@@ -6,6 +6,14 @@
 
 ---
 
+## 🚀 See It In Action
+
+![Markdown for Humans Overview](https://raw.githubusercontent.com/bhavya-concretio/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/basic_overview_of_features.gif)
+
+*Experience seamless WYSIWYG markdown editing with visual table editing, image management, and more—all in VS Code.*
+
+---
+
 ## Stop Fighting Markdown Syntax
 
 **Tired of manually writing table syntax? Struggling with image paths, resizing, renaming? Or you dont like memorising Markdown Syntax.** 
@@ -133,6 +141,12 @@ Built on TipTap with a **human-first design philosophy**:
 
 ## More Features
 
+### Enhanced Link Dialog
+
+![Enhanced Link Feature](https://raw.githubusercontent.com/bhavya-concretio/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/hyperlink_feature.gif)
+
+*Create links easily with support for URLs, file linking, heading links, and more—all through an intuitive dialog interface.*
+
 ### Mermaid Diagrams
 
 ![Mermaid Diagrams](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/mermaid_diagram_with_one_diagram_only.gif)
@@ -141,7 +155,7 @@ Built on TipTap with a **human-first design philosophy**:
 
 ### Document Outline
 
-![Document Outline](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/document_outline.gif)
+![Document Outline](https://raw.githubusercontent.com/bhavya-concretio/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/outline_feature_with_sidebar_display.gif)
 
 *Navigate your document quickly with sidebar outline showing all headings for instant access.*
 
