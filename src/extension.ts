@@ -80,6 +80,22 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand(
+      'markdownForHumans.openWithTextEditor',
+      async (uri?: vscode.Uri) => {
+        let targetUri = uri;
+        if (!targetUri && vscode.window.activeTextEditor) {
+          targetUri = vscode.window.activeTextEditor.document.uri;
+        }
+
+        if (targetUri) {
+          await vscode.commands.executeCommand('vscode.openWith', targetUri, 'default');
+        }
+      }
+    )
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('markdownForHumans.toggleSource', () => {
       // This will be handled by the webview
       vscode.window.activeTextEditor?.show();

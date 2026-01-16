@@ -94,6 +94,10 @@
         "title": "Open with Markdown for Humans"
       },
       {
+        "command": "markdownForHumans.openWithTextEditor",
+        "title": "Open as Markdown Source"
+      },
+      {
         "command": "markdownForHumans.outline.revealCurrent",
         "title": "Outline: Reveal Current Heading",
         "icon": "$(target)"
@@ -122,7 +126,12 @@
       "explorer/context": [
         {
           "command": "markdownForHumans.openFile",
-          "when": "resourceExtname == .md",
+          "when": "resourceExtname == .md && !config.markdownForHumans.openByDefault",
+          "group": "navigation"
+        },
+        {
+          "command": "markdownForHumans.openWithTextEditor",
+          "when": "resourceExtname == .md && config.markdownForHumans.openByDefault",
           "group": "navigation"
         }
       ],
