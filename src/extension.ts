@@ -130,6 +130,42 @@ export function activate(context: vscode.ExtensionContext) {
       outlineViewProvider.clearFilter();
     })
   );
+
+  // Handle "Open by Default" configuration change
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration(async e => {
+      if (e.affectsConfiguration('markdownForHumans.openByDefault')) {
+        const config = vscode.workspace.getConfiguration('markdownForHumans');
+        const openByDefault = config.get<boolean>('openByDefault');
+        const workbenchConfig = vscode.workspace.getConfiguration('workbench');
+        const editorAssociations =
+          workbenchConfig.get<Record<string, string>>('editorAssociations') || {};
+
+        if (openByDefault) {
+          // Add association if not already set to this editor
+          if (editorAssociations['*.md'] !== 'markdownForHumans.editor') {
+            const newAssociations = { ...editorAssociations, '*.md': 'markdownForHumans.editor' };
+            await workbenchConfig.update(
+              'editorAssociations',
+              newAssociations,
+              vscode.ConfigurationTarget.Global
+            );
+          }
+        } else {
+          // Remove association if it is set to this editor
+          if (editorAssociations['*.md'] === 'markdownForHumans.editor') {
+            const newAssociations = { ...editorAssociations };
+            delete newAssociations['*.md'];
+            await workbenchConfig.update(
+              'editorAssociations',
+              newAssociations,
+              vscode.ConfigurationTarget.Global
+            );
+          }
+        }
+      }
+    })
+  );
 }
 
 export function deactivate() {

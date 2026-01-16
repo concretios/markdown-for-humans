@@ -1,7 +1,7 @@
 {
   "name": "markdown-for-humans",
-  "displayName": "Markdown for Humans",
-  "description": "Seamless WYSIWYG markdown editing for VS Code — Write markdown the way humans think",
+  "displayName": "Markdown WYSIWYG Editor for Humans",
+  "description": "A full-featured WYSIWYG Markdown editor with visual table editing, drag-and-drop images, Mermaid diagrams, and distraction-free writing—all inside VS Code.",
   "version": "0.1.1",
   "publisher": "concretio",
   "author": {
@@ -31,11 +31,35 @@
   ],
   "keywords": [
     "markdown",
-    "wysiwyg",
     "editor",
-    "md",
+    "wysiwyg",
     "preview",
-    "writing"
+    "visual",
+    "md",
+    "table",
+    "tables",
+    "mermaid",
+    "diagram",
+    "image",
+    "drag-drop",
+    "github-flavored-markdown",
+    "gfm",
+    "notion-like",
+    "writing",
+    "documentation",
+    "readme",
+    "formatting",
+    "syntax-highlighting",
+    "live-preview",
+    "full-screen",
+    "distraction-free",
+    "cover-images",
+    "image-resizing",
+    "export",
+    "html",
+    "pdf",
+    "docx",
+    "human-friendly"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -146,6 +170,11 @@
           "type": "boolean",
           "default": false,
           "description": "Skip the warning dialog when resizing images. When enabled, images will be resized immediately without confirmation."
+        },
+        "markdownForHumans.openByDefault": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically use Markdown for Humans as the default editor for .md files."
         }
       }
     }
@@ -172,7 +201,7 @@
     "package:release": "vsce package",
     "publish:release": "vsce publish",
     "publish:ovsx:release": "npm run build:release && ovsx publish",
-    "install-hooks": "./scripts/install-git-hooks.sh"
+    "install-hooks": "bash ./scripts/install-git-hooks.sh"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.3",
