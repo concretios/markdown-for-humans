@@ -145,4 +145,58 @@ describe('markdownSerialization', () => {
       ],
     });
   });
+
+  it('falls back to editor.getMarkdown when serializer returns empty for non-empty doc', () => {
+    const serialize = jest.fn(() => '');
+    const fallbackMarkdown = '# fallback content';
+
+    const editor = {
+      getJSON: jest.fn(() => ({
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Hello world' }],
+          },
+        ],
+      })),
+      markdown: {
+        serialize,
+      },
+      getMarkdown: jest.fn(() => fallbackMarkdown),
+    } as unknown as import('@tiptap/core').Editor;
+
+    const markdown = getEditorMarkdownForSync(editor);
+
+    expect(markdown).toBe(fallbackMarkdown);
+    expect(serialize).toHaveBeenCalledTimes(2);
+    expect((editor as any).getMarkdown).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to storage.markdown.getMarkdown when editor.getMarkdown is unavailable', () => {
+    const serialize = jest.fn(() => '');
+    const fallbackMarkdown = '# storage fallback content';
+
+    const editor = {
+      getJSON: jest.fn(() => ({
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: 'Hello from storage fallback' }],
+          },
+        ],
+      })),
+      markdown: {
+        serialize,
+        getMarkdown: jest.fn(() => fallbackMarkdown),
+      },
+    } as unknown as import('@tiptap/core').Editor;
+
+    const markdown = getEditorMarkdownForSync(editor);
+
+    expect(markdown).toBe(fallbackMarkdown);
+    expect(serialize).toHaveBeenCalledTimes(2);
+    expect((editor as any).markdown.getMarkdown).toHaveBeenCalledTimes(1);
+  });
 });

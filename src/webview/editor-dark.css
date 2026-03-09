@@ -1,0 +1,69 @@
+:root,
+body {
+    /* VS Code variables mapping */
+    --vscode-editor-foreground: #cccccc;
+    --vscode-editor-background: #1e1e1e;
+    --vscode-editorWidget-border: #444444;
+    --vscode-descriptionForeground: #999999;
+    --vscode-editorWidget-background: #252526;
+    --vscode-list-hoverBackground: #37373d;
+    --vscode-textCodeBlock-background: #2a2d2e;
+    --vscode-textPreformat-foreground: #cccccc;
+    --vscode-textBlockQuote-border: #007acc;
+    --vscode-textBlockQuote-background: #252526;
+    --vscode-textLink-foreground: #3794ff;
+    --vscode-textLink-activeForeground: #1177aa;
+    --vscode-focusBorder: #007acc;
+    --vscode-editor-selectionBackground: #264f78;
+    --vscode-dropdown-background: #333333;
+    --vscode-dropdown-foreground: #cccccc;
+    --vscode-dropdown-border: #444444;
+    --vscode-button-background: #007acc;
+    --vscode-button-foreground: #ffffff;
+    --vscode-button-hoverBackground: #0062a3;
+    --vscode-errorForeground: #f48771;
+    --vscode-editorHoverWidget-background: #2a2d2e;
+    --vscode-editorHoverWidget-foreground: #cccccc;
+    --vscode-editorHoverWidget-border: #444444;
+
+    /* Markdown Editor variable mapping */
+    --md-foreground: var(--vscode-editor-foreground);
+    --md-background: var(--vscode-editor-background);
+    --md-border: var(--vscode-editorWidget-border);
+    --md-muted: var(--vscode-descriptionForeground);
+    --md-hover-bg: var(--vscode-list-hoverBackground);
+
+    /* Inline code in dark mode */
+    --md-code-inline-bg: #2a2d2e;
+    --md-code-inline-fg: #cccccc;
+
+    /* Mermaid editor in dark mode */
+    --md-mermaid-edit-bg: #2a2d2e;
+
+    --md-code-bg: var(--vscode-textCodeBlock-background);
+    --md-quote-bg: var(--vscode-textBlockQuote-background);
+    --md-dropdown-bg: var(--vscode-dropdown-background);
+    --md-dropdown-fg: var(--vscode-dropdown-foreground);
+    --md-dropdown-border: var(--vscode-dropdown-border);
+    --md-button-bg: var(--vscode-button-background);
+    --md-button-fg: var(--vscode-button-foreground);
+    --md-button-hover-bg: var(--vscode-button-hoverBackground);
+    --md-subtle-bg: var(--vscode-editorWidget-background);
+    --md-focus: var(--vscode-focusBorder);
+
+    /* Highlight.js syntax highlighting colors */
+    --hljs-color-default: #c9d1d9;
+    --hljs-color-keyword: #ff7b72;
+    --hljs-color-title: #d2a8ff;
+    --hljs-color-literal: #79c0ff;
+    --hljs-color-string: #a5d6ff;
+    --hljs-color-symbol: #ffa657;
+    --hljs-color-comment: #8b949e;
+    --hljs-color-tag: #7ee787;
+    --hljs-color-subst: #c9d1d9;
+    --hljs-color-bullet: #f2cc60;
+    --hljs-color-addition-fg: #aff5b4;
+    --hljs-color-addition-bg: #033a16;
+    --hljs-color-deletion-fg: #ffdcd7;
+    --hljs-color-deletion-bg: #67060c;
+}

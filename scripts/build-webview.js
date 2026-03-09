@@ -22,9 +22,13 @@ const isWatch = args.includes('--watch');
 const noSourcemap = args.includes('--no-sourcemap');
 
 const buildOptions = {
-  entryPoints: ['src/webview/editor.ts'],
+  entryPoints: [
+    { in: 'src/webview/editor.ts', out: 'webview' },
+    { in: 'src/webview/editor-light.css', out: 'editor-light' },
+    { in: 'src/webview/editor-dark.css', out: 'editor-dark' }
+  ],
   bundle: true,
-  outfile: 'dist/webview.js',
+  outdir: 'dist',
   format: 'iife',
   sourcemap: !noSourcemap && !isProduction, // Disable for marketplace builds
   minify: isProduction,
@@ -37,7 +41,7 @@ const buildOptions = {
   // This properly handles parsing and removes the calls during minification
   // while keeping console.error and console.warn
   pure: isProduction ? ['console.log', 'console.debug', 'console.info'] : [],
-  plugins: [], // No custom plugins needed - using 'pure' instead
+  plugins: [],
 };
 
 async function build() {

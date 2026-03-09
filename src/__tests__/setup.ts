@@ -41,3 +41,12 @@ if (typeof globalObj.File === 'undefined') {
     }
   };
 }
+
+// Global mock for acquireVsCodeApi used in webview scripts
+if (typeof globalObj.acquireVsCodeApi === 'undefined') {
+  globalObj.acquireVsCodeApi = () => ({
+    postMessage: jest.fn(),
+    getState: jest.fn(),
+    setState: jest.fn(),
+  });
+}

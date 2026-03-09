@@ -4,7 +4,7 @@
 
 - **Task name:** Source View Toggle
 - **Slug:** source-view-toggle
-- **Status:** planned
+- **Status:** planned, implementation failed
 - **Created:** 2025-11-29
 - **Last updated:** 2025-12-01
 - **Shipped:** *(pending)*

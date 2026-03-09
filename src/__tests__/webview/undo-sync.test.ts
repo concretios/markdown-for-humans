@@ -1,3 +1,4 @@
+/** @jest-environment jsdom */
 /**
  * Regression tests for webview undo/redo guards.
  *
@@ -9,6 +10,9 @@
 jest.mock('@tiptap/core', () => ({
   Editor: jest.fn(),
   Extension: { create: (config: unknown) => config },
+  Mark: { create: (config: unknown) => config },
+  Node: { create: (config: unknown) => config },
+  mergeAttributes: jest.fn(),
 }));
 jest.mock('@tiptap/starter-kit', () => ({ __esModule: true, default: { configure: () => ({}) } }));
 jest.mock('@tiptap/markdown', () => ({ Markdown: { configure: () => ({}) } }));
@@ -30,6 +34,15 @@ jest.mock('@tiptap/extension-code-block-lowlight', () => ({
   __esModule: true,
   default: { configure: () => ({}) },
 }));
+jest.mock('@tiptap/extension-highlight', () => ({
+  __esModule: true,
+  default: { configure: () => ({}) },
+  Highlight: { configure: () => ({}) },
+}));
+jest.mock('@tiptap/extension-underline', () => ({
+  __esModule: true,
+  default: { configure: () => ({}) },
+}));
 jest.mock('./../../webview/extensions/customImage', () => ({
   CustomImage: { configure: () => ({}) },
 }));
@@ -37,7 +50,18 @@ jest.mock('./../../webview/extensions/mermaid', () => ({ Mermaid: {} }));
 jest.mock('./../../webview/extensions/tabIndentation', () => ({ TabIndentation: {} }));
 jest.mock('./../../webview/extensions/imageEnterSpacing', () => ({ ImageEnterSpacing: {} }));
 jest.mock('./../../webview/extensions/markdownParagraph', () => ({ MarkdownParagraph: {} }));
+jest.mock('./../../webview/extensions/indentedImageCodeBlock', () => ({
+  IndentedImageCodeBlock: {},
+}));
+jest.mock('./../../webview/extensions/spaceFriendlyImagePaths', () => ({
+  SpaceFriendlyImagePaths: {},
+}));
 jest.mock('./../../webview/extensions/githubAlerts', () => ({ GitHubAlert: {} }));
+jest.mock('./../../webview/extensions/htmlPreservation', () => ({
+  GenericHTMLInline: {},
+  GenericHTMLBlock: {},
+}));
+jest.mock('./../../webview/extensions/livePreview', () => ({ LivePreview: {} }));
 jest.mock('./../../webview/BubbleMenuView', () => ({
   createFormattingToolbar: () => ({}),
   createTableMenu: () => ({}),
@@ -60,6 +84,24 @@ jest.mock('./../../webview/utils/pasteHandler', () => ({
 jest.mock('./../../webview/utils/copyMarkdown', () => ({ copySelectionAsMarkdown: jest.fn() }));
 jest.mock('./../../webview/utils/outline', () => ({ buildOutlineFromEditor: jest.fn(() => []) }));
 jest.mock('./../../webview/utils/scrollToHeading', () => ({ scrollToHeading: jest.fn() }));
+jest.mock('./../../webview/utils/linkValidation', () => ({ shouldAutoLink: jest.fn(() => false) }));
+jest.mock('./../../webview/features/linkDialog', () => ({ showLinkDialog: jest.fn() }));
+jest.mock('./../../webview/features/imageRenameDialog', () => ({}));
+
+// Mock Tiptap extensions that have ESM/CJS resolution issues in Jest
+jest.mock('@tiptap/extension-drag-handle', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Extension } = require('@tiptap/core');
+  const mockExtension = Extension.create({ name: 'dragHandle' });
+  return { __esModule: true, DragHandle: mockExtension, default: mockExtension };
+});
+
+jest.mock('@tiptap/extension-text-style', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Mark } = require('@tiptap/core');
+  const mockMark = Mark.create({ name: 'textStyle' });
+  return { __esModule: true, TextStyle: mockMark, default: mockMark };
+});
 
 type TestingModule = {
   resetSyncState: () => void;
@@ -75,44 +117,28 @@ describe('webview undo/redo guards', () => {
     jest.resetModules();
 
     // Minimal globals to satisfy editor.ts on import without creating the editor
-    (
-      global as unknown as { document: { readyState: string; addEventListener: jest.Mock } }
-    ).document = {
+    const mockDocument = {
       readyState: 'loading',
       addEventListener: jest.fn(),
     };
-    (
-      global as unknown as {
-        window: {
-          setTimeout: typeof setTimeout;
-          clearTimeout: typeof clearTimeout;
-          addEventListener: jest.Mock;
-        };
-      }
-    ).window = {
-      setTimeout,
-      clearTimeout,
-      addEventListener: jest.fn(),
-    };
-    (
-      global as unknown as {
-        acquireVsCodeApi: () => {
-          postMessage: jest.Mock;
-          getState: jest.Mock;
-          setState: jest.Mock;
-        };
-      }
-    ).acquireVsCodeApi = jest.fn(() => ({
+    (global as any).document = mockDocument;
+
+    // Mock VS Code API on global
+    const mockAcquireVsCodeApi = jest.fn(() => ({
       postMessage: jest.fn(),
       getState: jest.fn(),
       setState: jest.fn(),
     }));
-    (global as unknown as { performance: { now: () => number } }).performance = {
-      now: () => 0,
-    };
+    (global as any).acquireVsCodeApi = mockAcquireVsCodeApi;
+    (window as any).acquireVsCodeApi = mockAcquireVsCodeApi;
 
-    const mod = await import('../../webview/editor');
-    testing = mod.__testing;
+    try {
+      const mod = await import('../../webview/editor');
+      testing = mod.__testing;
+    } catch (e) {
+      console.error('IMPORT ERROR:', e);
+      throw e;
+    }
   };
 
   beforeEach(async () => {

@@ -61,8 +61,7 @@ async function build() {
       }
 
       console.log(
-        `✅ Extension build complete${isProduction ? ' (production)' : ' (development)'}${
-          noSourcemap ? ' (no sourcemap)' : ''
+        `✅ Extension build complete${isProduction ? ' (production)' : ' (development)'}${noSourcemap ? ' (no sourcemap)' : ''
         }`
       );
     } catch (error) {

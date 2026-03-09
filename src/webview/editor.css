@@ -3,454 +3,406 @@
    All colors derive from VS Code theme
    ============================================ */
 
-   .markdown-editor {
-    /* Base colors from VS Code theme */
-    --md-foreground: var(--vscode-editor-foreground);
-    --md-background: var(--vscode-editor-background);
-    --md-border: var(--vscode-editorWidget-border);
-  
-    /* Derived shades - use VS Code semantic colors */
-    --md-muted: var(--vscode-descriptionForeground);
-    --md-subtle-bg: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-    --md-hover-bg: var(--vscode-list-hoverBackground);
-  
-    /* Semantic colors for markdown elements */
-    --md-code-bg: var(--vscode-textCodeBlock-background);
-    --md-code-fg: var(--vscode-textPreformat-foreground, var(--md-foreground));
-    --md-quote-border: var(--vscode-textBlockQuote-border, var(--md-muted));
-    --md-quote-bg: var(--vscode-textBlockQuote-background);
-    --md-link-fg: var(--vscode-textLink-foreground);
-    --md-link-active-fg: var(--vscode-textLink-activeForeground);
-  
-    /* State colors */
-    --md-focus: var(--vscode-focusBorder);
-    --md-selection: var(--vscode-editor-selectionBackground);
-  
-    /* Typography and layout */
-    --md-base-size: var(--vscode-editor-font-size, 14px);
-  
-    line-height: 1.58;
-    letter-spacing: -0.003em;
-  
-    color: var(--md-foreground);
-    background-color: var(--md-background);
-  
-    /* Smooth reading */
-    min-height: 100vh;
-    outline: none;
-    word-wrap: break-word;
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-    margin: 10px 30px;
-  }
-  
-  .markdown-editor .ProseMirror {
-    outline: none;
-  }
-  
-  .markdown-editor:focus {
-    outline: none;
-  }
-  
-  /* ============================================
+body {
+  /* Base colors from VS Code theme */
+  --md-foreground: var(--vscode-editor-foreground);
+  --md-background: var(--vscode-editor-background);
+  --md-border: var(--vscode-editorWidget-border);
+
+  /* Derived shades - use VS Code semantic colors */
+  --md-muted: var(--vscode-descriptionForeground);
+  --md-subtle-bg: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  --md-hover-bg: var(--vscode-list-hoverBackground);
+
+  /* Semantic colors for markdown elements */
+  --md-code-bg: var(--vscode-textCodeBlock-background);
+  --md-code-fg: var(--vscode-textPreformat-foreground, var(--md-foreground));
+  --md-quote-border: var(--vscode-textBlockQuote-border, var(--md-muted));
+  --md-quote-bg: var(--vscode-textBlockQuote-background);
+  --md-link-fg: var(--vscode-textLink-foreground);
+  --md-link-active-fg: var(--vscode-textLink-activeForeground);
+
+  /* State colors */
+  --md-focus: var(--vscode-focusBorder);
+  --md-selection: var(--vscode-editor-selectionBackground);
+
+  /* Dropdown UI colors */
+  --md-dropdown-bg: var(--vscode-dropdown-background);
+  --md-dropdown-fg: var(--vscode-dropdown-foreground);
+  --md-dropdown-border: var(--vscode-dropdown-border);
+
+  /* Button UI colors */
+  --md-button-bg: var(--vscode-button-background);
+  --md-button-fg: var(--vscode-button-foreground);
+  --md-button-hover-bg: var(--vscode-button-hoverBackground);
+
+  /* Typography and layout */
+  --md-base-size: var(--vscode-editor-font-size, 14px);
+
+  /* Default Syntax Highlighting (Forced Dark) */
+  --hljs-color-default: #c9d1d9;
+  --hljs-color-keyword: #ff7b72;
+  --hljs-color-title: #d2a8ff;
+  --hljs-color-literal: #79c0ff;
+  --hljs-color-string: #a5d6ff;
+  --hljs-color-symbol: #ffa657;
+  --hljs-color-comment: #8b949e;
+  --hljs-color-tag: #7ee787;
+  --hljs-color-subst: #c9d1d9;
+  --hljs-color-bullet: #f2cc60;
+  --hljs-color-addition-fg: #aff5b4;
+  --hljs-color-addition-bg: #033a16;
+  --hljs-color-deletion-fg: #ffdcd7;
+  --hljs-color-deletion-bg: #67060c;
+
+  color: var(--md-foreground);
+  background-color: var(--md-background);
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+body.vscode-dark {
+  /* Default Syntax Highlighting (Dark) */
+  --hljs-color-default: #c9d1d9;
+  --hljs-color-keyword: #ff7b72;
+  --hljs-color-title: #d2a8ff;
+  --hljs-color-literal: #79c0ff;
+  --hljs-color-string: #a5d6ff;
+  --hljs-color-symbol: #ffa657;
+  --hljs-color-comment: #8b949e;
+  --hljs-color-tag: #7ee787;
+  --hljs-color-subst: #c9d1d9;
+  --hljs-color-bullet: #f2cc60;
+  --hljs-color-addition-fg: #aff5b4;
+  --hljs-color-addition-bg: #033a16;
+  --hljs-color-deletion-fg: #ffdcd7;
+  --hljs-color-deletion-bg: #67060c;
+}
+
+.markdown-editor {
+  line-height: 1.58;
+  letter-spacing: -0.003em;
+  color: var(--md-foreground);
+  background-color: var(--md-background);
+
+  /* Smooth reading */
+  outline: none;
+  word-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  margin: 10px 30px;
+}
+
+/* ============================================
+   Theme Overrides (Manual selection)
+   ============================================ */
+/* Overrides extracted to editor-light.css and editor-dark.css */
+
+.markdown-editor .ProseMirror {
+  outline: none;
+}
+
+.markdown-editor:focus {
+  outline: none;
+}
+
+/* ============================================
      Headers - Clean Style
      ============================================ */
-  
-  .markdown-editor h1,
-  .markdown-editor h2,
-  .markdown-editor h3,
-  .markdown-editor h4,
-  .markdown-editor h5,
-  .markdown-editor h6 {
-    line-height: 1.25;
-  }
-  
-  .markdown-editor h1 {
-    font-size: calc(var(--md-base-size) * 2.4);
-  }
-  
-  .markdown-editor h2 {
-    font-size: calc(var(--md-base-size) * 2);
-  }
-  
-  .markdown-editor h3 {
-    font-size: calc(var(--md-base-size) * 1.6);
-  }
-  
-  .markdown-editor h4 {
-    font-size: calc(var(--md-base-size) * 1.35);
-    line-height: 1.2;
-  }
-  
-  .markdown-editor h5 {
-    font-size: calc(var(--md-base-size) * 1.15);
-    line-height: 1.2;
-  }
-  
-  .markdown-editor h6 {
-    font-size: calc(var(--md-base-size) * 1.05);
-    line-height: 1.2;
-  }
-  
-  .markdown-editor :is(h1, h2, h3, h4, h5, h6) {
-    margin: 0.75em 0 0.35em;
-  }
-  
-  /* ============================================
+
+.markdown-editor h1,
+.markdown-editor h2,
+.markdown-editor h3,
+.markdown-editor h4,
+.markdown-editor h5,
+.markdown-editor h6 {
+  line-height: 1.25;
+}
+
+.markdown-editor h1 {
+  font-size: calc(var(--md-base-size) * 2.4);
+}
+
+.markdown-editor h2 {
+  font-size: calc(var(--md-base-size) * 2);
+}
+
+.markdown-editor h3 {
+  font-size: calc(var(--md-base-size) * 1.6);
+}
+
+.markdown-editor h4 {
+  font-size: calc(var(--md-base-size) * 1.35);
+  line-height: 1.2;
+}
+
+.markdown-editor h5 {
+  font-size: calc(var(--md-base-size) * 1.15);
+  line-height: 1.2;
+}
+
+.markdown-editor h6 {
+  font-size: calc(var(--md-base-size) * 1.05);
+  line-height: 1.2;
+}
+
+.markdown-editor :is(h1, h2, h3, h4, h5, h6) {
+  margin: 0.75em 0 0.35em;
+}
+
+/* ============================================
      Paragraphs & Text
      ============================================ */
-  
-  .markdown-editor p {
-    margin: 0;
-    line-height: 1.58;
-    font-size: calc(var(--md-base-size) * 1.2);
-  }
-  
-  .markdown-editor p:first-child {
-    margin-top: 0;
-  }
-  
-  /* Consistent spacing after headings */
-  .markdown-editor :is(h1, h2, h3, h4, h5, h6) + p {
-    margin-top: 0.5em;
-  }
-  
-  /* ============================================
+
+.markdown-editor p {
+  margin: 0;
+  line-height: 1.58;
+  font-size: calc(var(--md-base-size) * 1.2);
+}
+
+.markdown-editor p:first-child {
+  margin-top: 0;
+}
+
+/* Consistent spacing after headings */
+.markdown-editor :is(h1, h2, h3, h4, h5, h6)+p {
+  margin-top: 0.5em;
+}
+
+/* ============================================
      Lists
      ============================================ */
-  
-  .markdown-editor ul,
-  .markdown-editor ol {
-    padding-left: 30px;
-    margin: 0.75em 0;
-  }
-  
-  .markdown-editor li {
-    margin: 0.25em 0;
-    line-height: 1.58;
-  }
-  
-  .markdown-editor li>p {
-    margin: 0.25em 0;
-  }
-  
-  /* Nested lists */
-  .markdown-editor li ul,
-  .markdown-editor li ol {
-    margin: 0.25em 0;
-  }
-  
-  .markdown-editor li li {
-    margin: 0.15em 0;
-  }
-  
-  /* Task Lists */
-  .markdown-editor ul[data-type="taskList"] {
-    list-style: none;
-    padding-left: 0;
-  }
-  
-  .markdown-editor ul[data-type="taskList"] li {
-    display: flex;
-    align-items: center;
-  }
-  
-  .markdown-editor ul[data-type="taskList"] li>label {
-    flex: 0 0 auto;
-    user-select: none;
-  }
-  
-  .markdown-editor ul[data-type="taskList"] li>div {
-    flex: 1 1 auto;
-  }
-  
-  .markdown-editor ul[data-type="taskList"] li ul,
-  .markdown-editor ul[data-type="taskList"] li ol {
-    padding-left: 1.5em;
-  }
-  
-  .markdown-editor input[type="checkbox"] {
-    cursor: pointer;
-  }
-  
-  /* ============================================
+
+.markdown-editor ul,
+.markdown-editor ol {
+  padding-left: 30px;
+  margin: 0.75em 0;
+}
+
+.markdown-editor li {
+  margin: 0.25em 0;
+  line-height: 1.58;
+}
+
+.markdown-editor li>p {
+  margin: 0.25em 0;
+}
+
+/* Nested lists */
+.markdown-editor li ul,
+.markdown-editor li ol {
+  margin: 0.25em 0;
+}
+
+.markdown-editor li li {
+  margin: 0.15em 0;
+}
+
+/* Task Lists */
+.markdown-editor ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+  margin: 0.5rem 0;
+}
+
+.markdown-editor ul[data-type="taskList"] li {
+  display: flex;
+  align-items: center;
+  /* Center horizontally/vertically */
+  margin-bottom: 0.25rem;
+}
+
+.markdown-editor ul[data-type="taskList"] li>label {
+  flex: 0 0 auto;
+  user-select: none;
+  margin-right: 0.5rem;
+  display: flex;
+  align-items: center;
+}
+
+.markdown-editor ul[data-type="taskList"] li>div {
+  flex: 1 1 auto;
+}
+
+.markdown-editor ul[data-type="taskList"] li>div>p {
+  margin: 0 !important;
+}
+
+.markdown-editor ul[data-type="taskList"] li ul,
+.markdown-editor ul[data-type="taskList"] li ol {
+  padding-left: 1.5em;
+  margin: 0;
+}
+
+.markdown-editor input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+/* ============================================
      Code - Inline & Blocks
      ============================================ */
-  .markdown-editor code {
-    background-color: var(--md-code-bg);
-    color: var(--md-code-fg);
-    padding: 0.2em 0.2em;
-    border-radius: 3px;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
-    font-size: 90%;
-  }
-  
-  .markdown-editor pre {
-    background-color: var(--md-code-bg);
-    border: 1px solid var(--md-border);
-    padding: 20px;
-    border-radius: 6px;
-    overflow-x: auto;
-    margin: 1em 0;
-    line-height: 1.5;
-    position: relative;
-  }
-  
-  .markdown-editor pre code {
-    background: none;
-    padding: 0;
-    color: inherit;
-    font-size: calc(var(--vscode-editor-font-size) * 0.95);
-  
-  }
-  
-  /* Syntax highlighting - Code blocks */
-  .code-block-highlighted {
-    position: relative;
-    background-color: var(--md-code-bg);
-    border: 1px solid var(--md-border);
-    border-radius: 6px;
-    padding: 20px;
-    margin: 1em 0;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
-  
-    line-height: 1.5;
-    overflow-x: auto;
-  }
-  
-  /* ============================================
-     Syntax Highlighting - GitHub Theme (Light)
-     Official highlight.js GitHub theme colors
-     
-     NOTE: Colors are intentionally hardcoded here for consistent
-     syntax highlighting across all VS Code themes. These provide
-     semantic meaning (keywords, strings, comments) that work
-     regardless of the user's theme choice.
+.markdown-editor code {
+  background-color: var(--md-code-inline-bg);
+  color: var(--md-code-inline-fg);
+  padding: 0.2em 0.2em;
+  border-radius: 3px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-size: 90%;
+}
+
+.markdown-editor pre {
+  background-color: var(--md-code-bg);
+  border: 1px solid var(--md-border);
+  padding: 20px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 1em 0;
+  line-height: 1.5;
+  position: relative;
+}
+
+.markdown-editor pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: calc(var(--vscode-editor-font-size) * 0.95);
+
+}
+
+/* Syntax highlighting - Code blocks */
+.code-block-highlighted {
+  position: relative;
+  background-color: var(--md-code-bg);
+  border: 1px solid var(--md-border);
+  border-radius: 6px;
+  padding: 20px;
+  margin: 1em 0;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+
+  line-height: 1.5;
+  overflow-x: auto;
+  color: var(--hljs-color-default, inherit);
+}
+
+/* ============================================
+     Syntax Highlighting Colors mapped to Variables
      ============================================ */
-  
-  .code-block-highlighted .hljs-doctag,
-  .code-block-highlighted .hljs-keyword,
-  .code-block-highlighted .hljs-meta .hljs-keyword,
-  .code-block-highlighted .hljs-template-tag,
-  .code-block-highlighted .hljs-template-variable,
-  .code-block-highlighted .hljs-type,
-  .code-block-highlighted .hljs-variable.language_ {
-    color: #d73a49;
-  }
-  
-  .code-block-highlighted .hljs-title,
-  .code-block-highlighted .hljs-title.class_,
-  .code-block-highlighted .hljs-title.class_.inherited__,
-  .code-block-highlighted .hljs-title.function_ {
-    color: #6f42c1;
-  }
-  
-  .code-block-highlighted .hljs-attr,
-  .code-block-highlighted .hljs-attribute,
-  .code-block-highlighted .hljs-literal,
-  .code-block-highlighted .hljs-meta,
-  .code-block-highlighted .hljs-number,
-  .code-block-highlighted .hljs-operator,
-  .code-block-highlighted .hljs-variable,
-  .code-block-highlighted .hljs-selector-attr,
-  .code-block-highlighted .hljs-selector-class,
-  .code-block-highlighted .hljs-selector-id {
-    color: #005cc5;
-  }
-  
-  .code-block-highlighted .hljs-regexp,
-  .code-block-highlighted .hljs-string,
-  .code-block-highlighted .hljs-meta .hljs-string {
-    color: #032f62;
-  }
-  
-  .code-block-highlighted .hljs-built_in,
-  .code-block-highlighted .hljs-symbol {
-    color: #e36209;
-  }
-  
-  .code-block-highlighted .hljs-comment,
-  .code-block-highlighted .hljs-code,
-  .code-block-highlighted .hljs-formula {
-    color: #6a737d;
-  }
-  
-  .code-block-highlighted .hljs-name,
-  .code-block-highlighted .hljs-quote,
-  .code-block-highlighted .hljs-selector-tag,
-  .code-block-highlighted .hljs-selector-pseudo {
-    color: #22863a;
-  }
-  
-  .code-block-highlighted .hljs-subst {
-    color: #24292e;
-  }
-  
-  .code-block-highlighted .hljs-section {
-    color: #005cc5;
-    font-weight: bold;
-  }
-  
-  .code-block-highlighted .hljs-bullet {
-    color: #735c0f;
-  }
-  
-  .code-block-highlighted .hljs-emphasis {
-    color: #24292e;
-    font-style: italic;
-  }
-  
-  .code-block-highlighted .hljs-strong {
-    color: #24292e;
-    font-weight: bold;
-  }
-  
-  .code-block-highlighted .hljs-addition {
-    color: #22863a;
-    background-color: #f0fff4;
-  }
-  
-  .code-block-highlighted .hljs-deletion {
-    color: #b31d28;
-    background-color: #ffeef0;
-  }
-  
-  .code-block-highlighted .hljs-char.escape_,
-  .code-block-highlighted .hljs-link,
-  .code-block-highlighted .hljs-params,
-  .code-block-highlighted .hljs-property,
-  .code-block-highlighted .hljs-punctuation,
-  .code-block-highlighted .hljs-tag {
-    color: #24292e;
-  }
-  
-  /* ============================================
-     Syntax Highlighting - GitHub Theme (Dark)
-     Uses VS Code's body class for theme detection
-     
-     NOTE: Colors are intentionally hardcoded for consistent
-     syntax highlighting. Dark theme variants adjust brightness
-     for better contrast and visibility in dark themes.
-     ============================================ */
-  
-  .vscode-dark .code-block-highlighted,
-  .vscode-high-contrast .code-block-highlighted {
-    background-color: #161b22;
-    border-color: #30363d;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-doctag,
-  .vscode-dark .code-block-highlighted .hljs-keyword,
-  .vscode-dark .code-block-highlighted .hljs-meta .hljs-keyword,
-  .vscode-dark .code-block-highlighted .hljs-template-tag,
-  .vscode-dark .code-block-highlighted .hljs-template-variable,
-  .vscode-dark .code-block-highlighted .hljs-type,
-  .vscode-dark .code-block-highlighted .hljs-variable.language_ {
-    color: #ff7b72;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-title,
-  .vscode-dark .code-block-highlighted .hljs-title.class_,
-  .vscode-dark .code-block-highlighted .hljs-title.class_.inherited__,
-  .vscode-dark .code-block-highlighted .hljs-title.function_ {
-    color: #d2a8ff;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-attr,
-  .vscode-dark .code-block-highlighted .hljs-attribute,
-  .vscode-dark .code-block-highlighted .hljs-literal,
-  .vscode-dark .code-block-highlighted .hljs-meta,
-  .vscode-dark .code-block-highlighted .hljs-number,
-  .vscode-dark .code-block-highlighted .hljs-operator,
-  .vscode-dark .code-block-highlighted .hljs-variable,
-  .vscode-dark .code-block-highlighted .hljs-selector-attr,
-  .vscode-dark .code-block-highlighted .hljs-selector-class,
-  .vscode-dark .code-block-highlighted .hljs-selector-id {
-    color: #79c0ff;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-regexp,
-  .vscode-dark .code-block-highlighted .hljs-string,
-  .vscode-dark .code-block-highlighted .hljs-meta .hljs-string {
-    color: #a5d6ff;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-built_in,
-  .vscode-dark .code-block-highlighted .hljs-symbol {
-    color: #ffa657;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-comment,
-  .vscode-dark .code-block-highlighted .hljs-code,
-  .vscode-dark .code-block-highlighted .hljs-formula {
-    color: #8b949e;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-name,
-  .vscode-dark .code-block-highlighted .hljs-quote,
-  .vscode-dark .code-block-highlighted .hljs-selector-tag,
-  .vscode-dark .code-block-highlighted .hljs-selector-pseudo {
-    color: #7ee787;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-subst {
-    color: #c9d1d9;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-section {
-    color: #1f6feb;
-    font-weight: bold;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-bullet {
-    color: #f2cc60;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-emphasis {
-    color: #c9d1d9;
-    font-style: italic;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-strong {
-    color: #c9d1d9;
-    font-weight: bold;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-addition {
-    color: #aff5b4;
-    background-color: #033a16;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-deletion {
-    color: #ffdcd7;
-    background-color: #67060c;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-char.escape_,
-  .vscode-dark .code-block-highlighted .hljs-link,
-  .vscode-dark .code-block-highlighted .hljs-params,
-  .vscode-dark .code-block-highlighted .hljs-property,
-  .vscode-dark .code-block-highlighted .hljs-punctuation,
-  .vscode-dark .code-block-highlighted .hljs-tag {
-    color: #c9d1d9;
-  }
-  
-  /* ============================================
+
+.code-block-highlighted .hljs-doctag,
+.code-block-highlighted .hljs-keyword,
+.code-block-highlighted .hljs-meta .hljs-keyword,
+.code-block-highlighted .hljs-template-tag,
+.code-block-highlighted .hljs-template-variable,
+.code-block-highlighted .hljs-type,
+.code-block-highlighted .hljs-variable.language_ {
+  color: var(--hljs-color-keyword);
+}
+
+.code-block-highlighted .hljs-title,
+.code-block-highlighted .hljs-title.class_,
+.code-block-highlighted .hljs-title.class_.inherited__,
+.code-block-highlighted .hljs-title.function_ {
+  color: var(--hljs-color-title);
+}
+
+.code-block-highlighted .hljs-attr,
+.code-block-highlighted .hljs-attribute,
+.code-block-highlighted .hljs-literal,
+.code-block-highlighted .hljs-meta,
+.code-block-highlighted .hljs-number,
+.code-block-highlighted .hljs-operator,
+.code-block-highlighted .hljs-variable,
+.code-block-highlighted .hljs-selector-attr,
+.code-block-highlighted .hljs-selector-class,
+.code-block-highlighted .hljs-selector-id {
+  color: var(--hljs-color-literal);
+}
+
+.code-block-highlighted .hljs-regexp,
+.code-block-highlighted .hljs-string,
+.code-block-highlighted .hljs-meta .hljs-string {
+  color: var(--hljs-color-string);
+}
+
+.code-block-highlighted .hljs-built_in,
+.code-block-highlighted .hljs-symbol {
+  color: var(--hljs-color-symbol);
+}
+
+.code-block-highlighted .hljs-comment,
+.code-block-highlighted .hljs-code,
+.code-block-highlighted .hljs-formula {
+  color: var(--hljs-color-comment);
+}
+
+.code-block-highlighted .hljs-name,
+.code-block-highlighted .hljs-quote,
+.code-block-highlighted .hljs-selector-tag,
+.code-block-highlighted .hljs-selector-pseudo {
+  color: var(--hljs-color-tag);
+}
+
+.code-block-highlighted .hljs-subst {
+  color: var(--hljs-color-subst);
+}
+
+.code-block-highlighted .hljs-section {
+  color: var(--hljs-color-literal);
+  font-weight: bold;
+}
+
+.code-block-highlighted .hljs-bullet {
+  color: var(--hljs-color-bullet);
+}
+
+.code-block-highlighted .hljs-emphasis {
+  color: var(--hljs-color-subst);
+  font-style: italic;
+}
+
+.code-block-highlighted .hljs-strong {
+  color: var(--hljs-color-subst);
+  font-weight: bold;
+}
+
+.code-block-highlighted .hljs-addition {
+  color: var(--hljs-color-addition-fg);
+  background-color: var(--hljs-color-addition-bg);
+}
+
+.code-block-highlighted .hljs-deletion {
+  color: var(--hljs-color-deletion-fg);
+  background-color: var(--hljs-color-deletion-bg);
+}
+
+.code-block-highlighted .hljs-char.escape_,
+.code-block-highlighted .hljs-link,
+.code-block-highlighted .hljs-params,
+.code-block-highlighted .hljs-property,
+.code-block-highlighted .hljs-punctuation,
+.code-block-highlighted .hljs-tag {
+  color: var(--hljs-color-subst);
+}
+
+
+/* ============================================
      Blockquotes
      ============================================ */
-  
-  .markdown-editor blockquote {
-    border-left: 3px solid var(--md-quote-border);
-    background-color: var(--md-quote-bg);
-    padding-left: 23px;
-    margin: 1em 0;
-    font-style: italic;
-    color: var(--md-muted);
-    line-height: 1.58;
-    position: relative;
-  }
-  
-  /* ============================================
+
+.markdown-editor blockquote {
+  border-left: 3px solid var(--md-quote-border);
+  background-color: var(--md-quote-bg);
+  padding-left: 23px;
+  margin: 1em 0;
+  font-style: italic;
+  color: var(--md-muted);
+  line-height: 1.58;
+  position: relative;
+}
+
+/* ============================================
      GitHub Alerts
      
      NOTE: Alert colors are intentionally hardcoded for semantic
@@ -463,1997 +415,2157 @@
      
      Dark theme variants adjust brightness for visibility.
      ============================================ */
-  
-  .markdown-editor .github-alert {
-    border-left: 4px solid;
-    background-color: rgba(0, 0, 0, 0.05);
-    padding: 16px 20px;
-    margin: 1em 0;
-    border-radius: 6px;
-    font-style: normal;
-    color: var(--md-foreground);
-    line-height: 1.58;
-    position: relative;
-  }
-  
-  .markdown-editor .github-alert-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 0;
-    padding-bottom: 8px; /* Visual spacing kept inside non-editable header */
-    user-select: none; /* Prevent text selection in header */
-    pointer-events: auto; /* Keep header non-editable but intercept clicks */
-    cursor: default; /* Show default cursor over header */
-  }
-  
-  .markdown-editor .github-alert-icon {
-    font-size: 1.1em;
-    line-height: 1;
-  }
-  
-  .markdown-editor .github-alert-label {
-    font-weight: 600;
-    font-size: 0.95em;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-  
-  .markdown-editor .github-alert-content {
-    color: var(--md-foreground);
-    padding: 0;
-    margin: 0;
-  }
-  
-  .markdown-editor .github-alert-content > p {
-    margin: 0 0 0.75em;
-  }
-  
-  /* NOTE - Blue */
-  .markdown-editor .github-alert-note {
-    border-left-color: #0969da;
-    background-color: rgba(9, 105, 218, 0.1);
-  }
-  
-  .markdown-editor .github-alert-note .github-alert-icon::before {
-    content: 'ℹ';
-  }
-  
-  .markdown-editor .github-alert-note .github-alert-label {
-    color: #0969da;
-  }
-  
-  /* TIP - Green */
-  .markdown-editor .github-alert-tip {
-    border-left-color: #1a7f37;
-    background-color: rgba(26, 127, 55, 0.1);
-  }
-  
-  .markdown-editor .github-alert-tip .github-alert-icon::before {
-    content: '💡';
-  }
-  
-  .markdown-editor .github-alert-tip .github-alert-label {
-    color: #1a7f37;
-  }
-  
-  /* IMPORTANT - Purple */
-  .markdown-editor .github-alert-important {
-    border-left-color: #8250df;
-    background-color: rgba(130, 80, 223, 0.1);
-  }
-  
-  .markdown-editor .github-alert-important .github-alert-icon::before {
-    content: '📢';
-  }
-  
-  .markdown-editor .github-alert-important .github-alert-label {
-    color: #8250df;
-  }
-  
-  /* WARNING - Orange/Yellow */
-  .markdown-editor .github-alert-warning {
-    border-left-color: #9a6700;
-    background-color: rgba(154, 103, 0, 0.1);
-  }
-  
-  .markdown-editor .github-alert-warning .github-alert-icon::before {
-    content: '⚠';
-  }
-  
-  .markdown-editor .github-alert-warning .github-alert-label {
-    color: #9a6700;
-  }
-  
-  /* CAUTION - Red */
-  .markdown-editor .github-alert-caution {
-    border-left-color: #cf222e;
-    background-color: rgba(207, 34, 46, 0.1);
-  }
-  
-  .markdown-editor .github-alert-caution .github-alert-icon::before {
-    content: '🛑';
-  }
-  
-  .markdown-editor .github-alert-caution .github-alert-label {
-    color: #cf222e;
-  }
-  
-  /* Dark theme adjustments */
-  .vscode-dark .github-alert,
-  .vscode-high-contrast .github-alert {
-    background-color: rgba(255, 255, 255, 0.05);
-  }
-  
-  .vscode-dark .github-alert-note,
-  .vscode-high-contrast .github-alert-note {
-    background-color: rgba(9, 105, 218, 0.15);
-    border-left-color: #58a6ff;
-  }
-  
-  .vscode-dark .github-alert-note .github-alert-label,
-  .vscode-high-contrast .github-alert-note .github-alert-label {
-    color: #58a6ff;
-  }
-  
-  .vscode-dark .github-alert-tip,
-  .vscode-high-contrast .github-alert-tip {
-    background-color: rgba(26, 127, 55, 0.15);
-    border-left-color: #3fb950;
-  }
-  
-  .vscode-dark .github-alert-tip .github-alert-label,
-  .vscode-high-contrast .github-alert-tip .github-alert-label {
-    color: #3fb950;
-  }
-  
-  .vscode-dark .github-alert-important,
-  .vscode-high-contrast .github-alert-important {
-    background-color: rgba(130, 80, 223, 0.15);
-    border-left-color: #a371f7;
-  }
-  
-  .vscode-dark .github-alert-important .github-alert-label,
-  .vscode-high-contrast .github-alert-important .github-alert-label {
-    color: #a371f7;
-  }
-  
-  .vscode-dark .github-alert-warning,
-  .vscode-high-contrast .github-alert-warning {
-    background-color: rgba(154, 103, 0, 0.15);
-    border-left-color: #d29922;
-  }
-  
-  .vscode-dark .github-alert-warning .github-alert-label,
-  .vscode-high-contrast .github-alert-warning .github-alert-label {
-    color: #d29922;
-  }
-  
-  .vscode-dark .github-alert-caution,
-  .vscode-high-contrast .github-alert-caution {
-    background-color: rgba(207, 34, 46, 0.15);
-    border-left-color: #f85149;
-  }
-  
-  .vscode-dark .github-alert-caution .github-alert-label,
-  .vscode-high-contrast .github-alert-caution .github-alert-label {
-    color: #f85149;
-  }
-  
-  /* ============================================
+
+.markdown-editor .github-alert {
+  border-left: 4px solid;
+  background-color: rgba(0, 0, 0, 0.05);
+  padding: 16px 20px;
+  margin: 1em 0;
+  border-radius: 6px;
+  font-style: normal;
+  color: var(--md-foreground);
+  line-height: 1.58;
+}
+
+.ProseMirror p {
+  margin-top: 0;
+  margin-bottom: var(--md4h-paragraph-spacing);
+}
+
+/* Headings */
+.markdown-editor .github-alert-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 0;
+  padding-bottom: 8px;
+  /* Visual spacing kept inside non-editable header */
+  user-select: none;
+  /* Prevent text selection in header */
+  pointer-events: auto;
+  /* Keep header non-editable but intercept clicks */
+  cursor: default;
+}
+
+.markdown-editor .github-alert-icon {
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+.markdown-editor .github-alert-label {
+  font-weight: 600;
+  font-size: 0.95em;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+:root {
+  --md4h-header-spacing: 1.5;
+
+  /* Configurable spacing variables with fallbacks */
+  --md4h-line-spacing: 1;
+  --md4h-paragraph-spacing: 1em;
+  --md4h-table-cell-spacing: 0.1em;
+  --md4h-table-cell-horizontal-spacing: 0.2em;
+}
+
+body {
+  font-family:
+    var(--vscode-font-family),
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+  font-size: var(--vscode-editor-font-size);
+  line-height: var(--md4h-line-spacing);
+  color: var(--vscode-editor-foreground);
+}
+
+.markdown-editor .github-alert-content {
+  color: var(--md-foreground);
+  padding: 0;
+  margin: 0;
+}
+
+.markdown-editor .github-alert-content>p {
+  margin: 0 0 0.75em;
+}
+
+/* NOTE - Blue */
+.markdown-editor .github-alert-note {
+  border-left-color: #0969da;
+  background-color: rgba(9, 105, 218, 0.1);
+}
+
+.markdown-editor .github-alert-note .github-alert-icon::before {
+  content: 'ℹ';
+}
+
+.markdown-editor .github-alert-note .github-alert-label {
+  color: #0969da;
+}
+
+/* TIP - Green */
+.markdown-editor .github-alert-tip {
+  border-left-color: #1a7f37;
+  background-color: rgba(26, 127, 55, 0.1);
+}
+
+.markdown-editor .github-alert-tip .github-alert-icon::before {
+  content: '💡';
+}
+
+.markdown-editor .github-alert-tip .github-alert-label {
+  color: #1a7f37;
+}
+
+/* IMPORTANT - Purple */
+.markdown-editor .github-alert-important {
+  border-left-color: #8250df;
+  background-color: rgba(130, 80, 223, 0.1);
+}
+
+.markdown-editor .github-alert-important .github-alert-icon::before {
+  content: '📢';
+}
+
+.markdown-editor .github-alert-important .github-alert-label {
+  color: #8250df;
+}
+
+/* WARNING - Orange/Yellow */
+.markdown-editor .github-alert-warning {
+  border-left-color: #9a6700;
+  background-color: rgba(154, 103, 0, 0.1);
+}
+
+.markdown-editor .github-alert-warning .github-alert-icon::before {
+  content: '⚠';
+}
+
+.markdown-editor .github-alert-warning .github-alert-label {
+  color: #9a6700;
+}
+
+/* CAUTION - Red */
+.markdown-editor .github-alert-caution {
+  border-left-color: #cf222e;
+  background-color: rgba(207, 34, 46, 0.1);
+}
+
+.markdown-editor .github-alert-caution .github-alert-icon::before {
+  content: '🛑';
+}
+
+.markdown-editor .github-alert-caution .github-alert-label {
+  color: #cf222e;
+}
+
+/* Dark theme adjustments */
+.vscode-dark .github-alert,
+.vscode-high-contrast .github-alert {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.vscode-dark .github-alert-note,
+.vscode-high-contrast .github-alert-note {
+  background-color: rgba(9, 105, 218, 0.15);
+  border-left-color: #58a6ff;
+}
+
+.vscode-dark .github-alert-note .github-alert-label,
+.vscode-high-contrast .github-alert-note .github-alert-label {
+  color: #58a6ff;
+}
+
+.vscode-dark .github-alert-tip,
+.vscode-high-contrast .github-alert-tip {
+  background-color: rgba(26, 127, 55, 0.15);
+  border-left-color: #3fb950;
+}
+
+.vscode-dark .github-alert-tip .github-alert-label,
+.vscode-high-contrast .github-alert-tip .github-alert-label {
+  color: #3fb950;
+}
+
+.vscode-dark .github-alert-important,
+.vscode-high-contrast .github-alert-important {
+  background-color: rgba(130, 80, 223, 0.15);
+  border-left-color: #a371f7;
+}
+
+.vscode-dark .github-alert-important .github-alert-label,
+.vscode-high-contrast .github-alert-important .github-alert-label {
+  color: #a371f7;
+}
+
+.vscode-dark .github-alert-warning,
+.vscode-high-contrast .github-alert-warning {
+  background-color: rgba(154, 103, 0, 0.15);
+  border-left-color: #d29922;
+}
+
+.vscode-dark .github-alert-warning .github-alert-label,
+.vscode-high-contrast .github-alert-warning .github-alert-label {
+  color: #d29922;
+}
+
+.vscode-dark .github-alert-caution,
+.vscode-high-contrast .github-alert-caution {
+  background-color: rgba(207, 34, 46, 0.15);
+  border-left-color: #f85149;
+}
+
+.vscode-dark .github-alert-caution .github-alert-label,
+.vscode-high-contrast .github-alert-caution .github-alert-label {
+  color: #f85149;
+}
+
+/* ============================================
      Horizontal Rule
      ============================================ */
-  
-  .markdown-editor hr {
-    height: 0;
-    border: none;
-    border-top: 1px solid var(--md-border);
-    margin: 2em 0;
-    cursor: default;
-    transition: border-color 0.1s;
-    background: none;
-  }
-  
-  .markdown-editor hr.ProseMirror-selectednode {
-    border-top: 2px solid var(--md-selection);
-  }
-  
-  /* ============================================
+
+.markdown-editor hr {
+  height: 0;
+  border: none;
+  border-top: 1px solid var(--md-border);
+  margin: 2em 0;
+  cursor: default;
+  transition: border-color 0.1s;
+  background: none;
+}
+
+.markdown-editor hr.ProseMirror-selectednode {
+  border-top: 2px solid var(--md-selection);
+}
+
+/* ============================================
      Tables
      ============================================ */
-  
-  .markdown-editor table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 1em 0;
-    overflow: hidden;
-  }
-  
-  .markdown-editor table th,
-  .markdown-editor table td {
-    border: 1px solid var(--md-border);
-    padding: 12px 16px;
-    text-align: left;
-    vertical-align: top;
-    min-width: 100px;
-    position: relative; /* Required for absolute positioned resize handles */
-  }
-  
-  .markdown-editor table th {
-    background-color: var(--md-subtle-bg);
-    font-weight: 600;
-    border-bottom: 2px solid var(--md-border);
-  }
-  
-  .markdown-editor table tr:hover {
-    background-color: var(--md-hover-bg);
-  }
-  
-  .markdown-editor .tableWrapper {
-    overflow-x: auto;
-    margin: 1em 0;
-  }
-  
-  .markdown-editor table p {
-    margin: 0;
-  }
-  
-  /* Table resize handle */
-  .markdown-editor .column-resize-handle {
-    position: absolute;
-    right: -6px; /* Extend further right for easier hovering */
-    top: 0;
-    bottom: 0;
-    width: 12px; /* Increased from 4px to 12px for easier hovering */
-    cursor: col-resize !important; /* Force cursor to override cell cursor */
-    background-color: transparent; /* Invisible by default */
-    z-index: 20; /* Higher z-index to ensure it's on top */
-    pointer-events: auto; /* Ensure handle receives mouse events */
-    transition: background-color 0.15s ease, opacity 0.15s ease;
-  }
 
-  .markdown-editor .column-resize-handle:hover {
-    background-color: var(--md-focus);
-    cursor: col-resize !important;
-    opacity: 0.3; /* Visible on hover for better UX */
-  }
+.markdown-editor table {
+  border-collapse: collapse;
+  width: auto;
+  max-width: 100%;
+  margin: 1em 0;
+  overflow: hidden;
+}
 
-  /* Row resize handle (if supported by TableKit) */
-  .markdown-editor .row-resize-handle {
-    position: absolute;
-    bottom: -2px;
-    left: 0;
-    right: 0;
-    height: 4px;
-    cursor: row-resize;
-    background-color: var(--md-border);
-    z-index: 10;
-    transition: background-color 0.15s ease;
-  }
+.ProseMirror th,
+.ProseMirror td {
+  min-width: 1em;
+  border-bottom: 1px solid var(--md-border);
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  padding: var(--md4h-table-cell-spacing, 0.1em) var(--md4h-table-cell-horizontal-spacing, 0.2em);
+  margin: 0;
+  box-sizing: border-box;
+  position: relative;
+}
 
-  .markdown-editor .row-resize-handle:hover {
-    background-color: var(--md-focus);
-    cursor: row-resize;
-  }
-  
-  /* ============================================
+.markdown-editor table th {
+  background-color: var(--md-subtle-bg);
+  color: var(--md-foreground);
+  font-weight: 600;
+  border-bottom: 2px solid var(--md-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.markdown-editor table tr:hover {
+  background-color: var(--md-hover-bg);
+}
+
+.markdown-editor .tableWrapper {
+  overflow-x: auto;
+  margin: 1em 0;
+}
+
+.markdown-editor table p {
+  margin: 0;
+}
+
+/* Table resize handle */
+.markdown-editor .column-resize-handle {
+  position: absolute;
+  right: -6px;
+  /* Extend further right for easier hovering */
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  /* Increased from 4px to 12px for easier hovering */
+  cursor: col-resize !important;
+  /* Force cursor to override cell cursor */
+  background-color: transparent;
+  /* Invisible by default */
+  z-index: 20;
+  /* Higher z-index to ensure it's on top */
+  pointer-events: auto;
+  /* Ensure handle receives mouse events */
+  transition: background-color 0.15s ease, opacity 0.15s ease;
+}
+
+.markdown-editor .column-resize-handle:hover {
+  background-color: var(--md-focus);
+  cursor: col-resize !important;
+  opacity: 0.3;
+  /* Visible on hover for better UX */
+}
+
+/* Row resize handle (if supported by TableKit) */
+.markdown-editor .row-resize-handle {
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  cursor: row-resize;
+  background-color: var(--md-border);
+  z-index: 10;
+  transition: background-color 0.15s ease;
+}
+
+.markdown-editor .row-resize-handle:hover {
+  background-color: var(--md-focus);
+  cursor: row-resize;
+}
+
+/* ============================================
      Links
      ============================================ */
-  
-  .markdown-link {
-    color: var(--md-link-fg);
-    text-decoration: none;
-    cursor: pointer;
-  }
-  
-  .markdown-link:hover {
-    text-decoration: underline;
-    color: var(--md-link-active-fg);
-  }
-  
-  /* ============================================
+
+.markdown-link {
+  color: var(--md-link-fg);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.markdown-link:hover {
+  text-decoration: underline;
+  color: var(--md-link-active-fg);
+}
+
+/* ============================================
      Images
      ============================================ */
-  
-  .markdown-image {
-    max-width: 100%;
-    height: auto;
-    display: block;
-    margin: 0;
-    border-radius: 4px;
-    cursor: pointer;
-  }
-  
-  /* Hover state - only when no cursor state is active */
-  /* NOTE: Image glow effects use rgba values for visual feedback.
+
+.markdown-image {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* Hover state - only when no cursor state is active */
+/* NOTE: Image glow effects use rgba values for visual feedback.
      Light theme uses softer glows (rgba(0, 122, 204, 0.4-0.6)),
      dark theme uses brighter glows (rgba(100, 200, 255, 0.6-0.8))
      for better visibility. VS Code variable fallbacks used where appropriate. */
-  .image-wrapper:not(.image-caret-before):not(.image-caret-after):not(.image-caret-selected):not(.image-pending-delete) .markdown-image:hover {
-    outline: 2px solid var(--md-focus);
-    outline-offset: 2px;
-    box-shadow: 
+.image-wrapper:not(.image-caret-before):not(.image-caret-after):not(.image-caret-selected):not(.image-pending-delete) .markdown-image:hover {
+  outline: 2px solid var(--md-focus);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 12px rgba(0, 122, 204, 0.4),
+    0 0 24px rgba(0, 122, 204, 0.2);
+  position: relative;
+  transition: box-shadow 0.15s ease, outline 0.15s ease;
+}
+
+.markdown-editor .ProseMirror-gapcursor {
+  position: relative;
+  width: 2px;
+  margin: 0 1px;
+  background: var(--md-focus);
+  pointer-events: none;
+  animation: md-gapcursor-blink 1s steps(1, end) infinite;
+}
+
+.markdown-editor .ProseMirror-gapcursor:after {
+  content: '';
+  position: absolute;
+  top: -10px;
+  bottom: -10px;
+  left: -6px;
+  right: -6px;
+  border-radius: 6px;
+  background: var(--md-selection);
+  opacity: 0.35;
+}
+
+.markdown-editor .ProseMirror-focused .ProseMirror-gapcursor {
+  animation-play-state: running;
+}
+
+@keyframes md-gapcursor-blink {
+
+  0%,
+  50% {
+    opacity: 1;
+  }
+
+  50.01%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.markdown-editor img.ProseMirror-selectednode {
+  outline: 2px solid var(--md-focus);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 12px rgba(0, 122, 204, 0.4),
+    0 0 24px rgba(0, 122, 204, 0.2);
+  position: relative;
+  animation: image-select-pulse 0.25s ease-out;
+}
+
+/* Brief pulse animation on selection (respects reduced motion) */
+@keyframes image-select-pulse {
+  0% {
+    box-shadow:
+      0 0 0 2px var(--md-focus),
+      0 0 0 rgba(0, 122, 204, 0),
+      0 0 0 rgba(0, 122, 204, 0);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 2px var(--md-focus),
+      0 0 16px rgba(0, 122, 204, 0.6),
+      0 0 32px rgba(0, 122, 204, 0.3);
+  }
+
+  100% {
+    box-shadow:
       0 0 0 2px var(--md-focus),
       0 0 12px rgba(0, 122, 204, 0.4),
       0 0 24px rgba(0, 122, 204, 0.2);
-    position: relative;
-    transition: box-shadow 0.15s ease, outline 0.15s ease;
   }
-  
-  .markdown-editor .ProseMirror-gapcursor {
-    position: relative;
-    width: 2px;
-    margin: 0 1px;
-    background: var(--md-focus);
-    pointer-events: none;
-    animation: md-gapcursor-blink 1s steps(1, end) infinite;
-  }
-  
-  .markdown-editor .ProseMirror-gapcursor:after {
-    content: '';
-    position: absolute;
-    top: -10px;
-    bottom: -10px;
-    left: -6px;
-    right: -6px;
-    border-radius: 6px;
-    background: var(--md-selection);
-    opacity: 0.35;
-  }
-  
-  .markdown-editor .ProseMirror-focused .ProseMirror-gapcursor {
-    animation-play-state: running;
-  }
-  
-  @keyframes md-gapcursor-blink {
-    0%,
-    50% {
-      opacity: 1;
-    }
-    50.01%,
-    100% {
-      opacity: 0;
-    }
-  }
-  
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
   .markdown-editor img.ProseMirror-selectednode {
-    outline: 2px solid var(--md-focus);
-    outline-offset: 2px;
-    box-shadow: 
+    animation: none;
+  }
+}
+
+/* Dark theme overrides - brighter glow for better visibility */
+.vscode-dark .image-wrapper:not(.image-caret-before):not(.image-caret-after):not(.image-caret-selected):not(.image-pending-delete) .markdown-image:hover,
+.vscode-high-contrast .image-wrapper:not(.image-caret-before):not(.image-caret-after):not(.image-caret-selected):not(.image-pending-delete) .markdown-image:hover {
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 16px rgba(100, 200, 255, 0.6),
+    0 0 32px rgba(100, 200, 255, 0.3);
+}
+
+.vscode-dark .markdown-editor img.ProseMirror-selectednode,
+.vscode-high-contrast .markdown-editor img.ProseMirror-selectednode {
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 16px rgba(100, 200, 255, 0.6),
+    0 0 32px rgba(100, 200, 255, 0.3);
+}
+
+/* Dark theme pulse animation */
+@keyframes image-select-pulse-dark {
+  0% {
+    box-shadow:
       0 0 0 2px var(--md-focus),
-      0 0 12px rgba(0, 122, 204, 0.4),
-      0 0 24px rgba(0, 122, 204, 0.2);
-    position: relative;
-    animation: image-select-pulse 0.25s ease-out;
+      0 0 0 rgba(100, 200, 255, 0),
+      0 0 0 rgba(100, 200, 255, 0);
   }
-  
-  /* Brief pulse animation on selection (respects reduced motion) */
-  @keyframes image-select-pulse {
-    0% {
-      box-shadow: 
-        0 0 0 2px var(--md-focus),
-        0 0 0 rgba(0, 122, 204, 0),
-        0 0 0 rgba(0, 122, 204, 0);
-    }
-    50% {
-      box-shadow: 
-        0 0 0 2px var(--md-focus),
-        0 0 16px rgba(0, 122, 204, 0.6),
-        0 0 32px rgba(0, 122, 204, 0.3);
-    }
-    100% {
-      box-shadow: 
-        0 0 0 2px var(--md-focus),
-        0 0 12px rgba(0, 122, 204, 0.4),
-        0 0 24px rgba(0, 122, 204, 0.2);
-    }
+
+  50% {
+    box-shadow:
+      0 0 0 2px var(--md-focus),
+      0 0 20px rgba(100, 200, 255, 0.8),
+      0 0 40px rgba(100, 200, 255, 0.4);
   }
-  
-  /* Respect reduced motion preference */
-  @media (prefers-reduced-motion: reduce) {
-    .markdown-editor img.ProseMirror-selectednode {
-      animation: none;
-    }
-  }
-  
-  /* Dark theme overrides - brighter glow for better visibility */
-  .vscode-dark .image-wrapper:not(.image-caret-before):not(.image-caret-after):not(.image-caret-selected):not(.image-pending-delete) .markdown-image:hover,
-  .vscode-high-contrast .image-wrapper:not(.image-caret-before):not(.image-caret-after):not(.image-caret-selected):not(.image-pending-delete) .markdown-image:hover {
-    box-shadow: 
+
+  100% {
+    box-shadow:
       0 0 0 2px var(--md-focus),
       0 0 16px rgba(100, 200, 255, 0.6),
       0 0 32px rgba(100, 200, 255, 0.3);
   }
-  
+}
+
+.vscode-dark .markdown-editor img.ProseMirror-selectednode,
+.vscode-high-contrast .markdown-editor img.ProseMirror-selectednode {
+  animation: image-select-pulse-dark 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+
   .vscode-dark .markdown-editor img.ProseMirror-selectednode,
   .vscode-high-contrast .markdown-editor img.ProseMirror-selectednode {
-    box-shadow: 
-      0 0 0 2px var(--md-focus),
-      0 0 16px rgba(100, 200, 255, 0.6),
-      0 0 32px rgba(100, 200, 255, 0.3);
+    animation: none;
   }
-  
-  /* Dark theme pulse animation */
-  @keyframes image-select-pulse-dark {
-    0% {
-      box-shadow: 
-        0 0 0 2px var(--md-focus),
-        0 0 0 rgba(100, 200, 255, 0),
-        0 0 0 rgba(100, 200, 255, 0);
-    }
-    50% {
-      box-shadow: 
-        0 0 0 2px var(--md-focus),
-        0 0 20px rgba(100, 200, 255, 0.8),
-        0 0 40px rgba(100, 200, 255, 0.4);
-    }
-    100% {
-      box-shadow: 
-        0 0 0 2px var(--md-focus),
-        0 0 16px rgba(100, 200, 255, 0.6),
-        0 0 32px rgba(100, 200, 255, 0.3);
-    }
-  }
-  
-  .vscode-dark .markdown-editor img.ProseMirror-selectednode,
-  .vscode-high-contrast .markdown-editor img.ProseMirror-selectednode {
-    animation: image-select-pulse-dark 0.25s ease-out;
-  }
-  
-  @media (prefers-reduced-motion: reduce) {
-    .vscode-dark .markdown-editor img.ProseMirror-selectednode,
-    .vscode-high-contrast .markdown-editor img.ProseMirror-selectednode {
-      animation: none;
-    }
-  }
-  
-  /* Cursor before image - strong left glow only */
-  .image-wrapper.image-caret-before .markdown-image {
-    outline: none;  /* Remove outline - only directional border */
-    border-left: 2px solid var(--md-focus);  /* Subtle left border */
-    border-right: none;
-    border-top: none;
-    border-bottom: none;
-    box-shadow: 
-      -10px 0 20px rgba(0, 122, 204, 0.6),  /* Soft left glow - Apple-like subtlety */
-      -5px 0 10px rgba(0, 122, 204, 0.4);    /* Medium left glow */
-    position: relative;
-    transition: box-shadow 0.15s ease, border-left 0.15s ease;
-  }
-  
-  /* Cursor after image - strong right glow only */
-  .image-wrapper.image-caret-after .markdown-image {
-    outline: none;  /* Remove outline - only directional border */
-    border-right: 2px solid var(--md-focus);  /* Subtle right border */
-    border-left: none;
-    border-top: none;
-    border-bottom: none;
-    box-shadow: 
-      10px 0 20px rgba(0, 122, 204, 0.6),   /* Soft right glow - Apple-like subtlety */
-      5px 0 10px rgba(0, 122, 204, 0.4);     /* Medium right glow */
-    position: relative;
-    transition: box-shadow 0.15s ease, border-right 0.15s ease;
-  }
-  
-  .image-wrapper.image-caret-selected {
-    box-shadow: 0 0 0 2px var(--md-focus);
-    border-radius: 6px;
-  }
-  
-  /* Apply glow effects when image is selected via keyboard (decoration system) */
-  .image-wrapper.image-caret-selected .markdown-image {
-    outline: 2px solid var(--md-focus);
-    outline-offset: 2px;
-    box-shadow: 
-      0 0 0 2px var(--md-focus),
-      0 0 12px rgba(0, 122, 204, 0.4),
-      0 0 24px rgba(0, 122, 204, 0.2);
-    position: relative;
-    animation: image-select-pulse 0.25s ease-out;
-  }
-  
-  /* Pending deletion state - red glowing border warning */
-  .image-wrapper.image-pending-delete .markdown-image {
-    outline: 2px solid var(--vscode-errorForeground, #ff4444);
-    outline-offset: 2px;
-    box-shadow: 
+}
+
+/* Cursor before image - strong left glow only */
+.image-wrapper.image-caret-before .markdown-image {
+  outline: none;
+  /* Remove outline - only directional border */
+  border-left: 2px solid var(--md-focus);
+  /* Subtle left border */
+  border-right: none;
+  border-top: none;
+  border-bottom: none;
+  box-shadow:
+    -10px 0 20px rgba(0, 122, 204, 0.6),
+    /* Soft left glow - Apple-like subtlety */
+    -5px 0 10px rgba(0, 122, 204, 0.4);
+  /* Medium left glow */
+  position: relative;
+  transition: box-shadow 0.15s ease, border-left 0.15s ease;
+}
+
+/* Cursor after image - strong right glow only */
+.image-wrapper.image-caret-after .markdown-image {
+  outline: none;
+  /* Remove outline - only directional border */
+  border-right: 2px solid var(--md-focus);
+  /* Subtle right border */
+  border-left: none;
+  border-top: none;
+  border-bottom: none;
+  box-shadow:
+    10px 0 20px rgba(0, 122, 204, 0.6),
+    /* Soft right glow - Apple-like subtlety */
+    5px 0 10px rgba(0, 122, 204, 0.4);
+  /* Medium right glow */
+  position: relative;
+  transition: box-shadow 0.15s ease, border-right 0.15s ease;
+}
+
+.image-wrapper.image-caret-selected {
+  box-shadow: 0 0 0 2px var(--md-focus);
+  border-radius: 6px;
+}
+
+/* Apply glow effects when image is selected via keyboard (decoration system) */
+.image-wrapper.image-caret-selected .markdown-image {
+  outline: 2px solid var(--md-focus);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 12px rgba(0, 122, 204, 0.4),
+    0 0 24px rgba(0, 122, 204, 0.2);
+  position: relative;
+  animation: image-select-pulse 0.25s ease-out;
+}
+
+/* Pending deletion state - red glowing border warning */
+.image-wrapper.image-pending-delete .markdown-image {
+  outline: 2px solid var(--vscode-errorForeground, #ff4444);
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 2px var(--vscode-errorForeground, #ff4444),
+    0 0 12px rgba(255, 68, 68, 0.4),
+    0 0 24px rgba(255, 68, 68, 0.2);
+  position: relative;
+  animation: image-delete-pulse 1s ease-in-out infinite;
+}
+
+/* Dark theme for pending deletion */
+.vscode-dark .image-wrapper.image-pending-delete .markdown-image,
+.vscode-high-contrast .image-wrapper.image-pending-delete .markdown-image {
+  box-shadow:
+    0 0 0 2px var(--vscode-errorForeground, #ff6666),
+    0 0 16px rgba(255, 100, 100, 0.6),
+    0 0 32px rgba(255, 100, 100, 0.3);
+  animation: image-delete-pulse-dark 1s ease-in-out infinite;
+}
+
+@keyframes image-delete-pulse {
+
+  0%,
+  100% {
+    box-shadow:
       0 0 0 2px var(--vscode-errorForeground, #ff4444),
       0 0 12px rgba(255, 68, 68, 0.4),
       0 0 24px rgba(255, 68, 68, 0.2);
-    position: relative;
-    animation: image-delete-pulse 1s ease-in-out infinite;
   }
-  
-  /* Dark theme for pending deletion */
-  .vscode-dark .image-wrapper.image-pending-delete .markdown-image,
-  .vscode-high-contrast .image-wrapper.image-pending-delete .markdown-image {
-    box-shadow: 
+
+  50% {
+    box-shadow:
+      0 0 0 2px var(--vscode-errorForeground, #ff4444),
+      0 0 16px rgba(255, 68, 68, 0.6),
+      0 0 32px rgba(255, 68, 68, 0.4);
+  }
+}
+
+@keyframes image-delete-pulse-dark {
+
+  0%,
+  100% {
+    box-shadow:
       0 0 0 2px var(--vscode-errorForeground, #ff6666),
       0 0 16px rgba(255, 100, 100, 0.6),
       0 0 32px rgba(255, 100, 100, 0.3);
-    animation: image-delete-pulse-dark 1s ease-in-out infinite;
   }
-  
-  @keyframes image-delete-pulse {
-    0%, 100% {
-      box-shadow: 
-        0 0 0 2px var(--vscode-errorForeground, #ff4444),
-        0 0 12px rgba(255, 68, 68, 0.4),
-        0 0 24px rgba(255, 68, 68, 0.2);
-    }
-    50% {
-      box-shadow: 
-        0 0 0 2px var(--vscode-errorForeground, #ff4444),
-        0 0 16px rgba(255, 68, 68, 0.6),
-        0 0 32px rgba(255, 68, 68, 0.4);
-    }
+
+  50% {
+    box-shadow:
+      0 0 0 2px var(--vscode-errorForeground, #ff6666),
+      0 0 20px rgba(255, 100, 100, 0.8),
+      0 0 40px rgba(255, 100, 100, 0.5);
   }
-  
-  @keyframes image-delete-pulse-dark {
-    0%, 100% {
-      box-shadow: 
-        0 0 0 2px var(--vscode-errorForeground, #ff6666),
-        0 0 16px rgba(255, 100, 100, 0.6),
-        0 0 32px rgba(255, 100, 100, 0.3);
-    }
-    50% {
-      box-shadow: 
-        0 0 0 2px var(--vscode-errorForeground, #ff6666),
-        0 0 20px rgba(255, 100, 100, 0.8),
-        0 0 40px rgba(255, 100, 100, 0.5);
-    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-wrapper.image-pending-delete .markdown-image {
+    animation: none;
   }
-  
-  @media (prefers-reduced-motion: reduce) {
-    .image-wrapper.image-pending-delete .markdown-image {
-      animation: none;
-    }
-    .vscode-dark .image-wrapper.image-pending-delete .markdown-image,
-    .vscode-high-contrast .image-wrapper.image-pending-delete .markdown-image {
-      animation: none;
-    }
+
+  .vscode-dark .image-wrapper.image-pending-delete .markdown-image,
+  .vscode-high-contrast .image-wrapper.image-pending-delete .markdown-image {
+    animation: none;
   }
-  
-  /* Dark theme for keyboard-selected images */
+}
+
+/* Dark theme for keyboard-selected images */
+.vscode-dark .image-wrapper.image-caret-selected .markdown-image,
+.vscode-high-contrast .image-wrapper.image-caret-selected .markdown-image {
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 16px rgba(100, 200, 255, 0.6),
+    0 0 32px rgba(100, 200, 255, 0.3);
+  animation: image-select-pulse-dark 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .image-wrapper.image-caret-selected .markdown-image {
+    animation: none;
+  }
+
   .vscode-dark .image-wrapper.image-caret-selected .markdown-image,
   .vscode-high-contrast .image-wrapper.image-caret-selected .markdown-image {
-    box-shadow: 
-      0 0 0 2px var(--md-focus),
-      0 0 16px rgba(100, 200, 255, 0.6),
-      0 0 32px rgba(100, 200, 255, 0.3);
-    animation: image-select-pulse-dark 0.25s ease-out;
+    animation: none;
   }
-  
-  @media (prefers-reduced-motion: reduce) {
-    .image-wrapper.image-caret-selected .markdown-image {
-      animation: none;
-    }
-    .vscode-dark .image-wrapper.image-caret-selected .markdown-image,
-    .vscode-high-contrast .image-wrapper.image-caret-selected .markdown-image {
-      animation: none;
-    }
-  }
-  
-  /* Dark theme overrides for one-sided glows - brighter and more visible */
-  .vscode-dark .image-wrapper.image-caret-before .markdown-image,
-  .vscode-high-contrast .image-wrapper.image-caret-before .markdown-image {
-    border-left: 2px solid var(--md-focus);
-    border-right: none;
-    border-top: none;
-    border-bottom: none;
-    box-shadow: 
-      -10px 0 24px rgba(100, 200, 255, 0.8),  /* Bright left glow - visible in dark */
-      -5px 0 12px rgba(100, 200, 255, 0.5);   /* Medium left glow */
-  }
-  
-  .vscode-dark .image-wrapper.image-caret-after .markdown-image,
-  .vscode-high-contrast .image-wrapper.image-caret-after .markdown-image {
-    border-right: 2px solid var(--md-focus);
-    border-left: none;
-    border-top: none;
-    border-bottom: none;
-    box-shadow: 
-      10px 0 24px rgba(100, 200, 255, 0.8),   /* Bright right glow - visible in dark */
-      5px 0 12px rgba(100, 200, 255, 0.5);    /* Medium right glow */
-  }
-  
-  .markdown-image[data-placeholder-id] {
-    opacity: 0.7;
-    filter: blur(2px);
-    transition: opacity 0.3s, filter 0.3s;
-  }
-  
-  /* Image resize modal */
-  .image-resize-modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: transparent;
-    pointer-events: none;
-    z-index: 150;
-  }
-  
-  .image-resize-modal-panel {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    width: 320px;
-    background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 8px;
-    padding: 16px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-    backdrop-filter: blur(20px);
-    opacity: 0.95;
-    z-index: 200;
-    pointer-events: auto;
-    transition: opacity 0.2s ease;
-  }
-  
-  .image-resize-modal-panel:hover {
-    opacity: 1;
-  }
-  
-  figure {
-    margin: 1.5em 0;
-    text-align: center;
-  }
-  
-  figure img {
-    margin-bottom: 0.5em;
-  }
-  
-  figcaption {
-    font-size: 0.875em;
-    color: var(--md-muted);
-    font-style: italic;
-  }
-  
-  /* ============================================
+}
+
+/* Dark theme overrides for one-sided glows - brighter and more visible */
+.vscode-dark .image-wrapper.image-caret-before .markdown-image,
+.vscode-high-contrast .image-wrapper.image-caret-before .markdown-image {
+  border-left: 2px solid var(--md-focus);
+  border-right: none;
+  border-top: none;
+  border-bottom: none;
+  box-shadow:
+    -10px 0 24px rgba(100, 200, 255, 0.8),
+    /* Bright left glow - visible in dark */
+    -5px 0 12px rgba(100, 200, 255, 0.5);
+  /* Medium left glow */
+}
+
+.vscode-dark .image-wrapper.image-caret-after .markdown-image,
+.vscode-high-contrast .image-wrapper.image-caret-after .markdown-image {
+  border-right: 2px solid var(--md-focus);
+  border-left: none;
+  border-top: none;
+  border-bottom: none;
+  box-shadow:
+    10px 0 24px rgba(100, 200, 255, 0.8),
+    /* Bright right glow - visible in dark */
+    5px 0 12px rgba(100, 200, 255, 0.5);
+  /* Medium right glow */
+}
+
+.markdown-image[data-placeholder-id] {
+  opacity: 0.7;
+  filter: blur(2px);
+  transition: opacity 0.3s, filter 0.3s;
+}
+
+/* Image resize handle */
+.image-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 12px;
+  height: 12px;
+  background-color: var(--md-focus);
+  cursor: nwse-resize;
+  opacity: 0;
+  transition: opacity 0.2s;
+  border-radius: 2px;
+  z-index: 10;
+}
+
+.image-wrapper:hover .image-resize-handle {
+  opacity: 1;
+}
+
+.image-resize-handle:hover {
+  transform: scale(1.2);
+  background-color: var(--vscode-button-hoverBackground);
+}
+
+figure {
+  margin: 1.5em 0;
+  text-align: center;
+}
+
+figure img {
+  margin-bottom: 0.5em;
+}
+
+figcaption {
+  font-size: 0.875em;
+  color: var(--md-muted);
+  font-style: italic;
+}
+
+/* ============================================
      Mermaid Diagrams
      ============================================ */
-  
-  .mermaid-wrapper {
-    position: relative;
-    margin: 1em 0;
-    border: 1px solid var(--md-border);
-    border-radius: 6px;
-    background-color: var(--md-subtle-bg);
-    overflow: hidden;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-  
-  .mermaid-wrapper:hover {
-    background-color: var(--md-hover-bg);
-  }
-  
-  .mermaid-source {
-    background: var(--md-code-bg);
-    padding: 20px;
-    margin: 0;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
-    font-size: 0.9em;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    border-radius: 6px;
-  }
-  
-  .mermaid-source.hidden {
-    display: none;
-  }
-  
-  .mermaid-render {
-    padding: 20px;
-    text-align: center;
-    min-height: 100px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    /* Mermaid SVG text inherits typography from `.markdown-editor`; reset to avoid clipped labels. */
-    line-height: normal;
-    letter-spacing: normal;
-  }
-  
-  .mermaid-render.hidden {
-    display: none;
-  }
-  
-  .mermaid-render svg {
-    max-width: 100%;
-    height: auto;
-  }
-  
-  .mermaid-error {
-    color: var(--vscode-errorForeground);
-    padding: 20px;
-    font-size: 0.9em;
-    font-family: 'SF Mono', Monaco, Consolas, monospace;
-  }
-  
-  /* Highlighted state (single-click) */
-  .mermaid-wrapper.highlighted {
-    border: 2px solid var(--vscode-focusBorder);
-    background-color: var(--md-hover-bg);
-    box-shadow: 0 0 0 3px var(--vscode-focusBorder, rgba(0, 122, 204, 0.15));
-  }
-  
-  /* Tooltip */
-  .mermaid-tooltip {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    background-color: var(--vscode-editorHoverWidget-background);
-    color: var(--vscode-editorHoverWidget-foreground);
-    border: 1px solid var(--vscode-editorHoverWidget-border);
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 0.85em;
-    pointer-events: none;
-    z-index: 10;
-    box-shadow: 0 2px 8px var(--vscode-widget-shadow);
-  }
-  
-  /* Preview button */
-  .mermaid-preview-btn {
-    background-color: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border: 1px solid var(--vscode-button-border, transparent);
-    padding: 4px 12px;
-    border-radius: 4px;
-    font-size: 0.85em;
-    cursor: pointer;
-    margin-bottom: 8px;
-    transition: background-color 0.15s;
-  }
-  
-  .mermaid-preview-btn:hover {
-    background-color: var(--vscode-button-hoverBackground);
-  }
-  
-  .mermaid-preview-btn:active {
-    background-color: var(--vscode-button-activeBackground, var(--vscode-button-hoverBackground));
-  }
-  
-  /* Edit textarea */
-  .mermaid-edit-textarea {
-    width: 100%;
-    min-height: 200px;
-    padding: 20px;
-    margin: 0;
-    background: var(--md-code-bg);
-    color: var(--vscode-editor-foreground);
-    border: none;
-    border-radius: 6px;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
-    font-size: 0.9em;
-    line-height: 1.5;
-    resize: vertical;
-    outline: none;
-  }
-  
-  .mermaid-edit-textarea:focus {
-    outline: 2px solid var(--vscode-focusBorder);
-    outline-offset: -2px;
-  }
-  
-  /* ============================================
+
+.mermaid-split-wrapper {
+  position: relative;
+  margin: 1em 0;
+  border: 1px solid var(--md-border);
+  border-radius: 6px;
+  background-color: var(--md-subtle-bg);
+  overflow: hidden;
+  cursor: pointer;
+  transition: background-color 0.2s, box-shadow 0.2s, border-color 0.2s;
+}
+
+.mermaid-split-wrapper:not(.is-editing):hover {
+  background-color: var(--md-hover-bg);
+}
+
+.mermaid-split-wrapper.is-editing {
+  display: flex;
+  flex-direction: column;
+  cursor: default;
+  background-color: var(--vscode-editor-background);
+  box-shadow: 0 0 0 2px var(--md-focus);
+}
+
+.mermaid-code-block {
+  display: none;
+  flex: 1;
+  max-width: 100%;
+  padding: 16px;
+  border-bottom: 1px solid var(--md-border);
+  background-color: var(--md-mermaid-edit-bg);
+  overflow-x: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+}
+
+.mermaid-textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+  color: var(--vscode-editor-foreground, inherit);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 13px);
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.mermaid-split-wrapper.is-editing .mermaid-code-block {
+  display: block;
+}
+
+.mermaid-render-block {
+  flex: 1;
+  padding: 20px;
+  text-align: center;
+  min-height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: normal;
+  letter-spacing: normal;
+  background-color: var(--md-subtle-bg);
+}
+
+.mermaid-render-block svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid-error {
+  color: var(--vscode-errorForeground);
+  padding: 20px;
+  font-size: 0.9em;
+  font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+
+.mermaid-placeholder {
+  color: var(--md-muted);
+  font-style: italic;
+}
+
+/* Mermaid highlight on selection to match image highlight */
+.mermaid-split-wrapper.highlighted {
+  border: 1px solid var(--md-focus);
+  outline: 2px solid var(--md-focus);
+  outline-offset: 2px;
+  overflow: visible !important;
+  z-index: 10;
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 12px rgba(0, 122, 204, 0.4),
+    0 0 24px rgba(0, 122, 204, 0.2);
+  animation: image-select-pulse 0.25s ease-out;
+  transition: box-shadow 0.2s ease, outline-color 0.2s ease;
+}
+
+/* Dark theme overrides for Mermaid highlight */
+.vscode-dark .mermaid-split-wrapper.highlighted,
+.vscode-high-contrast .mermaid-split-wrapper.highlighted {
+  box-shadow:
+    0 0 0 2px var(--md-focus),
+    0 0 16px rgba(100, 200, 255, 0.6),
+    0 0 32px rgba(100, 200, 255, 0.3);
+  animation: image-select-pulse-dark 0.25s ease-out;
+}
+
+/* Tooltip for double-click hint */
+.mermaid-tooltip {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background-color: var(--vscode-editorHoverWidget-background);
+  color: var(--vscode-editorHoverWidget-foreground);
+  border: 1px solid var(--vscode-editorHoverWidget-border);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
+
+
+/* ============================================
      Formatting & Emphasis
      ============================================ */
-  
-  .markdown-editor strong {
-    font-weight: 700;
-  }
-  
-  .markdown-editor em {
-    font-style: italic;
-  }
-  
-  .markdown-editor s {
-    text-decoration: line-through;
-  }
-  
-  /* ============================================
+
+.markdown-editor strong {
+  font-weight: 700;
+}
+
+.markdown-editor em {
+  font-style: italic;
+}
+
+.markdown-editor s {
+  text-decoration: line-through;
+}
+
+/* ============================================
      Editor States
      ============================================ */
-  
-  .markdown-editor .ProseMirror-focused {
-    outline: none;
-  }
-  
-  .markdown-editor ::selection {
-    background-color: var(--md-selection);
-  }
-  
-  .markdown-editor .ProseMirror p.is-editor-empty:first-child::before {
-    content: 'Start writing...';
-    color: var(--md-muted);
-    pointer-events: none;
-    height: 0;
-    float: left;
-  }
-  
-  /* ============================================
+
+.markdown-editor .ProseMirror-focused {
+  outline: none;
+}
+
+.markdown-editor ::selection {
+  background-color: var(--md-selection);
+}
+
+.markdown-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: 'Start writing...';
+  color: var(--md-muted);
+  pointer-events: none;
+  height: 0;
+  float: left;
+}
+
+/* ============================================
      Drag & Drop
      ============================================ */
-  
-  .ProseMirror.drag-over {
-    background-color: var(--md-selection);
-    outline: 2px dashed var(--md-focus);
-    outline-offset: -2px;
-  }
-  
-  .ProseMirror.drag-over::after {
-    content: 'Drop image here';
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    padding: 16px 32px;
-    background-color: var(--vscode-dropdown-background);
-    border: 1px solid var(--vscode-dropdown-border);
-    border-radius: 8px;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--vscode-foreground);
-    pointer-events: none;
-    z-index: 1000;
-    box-shadow: 0 4px 16px var(--vscode-widget-shadow);
-  }
-  
-  /* ============================================
+
+.ProseMirror.drag-over {
+  background-color: var(--md-selection);
+  outline: 2px dashed var(--md-focus);
+  outline-offset: -2px;
+}
+
+.ProseMirror.drag-over::after {
+  content: 'Drop image here';
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 16px 32px;
+  background-color: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--vscode-foreground);
+  pointer-events: none;
+  z-index: 1000;
+  box-shadow: 0 4px 16px var(--vscode-widget-shadow);
+}
+
+/* ============================================
      Toolbar - Compact Style
      ============================================ */
-  
-  .formatting-toolbar {
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 8px;
-    background-color: var(--vscode-editor-background);
-    border-bottom: 1px solid var(--vscode-editorWidget-border);
-    backdrop-filter: blur(10px);
-    transition: all 0.2s ease;
+
+.formatting-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px;
+  background-color: var(--md-background);
+  border-bottom: 1px solid var(--md-border);
+  backdrop-filter: blur(10px);
+  transition: all 0.2s ease;
+}
+
+.toolbar-button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--md-foreground);
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  min-width: 24px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.75;
+}
+
+.toolbar-button:hover {
+  background-color: var(--md-hover-bg);
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+.toolbar-button.active {
+  background-color: var(--md-button-bg);
+  color: var(--md-button-fg);
+  opacity: 1;
+  box-shadow: 0 2px 4px var(--vscode-widget-shadow);
+}
+
+.toolbar-button:disabled,
+.toolbar-button.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background-color: var(--vscode-panel-border, currentColor);
+  opacity: 0.5;
+  margin: 0 6px;
+}
+
+/* Toolbar Dropdown */
+.toolbar-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.toolbar-dropdown-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background-color: var(--md-dropdown-bg);
+  border: 1px solid var(--md-dropdown-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow);
+  min-width: 160px;
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.toolbar-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--md-dropdown-fg);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.toolbar-dropdown-item:hover {
+  background-color: var(--md-hover-bg);
+}
+
+.toolbar-dropdown-item:active {
+  background-color: var(--vscode-list-activeSelectionBackground);
+}
+
+.toolbar-dropdown-item:disabled,
+.toolbar-dropdown-item.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  color: var(--md-muted);
+}
+
+.toolbar-dropdown-item:disabled:hover,
+.toolbar-dropdown-item.disabled:hover {
+  background-color: transparent;
+}
+
+/* Custom underline icon fallback (Codicon doesn't have one) */
+.codicon-underline:before {
+  content: "U";
+  font-family: var(--md-font-sans, system-ui, sans-serif);
+  text-decoration: underline;
+  font-weight: 600;
+  font-size: 1.1em;
+}
+
+/* Special toolbar buttons */
+.toolbar-button.toc-button {
+  font-weight: 600;
+}
+
+.toolbar-button.copy-button {
+  transition: all 0.2s ease;
+}
+
+.toolbar-button.copy-button.copied {
+  background-color: var(--vscode-terminal-ansiGreen);
+  color: white;
+}
+
+.toolbar-button.copy-button.copy-failed {
+  background-color: var(--vscode-terminal-ansiRed);
+  color: white;
+}
+
+.toolbar-button.copy-button.no-selection {
+  animation: shake 0.3s ease-in-out;
+}
+
+@keyframes shake {
+
+  0%,
+  100% {
+    transform: translateX(0);
   }
-  
-  .toolbar-button {
-    background: transparent;
-    border: 1px solid transparent;
-    color: var(--md-foreground);
-    padding: 6px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    min-width: 24px;
-    height: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.75;
+
+  25% {
+    transform: translateX(-3px);
   }
-  
-  .toolbar-button:hover {
-    background-color: var(--md-hover-bg);
-    opacity: 1;
-    transform: translateY(-1px);
+
+  75% {
+    transform: translateX(3px);
   }
-  
-  .toolbar-button.active {
-    background-color: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    opacity: 1;
-    box-shadow: 0 2px 4px var(--vscode-widget-shadow);
-  }
-  
-  .toolbar-button:disabled,
-  .toolbar-button.disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-  
-  .toolbar-separator {
-    width: 1px;
-    height: 20px;
-    background-color: var(--vscode-panel-border, currentColor);
-    opacity: 0.5;
-    margin: 0 6px;
-  }
-  
-  /* Toolbar Dropdown */
-  .toolbar-dropdown {
-    position: relative;
-    display: inline-block;
-  }
-  
-  .toolbar-dropdown-menu {
-    display: none;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 4px;
-    background-color: var(--vscode-dropdown-background);
-    border: 1px solid var(--vscode-dropdown-border);
-    border-radius: 6px;
-    box-shadow: 0 4px 12px var(--vscode-widget-shadow);
-    min-width: 160px;
-    z-index: 1000;
-    overflow: hidden;
-  }
-  
-  .toolbar-dropdown-item {
-    display: block;
-    width: 100%;
-    padding: 8px 12px;
-    background: transparent;
-    border: none;
-    color: var(--vscode-dropdown-foreground);
-    text-align: left;
-    cursor: pointer;
-    transition: background-color 0.15s;
-  }
-  
-  .toolbar-dropdown-item:hover {
-    background-color: var(--md-hover-bg);
-  }
-  
-  .toolbar-dropdown-item:active {
-    background-color: var(--vscode-list-activeSelectionBackground);
-  }
-  
-  .toolbar-dropdown-item:disabled,
-  .toolbar-dropdown-item.disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-    color: var(--md-muted);
-  }
-  
-  .toolbar-dropdown-item:disabled:hover,
-  .toolbar-dropdown-item.disabled:hover {
-    background-color: transparent;
-  }
-  
-  /* Special toolbar buttons */
-  .toolbar-button.toc-button {
-    font-weight: 600;
-  }
-  
-  .toolbar-button.copy-button {
-    transition: all 0.2s ease;
-  }
-  
-  .toolbar-button.copy-button.copied {
-    background-color: var(--vscode-terminal-ansiGreen);
-    color: white;
-  }
-  
-  .toolbar-button.copy-button.copy-failed {
-    background-color: var(--vscode-terminal-ansiRed);
-    color: white;
-  }
-  
-  .toolbar-button.copy-button.no-selection {
-    animation: shake 0.3s ease-in-out;
-  }
-  
-  @keyframes shake {
-  
-    0%,
-    100% {
-      transform: translateX(0);
-    }
-  
-    25% {
-      transform: translateX(-3px);
-    }
-  
-    75% {
-      transform: translateX(3px);
-    }
-  }
-  
-  .toolbar-button.source-button {
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-    font-weight: 500;
-    letter-spacing: -0.5px;
-  }
-  
-  /* ============================================
+}
+
+.toolbar-button.source-button {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-weight: 500;
+  letter-spacing: -0.5px;
+}
+
+/* ============================================
      Table Context Menu
      ============================================ */
-  
-  .table-menu {
-    position: absolute;
-    background-color: var(--vscode-menu-background);
-    border: 1px solid var(--vscode-menu-border);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px var(--vscode-widget-shadow);
-    z-index: 1000;
-    min-width: 180px;
-    padding: 4px 0;
-  }
-  
-  .table-menu-item {
-    padding: 8px 16px;
-    cursor: pointer;
-    color: var(--vscode-menu-foreground);
-  }
-  
-  .table-menu-item:hover {
-    background-color: var(--vscode-menu-selectionBackground);
-    color: var(--vscode-menu-selectionForeground);
-  }
-  
-  .table-menu-separator {
-    height: 1px;
-    background-color: var(--vscode-menu-separatorBackground);
-    margin: 4px 0;
-  }
-  
-  /* ============================================
+
+.table-menu {
+  position: absolute;
+  background-color: var(--vscode-menu-background);
+  border: 1px solid var(--vscode-menu-border);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow);
+  z-index: 1000;
+  min-width: 180px;
+  padding: 4px 0;
+}
+
+.table-menu-item {
+  padding: 8px 16px;
+  cursor: pointer;
+  color: var(--vscode-menu-foreground);
+}
+
+.table-menu-item:hover {
+  background-color: var(--vscode-menu-selectionBackground);
+  color: var(--vscode-menu-selectionForeground);
+}
+
+.table-menu-separator {
+  height: 1px;
+  background-color: var(--vscode-menu-separatorBackground);
+  margin: 4px 0;
+}
+
+/* ============================================
      TOC Overlay
      ============================================ */
-  
-  .toc-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 1000;
-    display: flex;
-    align-items: flex-start;
-    justify-content: center;
-    padding-top: 60px;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-  }
-  
-  .toc-overlay.visible {
-    opacity: 1;
-    visibility: visible;
-  }
-  
-  .toc-overlay-backdrop {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: var(--vscode-editor-background);
-    opacity: 0.9;
-    backdrop-filter: blur(2px);
-  }
-  
-  .toc-overlay-panel {
-    position: relative;
-    z-index: 1;
-    background-color: var(--vscode-editor-background);
-    border: 1px solid var(--md-border);
-    border-radius: 12px;
-    box-shadow: 0 8px 32px var(--vscode-widget-shadow);
-    max-width: 900px;
-    width: min(50vw, 900px);
-    max-height: 80vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  
-  .toc-overlay-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--md-border);
-    flex-shrink: 0;
-  }
-  
-  .toc-overlay-title {
-    margin: 0;
-    font-weight: 600;
-    color: var(--md-foreground);
-  }
-  
-  .toc-overlay-close {
-    background: transparent;
-    border: none;
-    line-height: 1;
-    color: var(--md-muted);
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-    transition: background-color 0.15s ease, color 0.15s ease;
-  }
-  
-  .toc-overlay-close:hover {
-    background-color: var(--md-hover-bg);
-    color: var(--md-foreground);
-  }
-  
-  .toc-overlay-close:focus {
-    outline: 2px solid var(--md-focus);
-    outline-offset: 1px;
-  }
-  
-  .toc-overlay-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 12px 8px;
-  }
-  
-  .toc-overlay-item {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    padding: 9px 24px;
-    margin: 1px 0;
-    background: transparent;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    text-align: left;
-    color: var(--md-foreground);
-    transition: background-color 0.15s ease;
-  }
-  
-  .toc-overlay-item:hover {
-    background-color: var(--md-hover-bg);
-  }
-  
-  .toc-overlay-item:focus {
-    outline: none;
-    background-color: var(--vscode-list-activeSelectionBackground);
-    box-shadow: inset 0 0 0 2px var(--md-focus);
-  }
-  
-  .toc-overlay-level-indicator {
-    flex-shrink: 0;
-    margin-left: 12px;
-    color: var(--md-muted);
-    padding: 2px 8px;
-    border-radius: 999px;
-    background-color: var(--md-subtle-bg);
-    opacity: 0;
-    transition: opacity 0.15s ease;
-    font-size: calc(var(--vscode-editor-font-size, 14px) * .7);
-  }
-  
-  .toc-overlay-item:is(:hover, :focus) .toc-overlay-level-indicator {
-    opacity: 1;
-  }
-  
-  .toc-overlay-item-text {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  
-  /* TOC indentation levels */
-  .toc-overlay-level-1 {
-    padding-left: 16px;
-  }
-  
-  .toc-overlay-level-2 {
-    padding-left: 32px;
-  }
-  
-  .toc-overlay-level-3 {
-    padding-left: 48px;
-  }
-  
-  .toc-overlay-level-4 {
-    padding-left: 64px;
-  }
-  
-  .toc-overlay-level-5 {
-    padding-left: 80px;
-  }
-  
-  .toc-overlay-level-6 {
-    padding-left: 96px;
-  }
-  
-  .toc-overlay-empty {
-    text-align: center;
-    padding: 40px 20px;
-    color: var(--md-muted);
-  }
-  
-  .toc-overlay-empty p {
-    margin: 0 0 8px 0;
-  }
-  
-  .toc-overlay-empty-hint {
-    opacity: 0.8;
-  }
-  
-  .toc-overlay-empty code {
-    background-color: var(--md-code-bg);
-    padding: 2px 6px;
-    border-radius: 3px;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
-  }
-  
-  /* ============================================
+
+.toc-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 60px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.toc-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.toc-overlay-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--vscode-editor-background);
+  opacity: 0.9;
+  backdrop-filter: blur(2px);
+}
+
+.toc-overlay-panel {
+  position: relative;
+  z-index: 1;
+  background-color: var(--vscode-editor-background);
+  border: 1px solid var(--md-border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px var(--vscode-widget-shadow);
+  max-width: 900px;
+  width: min(50vw, 900px);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.toc-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--md-border);
+  flex-shrink: 0;
+}
+
+.toc-overlay-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--md-foreground);
+}
+
+.toc-overlay-close {
+  background: transparent;
+  border: none;
+  line-height: 1;
+  color: var(--md-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.toc-overlay-close:hover {
+  background-color: var(--md-hover-bg);
+  color: var(--md-foreground);
+}
+
+.toc-overlay-close:focus {
+  outline: 2px solid var(--md-focus);
+  outline-offset: 1px;
+}
+
+.toc-overlay-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 8px;
+}
+
+.toc-overlay-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 24px;
+  margin: 1px 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--md-foreground);
+  transition: background-color 0.15s ease;
+}
+
+.toc-overlay-item:hover {
+  background-color: var(--md-hover-bg);
+}
+
+.toc-overlay-item:focus {
+  outline: none;
+  background-color: var(--vscode-list-activeSelectionBackground);
+  box-shadow: inset 0 0 0 2px var(--md-focus);
+}
+
+.toc-overlay-level-indicator {
+  flex-shrink: 0;
+  margin-left: 12px;
+  color: var(--md-muted);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background-color: var(--md-subtle-bg);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  font-size: calc(var(--vscode-editor-font-size, 14px) * .7);
+}
+
+.toc-overlay-item:is(:hover, :focus) .toc-overlay-level-indicator {
+  opacity: 1;
+}
+
+.toc-overlay-item-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* TOC indentation levels */
+.toc-overlay-level-1 {
+  padding-left: 16px;
+}
+
+.toc-overlay-level-2 {
+  padding-left: 32px;
+}
+
+.toc-overlay-level-3 {
+  padding-left: 48px;
+}
+
+.toc-overlay-level-4 {
+  padding-left: 64px;
+}
+
+.toc-overlay-level-5 {
+  padding-left: 80px;
+}
+
+.toc-overlay-level-6 {
+  padding-left: 96px;
+}
+
+.toc-overlay-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--md-muted);
+}
+
+.toc-overlay-empty p {
+  margin: 0 0 8px 0;
+}
+
+.toc-overlay-empty-hint {
+  opacity: 0.8;
+}
+
+.toc-overlay-empty code {
+  background-color: var(--md-code-bg);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+}
+
+/* ============================================
      Export Settings Overlay
      ============================================ */
-  
-  .export-settings-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-  }
-  
-  .export-settings-overlay.visible {
-    opacity: 1;
-    visibility: visible;
-  }
-  
-  .export-settings-overlay-backdrop {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: rgba(0, 0, 0, 0.6);
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
-  }
-  
-  .export-settings-overlay-panel {
-    position: relative;
-    z-index: 1;
-    background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-    border: 2px solid var(--vscode-widget-border, var(--md-border));
-    border-radius: 12px;
-    box-shadow: 
-      0 16px 48px rgba(0, 0, 0, 0.4),
-      0 0 0 1px rgba(255, 255, 255, 0.1),
-      0 8px 32px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
-    max-width: 500px;
-    width: min(90vw, 500px);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-  
-  .export-settings-overlay-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--vscode-widget-border, var(--md-border));
-    background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
-    flex-shrink: 0;
-  }
-  
-  .export-settings-overlay-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--vscode-editorWidget-foreground, var(--md-foreground));
-  }
-  
-  .export-settings-overlay-close {
-    background: transparent;
-    border: none;
-    font-size: 24px;
-    line-height: 1;
-    color: var(--md-muted);
-    cursor: pointer;
-    padding: 4px 8px;
-    border-radius: 4px;
-    transition: background-color 0.15s ease, color 0.15s ease;
-  }
-  
-  .export-settings-overlay-close:hover {
-    background-color: var(--md-hover-bg);
-    color: var(--md-foreground);
-  }
-  
-  .export-settings-overlay-close:focus {
-    outline: 2px solid var(--md-focus);
-    outline-offset: 1px;
-  }
-  
-  .export-settings-content {
-    padding: 20px;
-  }
-  
-  .export-settings-section {
-    margin-bottom: 24px;
-  }
-  
-  .export-settings-label {
-    display: block;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--md-foreground);
-    margin-bottom: 8px;
-  }
-  
-  .export-settings-select {
-    width: 100%;
-    padding: 8px 12px;
-    box-sizing: border-box;
-    background-color: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border, var(--md-border));
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-    margin-top: 4px;
-  }
-  
-  .export-settings-select:focus {
-    outline: 1px solid var(--md-focus);
-    outline-offset: 0;
-  }
-  
-  .export-settings-hint {
-    margin-top: 6px;
-    font-size: 12px;
-    color: var(--md-muted);
-    line-height: 1.4;
-  }
-  
-  .table-insert-fields {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
-  }
-  
-  .table-insert-fields .export-settings-label {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 0;
-    min-width: 0;
-  }
-  
-  .table-insert-input {
-    font-size: 22px;
-    text-align: center;
-    padding: 12px;
-  }
-  
-  .table-insert-actions {
-    display: flex;
-    gap: 12px;
-    justify-content: flex-end;
-    margin-top: 4px;
-  }
-  
-  /* ============================================
+
+.export-settings-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.2s ease, visibility 0.2s ease;
+}
+
+.export-settings-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.export-settings-overlay-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.export-settings-overlay-panel {
+  position: relative;
+  z-index: 1;
+  background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 2px solid var(--vscode-widget-border, var(--md-border));
+  border-radius: 12px;
+  box-shadow:
+    0 16px 48px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 8px 32px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
+  max-width: 500px;
+  width: min(90vw, 500px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.export-settings-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--vscode-widget-border, var(--md-border));
+  background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  flex-shrink: 0;
+}
+
+.export-settings-overlay-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--vscode-editor-foreground, var(--md-foreground));
+}
+
+.export-settings-overlay-close {
+  background: transparent;
+  border: none;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--md-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.export-settings-overlay-close:hover {
+  background-color: var(--md-hover-bg);
+  color: var(--md-foreground);
+}
+
+.export-settings-overlay-close:focus {
+  outline: 2px solid var(--md-focus);
+  outline-offset: 1px;
+}
+
+.export-settings-content {
+  padding: 20px;
+}
+
+.export-settings-section {
+  margin-bottom: 24px;
+}
+
+.export-settings-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--md-foreground);
+  margin-bottom: 8px;
+}
+
+.export-settings-select {
+  width: 100%;
+  padding: 8px 12px;
+  box-sizing: border-box;
+  background-color: var(--vscode-dropdown-background);
+  color: var(--vscode-dropdown-foreground);
+  border: 1px solid var(--vscode-dropdown-border);
+  border-radius: 4px;
+}
+
+/* ============================================
      Link Dialog Enhanced Features
      ============================================ */
-  
-  /* Radio button group for mode selection */
-  .link-dialog-mode-group {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-  }
-  
-  .link-dialog-mode-option {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    user-select: none;
-    padding: 4px 8px;
-    border-radius: 4px;
-    transition: background-color 0.15s ease;
-  }
-  
-  .link-dialog-mode-option:hover {
-    background-color: var(--md-hover-bg);
-  }
-  
-  .link-dialog-mode-option input[type="radio"] {
-    margin: 0;
-    cursor: pointer;
-    accent-color: var(--vscode-button-background);
-  }
-  
-  .link-dialog-mode-option span {
-    font-size: 13px;
-    color: var(--md-foreground);
-  }
-  
-  /* Filter checkboxes */
-  .link-dialog-filters {
-    display: flex;
-    gap: 16px;
-    flex-wrap: wrap;
-    margin-top: 8px;
-  }
-  
-  .link-dialog-filter-checkbox {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    cursor: pointer;
-    user-select: none;
-    padding: 4px 8px;
-    border-radius: 4px;
-    transition: background-color 0.15s ease;
-  }
-  
-  .link-dialog-filter-checkbox:hover:not(:has(input:disabled)) {
-    background-color: var(--md-hover-bg);
-  }
-  
-  .link-dialog-filter-checkbox input[type="checkbox"] {
-    margin: 0;
-    cursor: pointer;
-    accent-color: var(--vscode-button-background);
-  }
-  
-  .link-dialog-filter-checkbox input[type="checkbox"]:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-  
-  .link-dialog-filter-checkbox span {
-    font-size: 13px;
-    color: var(--md-foreground);
-  }
-  
-  .link-dialog-filter-checkbox:has(input:disabled) {
-    opacity: 0.6;
-    cursor: not-allowed;
-  }
-  
-  /* Autocomplete dropdown */
-  .link-dialog-autocomplete {
-    position: absolute;
-    z-index: 1001; /* Above input but below modal backdrop (1000) */
-    background-color: var(--vscode-editorWidget-background);
-    border: 1px solid var(--md-border);
-    border-radius: 4px;
-    box-shadow: 0 4px 12px var(--vscode-widget-shadow);
-    max-height: 300px; /* Default max-height, will be adjusted dynamically */
-    overflow-y: auto;
-    margin-top: 4px;
-    max-width: 100%; /* Ensure dropdown doesn't exceed dialog width */
-  }
-  
-  .link-dialog-autocomplete-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    padding: 8px 12px;
-    cursor: pointer;
-    transition: background-color 0.15s ease;
-    border-bottom: 1px solid var(--md-border);
-  }
-  
-  .link-dialog-autocomplete-item:last-child {
-    border-bottom: none;
-  }
-  
-  .link-dialog-autocomplete-item:hover,
-  .link-dialog-autocomplete-item-highlighted {
-    background-color: var(--md-hover-bg);
-  }
-  
-  .link-dialog-autocomplete-content {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-  
-  .link-dialog-autocomplete-item-file {
-    border-left: 3px solid var(--vscode-textLink-foreground, #4a9eff);
-  }
-  
-  .link-dialog-autocomplete-item-heading {
-    border-left: 3px solid var(--vscode-textBlockQuote-border, #808080);
-  }
-  
-  .link-dialog-autocomplete-filename {
-    font-weight: 500;
-    font-size: 13px;
-    color: var(--md-foreground);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  
-  .link-dialog-autocomplete-level {
-    font-weight: normal;
-    color: var(--md-muted);
-    flex-shrink: 0;
-  }
-  
-  .link-dialog-autocomplete-item-path {
-    font-size: 12px;
-    color: var(--md-muted);
-    max-width: calc(100% - 60px);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  
-  .link-dialog-autocomplete-empty {
-    padding: 16px;
-    text-align: center;
-    color: var(--md-muted);
-    font-size: 13px;
-  }
-  
-  /* ============================================
+
+/* Radio button group for mode selection */
+.link-dialog-mode-group {
+  display: flex;
+  background-color: var(--vscode-button-secondaryBackground);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.link-dialog-mode-option {
+  flex: 1;
+  cursor: pointer;
+  position: relative;
+}
+
+.link-dialog-mode-option input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.link-dialog-mode-option span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--vscode-button-secondaryForeground);
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.link-dialog-mode-option input:checked+span {
+  background-color: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.link-dialog-mode-option:hover span:not(input:checked + span) {
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Inline Remove Button */
+.link-dialog-inline-btn {
+  background: transparent;
+  border: none;
+  color: var(--vscode-errorForeground);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+  opacity: 0.7;
+}
+
+.link-dialog-inline-btn:hover {
+  background-color: rgba(255, 100, 100, 0.1);
+  opacity: 1;
+}
+
+.link-dialog-inline-btn .codicon {
+  font-size: 14px;
+}
+
+/* Filter checkboxes */
+.link-dialog-filters {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.link-dialog-filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.link-dialog-filter-checkbox:hover:not(:has(input:disabled)) {
+  background-color: var(--md-hover-bg);
+}
+
+.link-dialog-filter-checkbox input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--vscode-button-background);
+}
+
+.link-dialog-filter-checkbox input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.link-dialog-filter-checkbox span {
+  font-size: 13px;
+  color: var(--md-foreground);
+}
+
+.link-dialog-filter-checkbox:has(input:disabled) {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Autocomplete dropdown */
+.link-dialog-autocomplete {
+  position: absolute;
+  z-index: 1001;
+  /* Above input but below modal backdrop (1000) */
+  background-color: var(--vscode-editorWidget-background);
+  border: 1px solid var(--md-border);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px var(--vscode-widget-shadow);
+  max-height: 300px;
+  /* Default max-height, will be adjusted dynamically */
+  overflow-y: auto;
+  margin-top: 4px;
+  max-width: 100%;
+  /* Ensure dropdown doesn't exceed dialog width */
+}
+
+.link-dialog-autocomplete-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  border-bottom: 1px solid var(--md-border);
+}
+
+.link-dialog-autocomplete-item:last-child {
+  border-bottom: none;
+}
+
+.link-dialog-autocomplete-item:hover,
+.link-dialog-autocomplete-item-highlighted {
+  background-color: var(--md-hover-bg);
+}
+
+.link-dialog-autocomplete-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.link-dialog-autocomplete-item-file {
+  border-left: 3px solid var(--vscode-textLink-foreground, #4a9eff);
+}
+
+.link-dialog-autocomplete-item-heading {
+  border-left: 3px solid var(--vscode-textBlockQuote-border, #808080);
+}
+
+.link-dialog-autocomplete-filename {
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--md-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.link-dialog-autocomplete-level {
+  font-weight: normal;
+  color: var(--md-muted);
+  flex-shrink: 0;
+}
+
+.link-dialog-autocomplete-item-path {
+  font-size: 12px;
+  color: var(--md-muted);
+  max-width: calc(100% - 60px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-dialog-autocomplete-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--md-muted);
+  font-size: 13px;
+}
+
+/* ============================================
      Search Overlay - In-document Find
      ============================================ */
-  
-  .search-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 1001;
-    display: flex;
-    justify-content: center;
-    padding-top: 50px;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.15s ease, visibility 0.15s ease;
-    pointer-events: none;
-  }
-  
-  .search-overlay.visible {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-  }
-  
-  .search-overlay-panel {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background-color: var(--vscode-editorWidget-background);
-    border: 1px solid var(--vscode-editorWidget-border);
-    border-radius: 8px;
-    box-shadow: 0 4px 16px var(--vscode-widget-shadow);
-    min-width: 320px;
-    max-width: 500px;
-  }
-  
-  .search-overlay-input-wrapper {
-    display: flex;
-    align-items: center;
-    flex: 1;
-    gap: 8px;
-    background-color: var(--vscode-input-background);
-    border: 1px solid var(--vscode-input-border, var(--md-border));
-    border-radius: 4px;
-    padding: 4px 8px;
-    transition: border-color 0.15s ease;
-  }
-  
-  .search-overlay-input-wrapper:focus-within {
-    border-color: var(--vscode-focusBorder);
-  }
-  
-  .search-overlay-icon {
-    color: var(--md-muted);
-    font-size: 14px;
-    flex-shrink: 0;
-  }
-  
-  .search-overlay-input {
-    flex: 1;
-    background: transparent;
+
+.search-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1001;
+  display: flex;
+  justify-content: center;
+  padding-top: 50px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+  pointer-events: none;
+}
+
+.search-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.search-overlay-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px var(--vscode-widget-shadow);
+  min-width: 320px;
+  max-width: 500px;
+}
+
+.search-overlay-input-wrapper {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  gap: 8px;
+  background-color: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--md-border));
+  border-radius: 4px;
+  padding: 4px 8px;
+  transition: border-color 0.15s ease;
+}
+
+.search-overlay-input-wrapper:focus-within {
+  border-color: var(--vscode-focusBorder);
+}
+
+.search-overlay-icon {
+  color: var(--md-muted);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.search-overlay-input {
+  flex: 1;
+  background: transparent;
   border: none;
   color: var(--vscode-input-foreground);
   font-size: 13px;
   outline: none;
-    min-width: 150px;
-  }
-  
-  .search-overlay-input::placeholder {
-    color: var(--vscode-input-placeholderForeground);
-  }
-  
-  .search-overlay-input.no-results {
-    color: var(--vscode-errorForeground);
-  }
-  
-  .search-overlay-counter {
-    font-size: 12px;
-    color: var(--md-muted);
-    white-space: nowrap;
-    min-width: 60px;
-    text-align: right;
-  }
-  
-  .search-overlay-counter.no-results {
-    color: var(--vscode-errorForeground);
-  }
-  
-  .search-overlay-buttons {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-  
-  .search-overlay-btn {
-    background: transparent;
-    border: none;
-    color: var(--md-foreground);
-    padding: 6px;
-    border-radius: 4px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: background-color 0.15s ease;
-    opacity: 0.8;
-  }
-  
-  .search-overlay-btn:hover {
-    background-color: var(--md-hover-bg);
-    opacity: 1;
-  }
-  
-  .search-overlay-btn:active {
-    background-color: var(--vscode-list-activeSelectionBackground);
-  }
-  
-  .search-overlay-btn:focus {
-    outline: 1px solid var(--vscode-focusBorder);
-    outline-offset: -1px;
-  }
-  
-  .search-overlay-close {
-    margin-left: 4px;
-  }
-  
-  /* Search match highlighting */
-  .search-match {
-    background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
-    border-radius: 2px;
-  }
-  
-  .search-match-active {
-    background-color: var(--vscode-editor-findMatchBackground, rgba(162, 190, 100, 0.7));
-    box-shadow: 0 0 0 1px var(--vscode-editor-findMatchBorder, rgba(162, 190, 100, 0.9));
-  }
-  
-  /* ============================================
+  min-width: 150px;
+}
+
+.search-overlay-input::placeholder {
+  color: var(--vscode-input-placeholderForeground);
+}
+
+.search-overlay-input.no-results {
+  color: var(--vscode-errorForeground);
+}
+
+.search-overlay-counter {
+  font-size: 12px;
+  color: var(--md-muted);
+  white-space: nowrap;
+  min-width: 60px;
+  text-align: right;
+}
+
+.search-overlay-counter.no-results {
+  color: var(--vscode-errorForeground);
+}
+
+.search-overlay-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.search-overlay-btn {
+  background: transparent;
+  border: none;
+  color: var(--md-foreground);
+  padding: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s ease;
+  opacity: 0.8;
+}
+
+.search-overlay-btn:hover {
+  background-color: var(--md-hover-bg);
+  opacity: 1;
+}
+
+.search-overlay-btn:active {
+  background-color: var(--vscode-list-activeSelectionBackground);
+}
+
+.search-overlay-btn:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.search-overlay-close {
+  margin-left: 4px;
+}
+
+/* Search match highlighting */
+.search-match {
+  background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+  border-radius: 2px;
+}
+
+.search-match-active {
+  background-color: var(--vscode-editor-findMatchBackground, rgba(162, 190, 100, 0.7));
+  box-shadow: 0 0 0 1px var(--vscode-editor-findMatchBorder, rgba(162, 190, 100, 0.9));
+}
+
+/* ============================================
      Image Resize Icon (Hover)
      ============================================ */
-  
-  /* Image wrapper for resize icon positioning */
-  .image-wrapper {
-    position: relative;
+
+/* Image wrapper for resize icon positioning */
+.image-wrapper {
+  position: relative;
   display: inline-block;
-    max-width: 100%;
-    width: fit-content;
-    margin: 0.25em 0;
-  }
-  
-  .image-wrapper + .image-wrapper {
-    margin-top: 0.25em;
-  }
-  
-  /* Image menu button - three-dots menu (replaces resize icon) */
-  .image-menu-button {
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 28px;
-    height: 28px;
-    background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    z-index: 20;
-    padding: 0;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.1);
-    color: var(--vscode-foreground);
-  }
+  max-width: 100%;
+  width: fit-content;
+  margin: 0.25em 0;
+}
 
-  .image-menu-button .toolbar-icon {
-    font-size: 14px;
-    width: 14px;
-    height: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: inherit;
-  }
+.image-wrapper+.image-wrapper {
+  margin-top: 0.25em;
+}
 
-  /* Show menu button on image hover */
-  .image-wrapper.image-hover-active .image-menu-button {
-    display: flex;
-    opacity: 1;
-    transform: scale(1);
-  }
+/* Image menu button - three-dots menu (replaces resize icon) */
+.image-menu-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 28px;
+  height: 28px;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  z-index: 20;
+  padding: 0;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.1);
+  color: var(--vscode-foreground);
+}
 
-  /* Also show when image is selected */
-  .image-wrapper:has(img.ProseMirror-selectednode) .image-menu-button {
-    display: flex;
-    opacity: 1;
-    transform: scale(1);
-  }
+.image-menu-button .toolbar-icon {
+  font-size: 14px;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
 
-  /* Hide if image is still loading */
-  .image-wrapper:has(.markdown-image[data-loading]) .image-menu-button {
-    display: none !important;
-    opacity: 0 !important;
-  }
+/* Show menu button on image hover */
+.image-wrapper.image-hover-active .image-menu-button {
+  display: flex;
+  opacity: 1;
+  transform: scale(1);
+}
 
-  /* Hover state */
-  .image-menu-button:hover {
-    background: var(--vscode-list-hoverBackground);
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.15);
-    border-color: var(--vscode-button-background);
-    z-index: 21;
-  }
+/* Also show when image is selected */
+.image-wrapper:has(img.ProseMirror-selectednode) .image-menu-button {
+  display: flex;
+  opacity: 1;
+  transform: scale(1);
+}
 
-  /* Active/pressed state */
-  .image-menu-button:active {
-    transform: scale(0.98);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-  }
+/* Hide if image is still loading */
+.image-wrapper:has(.markdown-image[data-loading]) .image-menu-button {
+  display: none !important;
+  opacity: 0 !important;
+}
 
-  /* Focus state */
-  .image-menu-button:focus {
-    outline: 1px solid var(--vscode-focusBorder);
-    outline-offset: 2px;
-  }
+/* Hover state */
+.image-menu-button:hover {
+  background: var(--vscode-list-hoverBackground);
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.15);
+  border-color: var(--vscode-button-background);
+  z-index: 21;
+}
 
-  .image-menu-button .codicon {
-    color: var(--vscode-foreground);
-    opacity: 0.9;
-  }
+/* Active/pressed state */
+.image-menu-button:active {
+  transform: scale(0.98);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
 
-  .image-menu-button:hover .codicon {
-    opacity: 1;
-  }
+/* Focus state */
+.image-menu-button:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
 
-  /* Image context menu dropdown - positioned relative to button */
-  .image-context-menu {
-    position: absolute;
-    right: 0;
-    min-width: 160px;
-    background: var(--vscode-menu-background);
-    border: 1px solid var(--vscode-menu-border);
-    border-radius: 6px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-    z-index: 1000;
-    overflow: hidden;
-  }
+.image-menu-button .codicon {
+  color: var(--vscode-foreground);
+  opacity: 0.9;
+}
 
-  .image-context-menu .menu-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    cursor: pointer;
-    color: var(--vscode-menu-foreground);
-    font-size: 13px;
-    transition: background 0.1s ease;
-  }
+.image-menu-button:hover .codicon {
+  opacity: 1;
+}
 
-  .image-context-menu .menu-item:hover,
-  .image-context-menu .menu-item:focus {
-    background: var(--vscode-menu-selectionBackground);
-    color: var(--vscode-menu-selectionForeground);
-    outline: none;
-  }
+/* Image context menu dropdown - positioned relative to button */
+.image-context-menu {
+  position: absolute;
+  right: 0;
+  min-width: 160px;
+  background: var(--vscode-menu-background);
+  border: 1px solid var(--vscode-menu-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 1000;
+  overflow: hidden;
+}
 
-  .image-context-menu .menu-icon {
-    font-size: 14px;
-    opacity: 0.8;
-  }
+.image-context-menu .menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--vscode-menu-foreground);
+  font-size: 13px;
+  transition: background 0.1s ease;
+}
 
-  .image-context-menu .menu-label {
-    flex: 1;
-  }
+.image-context-menu .menu-item:hover,
+.image-context-menu .menu-item:focus {
+  background: var(--vscode-menu-selectionBackground);
+  color: var(--vscode-menu-selectionForeground);
+  outline: none;
+}
 
-  /* Menu separator */
-  .image-context-menu .menu-separator {
-    height: 1px;
-    background: var(--vscode-menu-separatorBackground);
-    margin: 4px 0;
-  }
+.image-context-menu .menu-icon {
+  font-size: 14px;
+  opacity: 0.8;
+}
 
-  /* Keep menu button visible when menu is open */
-  .image-wrapper:has(.image-context-menu[style*="block"]) .image-menu-button {
-    display: flex;
-    opacity: 1;
-  }
+.image-context-menu .menu-label {
+  flex: 1;
+}
 
-  /* ============================================
+/* Menu separator */
+.image-context-menu .menu-separator {
+  height: 1px;
+  background: var(--vscode-menu-separatorBackground);
+  margin: 4px 0;
+}
+
+/* Keep menu button visible when menu is open */
+.image-wrapper:has(.image-context-menu[style*="block"]) .image-menu-button {
+  display: flex;
+  opacity: 1;
+}
+
+/* ============================================
      Image Metadata Footer - Centered Overlay
      ============================================ */
 
-  /* Full-image backdrop overlay */
-  .image-wrapper::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;  /* Full image coverage */
-    background: rgba(0, 0, 0, 0.6);
-    opacity: 0;
-    transition: opacity 0.2s ease-in-out;
-    pointer-events: none;
-    z-index: 10;
-    border-radius: inherit;
-  }
+/* Full-image backdrop overlay */
+.image-wrapper::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Full image coverage */
+  background: rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out;
+  pointer-events: none;
+  z-index: 10;
+  border-radius: inherit;
+}
 
-  .image-wrapper.image-hover-active::before {
-    opacity: 1;
-  }
+.image-wrapper.image-hover-active::before {
+  opacity: 1;
+}
 
-  /* Centered metadata card */
-  .image-metadata-footer {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 85%;
-    max-width: 800px;
-    background: transparent;
-    border: none;
-    padding: 14px 16px;
-    z-index: 11;
-    display: none;
-    opacity: 0;
-    transition: opacity 0.2s ease-in-out, transform 0.2s ease-in-out;
-    line-height: 1.5;
-    font-family: var(--vscode-editor-font-family);
-  }
+/* Centered metadata card */
+.image-metadata-footer {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 85%;
+  max-width: 800px;
+  background: transparent;
+  border: none;
+  padding: 14px 16px;
+  z-index: 11;
+  display: none;
+  opacity: 0;
+  transition: opacity 0.2s ease-in-out, transform 0.2s ease-in-out;
+  line-height: 1.5;
+  font-family: var(--vscode-editor-font-family);
+}
 
-  .image-wrapper.image-hover-active .image-metadata-footer {
-    display: block;
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-  }
+.image-wrapper.image-hover-active .image-metadata-footer {
+  display: block;
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
 
-  /* Typography hierarchy by image size */
+/* Typography hierarchy by image size */
 
-  /* Small images (< 200px) */
-  .image-metadata-footer[data-image-size="small"] {
-    font-size: 13px;
-    padding: 12px 14px;
-  }
+/* Small images (< 200px) */
+.image-metadata-footer[data-image-size="small"] {
+  font-size: 13px;
+  padding: 12px 14px;
+}
 
-  .image-metadata-footer[data-image-size="small"] .metadata-dimensions {
-    font-size: 13px;
-  }
+.image-metadata-footer[data-image-size="small"] .metadata-dimensions {
+  font-size: 13px;
+}
 
-  .image-metadata-footer[data-image-size="small"] .metadata-path,
-  .image-metadata-footer[data-image-size="small"] .metadata-date {
-    font-size: 11px;
-  }
+.image-metadata-footer[data-image-size="small"] .metadata-path,
+.image-metadata-footer[data-image-size="small"] .metadata-date {
+  font-size: 11px;
+}
 
-  /* Medium images (200-600px) */
-  .image-metadata-footer[data-image-size="medium"] {
-    font-size: 14px;
-    padding: 14px 16px;
-  }
+/* Medium images (200-600px) */
+.image-metadata-footer[data-image-size="medium"] {
+  font-size: 14px;
+  padding: 14px 16px;
+}
 
-  .image-metadata-footer[data-image-size="medium"] .metadata-dimensions {
-    font-size: 15px;
-  }
+.image-metadata-footer[data-image-size="medium"] .metadata-dimensions {
+  font-size: 15px;
+}
 
-  .image-metadata-footer[data-image-size="medium"] .metadata-size {
-    font-size: 13px;
-  }
+.image-metadata-footer[data-image-size="medium"] .metadata-size {
+  font-size: 13px;
+}
 
-  .image-metadata-footer[data-image-size="medium"] .metadata-path,
-  .image-metadata-footer[data-image-size="medium"] .metadata-date {
-    font-size: 12px;
-  }
+.image-metadata-footer[data-image-size="medium"] .metadata-path,
+.image-metadata-footer[data-image-size="medium"] .metadata-date {
+  font-size: 12px;
+}
 
-  /* Large images (> 600px) */
-  .image-metadata-footer[data-image-size="large"] {
-    font-size: 15px;
-    padding: 16px 20px;
-  }
+/* Large images (> 600px) */
+.image-metadata-footer[data-image-size="large"] {
+  font-size: 15px;
+  padding: 16px 20px;
+}
 
-  .image-metadata-footer[data-image-size="large"] .metadata-dimensions {
-    font-size: 16px;
-  }
+.image-metadata-footer[data-image-size="large"] .metadata-dimensions {
+  font-size: 16px;
+}
 
-  .image-metadata-footer[data-image-size="large"] .metadata-size {
-    font-size: 14px;
-  }
+.image-metadata-footer[data-image-size="large"] .metadata-size {
+  font-size: 14px;
+}
 
-  .image-metadata-footer[data-image-size="large"] .metadata-path,
-  .image-metadata-footer[data-image-size="large"] .metadata-date {
-    font-size: 13px;
-  }
+.image-metadata-footer[data-image-size="large"] .metadata-path,
+.image-metadata-footer[data-image-size="large"] .metadata-date {
+  font-size: 13px;
+}
 
-  /* Metadata row styles - shared across all sizes */
-  .metadata-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 6px;
-    line-height: 1.4;
-  }
+/* Metadata row styles - shared across all sizes */
+.metadata-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
 
-  .metadata-row:last-child {
-    margin-bottom: 0;
-  }
+.metadata-row:last-child {
+  margin-bottom: 0;
+}
 
-  .metadata-filename {
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.95);
-  }
+.metadata-filename {
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.95);
+}
 
-  .metadata-dimensions {
-    color: rgba(255, 255, 255, 0.95);
-    font-family: var(--vscode-editor-font-family);
-    font-weight: 500;
-    line-height: 1.4;
-  }
+.metadata-dimensions {
+  color: rgba(255, 255, 255, 0.95);
+  font-family: var(--vscode-editor-font-family);
+  font-weight: 500;
+  line-height: 1.4;
+}
 
-  .metadata-size {
-    color: rgba(255, 255, 255, 0.85);
-    font-weight: 400;
-    line-height: 1.4;
-  }
+.metadata-size {
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 400;
+  line-height: 1.4;
+}
 
-  .metadata-path {
-    color: rgba(255, 255, 255, 0.7);
-    font-family: var(--vscode-editor-font-family);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+.metadata-path {
+  color: rgba(255, 255, 255, 0.7);
+  font-family: var(--vscode-editor-font-family);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
-  .metadata-date {
-    color: rgba(255, 255, 255, 0.7);
-  }
+.metadata-date {
+  color: rgba(255, 255, 255, 0.7);
+}
 
-  .metadata-separator {
-    color: rgba(255, 255, 255, 0.5);
-  }
+.metadata-separator {
+  color: rgba(255, 255, 255, 0.5);
+}
 
-  .metadata-loading {
-    color: rgba(255, 255, 255, 0.7);
-    font-style: italic;
-  }
-  
+.metadata-loading {
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+}
+
+/* ============================================
+     Visible Hard Breaks (<br />)
+     ============================================ */
+
+.hard-break-wrapper {
+  display: inline-block;
+}
+
+.hard-break-label {
+  display: inline-block;
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground, #a0a0a0);
+  background: var(--md-subtle-bg, #f0f0f0);
+  border: 1px solid var(--md-border, #d0d0d0);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin: 0 2px;
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0.8;
+  user-select: none;
+  vertical-align: bottom;
+}
+
+/* Save button in toolbar */
+.formatting-toolbar .toolbar-btn.save-btn {
+  font-size: 14px;
+  padding: 2px 4px;
+  min-width: unset;
+}
+
+.formatting-toolbar .toolbar-btn.save-btn.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.formatting-toolbar .toolbar-btn.save-btn:not(.disabled) {
+  opacity: 1;
+  color: var(--vscode-charts-blue, #3b82f6);
+}
+
+/* ============================================
+     Live Preview — Formatting Marks (Obsidian-style)
+     ============================================ */
+
+.live-preview-syntax {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground, #888);
+  opacity: 0.6;
+  pointer-events: none;
+  user-select: none;
+}
+
+.live-preview-syntax-block {
+  margin-right: 0.25em;
+  display: inline-block;
+  opacity: 0.4;
+}
+
+/* Custom Drag Handle styling */
+.custom-drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--vscode-editor-foreground);
+  opacity: 0.3;
+  cursor: grab;
+  border-radius: 4px;
+  transition: background-color 0.2s, opacity 0.2s;
+}
+
+.custom-drag-handle:hover {
+  background-color: var(--vscode-list-hoverBackground);
+  opacity: 0.8;
+}
+
+.custom-drag-handle:active {
+  cursor: grabbing;
+}

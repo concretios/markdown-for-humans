@@ -195,8 +195,13 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       type: 'update',
       content: 'fresh content',
       skipResizeWarning: false,
-      imagePath: 'images',
-      imagePathBase: 'relativeToDocument',
+      mediaPath: 'media',
+      mediaPathBase: 'sameNameFolder',
+      lineSpacing: 1,
+      paragraphSpacing: 1,
+      tableCellSpacing: 0.1,
+      tableCellHorizontalSpacing: 0.5,
+      themeOverride: 'system',
     });
   });
 });

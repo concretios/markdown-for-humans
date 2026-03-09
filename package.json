@@ -1,12 +1,12 @@
 {
-  "name": "markdown-for-humans",
-  "displayName": "Markdown for Humans: WYSIWYG Editor",
+  "name": "gpt-ai-markdown-editor",
+  "displayName": "GPT-AI Markdown Editor",
   "description": "A full-featured WYSIWYG Markdown editor with visual table editing, drag-and-drop images, Mermaid diagrams, and distraction-free writing—all inside VS Code.",
-  "version": "0.1.3",
-  "publisher": "concretio",
+  "version": "1.0.0",
+  "publisher": "kamransethi",
   "author": {
-    "name": "Abhinav",
-    "email": "abhinav@concret.io"
+    "name": "Kamran Sethi",
+    "email": "kamransethi@hotmail.com"
   },
   "license": "MIT",
   "icon": "icon.png",
@@ -16,12 +16,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/concretios/markdown-for-humans"
+    "url": "https://github.com/kamransethi/markdown-for-humans"
   },
   "bugs": {
-    "url": "https://github.com/concretios/markdown-for-humans/issues"
+    "url": "https://github.com/kamransethi/markdown-for-humans/issues"
   },
-  "homepage": "https://github.com/concretios/markdown-for-humans#readme",
+  "homepage": "https://github.com/kamransethi/markdown-for-humans#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -107,6 +107,10 @@
         "command": "markdownForHumans.outline.clearFilter",
         "title": "Outline: Clear Filter",
         "icon": "$(close)"
+      },
+      {
+        "command": "markdownForHumans.openAttachmentsFolder",
+        "title": "Open Attachments Folder"
       }
     ],
     "views": {
@@ -147,19 +151,25 @@
     "configuration": {
       "title": "Markdown for Humans",
       "properties": {
-        "markdownForHumans.imagePath": {
+        "markdownForHumans.mediaPath": {
           "type": "string",
-          "default": "images",
-          "description": "Folder path for saved images. Interpreted relative to markdownForHumans.imagePathBase."
+          "default": "media",
+          "description": "Subfolder name for saved media files (images, attachments). Only used when Media Path Base is 'relativeToDocument' or 'workspaceFolder'."
         },
-        "markdownForHumans.imagePathBase": {
+        "markdownForHumans.mediaPathBase": {
           "type": "string",
           "enum": [
+            "sameNameFolder",
             "relativeToDocument",
             "workspaceFolder"
           ],
-          "default": "relativeToDocument",
-          "description": "Controls whether Image Path is relative to the current markdown file folder or the workspace folder."
+          "enumDescriptions": [
+            "Save media in a folder with the same name as the markdown file (e.g., my-doc/ next to my-doc.md). Recommended.",
+            "Save media in a subfolder relative to the current markdown file's directory.",
+            "Save media in a subfolder relative to the workspace root."
+          ],
+          "default": "sameNameFolder",
+          "description": "Controls where media files (images, attachments) are saved."
         },
         "markdownForHumans.chromePath": {
           "type": "string",
@@ -170,6 +180,50 @@
           "type": "boolean",
           "default": false,
           "description": "Skip the warning dialog when resizing images. When enabled, images will be resized immediately without confirmation."
+        },
+        "markdownForHumans.lineSpacing": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 3,
+          "description": "Line height multiplier for body text in the editor (e.g., 1.7 = 170% of font size)."
+        },
+        "markdownForHumans.paragraphSpacing": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Extra bottom margin between paragraphs, in em units."
+        },
+        "markdownForHumans.tableCellSpacing": {
+          "type": "number",
+          "default": 0.1,
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Vertical padding inside table cells, in em units."
+        },
+        "markdownForHumans.tableCellHorizontalSpacing": {
+          "type": "number",
+          "default": 0.2,
+          "minimum": 0,
+          "maximum": 3,
+          "description": "Horizontal padding inside table cells, in em units."
+        },
+        "markdownForHumans.themeOverride": {
+          "type": "string",
+          "enum": [
+            "system",
+            "light",
+            "dark"
+          ],
+          "default": "system",
+          "description": "Override the editor theme mode (System, Light, or Dark) manually. Choosing System will follow your VS Code theme."
+        },
+        "markdownForHumans.developerMode": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "**Developer Mode**: Show detailed runtime errors in-editor and keep diagnostic logging enabled for troubleshooting.",
+          "order": 999
         }
       }
     }
@@ -200,6 +254,9 @@
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.3",
+    "@tiptap/extension-table-cell": "^3.20.1",
+    "@tiptap/extension-table-header": "^3.20.1",
+    "@tiptap/extension-table-row": "^3.20.1",
     "@types/image-size": "^0.7.0",
     "@types/jest": "^29.5.11",
     "@types/node": "^20.10.6",
@@ -221,10 +278,15 @@
   "dependencies": {
     "@tiptap/core": "^3.0.0",
     "@tiptap/extension-code-block-lowlight": "^3.0.0",
+    "@tiptap/extension-color": "^3.20.1",
+    "@tiptap/extension-drag-handle": "^3.20.1",
+    "@tiptap/extension-highlight": "^3.12.1",
     "@tiptap/extension-image": "^3.0.0",
     "@tiptap/extension-link": "^3.0.0",
     "@tiptap/extension-list": "^3.0.0",
     "@tiptap/extension-table": "^3.0.0",
+    "@tiptap/extension-text-style": "^3.20.1",
+    "@tiptap/extension-underline": "^3.20.1",
     "@tiptap/markdown": "^3.0.0",
     "@tiptap/pm": "^3.0.0",
     "@tiptap/starter-kit": "^3.0.0",
@@ -236,7 +298,8 @@
     "katex": "^0.16.9",
     "lowlight": "^2.9.0",
     "markdown-it": "^14.0.0",
-    "mermaid": "^10.6.1",
+    "markdown-it-mark": "^4.0.0",
+    "mermaid": "^11.12.3",
     "turndown": "^7.1.2"
   }
 }

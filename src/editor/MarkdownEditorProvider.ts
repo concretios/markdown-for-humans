@@ -9,7 +9,6 @@ import * as path from 'path';
 import * as os from 'os';
 import { outlineViewProvider } from '../features/outlineView';
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
-import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
 
 /**
  * Parse an image filename to extract source prefix
@@ -141,6 +140,29 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   // Remember last content sent from the webview so we can skip redundant updates
   private lastWebviewContent = new Map<string, string>();
 
+  // Use a promise queue per document to ensure edits are processed sequentially
+  private editQueue = new Map<string, Promise<void>>();
+
+  /**
+   * Helper to retrieve all webview-related configuration settings.
+   */
+  private getWebviewSettings(config: vscode.WorkspaceConfiguration) {
+    return {
+      skipResizeWarning: config.get<boolean>('markdownForHumans.imageResize.skipWarning', false),
+      mediaPath: config.get<string>('markdownForHumans.mediaPath', 'media'),
+      mediaPathBase: config.get<string>('markdownForHumans.mediaPathBase', 'sameNameFolder'),
+      lineSpacing: config.get<number>('markdownForHumans.lineSpacing', 1),
+      paragraphSpacing: config.get<number>('markdownForHumans.paragraphSpacing', 1),
+      tableCellSpacing: config.get<number>('markdownForHumans.tableCellSpacing', 0.1),
+      tableCellHorizontalSpacing: config.get<number>(
+        'markdownForHumans.tableCellHorizontalSpacing',
+        0.5
+      ),
+      themeOverride: config.get<string>('markdownForHumans.themeOverride', 'system'),
+      developerMode: config.get<boolean>('markdownForHumans.developerMode', true),
+    };
+  }
+
   public static register(context: vscode.ExtensionContext): vscode.Disposable {
     const provider = new MarkdownEditorProvider(context);
     const providerRegistration = vscode.window.registerCustomEditorProvider(
@@ -148,8 +170,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       provider,
       {
         webviewOptions: {
-          retainContextWhenHidden: true,
           enableFindWidget: true,
+          retainContextWhenHidden: true,
         },
         supportsMultipleEditorsPerDocument: false,
       }
@@ -168,7 +190,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       return path.dirname(document.uri.fsPath);
     }
     // For untitled files, getWorkspaceFolder may not work reliably
-    // So we check workspaceFolders first, then fall back to getWorkspaceFolder
     if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
       // For untitled files, use the first workspace folder if available
       return vscode.workspace.workspaceFolders[0].uri.fsPath;
@@ -238,10 +259,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
    */
   private getImageStorageBasePath(document: vscode.TextDocument): string | null {
     const config = vscode.workspace.getConfiguration();
-    const imagePathBase = config.get<string>(
-      'markdownForHumans.imagePathBase',
-      'relativeToDocument'
-    );
+    const mediaPathBase = config.get<string>('markdownForHumans.mediaPathBase', 'sameNameFolder');
 
     // Untitled docs: default to workspace-level saves when possible (we don't know
     // the final markdown file directory yet).
@@ -249,7 +267,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       return this.getWorkspaceFolderPath(document) ?? this.getImageBasePath(document);
     }
 
-    if (imagePathBase === 'workspaceFolder') {
+    if (mediaPathBase === 'sameNameFolder') {
+      const docPath = document.uri.fsPath;
+      const docDir = path.dirname(docPath);
+      const ext = path.extname(docPath);
+      const baseName = path.basename(docPath, ext);
+      return path.join(docDir, baseName);
+    }
+
+    if (mediaPathBase === 'workspaceFolder') {
       return this.getWorkspaceFolderPath(document) ?? this.getImageBasePath(document);
     }
 
@@ -257,6 +283,33 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return (
       this.getDocumentDirectory(document) ?? this.getWorkspaceFolderPath(document) ?? os.homedir()
     );
+  }
+
+  /**
+   * Get the resolved target folder for saving media
+   * Returns the absolute *folder* path where the media file will be placed.
+   */
+  private resolveMediaTargetFolder(
+    document: vscode.TextDocument,
+    requestedFolder: string
+  ): string | null {
+    const config = vscode.workspace.getConfiguration();
+    const mediaPathBase = config.get<string>('markdownForHumans.mediaPathBase', 'sameNameFolder');
+
+    if (mediaPathBase === 'sameNameFolder' || requestedFolder === '__sameNameFolder__') {
+      const docPath = document.uri.fsPath;
+      if (document.uri.scheme !== 'file') {
+        return path.join(os.homedir(), 'media');
+      }
+      const docDir = path.dirname(docPath);
+      const ext = path.extname(docPath);
+      const baseName = path.basename(docPath, ext);
+      return path.join(docDir, baseName);
+    }
+
+    const saveBasePath = this.getImageStorageBasePath(document);
+    if (!saveBasePath) return null;
+    return path.join(saveBasePath, requestedFolder);
   }
 
   /**
@@ -327,6 +380,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       }
     });
 
+    // Notify webview when document is successfully saved to disk
+    const saveDocumentSubscription = vscode.workspace.onDidSaveTextDocument(e => {
+      if (e.uri.toString() === document.uri.toString()) {
+        webviewPanel.webview.postMessage({ type: 'saved' });
+      }
+    });
+
     // Handle messages from webview
     webviewPanel.webview.onDidReceiveMessage(
       e => this.handleWebviewMessage(e, document, webviewPanel.webview),
@@ -345,20 +405,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       if (
         e.affectsConfiguration('markdownForHumans.imageResize.skipWarning') ||
         e.affectsConfiguration('markdownForHumans.imagePath') ||
-        e.affectsConfiguration('markdownForHumans.imagePathBase')
+        e.affectsConfiguration('markdownForHumans.mediaPathBase') ||
+        e.affectsConfiguration('markdownForHumans.themeOverride') ||
+        e.affectsConfiguration('markdownForHumans.developerMode')
       ) {
         const config = vscode.workspace.getConfiguration();
-        const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
-        const imagePath = config.get<string>('markdownForHumans.imagePath', 'images');
-        const imagePathBase = config.get<string>(
-          'markdownForHumans.imagePathBase',
-          'relativeToDocument'
-        );
+        const settings = this.getWebviewSettings(config);
+
         webviewPanel.webview.postMessage({
           type: 'settingsUpdate',
-          skipResizeWarning: skipWarning,
-          imagePath: imagePath,
-          imagePathBase: imagePathBase,
+          ...settings,
         });
       }
     });
@@ -374,6 +430,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // Cleanup
     webviewPanel.onDidDispose(() => {
       changeDocumentSubscription.dispose();
+      saveDocumentSubscription.dispose();
       configChangeSubscription.dispose();
       // Clean up pending edits tracking for this document
       this.pendingEdits.delete(document.uri.toString());
@@ -388,20 +445,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
    * Send document content to webview
    * Skips update if it's from a recent webview edit (avoid feedback loop)
    */
-  private updateWebview(document: vscode.TextDocument, webview: vscode.Webview) {
+  private updateWebview(document: vscode.TextDocument, webview: vscode.Webview, force = false) {
     const docUri = document.uri.toString();
     const lastEditTime = this.pendingEdits.get(docUri);
     const currentContent = document.getText();
 
     // Skip update if content matches what we already sent from the webview
     const lastSentContent = this.lastWebviewContent.get(docUri);
-    if (lastSentContent !== undefined && lastSentContent === currentContent) {
+    if (!force && lastSentContent !== undefined && lastSentContent === currentContent) {
       return;
     }
 
     // Skip update if this change came from webview within last 100ms
     // This prevents feedback loops while allowing external Git changes to sync
-    if (lastEditTime && Date.now() - lastEditTime < 100) {
+    if (!force && lastEditTime && Date.now() - lastEditTime < 100) {
       return;
     }
 
@@ -414,19 +471,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Get skip warning setting
     const config = vscode.workspace.getConfiguration();
-    const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
-    const imagePath = config.get<string>('markdownForHumans.imagePath', 'images');
-    const imagePathBase = config.get<string>(
-      'markdownForHumans.imagePathBase',
-      'relativeToDocument'
-    );
+    const settings = this.getWebviewSettings(config);
 
     webview.postMessage({
       type: 'update',
       content: transformedContent,
-      skipResizeWarning: skipWarning,
-      imagePath: imagePath,
-      imagePathBase: imagePathBase,
+      ...settings,
     });
   }
 
@@ -439,30 +489,89 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webview: vscode.Webview
   ) {
     switch (message.type) {
-      case 'edit':
-        // Fire-and-forget: errors are handled inside applyEdit and shown to user
-        void this.applyEdit(message.content as string, document);
+      case 'updateThemeOverride': {
+        const theme = message.theme as string;
+        // Save to VS Code settings for persistence
+        vscode.workspace
+          .getConfiguration()
+          .update('markdownForHumans.themeOverride', theme, vscode.ConfigurationTarget.Global);
+        // Immediately apply to the webview so it takes effect right away
+        webview.postMessage({
+          type: 'settingsUpdate',
+          themeOverride: theme,
+        });
         break;
+      }
+      case 'edit':
+        // Enqueue edit to ensure we don't apply overlapping edits which can confuse VS Code
+        void this.enqueueEdit(document.uri.toString(), () =>
+          this.applyEdit(message.content as string, document)
+        );
+        break;
+      case 'saveAndEdit': {
+        const contentStr = (message.content as string) || '';
+        const requestId =
+          typeof message.requestId === 'string' && message.requestId.trim().length > 0
+            ? message.requestId
+            : 'save-unknown';
+        const docUri = document.uri.toString();
+        console.log(
+          `[MD4H][SAVE][${requestId}] Received saveAndEdit (content len: ${contentStr.length}, uri: ${docUri})`
+        );
+        void this.enqueueEdit(document.uri.toString(), async () => {
+          try {
+            const success = await this.applyEdit(contentStr, document);
+            console.log(`[MD4H][SAVE][${requestId}] applyEdit result: ${success}`);
+
+            const saved = await document.save();
+            console.log(`[MD4H][SAVE][${requestId}] document.save() result: ${saved}`);
+
+            // Send signal back. We send it for 'success' (content matches) OR 'saved' (disk write).
+            // This ensures the toolbar can gray out if the document state is now congruent.
+            webview.postMessage({ type: 'saved', requestId });
+
+            // Proactive visible signal to user
+            if (saved) {
+              vscode.window.setStatusBarMessage('$(check) Markdown saved', 2000);
+            } else {
+              vscode.window.setStatusBarMessage('$(circle-slash) Markdown already saved', 2000);
+            }
+          } catch (err) {
+            console.error(`[MD4H][SAVE][${requestId}] Critical error in saveAndEdit:`, err);
+            vscode.window.showErrorMessage(
+              `Save failed: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        });
+        break;
+      }
       case 'save':
-        // Trigger VS Code's save command
-        vscode.commands.executeCommand('workbench.action.files.save');
+        console.log('[MD4H] Received save message');
+        void this.enqueueEdit(document.uri.toString(), async () => {
+          try {
+            const saved = await document.save();
+            console.log(`[MD4H] document.save() result: ${saved}`);
+            webview.postMessage({ type: 'saved' });
+
+            if (saved) {
+              vscode.window.setStatusBarMessage('$(check) Markdown saved', 2000);
+            }
+          } catch (err) {
+            console.error('[MD4H] Critical error in save:', err);
+          }
+        });
         break;
       case 'ready': {
         // Webview is ready, send initial content and settings
-        this.updateWebview(document, webview);
+        // Force resync to ensure editor is populated even if host thinks it's in sync
+        this.updateWebview(document, webview, true);
         // Also send settings separately
         const config = vscode.workspace.getConfiguration();
-        const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
-        const imagePath = config.get<string>('markdownForHumans.imagePath', 'images');
-        const imagePathBase = config.get<string>(
-          'markdownForHumans.imagePathBase',
-          'relativeToDocument'
-        );
+        const settings = this.getWebviewSettings(config);
+
         webview.postMessage({
           type: 'settingsUpdate',
-          skipResizeWarning: skipWarning,
-          imagePath: imagePath,
-          imagePathBase: imagePathBase,
+          ...settings,
         });
         break;
       }
@@ -506,15 +615,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       case 'showError':
         vscode.window.showErrorMessage(message.message as string);
         break;
-      case 'resizeImage':
-        this.handleResizeImage(message, document, webview);
+      case 'webviewLog': {
+        const level = typeof message.level === 'string' ? message.level : 'info';
+        const text = typeof message.message === 'string' ? message.message : 'Unknown webview log';
+        const details = message.details;
+        if (level === 'error') {
+          console.error(`[MD4H][WEBVIEW] ${text}`, details);
+        } else if (level === 'warn') {
+          console.warn(`[MD4H][WEBVIEW] ${text}`, details);
+        } else {
+          console.log(`[MD4H][WEBVIEW] ${text}`, details);
+        }
         break;
-      case 'undoResize':
-        this.handleUndoResize(message, document, webview);
-        break;
-      case 'redoResize':
-        this.handleRedoResize(message, document, webview);
-        break;
+      }
       case 'updateSetting':
         this.handleUpdateSetting(message, webview);
         break;
@@ -557,6 +670,124 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       case 'openImage':
         void this.handleOpenImage(message, document);
         break;
+      case 'openAttachmentsFolder':
+        void this.handleOpenAttachmentsFolder(document);
+        break;
+      case 'browseLocalFile':
+        void this.handleBrowseLocalFile(document, webview);
+        break;
+    }
+  }
+
+  /**
+   * Handle opening the attachments folder from the toolbar
+   */
+  private async handleOpenAttachmentsFolder(document: vscode.TextDocument): Promise<void> {
+    const config = vscode.workspace.getConfiguration();
+    const mediaFolderName = config.get<string>('markdownForHumans.mediaPath', 'media');
+
+    // Resolve absolute path using same logic as saving images
+    const targetDir = this.resolveMediaTargetFolder(document, mediaFolderName);
+    if (!targetDir) {
+      vscode.window.showErrorMessage('Cannot determine attachments folder location.');
+      return;
+    }
+
+    try {
+      // Create folder if it doesn't exist yet
+      const dirUri = vscode.Uri.file(targetDir);
+      try {
+        await vscode.workspace.fs.stat(dirUri);
+      } catch {
+        // Folder doesn't exist, create it so we can open it
+        await vscode.workspace.fs.createDirectory(dirUri);
+      }
+
+      // Reveal in OS completely
+      await vscode.commands.executeCommand('revealFileInOS', dirUri);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`Failed to open attachments folder: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Handle browsing for a local file to link
+   */
+  private async handleBrowseLocalFile(
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<void> {
+    const documentDir = vscode.Uri.joinPath(document.uri, '..');
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+    const workspacePath = workspaceFolder?.uri.fsPath;
+
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: false,
+      openLabel: 'Select File',
+      defaultUri: documentDir,
+    });
+
+    if (uris && uris.length > 0) {
+      const selectedUri = uris[0];
+      const selectedPath = selectedUri.fsPath;
+      const pathModule = await import('path');
+
+      let finalUri = selectedUri;
+      let isOutsideWorkspace = false;
+
+      if (workspacePath) {
+        // Check if selected file is inside the workspace
+        isOutsideWorkspace =
+          !selectedPath.startsWith(workspacePath + pathModule.sep) &&
+          selectedPath !== workspacePath;
+      } else {
+        // No workspace open, consider it "outside" for the purpose of copying to a local folder
+        isOutsideWorkspace = true;
+      }
+
+      if (isOutsideWorkspace) {
+        // Copy file to workspace media folder
+        const config = vscode.workspace.getConfiguration();
+        const mediaFolderName = config.get<string>('markdownForHumans.mediaPath', 'media');
+        const targetDir = this.resolveMediaTargetFolder(document, mediaFolderName);
+
+        if (targetDir) {
+          try {
+            // Ensure target directory exists
+            await vscode.workspace.fs.createDirectory(vscode.Uri.file(targetDir));
+
+            const fileName = pathModule.basename(selectedPath);
+            const targetPath = pathModule.join(targetDir, fileName);
+            const targetUri = vscode.Uri.file(targetPath);
+
+            // Copy the file
+            await vscode.workspace.fs.copy(selectedUri, targetUri, { overwrite: true });
+            finalUri = targetUri;
+
+            vscode.window.showInformationMessage(`Copied file to: ${mediaFolderName}/${fileName}`);
+          } catch (error) {
+            vscode.window.showErrorMessage(
+              `Failed to copy file: ${error instanceof Error ? error.message : String(error)}`
+            );
+            // Continue with original path if copy fails
+          }
+        }
+      }
+
+      // Calculate relative path from document directory to final file
+      const docDirPath = documentDir.fsPath;
+      const finalFsPath = finalUri.fsPath;
+
+      let relativePath = pathModule.relative(docDirPath, finalFsPath);
+      // Ensure forward slashes
+      relativePath = relativePath.replace(/\\/g, '/');
+
+      webview.postMessage({
+        type: 'localFileSelected',
+        filename: pathModule.basename(finalFsPath),
+        path: relativePath,
+      });
     }
   }
 
@@ -714,7 +945,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         }
 
         const config = vscode.workspace.getConfiguration();
-        const imageFolderName = config.get<string>('markdownForHumans.imagePath', 'images');
+        const imageFolderName = config.get<string>('markdownForHumans.mediaPath', 'media');
         const imagesDir = path.join(saveBasePath, imageFolderName);
 
         // Create folder if needed
@@ -831,9 +1062,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // Use user-selected folder from confirmation dialog
     const imageFolderName = (message.targetFolder as string) || 'images';
 
-    // Resolve where to save new images (may be doc-relative or workspace-level).
-    const saveBasePath = this.getImageStorageBasePath(document);
-    if (!saveBasePath) {
+    // Resolve where to save new images (may be doc-relative, workspace-level, or sameNameFolder).
+    const imagesDir = this.resolveMediaTargetFolder(document, imageFolderName);
+    if (!imagesDir) {
       const errorMessage = 'Cannot save image: no base directory available';
       vscode.window.showErrorMessage(errorMessage);
       webview.postMessage({
@@ -843,7 +1074,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       });
       return;
     }
-    const imagesDir = path.join(saveBasePath, imageFolderName);
 
     console.log(`[MD4H] Saving image "${name}" to folder: ${imagesDir}`);
 
@@ -895,8 +1125,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       await vscode.workspace.fs.writeFile(imageUri, new Uint8Array(data));
 
       // Markdown link should always be relative to the markdown file directory (portable in git).
+      const docDir = this.getDocumentDirectory(document);
       const markdownDir =
-        document.uri.scheme === 'file' ? path.dirname(document.uri.fsPath) : saveBasePath;
+        docDir ??
+        (document.uri.scheme === 'file' ? path.dirname(document.uri.fsPath) : os.homedir());
       let relativePath = path.relative(markdownDir, imagePath).replace(/\\/g, '/');
 
       if (!relativePath.startsWith('..') && !relativePath.startsWith('./')) {
@@ -921,224 +1153,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       webview.postMessage({
         type: 'imageError',
         placeholderId,
-        error: errorMessage,
-      });
-    }
-  }
-
-  /**
-   * Handle image resize request from webview
-   * Backs up the original image, then overwrites the original file in-place.
-   */
-  private async handleResizeImage(
-    message: { type: string; [key: string]: unknown },
-    document: vscode.TextDocument,
-    webview: vscode.Webview
-  ): Promise<void> {
-    const imagePath = message.imagePath as string;
-    const absolutePathFromMessage = message.absolutePath as string | undefined;
-    const newWidth = message.newWidth as number;
-    const newHeight = message.newHeight as number;
-    const originalWidth = message.originalWidth as number | undefined;
-    const originalHeight = message.originalHeight as number | undefined;
-    const imageData = message.imageData as string; // base64 data URL
-
-    console.log(`[MD4H] Resizing image: ${imagePath} to ${newWidth}x${newHeight}`);
-
-    try {
-      // If absolute path provided (edit in place), use it directly
-      // Otherwise resolve relative to document
-      let absolutePath: string;
-      let imageUri: vscode.Uri;
-
-      if (absolutePathFromMessage) {
-        // Editing in place (image outside workspace)
-        absolutePath = absolutePathFromMessage;
-        imageUri = vscode.Uri.file(absolutePath);
-      } else {
-        // Normal case: resolve relative to document base path
-        const basePath = this.getImageBasePath(document);
-        if (!basePath) {
-          throw new Error('Cannot resolve image path: no base directory available');
-        }
-        const normalizedPath = normalizeImagePath(imagePath);
-        absolutePath = path.resolve(basePath, normalizedPath);
-        imageUri = vscode.Uri.file(absolutePath);
-      }
-
-      // Check if image exists
-      try {
-        await vscode.workspace.fs.stat(imageUri);
-      } catch {
-        throw new Error(`Image not found: ${imagePath}`);
-      }
-
-      // Copy original to backup (workspace-scoped; never write backups next to external files)
-      const originalData = await vscode.workspace.fs.readFile(imageUri);
-      const basePath = this.getImageBasePath(document);
-      if (!basePath) {
-        throw new Error('Cannot compute backup path: no base directory available');
-      }
-
-      const backupWorkspaceRoot = this.getWorkspaceFolderPath(document) ?? basePath;
-      const backupLocation = buildResizeBackupLocation({
-        backupWorkspaceRoot,
-        imageAbsolutePath: absolutePath,
-        oldWidth: typeof originalWidth === 'number' && originalWidth > 0 ? originalWidth : newWidth,
-        oldHeight:
-          typeof originalHeight === 'number' && originalHeight > 0 ? originalHeight : newHeight,
-        now: new Date(),
-      });
-
-      // Ensure backup root directory exists (flat structure - single directory)
-      await vscode.workspace.fs.createDirectory(vscode.Uri.file(backupLocation.backupDir));
-
-      // Resolve backup path with collision detection
-      const finalBackupPath = await resolveBackupPathWithCollisionDetection(
-        backupLocation.backupFilePath
-      );
-
-      await vscode.workspace.fs.writeFile(vscode.Uri.file(finalBackupPath), originalData);
-      console.log(`[MD4H] Backup created: ${finalBackupPath}`);
-
-      // Convert base64 data URL to buffer
-      const base64Data = imageData.split(',')[1]; // Remove data:image/png;base64, prefix
-      const buffer = Buffer.from(base64Data, 'base64');
-
-      // Overwrite the original file in place (path remains unchanged).
-      await vscode.workspace.fs.writeFile(imageUri, buffer);
-      console.log(`[MD4H] Image resized in-place: ${absolutePath}`);
-
-      const relativeBackupPath = path.relative(basePath, finalBackupPath).replace(/\\/g, '/');
-      const normalizedBackupPath =
-        relativeBackupPath.startsWith('..') || relativeBackupPath.startsWith('./')
-          ? relativeBackupPath
-          : `./${relativeBackupPath}`;
-
-      webview.postMessage({
-        type: 'imageResized',
-        success: true,
-        imagePath,
-        backupPath: normalizedBackupPath,
-        newWidth, // Pass new dimensions so metadata can be updated immediately
-        newHeight,
-        timestamp: Date.now(), // Cache-busting
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[MD4H] Failed to resize image: ${errorMessage}`);
-      vscode.window.showErrorMessage(`Failed to resize image: ${errorMessage}`);
-      webview.postMessage({
-        type: 'imageResized',
-        success: false,
-        error: errorMessage,
-      });
-    }
-  }
-
-  /**
-   * Handle undo resize request from webview
-   * Restores image from backup
-   */
-  private async handleUndoResize(
-    message: { type: string; [key: string]: unknown },
-    document: vscode.TextDocument,
-    webview: vscode.Webview
-  ): Promise<void> {
-    const imagePath = message.imagePath as string;
-    const backupPath = message.backupPath as string;
-
-    console.log(`[MD4H] Undoing resize: restoring ${imagePath} from ${backupPath}`);
-
-    try {
-      // Resolve paths using base path
-      const basePath = this.getImageBasePath(document);
-      if (!basePath) {
-        throw new Error('Cannot resolve image path: no base directory available');
-      }
-      const normalizedImagePath = normalizeImagePath(imagePath);
-      const normalizedBackupPath = normalizeImagePath(backupPath);
-      const absoluteImagePath = path.resolve(basePath, normalizedImagePath);
-      const absoluteBackupPath = path.resolve(basePath, normalizedBackupPath);
-
-      const imageUri = vscode.Uri.file(absoluteImagePath);
-      const backupUri = vscode.Uri.file(absoluteBackupPath);
-
-      // Check if backup exists
-      try {
-        await vscode.workspace.fs.stat(backupUri);
-      } catch {
-        throw new Error(`Backup not found: ${backupPath}`);
-      }
-
-      // Restore from backup
-      const backupData = await vscode.workspace.fs.readFile(backupUri);
-      await vscode.workspace.fs.writeFile(imageUri, backupData);
-      console.log(`[MD4H] Image restored from backup`);
-
-      webview.postMessage({
-        type: 'imageUndoResized',
-        success: true,
-        imagePath,
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[MD4H] Failed to undo resize: ${errorMessage}`);
-      vscode.window.showErrorMessage(`Failed to undo resize: ${errorMessage}`);
-      webview.postMessage({
-        type: 'imageUndoResized',
-        success: false,
-        error: errorMessage,
-      });
-    }
-  }
-
-  /**
-   * Handle redo resize request from webview
-   * Reapplies resize operation
-   */
-  private async handleRedoResize(
-    message: { type: string; [key: string]: unknown },
-    document: vscode.TextDocument,
-    webview: vscode.Webview
-  ): Promise<void> {
-    const imagePath = message.imagePath as string;
-    const newWidth = message.newWidth as number;
-    const newHeight = message.newHeight as number;
-    const imageData = message.imageData as string;
-
-    console.log(`[MD4H] Redoing resize: ${imagePath} to ${newWidth}x${newHeight}`);
-
-    try {
-      // Resolve image path using base path
-      const basePath = this.getImageBasePath(document);
-      if (!basePath) {
-        throw new Error('Cannot resolve image path: no base directory available');
-      }
-      const normalizedPath = normalizeImagePath(imagePath);
-      const absolutePath = path.resolve(basePath, normalizedPath);
-      const imageUri = vscode.Uri.file(absolutePath);
-
-      // Convert base64 to buffer
-      const base64Data = imageData.split(',')[1];
-      const buffer = Buffer.from(base64Data, 'base64');
-
-      // Save resized image
-      await vscode.workspace.fs.writeFile(imageUri, buffer);
-      console.log(`[MD4H] Image resize redone successfully`);
-
-      webview.postMessage({
-        type: 'imageRedoResized',
-        success: true,
-        imagePath,
-      });
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[MD4H] Failed to redo resize: ${errorMessage}`);
-      vscode.window.showErrorMessage(`Failed to redo resize: ${errorMessage}`);
-      webview.postMessage({
-        type: 'imageRedoResized',
-        success: false,
         error: errorMessage,
       });
     }
@@ -1819,37 +1833,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   /**
-   * File extension categories for filtering
-   */
-  private readonly FILE_CATEGORIES = {
-    md: ['.md', '.markdown'],
-    images: ['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico'],
-    code: [
-      '.js',
-      '.ts',
-      '.jsx',
-      '.tsx',
-      '.py',
-      '.java',
-      '.cpp',
-      '.c',
-      '.h',
-      '.go',
-      '.rs',
-      '.rb',
-      '.php',
-      '.swift',
-      '.kt',
-      '.cs',
-      '.sh',
-      '.bash',
-      '.zsh',
-      '.fish',
-    ],
-    config: ['.json', '.xml', '.yaml', '.yml', '.toml', '.ini', '.conf', '.config', '.properties'],
-  };
-
-  /**
    * Handle file search request from webview
    */
   private async handleSearchFiles(
@@ -1858,16 +1841,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   ): Promise<void> {
     try {
       const query = (message.query as string) || '';
-      const filters = (message.filters as {
-        all?: boolean;
-        md?: boolean;
-        images?: boolean;
-        code?: boolean;
-        config?: boolean;
-      }) || { all: true };
       const requestId = (message.requestId as number) || 0;
 
-      console.log('[MD4H] File search request:', { query, filters, requestId });
+      console.log('[MD4H] File search request:', { query, requestId });
 
       if (!query || query.trim().length < 1) {
         console.log('[MD4H] Empty query, returning empty results');
@@ -1899,31 +1875,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       const allFiles = await vscode.workspace.findFiles('**/*', excludePattern, 10000);
       console.log('[MD4H] Found', allFiles.length, 'files total');
 
-      let filteredFiles = allFiles;
-      if (!filters.all) {
-        const allowedExtensions = new Set<string>();
-        if (filters.md) {
-          this.FILE_CATEGORIES.md.forEach(ext => allowedExtensions.add(ext));
-        }
-        if (filters.images) {
-          this.FILE_CATEGORIES.images.forEach(ext => allowedExtensions.add(ext));
-        }
-        if (filters.code) {
-          this.FILE_CATEGORIES.code.forEach(ext => allowedExtensions.add(ext));
-        }
-        if (filters.config) {
-          this.FILE_CATEGORIES.config.forEach(ext => allowedExtensions.add(ext));
-        }
-
-        filteredFiles = allFiles.filter(uri => {
-          const ext = path.extname(uri.fsPath).toLowerCase();
-          return allowedExtensions.has(ext);
-        });
-        console.log('[MD4H] After filter:', filteredFiles.length, 'files');
-      }
+      const filteredFiles = allFiles;
 
       const queryLower = query.toLowerCase().trim();
-      const queryParts = queryLower.split(/\s+/).filter(p => p.length > 0);
+      const queryParts = queryLower.split(/\s+/).filter((p: string) => p.length > 0);
 
       // Enhanced matching: search by filename, path, and individual query parts
       const matchingFiles = filteredFiles.filter(uri => {
@@ -1945,7 +1900,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         // Tertiary match: all query parts appear in filename or path
         if (queryParts.length > 1) {
           const allPartsMatch = queryParts.every(
-            part => filenameLower.includes(part) || pathLower.includes(part)
+            (part: string) => filenameLower.includes(part) || pathLower.includes(part)
           );
           if (allPartsMatch) {
             return true;
@@ -2398,17 +2353,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
       // Immediately notify webview of the setting change
       // This ensures the setting takes effect right away without waiting for next update
-      const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
-      const imagePath = config.get<string>('markdownForHumans.imagePath', 'images');
-      const imagePathBase = config.get<string>(
-        'markdownForHumans.imagePathBase',
-        'relativeToDocument'
-      );
+      const settings = this.getWebviewSettings(config);
+
       webview.postMessage({
         type: 'settingsUpdate',
-        skipResizeWarning: skipWarning,
-        imagePath: imagePath,
-        imagePathBase: imagePathBase,
+        ...settings,
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -2426,11 +2375,24 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
    * @throws Never - errors are caught and shown to user
    */
   private async applyEdit(content: string, document: vscode.TextDocument): Promise<boolean> {
-    // Skip if content unchanged (avoid redundant edits)
     const unwrappedContent = this.unwrapFrontmatterFromWebview(content);
-    if (unwrappedContent === document.getText()) {
+    console.log(
+      `[MD4H] applyEdit: rawLen=${content.length}, unwrappedLen=${unwrappedContent.length}`
+    );
+
+    // Normalize newlines of both strings before comparison to avoid phantom dirty states
+    // caused by different line ending flavors (\r\n vs \n)
+    const normalizedNew = unwrappedContent.replace(/\r\n/g, '\n');
+    const normalizedOld = document.getText().replace(/\r\n/g, '\n');
+
+    if (normalizedNew === normalizedOld) {
+      console.log(`[MD4H] applyEdit: content already matches (length=${normalizedNew.length})`);
       return true;
     }
+
+    console.log(
+      `[MD4H] applyEdit: content mismatch. New=${normalizedNew.length} chars, Old=${normalizedOld.length} chars`
+    );
 
     // Mark this edit to prevent feedback loop
     const docUri = document.uri.toString();
@@ -2439,7 +2401,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     const edit = new vscode.WorkspaceEdit();
 
-    // Replace entire document content
+    // Use a robust full-document range to ensure everything is replaced
     const fullRange = new vscode.Range(
       document.positionAt(0),
       document.positionAt(document.getText().length)
@@ -2495,11 +2457,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
    * If no wrapped frontmatter is detected, returns the original content.
    */
   private unwrapFrontmatterFromWebview(content: string): string {
-    if (!content.startsWith('```')) return content;
+    // If it's a code block, unwrap it. Trim leading whitespace to be resilient to serializer quirks.
+    const trimmed = content.trimStart();
+    if (!trimmed.startsWith('```')) return content;
 
     const usesCrLf = content.includes('\r\n');
     const newline = usesCrLf ? '\r\n' : '\n';
-    const lines = content.split(newline);
+    const lines = content.split(/\r?\n/);
 
     const firstLine = lines[0].trim().toLowerCase();
     if (firstLine !== '```yaml' && firstLine !== '```yml' && firstLine !== '```json') {
@@ -2524,6 +2488,23 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   /**
+   * Helper to enqueue an operation for a specific document URI.
+   */
+  private async enqueueEdit(docUri: string, editFn: () => Promise<any>): Promise<any> {
+    const lastEdit = this.editQueue.get(docUri) || Promise.resolve();
+    const nextEdit = lastEdit.then(async () => {
+      try {
+        await editFn();
+      } catch (err) {
+        console.error(`[MD4H] Error in enqueued edit:`, err);
+      }
+    });
+
+    this.editQueue.set(docUri, nextEdit);
+    return nextEdit;
+  }
+
+  /**
    * Generate HTML for webview
    */
   private getHtmlForWebview(webview: vscode.Webview): string {
@@ -2534,6 +2515,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.css')
     );
+
+    const lightStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'editor-light.css')
+    );
+
+    const darkStyleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'editor-dark.css')
+    );
+
+    // Read the current theme from config
+    const config = vscode.workspace.getConfiguration();
+    const themeOverride = config.get<string>('markdownForHumans.themeOverride', 'system');
 
     // Use a nonce for security
     const nonce = getNonce();
@@ -2548,10 +2541,99 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
               content="default-src 'none';
                        style-src ${webview.cspSource} 'unsafe-inline';
                        script-src 'nonce-${nonce}';
+                 connect-src ${webview.cspSource};
                        font-src ${webview.cspSource};
                        img-src ${webview.cspSource} https: data: blob:;">
         
         <link href="${styleUri}" rel="stylesheet">
+        <link id="theme-style-link" href="" rel="stylesheet">
+        
+        <script nonce="${nonce}">
+          window.md4hThemeLightUri = "${lightStyleUri}";
+          window.md4hThemeDarkUri = "${darkStyleUri}";
+          window.md4hLastResolvedTheme = 'dark';
+
+          window.md4hResolveVsCodeTheme = function() {
+            try {
+              const htmlCls = document.documentElement.classList;
+              const bodyCls = document.body ? document.body.classList : null;
+              const hasClass = function(name) {
+                return htmlCls.contains(name) || (bodyCls ? bodyCls.contains(name) : false);
+              };
+
+              if (hasClass('vscode-light') || hasClass('vscode-high-contrast-light')) {
+                return 'light';
+              }
+              if (hasClass('vscode-dark') || hasClass('vscode-high-contrast')) {
+                return 'dark';
+              }
+            } catch (err) {
+              console.error('[MD4H][THEME] Failed to resolve VS Code theme classes:', err);
+            }
+
+            return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light';
+          };
+
+          window.md4hSetThemeStylesheet = function(mode) {
+            const link = document.getElementById('theme-style-link');
+            if (!link) return;
+
+            if (mode === 'light') {
+              link.disabled = false;
+              link.href = window.md4hThemeLightUri;
+              return;
+            }
+
+            if (mode === 'dark') {
+              link.disabled = false;
+              link.href = window.md4hThemeDarkUri;
+              return;
+            }
+
+            // System mode: rely on VS Code-provided CSS variables from base stylesheet.
+            link.disabled = true;
+            link.removeAttribute('href');
+          };
+          
+          window.md4hApplyTheme = function(theme) {
+            try {
+              const body = document.body || document.documentElement;
+              const requested = theme === 'light' || theme === 'dark' || theme === 'system'
+                ? theme
+                : 'system';
+
+              const resolvedTheme = requested === 'system'
+                ? window.md4hResolveVsCodeTheme()
+                : requested;
+
+              if (requested === 'system') {
+                body.removeAttribute('data-theme-override');
+              } else {
+                body.setAttribute('data-theme-override', requested);
+              }
+
+              window.md4hSetThemeStylesheet(requested);
+              window.md4hLastResolvedTheme = resolvedTheme;
+              console.warn('[MD4H][THEME] Applied', { requested, resolvedTheme });
+
+              window.dispatchEvent(
+                new CustomEvent('md4hThemeChanged', { detail: { theme: resolvedTheme } })
+              );
+            } catch (err) {
+              console.error('[MD4H][THEME] Failed to apply theme:', err, { theme });
+            }
+          };
+
+          // Initial apply only. Re-apply later only via explicit settingsUpdate messages.
+          document.addEventListener('DOMContentLoaded', () => {
+            window.md4hCurrentThemeOverride = '${themeOverride}';
+            console.warn('[MD4H][THEME] Bootstrap ready', { override: window.md4hCurrentThemeOverride });
+            window.md4hApplyTheme('${themeOverride}');
+          });
+        </script>
+        
         <title>Markdown for Humans</title>
       </head>
       <body>

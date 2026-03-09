@@ -62,6 +62,7 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
   // Create overlay
   const overlay = document.createElement('div');
   overlay.className = 'rename-dialog-overlay';
+  overlay.setAttribute('contenteditable', 'false');
   overlay.style.cssText = `
     position: fixed;
     top: 0;
@@ -78,9 +79,10 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
   // Create dialog
   const dialog = document.createElement('div');
   dialog.className = 'rename-dialog';
+  dialog.setAttribute('contenteditable', 'false');
   dialog.style.cssText = `
-    background: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
+    background: var(--vscode-editor-background, var(--md-background));
+    border: 1px solid var(--vscode-panel-border, var(--md-border));
     border-radius: 8px;
     padding: 20px;
     min-width: 400px;
@@ -210,16 +212,16 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
     </div>
 
     <div style="display: flex; gap: 8px; justify-content: flex-end;">
-      <button class="cancel-btn" style="
+      <button type="button" class="cancel-btn" style="
         padding: 8px 16px;
         font-size: 13px;
         background: transparent;
-        color: var(--vscode-foreground);
-        border: 1px solid var(--vscode-panel-border);
+        color: var(--vscode-foreground, var(--md-foreground));
+        border: 1px solid var(--vscode-panel-border, var(--md-border));
         border-radius: 4px;
         cursor: pointer;
       ">Cancel</button>
-      <button class="rename-btn" style="
+      <button type="button" class="rename-btn" style="
         padding: 8px 16px;
         font-size: 13px;
         background: var(--vscode-button-background);
@@ -232,6 +234,7 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
   `;
 
   overlay.appendChild(dialog);
+  // Mount outside ProseMirror contentEditable to avoid key/click events leaking into editor.
   document.body.appendChild(overlay);
 
   const input = dialog.querySelector('.rename-input') as HTMLInputElement;
@@ -257,8 +260,23 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
   input.focus();
   input.select();
 
+  // Prevent events inside dialog from bubbling to ProseMirror/editor handlers.
+  const stopEventLeak = (event: Event) => {
+    event.stopPropagation();
+  };
+
+  for (const eventName of ['click', 'mousedown', 'mouseup', 'keydown', 'keypress', 'keyup']) {
+    dialog.addEventListener(eventName, stopEventLeak);
+  }
+
+  for (const eventName of ['beforeinput', 'input', 'paste']) {
+    input.addEventListener(eventName, stopEventLeak);
+  }
+
   const closeDialog = () => {
-    document.body.removeChild(overlay);
+    if (overlay.parentElement) {
+      overlay.parentElement.removeChild(overlay);
+    }
   };
 
   let referencePayload: ReferencePayload | null = null;
@@ -635,11 +653,13 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
   });
 
   overlay.addEventListener('click', e => {
+    e.stopPropagation();
     if (e.target === overlay) {
       closeDialog();
     }
   });
-}
 
-// Make available globally for imageMenu.ts
-(window as any).showImageRenameDialog = showImageRenameDialog;
+  overlay.addEventListener('mousedown', e => {
+    e.stopPropagation();
+  });
+}

@@ -179,6 +179,24 @@ ls -lh dist/
 
 3. Check extension host logs (Help > Toggle Developer Tools > Extension Host)
 
+### Alpha diagnostics for save issues
+
+When users report "Save didn't persist" or "content reverted", ask for logs from BOTH consoles:
+
+1. Webview console (Developer: Open Webview Developer Tools)
+2. Extension Host console (Help -> Toggle Developer Tools -> Extension Host)
+
+Filter for `MD4H` and especially `MD4H][SAVE]`.
+
+Correlated save logs now include a request ID, for example:
+
+- Webview: `[MD4H][SAVE][save-abc123] Dispatching saveAndEdit ...`
+- Extension host: `[MD4H][SAVE][save-abc123] applyEdit result: true`
+- Extension host: `[MD4H][SAVE][save-abc123] document.save() result: true`
+- Webview: `[MD4H][SAVE][save-abc123] Received "saved" signal from extension`
+
+If the same request ID appears with an error, include all lines with that ID in the bug report.
+
 ## Emergency: Released broken version
 
 ### Step 1: Verify the issue

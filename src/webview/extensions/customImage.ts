@@ -25,6 +25,7 @@ import {
   hideImageMenu,
   isExternalImage,
 } from '../features/imageMenu';
+import { createCustomImageMessagePlugin } from './customImageMessagePlugin';
 import { showImageMetadataFooter, hideImageMetadataFooter } from '../features/imageMetadata';
 
 const INDENT_PIXELS_PER_LEVEL = 30;
@@ -137,6 +138,7 @@ export const CustomImage = Image.extend({
           },
         },
       }),
+      createCustomImageMessagePlugin(this.editor),
     ];
   },
 
@@ -176,6 +178,22 @@ export const CustomImage = Image.extend({
       // This enables round-tripping markdown where images were intentionally aligned/indented.
       'indent-prefix': {
         default: null,
+      },
+      width: {
+        default: null,
+        parseHTML: element => element.getAttribute('width'),
+        renderHTML: attributes => {
+          if (!attributes.width) return {};
+          return { width: attributes.width };
+        },
+      },
+      height: {
+        default: null,
+        parseHTML: element => element.getAttribute('height'),
+        renderHTML: attributes => {
+          if (!attributes.height) return {};
+          return { height: attributes.height };
+        },
       },
     };
   },
@@ -251,6 +269,14 @@ export const CustomImage = Image.extend({
         }
       }
 
+      // Apply dimensions if present
+      if (node.attrs.width) {
+        dom.style.width = `${node.attrs.width}px`;
+      }
+      if (node.attrs.height) {
+        dom.style.height = `${node.attrs.height}px`;
+      }
+
       // Create three-dots menu button (shown on hover)
       const menuButton = createImageMenuButton();
       menuButton.setAttribute('title', 'Image options');
@@ -309,8 +335,11 @@ export const CustomImage = Image.extend({
       wrapper.addEventListener('mouseenter', handleMouseEnter);
       wrapper.addEventListener('mouseleave', handleMouseLeave);
 
-      // Click menu button to show/hide dropdown
-      menuButton.addEventListener('click', e => {
+      // Append menu as sibling of button (not child) for correct positioning
+      wrapper.appendChild(dom);
+
+      // Create three-dots menu button click handler
+      menuButton.addEventListener('click', (e: MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
         const vscodeApi = (window as any).vscode;
@@ -321,8 +350,56 @@ export const CustomImage = Image.extend({
         }
       });
 
-      // Append menu as sibling of button (not child) for correct positioning
-      wrapper.appendChild(dom);
+      // Add resize handle
+      const resizeHandle = document.createElement('div');
+      resizeHandle.className = 'image-resize-handle';
+      wrapper.appendChild(resizeHandle);
+
+      // Resize logic
+      let isResizing = false;
+      let startX = 0;
+      let startWidth = 0;
+      let aspectRatio = 0;
+
+      const onMouseDown = (e: MouseEvent) => {
+        isResizing = true;
+        startX = e.clientX;
+        startWidth = dom.clientWidth;
+        aspectRatio = dom.naturalWidth / dom.naturalHeight || dom.clientWidth / dom.clientHeight;
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        e.preventDefault();
+        e.stopPropagation();
+      };
+
+      const onMouseMove = (e: MouseEvent) => {
+        if (!isResizing) return;
+
+        const deltaX = e.clientX - startX;
+        const newWidth = Math.max(20, startWidth + deltaX);
+        const newHeight = newWidth / aspectRatio;
+
+        dom.style.width = `${newWidth}px`;
+        dom.style.height = `${newHeight}px`;
+      };
+
+      const onMouseUp = () => {
+        if (!isResizing) return;
+        isResizing = false;
+
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+
+        // Update node attributes
+        const width = Math.round(dom.clientWidth);
+        const height = Math.round(dom.clientHeight);
+
+        editor.commands.updateAttributes('image', { width, height });
+      };
+
+      resizeHandle.addEventListener('mousedown', onMouseDown);
+
       wrapper.appendChild(menuButton);
       wrapper.appendChild(menu);
 
@@ -347,8 +424,17 @@ export const CustomImage = Image.extend({
     const alt = node.attrs?.alt || '';
     const indentPrefix =
       typeof node.attrs?.['indent-prefix'] === 'string' ? node.attrs['indent-prefix'] : '';
+    const width = node.attrs?.width;
+    const height = node.attrs?.height;
     const destination = typeof src === 'string' ? src : '';
     const formattedDestination = /\s/.test(destination) ? `<${destination}>` : destination;
+
+    // Use HTML img tag if width or height is present to preserve dimensions
+    if (width || height) {
+      const widthAttr = width ? ` width="${width}"` : '';
+      const heightAttr = height ? ` height="${height}"` : '';
+      return `${indentPrefix}<img src="${destination}" alt="${alt}"${widthAttr}${heightAttr} />`;
+    }
 
     // Use markdown-src if available (preserves original path with dimensions after resize)
     // Fall back to src if markdown-src is not set

@@ -8,6 +8,13 @@
 
 import type { Editor } from '@tiptap/core';
 
+// Mock the VS Code API
+(global as any).acquireVsCodeApi = jest.fn(() => ({
+  postMessage: jest.fn(),
+  getState: jest.fn(),
+  setState: jest.fn(),
+}));
+
 // Mock the imports
 jest.mock('../../webview/mermaidTemplates', () => ({
   MERMAID_TEMPLATES: [{ label: 'Flowchart', diagram: 'graph TD\nA-->B' }],

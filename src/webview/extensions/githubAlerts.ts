@@ -15,14 +15,16 @@ import type {
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Fragment } from '@tiptap/pm/model';
 
-/**
- * GitHub Alerts Extension
- *
- * Supports GitHub-style callout alerts:
- * - NOTE, TIP, IMPORTANT, WARNING, CAUTION
- * - Renders with colored borders, icons, and labels
- * - Round-trips markdown syntax `> [!TYPE]`
- */
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    githubAlerts: {
+      /**
+       * Toggle a GitHub alert
+       */
+      toggleAlert: (type: AlertType) => ReturnType;
+    };
+  }
+}
 
 export type AlertType = 'NOTE' | 'TIP' | 'IMPORTANT' | 'WARNING' | 'CAUTION';
 
@@ -37,7 +39,7 @@ export const GitHubAlerts = Node.create({
 
   defining: true,
 
-  isolating: true,
+  isolating: false,
 
   atom: false,
 
@@ -54,6 +56,24 @@ export const GitHubAlerts = Node.create({
           'data-alert-type': attributes.alertType,
         }),
       },
+    };
+  },
+
+  addCommands() {
+    return {
+      toggleAlert:
+        (alertType: AlertType) =>
+        ({ commands, editor }) => {
+          if (editor.isActive('githubAlert', { alertType })) {
+            return commands.lift('githubAlert');
+          }
+
+          if (editor.isActive('githubAlert')) {
+            return commands.updateAttributes('githubAlert', { alertType });
+          }
+
+          return commands.wrapIn('githubAlert', { alertType });
+        },
     };
   },
 

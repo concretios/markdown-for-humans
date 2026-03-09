@@ -49,6 +49,7 @@ jest.mock('vscode', () => ({
     })),
     applyEdit: jest.fn(),
     onDidChangeTextDocument: jest.fn(),
+    onDidSaveTextDocument: jest.fn(() => ({ dispose: jest.fn() })),
     onDidChangeConfiguration: jest.fn(),
     fs: {
       createDirectory: jest.fn(),
@@ -529,7 +530,7 @@ describe('MarkdownEditorProvider - In-Memory File Support', () => {
       });
       (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
         get: jest.fn((key: string, defaultValue?: unknown) => {
-          if (key === 'markdownForHumans.imagePathBase') return 'relativeToDocument';
+          if (key === 'markdownForHumans.mediaPathBase') return 'relativeToDocument';
           return defaultValue;
         }),
         update: jest.fn(),
@@ -582,7 +583,7 @@ describe('MarkdownEditorProvider - In-Memory File Support', () => {
       });
       (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
         get: jest.fn((key: string, defaultValue?: unknown) => {
-          if (key === 'markdownForHumans.imagePathBase') return 'workspaceFolder';
+          if (key === 'markdownForHumans.mediaPathBase') return 'workspaceFolder';
           return defaultValue;
         }),
         update: jest.fn(),
@@ -629,6 +630,13 @@ describe('MarkdownEditorProvider - In-Memory File Support', () => {
         { uri: { fsPath: '/workspace' } as vscode.Uri } as vscode.WorkspaceFolder,
       ];
       (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue(null);
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn((key: string, defaultValue?: unknown) => {
+          if (key === 'markdownForHumans.mediaPathBase') return 'workspaceFolder';
+          return defaultValue;
+        }),
+        update: jest.fn(),
+      });
       (vscode.workspace.fs.createDirectory as jest.Mock).mockResolvedValue(undefined);
       (vscode.workspace.fs.stat as jest.Mock).mockRejectedValue(new Error('ENOENT'));
       (vscode.workspace.fs.writeFile as jest.Mock).mockResolvedValue(undefined);
@@ -670,6 +678,13 @@ describe('MarkdownEditorProvider - In-Memory File Support', () => {
         { uri: { fsPath: '/workspace' } as vscode.Uri } as vscode.WorkspaceFolder,
       ];
       (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue(null);
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn((key: string, defaultValue?: unknown) => {
+          if (key === 'markdownForHumans.mediaPathBase') return 'workspaceFolder';
+          return defaultValue;
+        }),
+        update: jest.fn(),
+      });
       (vscode.workspace.fs.createDirectory as jest.Mock).mockResolvedValue(undefined);
       (vscode.workspace.fs.writeFile as jest.Mock).mockResolvedValue(undefined);
       (vscode.workspace.fs.stat as jest.Mock).mockImplementation((uri: unknown) => {
@@ -728,6 +743,13 @@ describe('MarkdownEditorProvider - In-Memory File Support', () => {
       (vscode.workspace.workspaceFolders as unknown as vscode.WorkspaceFolder[] | undefined) =
         undefined;
       (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue(null);
+      (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
+        get: jest.fn((key: string, defaultValue?: unknown) => {
+          if (key === 'markdownForHumans.mediaPathBase') return 'workspaceFolder';
+          return defaultValue;
+        }),
+        update: jest.fn(),
+      });
       (vscode.workspace.fs.createDirectory as jest.Mock).mockResolvedValue(undefined);
       (vscode.workspace.fs.stat as jest.Mock).mockRejectedValue(new Error('ENOENT'));
       (vscode.workspace.fs.writeFile as jest.Mock).mockResolvedValue(undefined);
@@ -802,7 +824,7 @@ describe('MarkdownEditorProvider - In-Memory File Support', () => {
       });
       (vscode.workspace.getConfiguration as jest.Mock).mockReturnValue({
         get: jest.fn((key: string, defaultValue?: unknown) => {
-          if (key === 'markdownForHumans.imagePathBase') return 'workspaceFolder';
+          if (key === 'markdownForHumans.mediaPathBase') return 'workspaceFolder';
           return defaultValue;
         }),
         update: jest.fn(),

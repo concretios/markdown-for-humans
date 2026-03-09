@@ -10,20 +10,11 @@
  */
 import { getMarkRange, Editor } from '@tiptap/core';
 import { TextSelection } from 'prosemirror-state';
-import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { buildOutlineFromEditor } from '../utils/outline';
 
 type Range = { from: number; to: number };
 type ParentContext = { parentStart: number; parentText: string };
 type LinkMode = 'url' | 'file' | 'headings';
-
-interface FileFilterState {
-  all: boolean;
-  md: boolean;
-  images: boolean;
-  code: boolean;
-  config: boolean;
-}
 
 interface FileSearchResult {
   filename: string;
@@ -49,14 +40,11 @@ let shouldRestoreSelectionOnHide = true;
 
 // Enhanced dialog state
 let currentMode: LinkMode = 'url';
-let filterState: FileFilterState = { all: true, md: true, images: true, code: true, config: true };
 let autocompleteDropdown: HTMLElement | null = null;
 let selectedAutocompleteIndex: number | null = null;
 let fileSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let fileSearchRequestId = 0;
 let actualLinkPath: string | null = null; // Store actual path separately from displayed value
-
-const isWhitespace = (char: string) => /\s/.test(char);
 
 /**
  * Generate GFM-style slug from heading text with duplicate handling
@@ -82,39 +70,6 @@ function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
 }
 
 /**
- * Load filter state from localStorage
- */
-function loadFilterState(): FileFilterState {
-  try {
-    const stored = localStorage.getItem('markdownForHumans.linkFileFilters');
-    if (stored) {
-      const parsed = JSON.parse(stored) as Partial<FileFilterState>;
-      return {
-        all: typeof parsed.all === 'boolean' ? parsed.all : true,
-        md: typeof parsed.md === 'boolean' ? parsed.md : true,
-        images: typeof parsed.images === 'boolean' ? parsed.images : true,
-        code: typeof parsed.code === 'boolean' ? parsed.code : true,
-        config: typeof parsed.config === 'boolean' ? parsed.config : true,
-      };
-    }
-  } catch (error) {
-    console.warn('[MD4H] Failed to load filter state from localStorage', error);
-  }
-  return { all: true, md: true, images: true, code: true, config: true };
-}
-
-/**
- * Save filter state to localStorage
- */
-function saveFilterState(state: FileFilterState): void {
-  try {
-    localStorage.setItem('markdownForHumans.linkFileFilters', JSON.stringify(state));
-  } catch (error) {
-    console.warn('[MD4H] Failed to save filter state to localStorage', error);
-  }
-}
-
-/**
  * Close autocomplete dropdown
  */
 function closeAutocomplete(): void {
@@ -135,7 +90,7 @@ function escapeHtml(text: string): string {
 
 const getParentContext = (
   range: Range | null,
-  doc: ProseMirrorNode | null
+  doc: { resolve: (pos: number) => any }
 ): ParentContext | null => {
   if (!range) return null;
   if (typeof doc?.resolve !== 'function') return null;
@@ -147,85 +102,11 @@ const getParentContext = (
   return { parentStart, parentText };
 };
 
-const clampOffset = (offset: number, max: number) => Math.max(0, Math.min(offset, max));
-
-const findPrevWordStart = (text: string, offset: number) => {
-  let i = clampOffset(offset, text.length) - 1;
-  while (i >= 0 && isWhitespace(text[i])) i--;
-  while (i >= 0 && !isWhitespace(text[i])) i--;
-  return i + 1;
-};
-
-const findNextWordStart = (text: string, offset: number) => {
-  let i = clampOffset(offset, text.length);
-  while (i < text.length && !isWhitespace(text[i])) i++;
-  while (i < text.length && isWhitespace(text[i])) i++;
-  return i;
-};
-
-const findNextWordEnd = (text: string, offset: number) => {
-  let i = clampOffset(offset, text.length);
-  while (i < text.length && isWhitespace(text[i])) i++;
-  while (i < text.length && !isWhitespace(text[i])) i++;
-  return i;
-};
-
-const trimTrailingWhitespace = (text: string, offset: number) => {
-  let i = clampOffset(offset, text.length);
-  while (i > 0 && isWhitespace(text[i - 1])) i--;
-  return i;
-};
-
-const updateTextInputFromRange = (textInput: HTMLInputElement) => {
-  if (!currentEditor || !workingRange) return;
-  const { doc } = currentEditor.state;
-  textInput.value = doc.textBetween(workingRange.from, workingRange.to, ' ');
-};
-
-const adjustLinkBoundary = (
-  direction: 'left' | 'right',
-  action: 'expand' | 'shrink',
-  textInput: HTMLInputElement
-) => {
-  if (!currentEditor || !workingRange) return;
-
-  const { doc } = currentEditor.state;
-  const context = getParentContext(workingRange, doc);
-  if (!context) return;
-
-  const { parentStart, parentText } = context;
-  const relFrom = clampOffset(workingRange.from - parentStart, parentText.length);
-  const relTo = clampOffset(workingRange.to - parentStart, parentText.length);
-
-  let newFrom = workingRange.from;
-  let newTo = workingRange.to;
-
-  if (direction === 'left' && action === 'expand') {
-    newFrom = parentStart + findPrevWordStart(parentText, relFrom);
-  } else if (direction === 'left' && action === 'shrink') {
-    const nextStart = parentStart + findNextWordStart(parentText, relFrom);
-    if (nextStart < newTo) {
-      newFrom = nextStart;
-    }
-  } else if (direction === 'right' && action === 'expand') {
-    newTo = parentStart + findNextWordEnd(parentText, relTo);
-  } else if (direction === 'right' && action === 'shrink') {
-    const startOfLastWord = findPrevWordStart(parentText, relTo);
-    const boundary = parentStart + trimTrailingWhitespace(parentText, startOfLastWord);
-    if (boundary > newFrom) {
-      newTo = boundary;
-    }
-  }
-
-  if (newFrom >= newTo) return;
-  if (newFrom === workingRange.from && newTo === workingRange.to) return;
-
-  workingRange = { from: newFrom, to: newTo };
-  updateTextInputFromRange(textInput);
-  setSelectionHighlight(workingRange);
-};
-
-const findNearestTextRange = (text: string, range: Range, doc: any): Range | null => {
+const findNearestTextRange = (
+  text: string,
+  range: Range,
+  doc: { resolve: (pos: number) => any }
+): Range | null => {
   if (!text) return null;
   const context = getParentContext(range, doc);
   if (!context) return null;
@@ -392,7 +273,7 @@ function createAutocompleteDropdown(urlInput: HTMLInputElement): HTMLElement {
   window.addEventListener('scroll', updatePosition, true);
 
   // Store update function for later use
-  (dropdown as any)._updatePosition = updatePosition;
+  (dropdown as unknown as { _updatePosition: () => void })._updatePosition = updatePosition;
 
   return dropdown;
 }
@@ -497,8 +378,8 @@ function updateAutocompleteDropdown(
   dropdown.style.display = 'block';
 
   // Update position when showing results
-  if ((dropdown as any)._updatePosition) {
-    (dropdown as any)._updatePosition();
+  if ((dropdown as HTMLElement & { _updatePosition?: () => void })._updatePosition) {
+    (dropdown as HTMLElement & { _updatePosition: () => void })._updatePosition();
   }
 
   updateAutocompleteHighlight(dropdown);
@@ -571,7 +452,7 @@ function handleAutocompleteKeyboard(
 /**
  * Handle file search with debouncing
  */
-function handleFileSearch(query: string, filters: FileFilterState): void {
+function handleFileSearch(query: string): void {
   if (fileSearchDebounceTimer) {
     clearTimeout(fileSearchDebounceTimer);
   }
@@ -597,13 +478,11 @@ function handleFileSearch(query: string, filters: FileFilterState): void {
     if (vscode && typeof vscode.postMessage === 'function') {
       console.log('[MD4H] Sending file search request:', {
         query: trimmedQuery,
-        filters,
         requestId,
       });
       vscode.postMessage({
         type: 'searchFiles',
         query: trimmedQuery,
-        filters,
         requestId,
       });
     } else {
@@ -647,11 +526,7 @@ function handleHeadingExtraction(editor: Editor, query: string, urlInput: HTMLIn
 /**
  * Update mode and UI accordingly
  */
-function updateMode(
-  mode: LinkMode,
-  urlInput: HTMLInputElement,
-  filtersContainer: HTMLElement | null
-): void {
+function updateMode(mode: LinkMode, urlInput: HTMLInputElement): void {
   currentMode = mode;
 
   // Update URL label text based on mode
@@ -680,8 +555,11 @@ function updateMode(
       break;
   }
 
-  if (filtersContainer) {
-    filtersContainer.style.display = mode === 'file' ? 'block' : 'none';
+  const browseBtn = linkDialogElement?.querySelector(
+    '#link-browse-local-btn'
+  ) as HTMLElement | null;
+  if (browseBtn) {
+    browseBtn.style.display = mode === 'file' ? 'block' : 'none';
   }
 
   urlInput.value = '';
@@ -732,55 +610,6 @@ export function createLinkDialog(): HTMLElement {
   content.className = 'export-settings-content';
   content.innerHTML = `
     <div class="export-settings-section" style="margin-bottom: 16px;">
-      <label class="export-settings-label" for="link-text-input">Link Text</label>
-      <div style="display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;">
-        <div style="display: flex; gap: 4px;">
-          <button
-            id="link-trim-left-btn"
-            class="export-settings-select"
-            style="padding: 6px 10px; font-size: 12px;"
-            title="Trim left boundary by one word"
-          >
-            -
-          </button>
-          <button
-            id="link-expand-left-btn"
-            class="export-settings-select"
-            style="padding: 6px 10px; font-size: 12px;"
-            title="Expand left boundary to previous word"
-          >
-            +
-          </button>
-        </div>
-        <input
-          type="text"
-          id="link-text-input"
-          class="export-settings-select"
-          style="padding: 8px 12px; flex: 1; min-width: 0;"
-          placeholder="Text to display"
-        />
-        <div style="display: flex; gap: 4px;">
-          <button
-            id="link-expand-right-btn"
-            class="export-settings-select"
-            style="padding: 6px 10px; font-size: 12px;"
-            title="Expand right boundary to next word"
-          >
-            +
-          </button>
-          <button
-            id="link-trim-right-btn"
-            class="export-settings-select"
-            style="padding: 6px 10px; font-size: 12px;"
-            title="Trim right boundary by one word"
-          >
-            -
-          </button>
-        </div>
-      </div>
-      <p class="export-settings-hint">The text that will be shown in the document</p>
-    </div>
-    <div class="export-settings-section" style="margin-bottom: 16px;">
       <label class="export-settings-label">Type</label>
       <div class="link-dialog-mode-group">
         <label class="link-dialog-mode-option">
@@ -793,67 +622,62 @@ export function createLinkDialog(): HTMLElement {
         </label>
         <label class="link-dialog-mode-option">
           <input type="radio" name="link-mode" value="headings" id="link-mode-headings" />
-          <span>Headings</span>
+          <span>Heading</span>
         </label>
       </div>
     </div>
     <div class="export-settings-section" style="margin-bottom: 16px; position: relative;">
       <label class="export-settings-label" for="link-url-input" id="link-url-label">
         <span id="link-url-label-text">URL</span>
+      </label>
+      <div style="display: flex; gap: 4px; align-items: center;">
         <input
           type="text"
           id="link-url-input"
           class="export-settings-select"
-          style="padding: 8px 12px;"
+          style="padding: 8px 12px; flex: 1;"
           placeholder="https://example.com"
         />
-      </label>
-      <p class="export-settings-hint">The web address or file path</p>
-    </div>
-    <div class="export-settings-section" id="link-filters-container" style="margin-bottom: 16px; display: none;">
-      <label class="export-settings-label">Filter</label>
-      <div class="link-dialog-filters">
-        <label class="link-dialog-filter-checkbox">
-          <input type="checkbox" id="link-filter-all" checked />
-          <span>All</span>
-        </label>
-        <label class="link-dialog-filter-checkbox">
-          <input type="checkbox" id="link-filter-md" checked />
-          <span>MD</span>
-        </label>
-        <label class="link-dialog-filter-checkbox">
-          <input type="checkbox" id="link-filter-images" checked />
-          <span>Images</span>
-        </label>
-        <label class="link-dialog-filter-checkbox">
-          <input type="checkbox" id="link-filter-code" checked />
-          <span>Code</span>
-        </label>
-        <label class="link-dialog-filter-checkbox">
-          <input type="checkbox" id="link-filter-config" checked />
-          <span>Config</span>
-        </label>
+        <button
+          id="link-browse-local-btn"
+          class="export-settings-select"
+          style="width: 34px; height: 34px; padding: 0; display: none; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0;"
+          title="Browse for a local file..."
+        >
+          <span class="codicon codicon-folder"></span>
+        </button>
       </div>
+      <p class="export-settings-hint" id="link-url-hint">The web address or file path</p>
     </div>
-    <div style="display: flex; gap: 12px; justify-content: flex-end; align-items: center;">
+    <div class="export-settings-section" style="margin-bottom: 8px;">
+      <label class="export-settings-label" for="link-text-input">Link Text</label>
+      <input
+        type="text"
+        id="link-text-input"
+        class="export-settings-select"
+        style="padding: 8px 12px;"
+        placeholder="Text to display"
+      />
+    </div>
+    <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; border-top: 1px solid var(--md-border); padding-top: 16px;">
       <button
         id="link-remove-btn"
         class="export-settings-select"
-        style="padding: 8px 16px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; border-radius: 4px; margin-right: auto;"
+        style="width: auto; padding: 6px 16px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; border-radius: 4px; margin-right: auto;"
       >
         Remove Link
       </button>
       <button
         id="link-cancel-btn"
         class="export-settings-select"
-        style="padding: 8px 24px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; border-radius: 4px;"
+        style="width: auto; padding: 6px 20px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; border-radius: 4px;"
       >
         Cancel
       </button>
       <button
         id="link-ok-btn"
         class="export-settings-select"
-        style="padding: 8px 24px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; cursor: pointer; border-radius: 4px;"
+        style="width: auto; padding: 6px 20px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; cursor: pointer; border-radius: 4px;"
       >
         OK
       </button>
@@ -866,81 +690,12 @@ export function createLinkDialog(): HTMLElement {
   const removeBtn = content.querySelector('#link-remove-btn') as HTMLButtonElement;
   const textInput = content.querySelector('#link-text-input') as HTMLInputElement;
   const urlInput = content.querySelector('#link-url-input') as HTMLInputElement;
-  const trimLeftBtn = content.querySelector('#link-trim-left-btn') as HTMLButtonElement | null;
-  const expandLeftBtn = content.querySelector('#link-expand-left-btn') as HTMLButtonElement | null;
-  const expandRightBtn = content.querySelector(
-    '#link-expand-right-btn'
-  ) as HTMLButtonElement | null;
-  const trimRightBtn = content.querySelector('#link-trim-right-btn') as HTMLButtonElement | null;
-  const filtersContainer = content.querySelector('#link-filters-container') as HTMLElement | null;
 
   // Create autocomplete dropdown
   if (urlInput) {
     autocompleteDropdown = createAutocompleteDropdown(urlInput);
     content.appendChild(autocompleteDropdown);
   }
-
-  // Load filter state
-  filterState = loadFilterState();
-
-  // Setup filter checkboxes
-  const filterAll = content.querySelector('#link-filter-all') as HTMLInputElement;
-  const filterMd = content.querySelector('#link-filter-md') as HTMLInputElement;
-  const filterImages = content.querySelector('#link-filter-images') as HTMLInputElement;
-  const filterCode = content.querySelector('#link-filter-code') as HTMLInputElement;
-  const filterConfig = content.querySelector('#link-filter-config') as HTMLInputElement;
-
-  // Initialize filter checkboxes
-  filterAll.checked = filterState.all;
-  filterMd.checked = filterState.md;
-  filterImages.checked = filterState.images;
-  filterCode.checked = filterState.code;
-  filterConfig.checked = filterState.config;
-
-  // Update filter checkbox states based on "All" checkbox
-  const updateFilterCheckboxes = () => {
-    const allChecked = filterAll.checked;
-    filterMd.disabled = allChecked;
-    filterImages.disabled = allChecked;
-    filterCode.disabled = allChecked;
-    filterConfig.disabled = allChecked;
-
-    if (allChecked) {
-      filterMd.checked = true;
-      filterImages.checked = true;
-      filterCode.checked = true;
-      filterConfig.checked = true;
-    }
-
-    filterState = {
-      all: filterAll.checked,
-      md: filterMd.checked,
-      images: filterImages.checked,
-      code: filterCode.checked,
-      config: filterConfig.checked,
-    };
-    saveFilterState(filterState);
-
-    if (currentMode === 'file' && urlInput.value.trim()) {
-      handleFileSearch(urlInput.value.trim(), filterState);
-    }
-  };
-
-  filterAll.addEventListener('change', () => {
-    updateFilterCheckboxes();
-  });
-
-  [filterMd, filterImages, filterCode, filterConfig].forEach(checkbox => {
-    checkbox.addEventListener('change', () => {
-      if (!checkbox.checked) {
-        filterAll.checked = false;
-      }
-      if (filterMd.checked && filterImages.checked && filterCode.checked && filterConfig.checked) {
-        filterAll.checked = true;
-      }
-      updateFilterCheckboxes();
-    });
-  });
 
   // Setup radio buttons for mode switching
   const modeUrl = content.querySelector('#link-mode-url') as HTMLInputElement;
@@ -949,19 +704,19 @@ export function createLinkDialog(): HTMLElement {
 
   modeUrl.addEventListener('change', () => {
     if (modeUrl.checked) {
-      updateMode('url', urlInput, filtersContainer);
+      updateMode('url', urlInput);
     }
   });
 
   modeFile.addEventListener('change', () => {
     if (modeFile.checked) {
-      updateMode('file', urlInput, filtersContainer);
+      updateMode('file', urlInput);
     }
   });
 
   modeHeadings.addEventListener('change', () => {
     if (modeHeadings.checked) {
-      updateMode('headings', urlInput, filtersContainer);
+      updateMode('headings', urlInput);
     }
   });
 
@@ -983,11 +738,49 @@ export function createLinkDialog(): HTMLElement {
     }
   });
 
+  // Setup local file browse button
+  const browseLocalBtn = content.querySelector(
+    '#link-browse-local-btn'
+  ) as HTMLButtonElement | null;
+  if (browseLocalBtn) {
+    browseLocalBtn.addEventListener('click', () => {
+      const vscode = (window as Window & { vscode: { postMessage: (msg: any) => void } }).vscode;
+      if (vscode && typeof vscode.postMessage === 'function') {
+        vscode.postMessage({ type: 'browseLocalFile' });
+      }
+    });
+  }
+
+  // Set up message listener for local file selection
+  const messageListener = (event: MessageEvent) => {
+    const message = event.data;
+    if (message.type === 'localFileSelected' && isVisible && currentMode === 'file') {
+      // Normalize path
+      let normalizedPath = message.path.replace(/\\/g, '/');
+      if (
+        !normalizedPath.startsWith('./') &&
+        !normalizedPath.startsWith('../') &&
+        !normalizedPath.startsWith('/') &&
+        !normalizedPath.match(/^[A-Za-z]:/)
+      ) {
+        normalizedPath = './' + normalizedPath;
+      }
+
+      actualLinkPath = normalizedPath;
+      urlInput.value = message.filename;
+      urlInput.focus(); // Keep focus in dialog
+    }
+  };
+  window.addEventListener('message', messageListener);
+  // Store listener on element so we can remove it when closing
+  (overlay as unknown as { _messageListener: (e: MessageEvent) => void })._messageListener =
+    messageListener;
+
   urlInput.addEventListener('input', () => {
     if (currentMode === 'file') {
       const query = urlInput.value.trim();
       if (query.length >= 1) {
-        handleFileSearch(query, filterState);
+        handleFileSearch(query);
       } else {
         // Show placeholder message when input is empty
         if (autocompleteDropdown) {
@@ -1021,18 +814,6 @@ export function createLinkDialog(): HTMLElement {
     ) {
       closeAutocomplete();
     }
-  });
-
-  const boundaryButtons = [
-    { button: trimLeftBtn, direction: 'left' as const, action: 'shrink' as const },
-    { button: expandLeftBtn, direction: 'left' as const, action: 'expand' as const },
-    { button: expandRightBtn, direction: 'right' as const, action: 'expand' as const },
-    { button: trimRightBtn, direction: 'right' as const, action: 'shrink' as const },
-  ];
-
-  boundaryButtons.forEach(({ button, direction, action }) => {
-    if (!button) return;
-    button.onclick = () => adjustLinkBoundary(direction, action, textInput);
   });
 
   okBtn.onclick = () => {
@@ -1149,15 +930,12 @@ export function showLinkDialog(editor: Editor): void {
   const modeUrl = linkDialogElement.querySelector('#link-mode-url') as HTMLInputElement;
   const modeFile = linkDialogElement.querySelector('#link-mode-file') as HTMLInputElement;
   const modeHeadings = linkDialogElement.querySelector('#link-mode-headings') as HTMLInputElement;
-  const filtersContainer = linkDialogElement.querySelector(
-    '#link-filters-container'
-  ) as HTMLElement | null;
 
   if (modeUrl) modeUrl.checked = true;
   if (modeFile) modeFile.checked = false;
   if (modeHeadings) modeHeadings.checked = false;
 
-  updateMode('url', urlInput, filtersContainer);
+  updateMode('url', urlInput);
 
   // Restore URL values if editing existing link (updateMode clears them)
   if (currentUrl) {

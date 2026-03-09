@@ -15,6 +15,8 @@
 
 import TurndownService from 'turndown';
 import MarkdownIt from 'markdown-it';
+// @ts-expect-error - markdown-it-mark does not have types available
+import markdownItMark from 'markdown-it-mark';
 
 // Create and configure turndown instance
 const turndown = new TurndownService({
@@ -33,6 +35,12 @@ turndown.addRule('strikethrough', {
     return tagName === 'del' || tagName === 's' || tagName === 'strike';
   },
   replacement: content => `~~${content}~~`,
+});
+
+// Add rule for highlight (mark elements)
+turndown.addRule('highlight', {
+  filter: ['mark'],
+  replacement: content => `==${content}==`,
 });
 
 // Add rule for task lists (checkboxes) - must have actual checkbox input
@@ -68,7 +76,7 @@ turndown.addRule('fencedCodeBlock', {
 });
 
 // Keep certain elements as-is (don't convert)
-turndown.keep(['sup', 'sub']);
+turndown.keep(['sup', 'sub', 'u']);
 
 // Remove elements that shouldn't be in markdown
 turndown.remove(['script', 'style', 'noscript', 'iframe', 'object', 'embed']);
@@ -117,7 +125,7 @@ const md = new MarkdownIt({
   html: true,
   breaks: true, // Preserve single newlines as <br> for plain text blocks
   linkify: true,
-});
+}).use(markdownItMark);
 
 /**
  * Check if text looks like markdown (has syntax that needs parsing)

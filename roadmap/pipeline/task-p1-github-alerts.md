@@ -7,7 +7,7 @@
 - **Status:** in-progress
 - **Created:** 2025-12-09
 - **Last updated:** 2025-12-09
-- **Shipped:** _(pending)_
+- **Shipped:** Completed
 
 ---
 

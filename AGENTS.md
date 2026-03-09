@@ -61,20 +61,18 @@
 
 ---
 
-## Detailed Guides (Load When Needed)
+## Detailed Guides (Load As Needed)
 
-| Guide | When to Load | Load Proactively? |
-|-------|--------------|-------------------|
-| [common-pitfalls.md](vibe-coding-rules/common-pitfalls.md) | Known issues and solutions | Read before any task |
-| [testing.md](vibe-coding-rules/testing.md) | Writing tests, TDD workflow, bug fixes | For all bug fixes |
-| [vscode-integration.md](vibe-coding-rules/vscode-integration.md) | Commands, webview, extension patterns | For extension features |
-| [ux-principles.md](vibe-coding-rules/ux-principles.md) | Response times, errors, accessibility | For UI changes |
-| [styling.md](vibe-coding-rules/styling.md) | CSS, visual feedback, theme-aware styling, Apple-like polish | For CSS/styling changes |
-| [coding-standards.md](vibe-coding-rules/coding-standards.md) | TypeScript style, code documentation, file organization | For all code changes |
-| [image-and-dom-handling.md](vibe-coding-rules/image-and-dom-handling.md) | Images, Enter key, NodeViews, Markdown serialization | For image/DOM changes |
-| [performance.md](vibe-coding-rules/performance.md) | Bundle size, startup, memory optimization | Reference if concerns arise |
+- [common-pitfalls.md](vibe-coding-rules/common-pitfalls.md): read before sync/editor-state work.
+- [testing.md](vibe-coding-rules/testing.md): required for bug fixes and TDD workflow.
+- [vscode-integration.md](vibe-coding-rules/vscode-integration.md): VS Code commands, webview patterns.
+- [ux-principles.md](vibe-coding-rules/ux-principles.md): responsiveness and error UX.
+- [styling.md](vibe-coding-rules/styling.md): theme-aware CSS patterns.
+- [coding-standards.md](vibe-coding-rules/coding-standards.md): TypeScript and documentation standards.
+- [image-and-dom-handling.md](vibe-coding-rules/image-and-dom-handling.md): images/DOM/nodeview patterns.
+- [performance.md](vibe-coding-rules/performance.md): startup, bundle, and memory guidance.
 
-**Usage:** Proactively load guides when starting relevant work. The guides contain detailed patterns and examples.
+Load only what the current task requires.
 
 ---
 
@@ -147,6 +145,7 @@ See: [vibe-coding-rules/coding-standards.md#code-documentation](vibe-coding-rule
 1. Check official docs (VS Code API, TipTap/ProseMirror) - prefer over memory
 2. Search GitHub issues for known problems
 3. Test assumptions with small examples
+4. **ALWAYS fact check what the user is asking and suggest simple robust alternative ways if their request is fundamentally a bandaid or goes against VS Code paradigms.**
 
 **Critical issues:** Feedback loops, cursor position breaks, performance degradation
 
@@ -212,6 +211,36 @@ See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md
 5. **Simplicity wins** — Simplest solution that works
 6. **Test by using** — Read a 3000+ word doc for 10 minutes
 
+## Runtime Error Policy (Developer Mode)
+
+- Config key: `markdownForHumans.developerMode` (boolean, default `true`).
+- For runtime failures that risk data loss (serialization/sync/save), always:
+    - log with `[MD4H]` context,
+    - surface a user-visible error notification,
+    - include technical details in notifications only when Developer Mode is enabled.
+- Throttle repeated notifications to avoid user spam loops.
+- Do not silently discard risky failures.
+
 ---
 
 **Last Updated:** 2025-12-13
+
+## Modular Extension Strategy
+
+To maintain a clean and reliable editor experience, all custom functionality MUST be implemented as modular Tiptap Extensions.
+
+### Core Rules for Extensions
+
+1. **No Core Redundancy**: If `StarterKit` or an official `@tiptap/extension-*` provides it (e.g., input rules for Markdown), use the official package. Do NOT write custom input rules unless they are for our own entirely custom nodes.
+2. **Total Encapsulation**: Tiptap extensions should be completely self-sufficient.
+    - If a feature requires CSS, it hooks into an existing standardized class, or the CSS is cleanly separated in `editor.css`.
+    - If a feature requires DOM manipulation (like drag handles for images), it MUST be implemented within a `NodeView` via the `addNodeView` method of the extension, NOT via global `window.addEventListener('click')` inside `editor.ts`.
+3. **Strict Boundaries**: 
+    - Extensions reside in `src/webview/extensions/`.
+    - Extensions should export a single `Extension.create()`, `Node.create()`, or `Mark.create()` object.
+    - Extensions should only communicate with the VS Code backend via standardized `vscode.postMessage` payloads.
+
+### Refactoring Roadmap
+1. Remove redundant hacks (e.g. `markdownInputRules.ts`).
+2. Migrate global DOM manipulation out of `editor.ts` and into proper ProseMirror internal `NodeView` components (e.g. Image Resizing handles).
+3. Decouple Message Handling: Move extension-specific message handling into `addProseMirrorPlugins` within the extension itself, limiting the footprint inside the main `editor.ts` switch statement.

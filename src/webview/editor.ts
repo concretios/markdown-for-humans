@@ -11,10 +11,13 @@ import './codicon.css';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
-import { TableKit } from '@tiptap/extension-table';
+import { TableKit, Table } from '@tiptap/extension-table';
 import { ListKit } from '@tiptap/extension-list';
 import Link from '@tiptap/extension-link';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import Highlight from '@tiptap/extension-highlight';
+import DragHandle from '@tiptap/extension-drag-handle';
+import { marked as markedInstance } from 'marked';
 import { CustomImage } from './extensions/customImage';
 import { lowlight } from 'lowlight';
 import { Mermaid } from './extensions/mermaid';
@@ -25,13 +28,18 @@ import { GitHubAlerts } from './extensions/githubAlerts';
 import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
+import { TableCellEnterHandler } from './extensions/tableCellEnterHandler';
+import { GenericHTMLInline, GenericHTMLBlock } from './extensions/htmlPreservation';
+import { LivePreview } from './extensions/livePreview';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
+import { TextColorMark, CustomTextStyle } from './extensions/textColor';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import {
   setupImageDragDrop,
   hasPendingImageSaves,
   getPendingImageCount,
 } from './features/imageDragDrop';
+import { renderTableToMarkdownWithBreaks } from './utils/tableMarkdownSerializer';
 import { toggleTocOverlay } from './features/tocOverlay';
 import { toggleSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
@@ -40,7 +48,122 @@ import { copySelectionAsMarkdown } from './utils/copyMarkdown';
 import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
+import { isSaveShortcut } from './utils/shortcutKeys';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
+
+/**
+ * Tags that TipTap handles natively — never strip these.
+ */
+const KNOWN_HTML_TAGS = new Set([
+  'br',
+  'p',
+  'div',
+  'span',
+  'hr',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'li',
+  'table',
+  'thead',
+  'tbody',
+  'tr',
+  'td',
+  'th',
+  'strong',
+  'b',
+  'em',
+  'i',
+  'u',
+  's',
+  'del',
+  'ins',
+  'sub',
+  'sup',
+  'code',
+  'pre',
+  'blockquote',
+  'a',
+  'img',
+  'mark',
+]);
+
+/**
+ * Strip unknown HTML tags from a string, keeping text content.
+ * Converts `<mark>` → `==` for native Highlight support.
+ */
+function stripUnknownHtml(raw: string): string {
+  let result = raw.replace(/<mark>/gi, '==').replace(/<\/mark>/gi, '==');
+  result = result.replace(/<\/?([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*\/?>/g, (tag, tagName) => {
+    return KNOWN_HTML_TAGS.has(tagName.toLowerCase()) ? tag : '';
+  });
+  return result;
+}
+
+/**
+ * Pre-process markdown content using `marked`'s AST to safely strip unknown
+ * HTML tags while NEVER touching content inside code blocks or inline code spans.
+ *
+ * The previous regex-based approach was fragile with nested backticks, escaped
+ * characters, and indented code blocks. Using `marked.lexer()` leverages the
+ * same parser TipTap uses, so code boundary detection is 100% accurate.
+ */
+function preprocessMarkdownContent(content: string): string {
+  const tokens = markedInstance.lexer(content);
+  return reconstructFromTokens(tokens);
+}
+
+/**
+ * Recursively reconstruct markdown from a token tree, stripping unknown HTML
+ * only from non-code tokens. Code tokens (`code`, `codespan`) are returned
+ * verbatim via `token.raw`.
+ */
+function reconstructFromTokens(
+  tokens: Array<{ type: string; raw: string; tokens?: unknown[]; items?: unknown[] }>
+): string {
+  return tokens
+    .map(token => {
+      // Code tokens: return raw content completely untouched
+      if (token.type === 'code' || token.type === 'codespan') {
+        return token.raw;
+      }
+
+      // HTML tokens (inline or block): strip unknown tags
+      if (token.type === 'html') {
+        return stripUnknownHtml(token.raw);
+      }
+
+      // Tokens with children: we must reconstruct from children to
+      // preserve the tree walk, but keep the token's own raw prefix/suffix
+      if (token.tokens && Array.isArray(token.tokens)) {
+        const childrenOutput = reconstructFromTokens(
+          token.tokens as Array<{ type: string; raw: string; tokens?: unknown[] }>
+        );
+        // For top-level block tokens (paragraph, heading, etc.) the raw includes
+        // trailing newlines — we need to preserve those but swap inner content
+        const rawInner = (token.tokens as Array<{ raw: string }>).map(t => t.raw).join('');
+        return token.raw.replace(rawInner, childrenOutput);
+      }
+
+      // List items have `items` instead of `tokens`
+      if (token.items && Array.isArray(token.items)) {
+        const itemsOutput = reconstructFromTokens(
+          token.items as Array<{ type: string; raw: string; tokens?: unknown[] }>
+        );
+        const rawInner = (token.items as Array<{ raw: string }>).map(i => i.raw).join('');
+        return token.raw.replace(rawInner, itemsOutput);
+      }
+
+      // Leaf tokens (text, space, etc.): return raw
+      return token.raw;
+    })
+    .join('');
+}
 
 // Helper function for slug generation (same as in linkDialog)
 function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
@@ -62,18 +185,6 @@ function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
   existingSlugs.add(finalSlug);
   return finalSlug;
 }
-import {
-  handleImageResized,
-  showResizeModalAfterDownload,
-  showImageResizeModal,
-} from './features/imageResizeModal';
-import {
-  clearImageMetadataCache,
-  updateImageMetadataDimensions,
-  getCachedImageMetadata,
-} from './features/imageMetadata';
-// Import rename dialog to register global function
-import './features/imageRenameDialog';
 
 // Import common languages for syntax highlighting
 import javascript from 'highlight.js/lib/languages/javascript';
@@ -130,6 +241,7 @@ declare global {
     imagePathBase?: string;
     _imageCacheBust?: Map<string, number>;
     _workspaceCheckCallbacks?: Map<string, (result: unknown) => void>;
+    md4hDeveloperMode?: boolean;
   }
 }
 
@@ -138,10 +250,65 @@ const vscode = acquireVsCodeApi();
 // Make vscode API available globally for toolbar buttons
 window.vscode = vscode;
 
+/**
+ * Mirror webview diagnostics into extension-host logs for easier alpha troubleshooting.
+ */
+function reportWebviewIssue(level: 'error' | 'warn' | 'info', message: string, details?: unknown) {
+  try {
+    vscode.postMessage({
+      type: 'webviewLog',
+      level,
+      message,
+      details,
+    });
+  } catch (error) {
+    console.error('[MD4H] Failed to forward webview issue to extension host:', error);
+  }
+}
+
+const userErrorCooldownMs = 5000;
+const lastUserErrorAt = new Map<string, number>();
+
+function isDeveloperModeEnabled(): boolean {
+  return window.md4hDeveloperMode !== false;
+}
+
+function showRuntimeErrorToUser(code: string, baseMessage: string, error?: unknown) {
+  const now = Date.now();
+  const last = lastUserErrorAt.get(code) ?? 0;
+  if (now - last < userErrorCooldownMs) {
+    return;
+  }
+  lastUserErrorAt.set(code, now);
+
+  const errorText =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : String(error ?? '');
+  const message =
+    isDeveloperModeEnabled() && errorText ? `${baseMessage} (${errorText})` : baseMessage;
+
+  vscode.postMessage({
+    type: 'showError',
+    message,
+  });
+}
+
 let editor: Editor | null = null;
 let isUpdating = false; // Prevent feedback loops
 let formattingToolbar: HTMLElement;
 let tableMenu: HTMLElement;
+// Dirty state tracking — true when webview has unsaved edits
+let docDirty = false;
+
+function setDocDirty(dirty: boolean) {
+  docDirty = dirty;
+  (window as any).__docDirty = dirty;
+  window.dispatchEvent(new CustomEvent('documentDirtyChange', { detail: { dirty } }));
+  updateToolbarStates();
+}
 let updateTimeout: number | null = null;
 let lastUserEditTime = 0; // Track when user last edited
 let pendingInitialContent: string | null = null; // Content from host before editor is ready
@@ -163,11 +330,47 @@ function hashString(str: string): string {
   }
   return hash.toString(36);
 }
+
+/**
+ * Generate short request IDs used to correlate save logs between webview and extension host.
+ */
+function createRequestId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 const signalReady = () => {
   if (hasSentReadySignal) return;
   vscode.postMessage({ type: 'ready' });
   hasSentReadySignal = true;
 };
+
+/**
+ * Explicitly request a fresh document/settings sync from extension host.
+ * Used as a recovery path when webview is visible but editor DOM is blank.
+ */
+function requestHostResync(reason: string) {
+  console.warn('[MD4H][RECOVERY] Requesting host resync:', reason);
+  vscode.postMessage({ type: 'ready' });
+}
+
+function isEditorDomBlank(): boolean {
+  const root = document.querySelector('#editor') as HTMLElement | null;
+  if (!root) return true;
+  if (!root.querySelector('.ProseMirror')) return true;
+  if (editor && editor.state.doc.content.size > 0) return false;
+  const proseMirrorText = root.textContent?.trim() || '';
+  return proseMirrorText.length === 0;
+}
+
+function scheduleBlankEditorRecovery(trigger: string) {
+  setTimeout(() => {
+    if (document.visibilityState !== 'visible') return;
+    if (!isEditorDomBlank()) return;
+
+    console.warn('[MD4H][RECOVERY] Blank editor detected after', trigger);
+    requestHostResync(`blank-editor-${trigger}`);
+  }, 120);
+}
 
 /**
  * Track content we're about to send to prevent echo updates
@@ -197,90 +400,19 @@ const scheduleOutlineUpdate = () => {
   }, 250);
 };
 
-// Global function for resolving image paths (used by CustomImage extension)
-const uriResolveCallbacks = new Map<string, (uri: string) => void>();
-window.resolveImagePath = function (relativePath: string): Promise<string> {
-  return new Promise(resolve => {
-    const requestId = `resolve-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    uriResolveCallbacks.set(requestId, resolve);
-    vscode.postMessage({
-      type: 'resolveImageUri',
-      requestId,
-      relativePath,
-    });
-  });
-};
-
-type ImageReferenceMatch = { line: number; text: string };
-type ImageReferencesPayload = {
-  requestId: string;
-  imagePath: string;
-  currentFileCount: number;
-  otherFiles: Array<{ fsPath: string; matches: ImageReferenceMatch[] }>;
-  error?: string;
-};
-
-const imageReferencesCallbacks = new Map<string, (payload: ImageReferencesPayload) => void>();
-window.getImageReferences = function (imagePath: string): Promise<unknown> {
-  return new Promise(resolve => {
-    const requestId = `refs-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    imageReferencesCallbacks.set(requestId, resolve as (payload: ImageReferencesPayload) => void);
-    vscode.postMessage({
-      type: 'getImageReferences',
-      requestId,
-      imagePath,
-    });
-  });
-};
-
-type ImageRenameCheckPayload = {
-  requestId: string;
-  exists: boolean;
-  newFilename: string;
-  newPath: string;
-  error?: string;
-};
-
-const imageRenameCheckCallbacks = new Map<string, (payload: ImageRenameCheckPayload) => void>();
-window.checkImageRename = function (oldPath: string, newName: string): Promise<unknown> {
-  return new Promise(resolve => {
-    const requestId = `renamecheck-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    imageRenameCheckCallbacks.set(requestId, resolve as (payload: ImageRenameCheckPayload) => void);
-    vscode.postMessage({
-      type: 'checkImageRename',
-      requestId,
-      oldPath,
-      newName,
-    });
-  });
-};
-
-// Global function for setting up image resize (used by CustomImage extension)
-window.setupImageResize = function (
-  img: HTMLImageElement,
-  editorInstance?: Editor,
-  vscodeApi?: VsCodeApi
-): void {
-  const editorToUse = editorInstance || editor;
-  if (!editorToUse) {
-    console.warn('[MD4H] setupImageResize called before editor is ready');
-    return;
-  }
-
-  const apiToUse = vscodeApi || vscode;
-  void showImageResizeModal(img, editorToUse, apiToUse).catch(error => {
-    console.error('[MD4H] Failed to open image resize modal:', error);
-    apiToUse.postMessage({
-      type: 'showError',
-      message: 'Failed to open the image resize dialog. Please reload the editor and try again.',
-    });
-  });
-};
-
 /**
  * Immediately send update (used for save shortcuts)
  */
 function immediateUpdate() {
+  if (!editor) return;
+  saveDocument();
+}
+
+/**
+ * Explicitly save the document — sends content to extension and triggers VS Code save.
+ * This is the ONLY path through which webview edits reach the file system.
+ */
+function saveDocument() {
   if (!editor) return;
 
   try {
@@ -291,30 +423,61 @@ function immediateUpdate() {
     }
 
     const markdown = getEditorMarkdownForSync(editor);
+    const plainTextLength = editor.getText().trim().length;
+    const saveRequestId = createRequestId('save');
+    const contentHash = hashString(markdown);
+
+    if (markdown.length === 0 && plainTextLength > 0) {
+      const details = {
+        requestId: saveRequestId,
+        plainTextLength,
+        docSize: editor.state.doc.content.size,
+      };
+      console.error('[MD4H] Serialization produced empty markdown for non-empty document', details);
+      reportWebviewIssue(
+        'error',
+        '[SAVE] Serialization produced empty markdown for non-empty document; save blocked to prevent data loss',
+        details
+      );
+      showRuntimeErrorToUser(
+        'save-serialization-empty',
+        'Save blocked: serialization returned empty output for a non-empty document. Please share MD4H logs with support.'
+      );
+      return;
+    }
+
     trackSentContent(markdown);
 
-    console.log('[MD4H] Immediate save triggered');
+    console.log(
+      `[MD4H][SAVE][${saveRequestId}] Dispatching saveAndEdit (len=${markdown.length}, hash=${contentHash})`
+    );
 
-    // Send edit first
+    // Send combined edit and save to avoid race conditions
     vscode.postMessage({
-      type: 'edit',
+      type: 'saveAndEdit',
       content: markdown,
+      requestId: saveRequestId,
     });
-
-    // Then tell VS Code to save the file
-    setTimeout(() => {
-      vscode.postMessage({
-        type: 'save',
-      });
-    }, 50); // Small delay to ensure edit is processed first
+    // Let the VS Code side send the 'saved' event to clear the dirty state
   } catch (error) {
-    console.error('[MD4H] Error in immediate save:', error);
+    console.error('[MD4H] Error saving document:', error);
+    reportWebviewIssue('error', '[SAVE] Exception while preparing save payload', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    showRuntimeErrorToUser(
+      'save-exception',
+      'Save failed while preparing document content.',
+      error
+    );
   }
 }
 
+// Expose saveDocument globally for toolbar button
+(window as any).saveDocument = saveDocument;
+
 /**
- * Debounced update with error handling
- * Prevents sync while images are being saved to avoid race conditions
+ * Debounced update sending edits to VS Code
+ * This ensures the VS Code TextDocument is marked dirty and can be saved naturally
  */
 function debouncedUpdate(markdown: string) {
   if (updateTimeout) {
@@ -323,26 +486,47 @@ function debouncedUpdate(markdown: string) {
 
   updateTimeout = window.setTimeout(() => {
     try {
+      console.log(`[MD4H] debouncedUpdate firing for ${markdown.length} chars...`);
+      if (editor && markdown.length === 0 && editor.getText().trim().length > 0) {
+        const details = {
+          plainTextLength: editor.getText().trim().length,
+          docSize: editor.state.doc.content.size,
+        };
+        console.error(
+          '[MD4H] Debounced sync produced empty markdown for non-empty document',
+          details
+        );
+        reportWebviewIssue(
+          'error',
+          '[SYNC] Debounced sync produced empty markdown for non-empty document; sync skipped',
+          details
+        );
+        showRuntimeErrorToUser(
+          'sync-serialization-empty',
+          'Auto-sync skipped because serialization returned empty output for non-empty content.'
+        );
+        updateTimeout = null;
+        return;
+      }
       // Check if any images are currently being saved
       if (hasPendingImageSaves()) {
         const count = getPendingImageCount();
         console.log(`[MD4H] Delaying document sync - ${count} image(s) still being saved`);
-        // Reschedule the update to check again
+        // Re-queue the update
         debouncedUpdate(markdown);
         return;
       }
-
-      // Track content hash to detect and ignore echo updates
-      trackSentContent(markdown);
 
       vscode.postMessage({
         type: 'edit',
         content: markdown,
       });
+      updateTimeout = null;
+      trackSentContent(markdown);
     } catch (error) {
-      console.error('[MD4H] Error sending update:', error);
+      console.error('[MD4H] Error in debounced update:', error);
     }
-  }, 500);
+  }, 300);
 }
 
 // TODO: Re-implement code block language badges feature
@@ -401,6 +585,25 @@ function initializeEditor(initialContent: string) {
         SpaceFriendlyImagePaths,
         // GitHubAlerts must be before StarterKit to intercept alert blockquotes
         GitHubAlerts,
+        Highlight.configure({
+          HTMLAttributes: {
+            class: 'highlight',
+          },
+        }),
+        GenericHTMLInline,
+        GenericHTMLBlock,
+        LivePreview,
+        DragHandle.configure({
+          render() {
+            const element = document.createElement('div');
+            element.classList.add('custom-drag-handle');
+            element.innerHTML =
+              '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/></svg>';
+            return element;
+          },
+        }),
+        CustomTextStyle,
+        TextColorMark,
         StarterKit.configure({
           heading: {
             levels: [1, 2, 3, 4, 5, 6],
@@ -436,13 +639,21 @@ function initializeEditor(initialContent: string) {
             breaks: true, // Preserve single newlines as <br>
           },
         }),
-        TableKit.configure({
-          table: {
-            resizable: true,
-            HTMLAttributes: {
-              class: 'markdown-table',
-            },
+        // Custom Table extension that handles <br /> correctly
+        Table.extend({
+          renderMarkdown(node, h) {
+            return renderTableToMarkdownWithBreaks(node, h);
           },
+        }).configure({
+          resizable: true,
+          HTMLAttributes: {
+            class: 'markdown-table',
+          },
+        }),
+        // Still use TableKit for rows and cells, but disable its internal table
+        // to avoid duplicate registration of the 'table' node
+        TableKit.configure({
+          table: false,
         }),
         ListKit.configure({
           orderedList: false,
@@ -453,6 +664,7 @@ function initializeEditor(initialContent: string) {
         OrderedListMarkdownFix,
         TabIndentation, // Enable Tab/Shift+Tab for list indentation
         ImageEnterSpacing, // Handle Enter key around images and gap cursor
+        TableCellEnterHandler, // Make Enter in table cells insert <br /> instead of new paragraph
         Link.configure({
           openOnClick: false,
           HTMLAttributes: {
@@ -474,8 +686,29 @@ function initializeEditor(initialContent: string) {
           spellcheck: 'true',
         },
         // Prevent default image drop handling - let our custom handler manage it
-        handleDrop: (_view, event, _slice, _moved) => {
+        handleDrop: (_view, event, slice, moved) => {
           const dt = event.dataTransfer;
+
+          // Disable dragging tables - it causes erroneous rows/cols or duplication in Tiptap
+          if (moved && slice.content.childCount > 0) {
+            let hasTable = false;
+            slice.content.forEach(node => {
+              if (
+                node.type.name === 'table' ||
+                node.type.name === 'tableRow' ||
+                node.type.name === 'tableCell' ||
+                node.type.name === 'tableHeader'
+              ) {
+                hasTable = true;
+              }
+            });
+
+            if (hasTable) {
+              console.log('[MD4H] Prevented table drag to avoid structure corruption');
+              return true; // Prevent default
+            }
+          }
+
           if (!dt) return false;
 
           // Case 1: Actual image files (from desktop/finder)
@@ -501,16 +734,23 @@ function initializeEditor(initialContent: string) {
           return false; // Allow default for non-image drops
         },
       },
-      onUpdate: ({ editor }) => {
+      onUpdate: ({ editor: _editor }) => {
         if (isUpdating) return;
 
         try {
           // Track when user last edited
           lastUserEditTime = Date.now();
 
-          const markdown = getEditorMarkdownForSync(editor);
-          debouncedUpdate(markdown);
+          // Mark document dirty (don't auto-send to extension)
+          if (!docDirty) {
+            setDocDirty(true);
+          }
+
           scheduleOutlineUpdate();
+
+          const markdown = getEditorMarkdownForSync(_editor);
+          console.log(`[MD4H] onUpdate: markdown serialized (len=${markdown.length})`);
+          debouncedUpdate(markdown);
         } catch (error) {
           console.error('[MD4H] Error in onUpdate:', error);
         }
@@ -522,6 +762,13 @@ function initializeEditor(initialContent: string) {
         } catch (error) {
           console.warn('[MD4H] Selection update failed:', error);
         }
+      },
+      onFocus: () => {
+        // Signal focus to enable focus-requiring toolbar buttons
+        window.dispatchEvent(new CustomEvent('editorFocusChange', { detail: { focused: true } }));
+      },
+      onBlur: () => {
+        // Focus change is handled via relatedTarget in editorDom listener to allow toolbar interaction
       },
       onCreate: () => {
         console.log('[MD4H] Editor created successfully');
@@ -538,7 +785,9 @@ function initializeEditor(initialContent: string) {
       // Prevent onUpdate from firing during initialization - this was causing
       // documents with frontmatter to be marked dirty even without user edits
       isUpdating = true;
-      editor.commands.setContent(initialContent, { contentType: 'markdown' });
+      editor.commands.setContent(preprocessMarkdownContent(initialContent), {
+        contentType: 'markdown',
+      });
       isUpdating = false;
     }
 
@@ -625,7 +874,7 @@ function initializeEditor(initialContent: string) {
       }
 
       // Save shortcut - immediate save
-      if (isMod && e.key === 's') {
+      if (isSaveShortcut(e)) {
         console.log('[MD4H] *** SAVE SHORTCUT TRIGGERED ***');
         e.preventDefault();
         e.stopPropagation();
@@ -801,6 +1050,7 @@ function initializeEditor(initialContent: string) {
     console.log('[MD4H] Editor initialization complete');
   } catch (error) {
     console.error('[MD4H] Fatal error initializing editor:', error);
+    showRuntimeErrorToUser('editor-init-fatal', 'Editor failed to initialize.', error);
     const editorElement = document.querySelector('#editor') as HTMLElement;
     if (editorElement) {
       editorElement.innerHTML = `
@@ -815,6 +1065,57 @@ function initializeEditor(initialContent: string) {
 }
 
 /**
+ * Helper to apply all webview configuration settings from extension messages.
+ */
+function applyWebviewSettings(message: any) {
+  if (typeof message.skipResizeWarning === 'boolean') {
+    (window as any).skipResizeWarning = message.skipResizeWarning;
+  }
+  if (typeof message.imagePath === 'string') {
+    (window as any).imagePath = message.imagePath;
+  }
+  if (typeof message.mediaPath === 'string') {
+    (window as any).mediaPath = message.mediaPath;
+  }
+  if (typeof message.mediaPathBase === 'string') {
+    (window as any).mediaPathBase = message.mediaPathBase;
+  }
+  if (typeof message.imagePathBase === 'string') {
+    (window as any).imagePathBase = message.imagePathBase;
+  }
+  if (typeof message.developerMode === 'boolean') {
+    window.md4hDeveloperMode = message.developerMode;
+  }
+
+  // Apply spacing variables
+  const root = document.documentElement;
+  if (typeof message.lineSpacing === 'number') {
+    root.style.setProperty('--md4h-line-spacing', message.lineSpacing.toString());
+  }
+  if (typeof message.paragraphSpacing === 'number') {
+    root.style.setProperty('--md4h-paragraph-spacing', `${message.paragraphSpacing}em`);
+  }
+  if (typeof message.tableCellSpacing === 'number') {
+    root.style.setProperty('--md4h-table-cell-spacing', `${message.tableCellSpacing}em`);
+  }
+  if (typeof message.tableCellHorizontalSpacing === 'number') {
+    root.style.setProperty(
+      '--md4h-table-cell-horizontal-spacing',
+      `${message.tableCellHorizontalSpacing}em`
+    );
+  }
+
+  if (message.themeOverride) {
+    (window as any).md4hCurrentThemeOverride = message.themeOverride;
+    console.warn('[MD4H][THEME] settingsUpdate received', { themeOverride: message.themeOverride });
+    if (typeof (window as any).md4hApplyTheme === 'function') {
+      (window as any).md4hApplyTheme(message.themeOverride);
+    }
+    window.dispatchEvent(new CustomEvent('themeChange'));
+  }
+}
+
+/**
  * Handle messages from extension
  */
 window.addEventListener('message', (event: MessageEvent) => {
@@ -823,385 +1124,25 @@ window.addEventListener('message', (event: MessageEvent) => {
 
     switch (message.type) {
       case 'update':
-        // Store skipResizeWarning setting if present
-        if (typeof message.skipResizeWarning === 'boolean') {
-          (window as any).skipResizeWarning = message.skipResizeWarning;
-        }
-        // Store imagePath setting if present
-        if (typeof message.imagePath === 'string') {
-          (window as any).imagePath = message.imagePath;
-        }
-        if (typeof message.imagePathBase === 'string') {
-          (window as any).imagePathBase = message.imagePathBase;
-        }
+        applyWebviewSettings(message);
+
         // Initialize editor with first payload to seed undo history correctly
         if (!editor) {
           if (isDomReady) {
             initializeEditor(message.content);
           } else {
             pendingInitialContent = message.content;
+            (window as any)._pendingThemeOverride = message.themeOverride;
           }
           return;
         }
         updateEditorContent(message.content);
         break;
-      case 'settingsUpdate':
-        // Update skipResizeWarning setting
-        if (typeof message.skipResizeWarning === 'boolean') {
-          (window as any).skipResizeWarning = message.skipResizeWarning;
-        }
-        // Update imagePath setting
-        if (typeof message.imagePath === 'string') {
-          (window as any).imagePath = message.imagePath;
-        }
-        if (typeof message.imagePathBase === 'string') {
-          (window as any).imagePathBase = message.imagePathBase;
-        }
-        break;
-      case 'imageResized': {
-        // Handle image resize completion
-        if (message.success && message.imagePath && message.backupPath) {
-          const timestamp = (message.timestamp as number) || Date.now();
-          const newImagePath = message.newImagePath as string | undefined;
-          const newWidth = message.newWidth as number | undefined;
-          const newHeight = message.newHeight as number | undefined;
-
-          // Cache-bust image reloads (especially important when the NodeView is recreated).
-          const cacheBustMap =
-            ((window as any)._imageCacheBust as Map<string, number> | undefined) ??
-            new Map<string, number>();
-          (window as any)._imageCacheBust = cacheBustMap;
-          if (typeof message.imagePath === 'string') {
-            cacheBustMap.set(message.imagePath, timestamp);
-          }
-          if (typeof newImagePath === 'string') {
-            cacheBustMap.set(newImagePath, timestamp);
-          }
-
-          // Find the image element by path
-          const images = document.querySelectorAll('.markdown-image');
-          for (const img of images) {
-            const imgElement = img as HTMLImageElement;
-            const imgPath =
-              imgElement.getAttribute('data-markdown-src') || imgElement.getAttribute('src') || '';
-            if (imgPath === message.imagePath || imgPath.endsWith(message.imagePath)) {
-              // Get old metadata before clearing cache
-              const oldMetadata = getCachedImageMetadata(imgPath);
-
-              // Clear metadata cache for both old and new paths
-              clearImageMetadataCache(imgPath);
-              if (newImagePath && newImagePath !== imgPath) {
-                clearImageMetadataCache(newImagePath);
-              }
-
-              // Immediately update metadata cache with new dimensions if provided
-              // This ensures correct dimensions are shown even before image fully loads
-              if (newWidth !== undefined && newHeight !== undefined) {
-                const metadataPath =
-                  newImagePath && newImagePath !== imgPath ? newImagePath : imgPath;
-                updateImageMetadataDimensions(
-                  metadataPath,
-                  { width: newWidth, height: newHeight },
-                  oldMetadata
-                );
-              }
-
-              handleImageResized(message.backupPath, imgElement);
-
-              // Update TipTap node attributes if new path is provided (includes dimensions)
-              if (newImagePath && editor) {
-                // Find the wrapper and get position from it (imgElement is inside wrapper)
-                const wrapper = imgElement.closest('.image-wrapper');
-                if (wrapper) {
-                  // Get position from wrapper (the actual ProseMirror node)
-                  const pos = editor.view.posAtDOM(wrapper, 0);
-                  if (pos !== undefined && pos !== null) {
-                    // Get the node at this position
-                    const node = editor.state.doc.nodeAt(pos);
-                    if (node && node.type.name === 'image') {
-                      // Update image node attributes with new path (includes dimensions)
-                      // This will trigger onUpdate automatically, which syncs markdown
-                      editor
-                        .chain()
-                        .setNodeSelection(pos)
-                        .updateAttributes('image', {
-                          src: newImagePath,
-                          'markdown-src': newImagePath,
-                        })
-                        .run();
-                    }
-                  }
-                }
-              }
-
-              // Update DOM attributes
-              if (newImagePath) {
-                imgElement.setAttribute('data-markdown-src', newImagePath);
-              }
-
-              // Force image reload with cache-busting to show resized version
-              // The image file has been overwritten, but browser may have cached the old version
-              const currentSrc = imgElement.src;
-              if (currentSrc && !currentSrc.includes('?t=')) {
-                // Add timestamp query parameter to force reload
-                const separator = currentSrc.includes('?') ? '&' : '?';
-                imgElement.src = `${currentSrc}${separator}t=${timestamp}`;
-              } else {
-                // Already has timestamp, replace it
-                imgElement.src = currentSrc.replace(/[?&]t=\d+/, `?t=${timestamp}`);
-              }
-              break;
-            }
-          }
-        }
+      case 'settingsUpdate': {
+        applyWebviewSettings(message);
         break;
       }
-      case 'imageUndoResized':
-      case 'imageRedoResized':
-        // Image undo/redo completed - image file already updated by extension
-        // Just refresh the image src to show updated version
-        if (message.success && message.imagePath) {
-          const timestamp = Date.now();
-          const images = document.querySelectorAll('.markdown-image');
-          for (const img of images) {
-            const imgElement = img as HTMLImageElement;
-            const imgPath =
-              imgElement.getAttribute('data-markdown-src') || imgElement.getAttribute('src') || '';
-            if (imgPath === message.imagePath || imgPath.endsWith(message.imagePath)) {
-              // Clear metadata cache to force fresh fetch with updated dimensions
-              clearImageMetadataCache(imgPath);
 
-              // Force image reload with cache-busting
-              const currentSrc = imgElement.src;
-              if (currentSrc) {
-                const separator = currentSrc.includes('?') ? '&' : '?';
-                imgElement.src = currentSrc.split(/[?&]t=/)[0] + `${separator}t=${timestamp}`;
-              }
-              break;
-            }
-          }
-        }
-        break;
-      case 'imageWorkspaceCheck': {
-        // Response to checkImageInWorkspace request
-        const requestId = message.requestId as string;
-        const callbacks = (window as any)._workspaceCheckCallbacks;
-        if (callbacks && callbacks.has(requestId)) {
-          const callback = callbacks.get(requestId);
-          callback({
-            inWorkspace: message.inWorkspace as boolean,
-            absolutePath: message.absolutePath as string | undefined,
-          });
-          callbacks.delete(requestId);
-        }
-        break;
-      }
-      case 'imageReferences': {
-        const requestId = message.requestId as string;
-        const callback = imageReferencesCallbacks.get(requestId);
-        if (callback) {
-          callback(message as ImageReferencesPayload);
-          imageReferencesCallbacks.delete(requestId);
-        }
-        break;
-      }
-      case 'imageRenameCheck': {
-        const requestId = message.requestId as string;
-        const callback = imageRenameCheckCallbacks.get(requestId);
-        if (callback) {
-          callback(message as ImageRenameCheckPayload);
-          imageRenameCheckCallbacks.delete(requestId);
-        }
-        break;
-      }
-      case 'imageMetadata': {
-        // Response to getImageMetadata request
-        const requestId = message.requestId as string;
-        const metadata = message.metadata;
-        const callbacks = (window as any)._metadataCallbacks;
-        if (callbacks && callbacks.has(requestId)) {
-          const callback = callbacks.get(requestId);
-
-          // Check if we already have cached metadata with dimensions (e.g., from resize)
-          const imagePath = metadata?.path;
-          const cachedMetadata = imagePath ? getCachedImageMetadata(imagePath) : null;
-          const preservedDimensions =
-            cachedMetadata &&
-            cachedMetadata.dimensions.width > 0 &&
-            cachedMetadata.dimensions.height > 0
-              ? cachedMetadata.dimensions
-              : null;
-
-          // If metadata has dimensions 0x0, try to get from img element or use preserved dimensions
-          if (metadata && metadata.dimensions && metadata.dimensions.width === 0) {
-            // First, try to use preserved dimensions from cache (set during resize)
-            if (preservedDimensions) {
-              metadata.dimensions = preservedDimensions;
-            } else {
-              // Fall back to getting dimensions from img element
-              const images = document.querySelectorAll('.markdown-image');
-              for (const img of images) {
-                const imgElement = img as HTMLImageElement;
-                const imgPath =
-                  imgElement.getAttribute('data-markdown-src') ||
-                  imgElement.getAttribute('src') ||
-                  '';
-                // Match by exact path or if one ends with the other (handles relative path variations)
-                if (
-                  imgPath === imagePath ||
-                  imgPath.endsWith(imagePath) ||
-                  imagePath.endsWith(imgPath)
-                ) {
-                  // Prefer naturalWidth/naturalHeight (actual image file dimensions)
-                  // These reflect the actual resized image dimensions after resize
-                  const width = imgElement.naturalWidth || imgElement.width || 0;
-                  const height = imgElement.naturalHeight || imgElement.height || 0;
-
-                  if (width > 0 && height > 0) {
-                    metadata.dimensions = {
-                      width,
-                      height,
-                    };
-                  }
-                  break;
-                }
-              }
-            }
-          } else if (preservedDimensions && metadata) {
-            // If we have preserved dimensions and metadata already has dimensions, prefer preserved (more recent)
-            metadata.dimensions = preservedDimensions;
-          }
-
-          callback(metadata);
-          callbacks.delete(requestId);
-        }
-        break;
-      }
-      case 'localImageCopied': {
-        // Local image copied to workspace - update TipTap node and show resize modal
-        if (!editor) break;
-
-        const relativePath = message.relativePath as string;
-        const originalPath = message.originalPath as string;
-
-        // Find the image element in DOM first (more reliable than searching doc)
-        const images = document.querySelectorAll('.markdown-image');
-        let imgElement: HTMLImageElement | null = null;
-
-        for (const img of images) {
-          const element = img as HTMLImageElement;
-          const imgSrc =
-            element.getAttribute('data-markdown-src') || element.getAttribute('src') || '';
-          // Check if this matches the original path (could be relative or absolute)
-          if (
-            imgSrc === originalPath ||
-            imgSrc.includes(originalPath) ||
-            originalPath.includes(imgSrc)
-          ) {
-            imgElement = element;
-            break;
-          }
-        }
-
-        if (!imgElement) {
-          console.warn('[MD4H] Could not find image element for local image copy');
-          break;
-        }
-
-        // Get position from DOM element
-        const pos = editor.view.posAtDOM(imgElement, 0);
-
-        if (pos === undefined || pos === null) {
-          console.warn('[MD4H] Could not find position for image in editor');
-          break;
-        }
-
-        // Get the node at this position
-        const node = editor.state.doc.nodeAt(pos);
-
-        if (!node || node.type.name !== 'image') {
-          console.warn(`[MD4H] Node at position ${pos} is not an image: ${node?.type.name}`);
-          break;
-        }
-
-        // Update image node attributes using updateAttributes (safer than setNodeMarkup)
-        try {
-          editor
-            .chain()
-            .setNodeSelection(pos)
-            .updateAttributes('image', {
-              src: relativePath,
-              'markdown-src': relativePath,
-            })
-            .run();
-
-          // Update DOM attributes
-          imgElement.setAttribute('data-markdown-src', relativePath);
-          imgElement.setAttribute('src', relativePath);
-
-          // Clear pending copy flags
-          delete (imgElement as any)._pendingDownloadPlaceholderId;
-
-          // If this image was pending resize after copy, show resize modal now
-          if ((imgElement as any)._pendingResizeAfterDownload) {
-            delete (imgElement as any)._pendingResizeAfterDownload;
-
-            // Wait for image to load, then show resize modal
-            const showModalAfterLoad = () => {
-              if (editor && imgElement) {
-                showResizeModalAfterDownload(imgElement, editor, vscode);
-              }
-            };
-
-            if (imgElement.complete) {
-              showModalAfterLoad();
-            } else {
-              imgElement.addEventListener('load', showModalAfterLoad, { once: true });
-
-              // Request resolution for the new local path
-              if ((window as any).resolveImagePath) {
-                (window as any).resolveImagePath(relativePath).then((webviewUri: string) => {
-                  if (imgElement) {
-                    imgElement.src = webviewUri;
-                    imgElement.setAttribute('data-markdown-src', relativePath);
-                  }
-                });
-              } else {
-                const newSrc = relativePath.startsWith('./') ? relativePath : `./${relativePath}`;
-                imgElement.src = newSrc;
-                imgElement.setAttribute('data-markdown-src', relativePath);
-              }
-            }
-          }
-        } catch (error) {
-          console.error('[MD4H] Failed to update image node after copy:', error);
-        }
-        break;
-      }
-      case 'localImageCopyError': {
-        // Local image copy failed
-        const error = message.error as string;
-        console.error('[MD4H] Local image copy failed:', error);
-        // Error already shown by extension, just clean up any pending state
-        const images = document.querySelectorAll('.markdown-image');
-        for (const img of images) {
-          const imgElement = img as HTMLImageElement;
-          if ((imgElement as any)._pendingDownloadPlaceholderId === message.placeholderId) {
-            delete (imgElement as any)._pendingDownloadPlaceholderId;
-            delete (imgElement as any)._pendingResizeAfterDownload;
-          }
-        }
-        break;
-      }
-      case 'imageUriResolved': {
-        // Handle image URI resolution response
-        const callback = uriResolveCallbacks.get(message.requestId);
-        if (callback) {
-          callback(message.webviewUri);
-          uriResolveCallbacks.delete(message.requestId);
-        }
-        break;
-      }
       case 'navigateToHeading': {
         if (!editor) return;
         const pos = message.pos as number;
@@ -1216,6 +1157,24 @@ window.addEventListener('message', (event: MessageEvent) => {
         });
         break;
       }
+      case 'exportResult':
+        if (message.success) {
+          vscode.postMessage({ type: 'showInfo', message: 'Document exported successfully!' });
+        } else {
+          vscode.postMessage({ type: 'showError', message: `Export failed: ${message.error}` });
+        }
+        break;
+      case 'saved':
+        if (typeof message.requestId === 'string') {
+          console.log(`[MD4H][SAVE][${message.requestId}] Received "saved" signal from extension`);
+        } else {
+          console.log('[MD4H] Received "saved" signal from extension');
+        }
+        setDocDirty(false);
+        break;
+      case 'imageUriResolved':
+        // Handled by the custom image message plugin; ignore here to avoid log noise.
+        break;
       default:
         console.warn('[MD4H] Unknown message type:', message.type);
     }
@@ -1271,14 +1230,14 @@ function updateEditorContent(markdown: string) {
     console.log(`[MD4H] Saving cursor position: ${from}-${to}`);
 
     // Set content
-    editor.commands.setContent(markdown, { contentType: 'markdown' });
+    editor.commands.setContent(preprocessMarkdownContent(markdown), { contentType: 'markdown' });
 
     // Restore cursor position
     try {
       editor.commands.setTextSelection({ from, to });
       console.log(`[MD4H] Restored cursor position: ${from}-${to}`);
     } catch {
-      console.warn('[MD4H] Could not restore exact cursor position, using safe position');
+      console.log('[MD4H] Could not restore cursor position (document too short)');
       // If exact position fails, move to end of document
       const endPos = editor.state.doc.content.size;
       editor.commands.setTextSelection(Math.min(from, endPos));
@@ -1320,6 +1279,20 @@ if (document.readyState === 'loading') {
   }
 }
 
+// Recovery hooks: if the webview is reclaimed from hidden state and appears blank,
+// request host re-sync rather than leaving user with an empty editor.
+window.addEventListener('focus', () => {
+  scheduleBlankEditorRecovery('focus');
+});
+window.addEventListener('pageshow', () => {
+  scheduleBlankEditorRecovery('pageshow');
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    scheduleBlankEditorRecovery('visible');
+  }
+});
+
 // Handle custom event for TOC toggle from toolbar button
 window.addEventListener('toggleTocOutline', () => {
   if (editor) {
@@ -1343,6 +1316,11 @@ window.addEventListener('openSourceView', () => {
 // Handle settings button from toolbar -> open VS Code settings UI
 window.addEventListener('openExtensionSettings', () => {
   vscode.postMessage({ type: 'openExtensionSettings' });
+});
+
+// Handle attachments button from toolbar -> open attachments folder in OS explorer
+window.addEventListener('openAttachmentsFolder', () => {
+  vscode.postMessage({ type: 'openAttachmentsFolder' });
 });
 
 // Handle export document from toolbar button

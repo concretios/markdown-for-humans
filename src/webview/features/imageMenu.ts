@@ -15,6 +15,7 @@
  */
 
 import type { Editor } from '@tiptap/core';
+import { showImageRenameDialog } from './imageRenameDialog';
 
 // Track currently open menu to close on outside click
 let currentOpenMenu: HTMLElement | null = null;
@@ -50,9 +51,9 @@ export function createImageMenu(isLocal: boolean = true): HTMLElement {
 
   // Build menu HTML
   let menuHTML = `
-    <div class="menu-item" role="menuitem" tabindex="0" data-action="resize">
-      <span class="codicon codicon-edit-sparkle menu-icon"></span>
-      <span class="menu-label">Resize</span>
+    <div class="menu-item" role="menuitem" tabindex="0" data-action="revert">
+      <span class="codicon codicon-refresh menu-icon"></span>
+      <span class="menu-label">Revert to original size</span>
     </div>
     <div class="menu-item" role="menuitem" tabindex="0" data-action="rename">
       <span class="codicon codicon-edit menu-icon"></span>
@@ -148,20 +149,14 @@ export function showImageMenu(
     if (menuItem) {
       const action = menuItem.getAttribute('data-action');
 
-      if (action === 'resize') {
+      if (action === 'revert') {
         hideImageMenu(menu);
-        // Open resize modal
-        if ((window as any).setupImageResize) {
-          (window as any).setupImageResize(img, editor, vscodeApi);
-        }
+        // Clear width and height attributes
+        editor.commands.updateAttributes('image', { width: null, height: null });
       } else if (action === 'rename') {
         hideImageMenu(menu);
         // Open rename dialog
-        if ((window as any).showImageRenameDialog) {
-          (window as any).showImageRenameDialog(img, vscodeApi);
-        } else {
-          console.warn('[MD4H] Rename dialog not available yet');
-        }
+        showImageRenameDialog(img, vscodeApi as any);
       } else if (action === 'openInFinder') {
         hideImageMenu(menu);
         // Get image path from data-markdown-src or src attribute

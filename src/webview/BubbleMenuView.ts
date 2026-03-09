@@ -17,6 +17,7 @@ import { showTableInsertDialog } from './features/tableInsert';
 import { showLinkDialog } from './features/linkDialog';
 import { showImageInsertDialog } from './features/imageInsertDialog';
 import type { Editor } from '@tiptap/core';
+import { getSelectedTableLines } from './utils/tableSelectionUtils';
 
 // Store reference to refresh function so it can be called externally
 let toolbarRefreshFunction: (() => void) | null = null;
@@ -88,6 +89,7 @@ type ToolbarActionButton = {
   title?: string;
   action: () => void;
   isActive?: () => boolean;
+  isEnabled?: () => boolean;
   className?: string;
   icon: ToolbarIcon;
   requiresFocus?: boolean; // Whether this button requires editor focus to be enabled
@@ -109,6 +111,7 @@ type ToolbarDropdown = {
   items: ToolbarDropdownItem[];
   requiresFocus?: boolean; // Whether this dropdown requires editor focus to be enabled
   isActive?: () => boolean; // Function to determine if dropdown should appear active
+  isEnabled?: () => boolean;
 };
 
 type ToolbarSeparator = { type: 'separator' };
@@ -189,6 +192,101 @@ export function updateToolbarStates() {
 }
 
 /**
+ * Custom table bullet toggler that adds "- " after every hardBreak in the cell.
+ */
+function toggleTableBullet(editor: Editor) {
+  const { state, dispatch } = editor.view;
+  const result = getSelectedTableLines(state, state.selection);
+  if (!result) return;
+  const { selectedLines, tr } = result;
+
+  const lineStarts = selectedLines.map(l => l.start);
+
+  let allHaveBullet = true;
+  for (const pos of lineStarts) {
+    const nextNode = tr.doc.nodeAt(pos);
+    if (nextNode && nextNode.isText) {
+      if (!nextNode.text?.startsWith('- ')) {
+        allHaveBullet = false;
+        break;
+      }
+    } else {
+      allHaveBullet = false;
+      break;
+    }
+  }
+
+  if (lineStarts.length === 1) {
+    const nextNode = tr.doc.nodeAt(lineStarts[0]);
+    if (!nextNode) {
+      allHaveBullet = false;
+    }
+  }
+
+  const originalFrom = state.selection.from;
+  const originalTo = state.selection.to;
+  const isEmpty = state.selection.empty;
+
+  for (let i = lineStarts.length - 1; i >= 0; i--) {
+    const pos = lineStarts[i];
+    if (allHaveBullet) {
+      const nextNode = tr.doc.nodeAt(pos);
+      if (nextNode && nextNode.isText && nextNode.text?.startsWith('- ')) {
+        tr.delete(pos, pos + 2);
+      }
+    } else {
+      const nextNode = tr.doc.nodeAt(pos);
+      if (!nextNode || (nextNode.isText && !nextNode.text?.startsWith('- '))) {
+        tr.insertText('- ', pos);
+      } else if (nextNode && !nextNode.isText) {
+        tr.insertText('- ', pos);
+      }
+    }
+  }
+
+  dispatch(tr);
+
+  // Remap original selection to keep exactly what the user selected, shifted by the bullet insertions
+  if (!isEmpty) {
+    const newFrom = tr.mapping.map(originalFrom, -1);
+    const newTo = tr.mapping.map(originalTo, 1);
+
+    // Check if newTo is valid
+    if (newTo > newFrom) {
+      editor.chain().setTextSelection({ from: newFrom, to: newTo }).focus().run();
+    } else {
+      editor.chain().focus().run();
+    }
+  } else {
+    editor.chain().focus().run();
+  }
+}
+
+function isTableBulletActive(editor: Editor): boolean {
+  if (!editor.isActive('table')) return false;
+
+  const { state } = editor;
+  const result = getSelectedTableLines(state, state.selection);
+  if (!result) return false;
+  const { selectedLines, tr } = result;
+
+  const lineStarts = selectedLines.map(l => l.start);
+
+  if (lineStarts.length === 1 && !tr.doc.nodeAt(lineStarts[0])) {
+    return false; // Empty cell
+  }
+
+  for (const pos of lineStarts) {
+    const nextNode = tr.doc.nodeAt(pos);
+    if (!nextNode || !nextNode.isText || !nextNode.text?.startsWith('- ')) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Create compact formatting toolbar with clean, minimal design.
  *
  * @param editor - TipTap editor instance
@@ -204,6 +302,24 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
   const modKeyLabel = isMac ? 'Cmd' : 'Ctrl';
 
   const buttons: ToolbarItem[] = [
+    {
+      type: 'button',
+      label: 'Save',
+      title: `Save document (${modKeyLabel}+S)`,
+      icon: { name: 'save', fallback: 'Save' },
+      action: () => {
+        if ((window as any).saveDocument) {
+          (window as any).saveDocument();
+        }
+      },
+      isActive: () => false,
+      isEnabled: () => !!(window as any).__docDirty,
+      className: 'save-button',
+      requiresFocus: false, // Can save even if editor lost focus
+    },
+    {
+      type: 'separator',
+    },
     {
       type: 'button',
       label: 'Bold',
@@ -223,6 +339,33 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       isActive: () => editor.isActive('italic'),
       className: 'italic',
       requiresFocus: true,
+    },
+    {
+      type: 'button',
+      label: 'Highlight',
+      title: 'Toggle highlight',
+      icon: { name: 'paintcan', fallback: 'Hl' },
+      action: () => editor.chain().focus().toggleHighlight().run(),
+      isActive: () => editor.isActive('highlight'),
+      className: 'highlight-icon',
+      requiresFocus: true,
+    },
+    {
+      type: 'dropdown',
+      label: 'Text Color',
+      title: 'Choose text color',
+      icon: { name: 'symbol-color', fallback: 'A' },
+      requiresFocus: true,
+      items: [
+        { label: 'Default', action: () => editor.chain().focus().unsetColor().run() },
+        { label: 'Red', action: () => editor.chain().focus().setColor('#e81123').run() },
+        { label: 'Orange', action: () => editor.chain().focus().setColor('#ea5a00').run() },
+        { label: 'Yellow', action: () => editor.chain().focus().setColor('#fce100').run() },
+        { label: 'Green', action: () => editor.chain().focus().setColor('#107c10').run() },
+        { label: 'Blue', action: () => editor.chain().focus().setColor('#0078d4').run() },
+        { label: 'Purple', action: () => editor.chain().focus().setColor('#8e562e').run() },
+        { label: 'Pink', action: () => editor.chain().focus().setColor('#c239b3').run() },
+      ],
     },
     {
       type: 'button',
@@ -251,6 +394,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { fallback: 'H1' },
       action: () => editor.chain().focus().toggleHeading({ level: 1 }).run(),
       isActive: () => editor.isActive('heading', { level: 1 }),
+      isEnabled: () => !editor.isActive('table'),
       requiresFocus: true,
     },
     {
@@ -260,6 +404,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { fallback: 'H2' },
       action: () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
       isActive: () => editor.isActive('heading', { level: 2 }),
+      isEnabled: () => !editor.isActive('table'),
       requiresFocus: true,
     },
     {
@@ -269,6 +414,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { fallback: 'H3' },
       action: () => editor.chain().focus().toggleHeading({ level: 3 }).run(),
       isActive: () => editor.isActive('heading', { level: 3 }),
+      isEnabled: () => !editor.isActive('table'),
       requiresFocus: true,
     },
     {
@@ -277,6 +423,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       title: 'More heading levels',
       icon: { name: 'text-size', fallback: 'H+' },
       requiresFocus: true,
+      isEnabled: () => !editor.isActive('table'),
       items: [
         {
           label: 'Heading 4 (H4)',
@@ -300,6 +447,18 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { name: 'list-unordered', fallback: '•' },
       action: () => editor.chain().focus().toggleBulletList().run(),
       isActive: () => editor.isActive('bulletList'),
+      isEnabled: () => !editor.isActive('table'),
+      requiresFocus: true,
+    },
+    {
+      type: 'button',
+      label: 'Table Bullet',
+      title: 'Toggle text bullet list in table cell',
+      icon: { name: 'list-unordered', fallback: '•' },
+      action: () => toggleTableBullet(editor),
+      isActive: () => isTableBulletActive(editor),
+      // This is a special button that ONLY shows up when inside a table
+      isEnabled: () => editor.isActive('table'),
       requiresFocus: true,
     },
     {
@@ -309,6 +468,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { name: 'list-ordered', fallback: '1.' },
       action: () => editor.chain().focus().toggleOrderedList().run(),
       isActive: () => editor.isActive('orderedList'),
+      isEnabled: () => !editor.isActive('table'),
       requiresFocus: true,
     },
     {
@@ -318,6 +478,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { name: 'tasklist', fallback: '☐' },
       action: () => editor.chain().focus().toggleTaskList().run(),
       isActive: () => editor.isActive('taskList'),
+      isEnabled: () => !editor.isActive('table'),
       requiresFocus: true,
     },
     { type: 'separator' },
@@ -386,6 +547,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { name: 'quote', fallback: '"' },
       action: () => editor.chain().focus().toggleBlockquote().run(),
       isActive: () => editor.isActive('blockquote'),
+      isEnabled: () => !editor.isActive('table'),
       requiresFocus: true,
     },
     {
@@ -395,56 +557,48 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { name: 'info', fallback: '!' },
       requiresFocus: true,
       isActive: () => editor.isActive('githubAlert'),
+      isEnabled: () => !editor.isActive('table'),
       items: [
         {
           label: ' Note',
           icon: { name: 'info', fallback: 'ℹ' },
           action: () => {
-            editor
-              .chain()
-              .focus()
-              .insertContent(`> [!NOTE]\n> `, { contentType: 'markdown' })
-              .run();
+            editor.chain().focus().toggleAlert('NOTE').run();
           },
         },
         {
           label: ' Tip',
           icon: { name: 'lightbulb', fallback: '💡' },
           action: () => {
-            editor.chain().focus().insertContent(`> [!TIP]\n> `, { contentType: 'markdown' }).run();
+            editor.chain().focus().toggleAlert('TIP').run();
           },
         },
         {
           label: ' Important',
           icon: { name: 'megaphone', fallback: '📢' },
           action: () => {
-            editor
-              .chain()
-              .focus()
-              .insertContent(`> [!IMPORTANT]\n> `, { contentType: 'markdown' })
-              .run();
+            editor.chain().focus().toggleAlert('IMPORTANT').run();
           },
         },
         {
           label: ' Warning',
           icon: { name: 'warning', fallback: '⚠' },
           action: () => {
-            editor
-              .chain()
-              .focus()
-              .insertContent(`> [!WARNING]\n> `, { contentType: 'markdown' })
-              .run();
+            editor.chain().focus().toggleAlert('WARNING').run();
           },
         },
         {
           label: ' Caution',
           icon: { name: 'error', fallback: '🛑' },
           action: () => {
-            editor
-              .chain()
-              .focus()
-              .insertContent(`> [!CAUTION]\n> `, { contentType: 'markdown' })
-              .run();
+            editor.chain().focus().toggleAlert('CAUTION').run();
+          },
+        },
+        {
+          label: ' No Alert',
+          icon: { name: 'close', fallback: '×' },
+          action: () => {
+            editor.chain().focus().lift('githubAlert').run();
           },
         },
       ],
@@ -456,6 +610,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       icon: { name: 'code', fallback: '{}' },
       requiresFocus: true,
       isActive: () => editor.isActive('codeBlock'),
+      isEnabled: () => !editor.isActive('table'),
       items: [
         {
           label: 'Plain Text',
@@ -546,6 +701,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       title: 'Insert Mermaid diagram',
       icon: { name: 'pie-chart', fallback: 'Mer' },
       requiresFocus: true,
+      isEnabled: () => !editor.isActive('table'),
       items: MERMAID_TEMPLATES.map(template => ({
         label: template.label,
         action: () => {
@@ -640,14 +796,19 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       element.setAttribute('aria-pressed', String(Boolean(active)));
 
       // Check if button requires focus
-      const enabled = config.requiresFocus ? isEditorFocused : true;
+      let enabled = config.requiresFocus ? isEditorFocused : true;
+      if (enabled && config.isEnabled) {
+        enabled = config.isEnabled();
+      }
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
 
       // Update title to explain why disabled
-      if (!enabled && config.requiresFocus) {
+      if (!enabled && config.requiresFocus && !isEditorFocused) {
         element.title = (config.title || config.label) + ' (Click in document to edit)';
+      } else if (!enabled) {
+        element.title = (config.title || config.label) + ' (Not available here)';
       } else {
         element.title = config.title || config.label;
       }
@@ -659,14 +820,19 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       element.classList.toggle('active', Boolean(active));
       element.setAttribute('aria-pressed', String(Boolean(active)));
 
-      const enabled = config.requiresFocus ? isEditorFocused : true;
+      let enabled = config.requiresFocus ? isEditorFocused : true;
+      if (enabled && config.isEnabled) {
+        enabled = config.isEnabled();
+      }
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
 
       // Update title to explain why disabled
-      if (!enabled && config.requiresFocus) {
+      if (!enabled && config.requiresFocus && !isEditorFocused) {
         element.title = (config.title || config.label) + ' (Click in document to edit)';
+      } else if (!enabled) {
+        element.title = (config.title || config.label) + ' (Not available here)';
       } else {
         element.title = config.title || config.label;
       }
