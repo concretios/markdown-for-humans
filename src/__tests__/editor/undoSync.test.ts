@@ -212,6 +212,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       zoom: 100,
       editorTheme: 'vscode',
       vscodeIsDark: true,
+      enableMath: true,
     });
   });
 
@@ -257,6 +258,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       zoom: 100,
       editorTheme: 'vscode',
       vscodeIsDark: true,
+      enableMath: true,
     });
 
     getConfigurationSpy.mockRestore();

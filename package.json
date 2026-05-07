@@ -249,6 +249,11 @@
           "default": "vscode",
           "description": "Controls the editor's color theme. 'Follow VS Code theme' mirrors your active VS Code theme. 'Always light'/'Always dark' keep the editor light or dark regardless of VS Code: when VS Code's theme already matches that appearance the editor uses your real theme, otherwise it falls back to a built-in light/dark theme. The toolbar toggle switches between light and dark and applies to all open editors.",
           "scope": "application"
+        },
+        "markdownForHumans.enableMath": {
+          "type": "boolean",
+          "default": true,
+          "description": "Render LaTeX math expressions using KaTeX. Use $...$ for inline math and $$...$$ for display math. Toggling this setting requires reopening the editor."
         }
       }
     }

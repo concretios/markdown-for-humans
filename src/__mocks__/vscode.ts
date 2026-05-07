@@ -204,7 +204,7 @@ export class TreeItem {
 }
 
 export class EventEmitter<T> {
-  public event = jest.fn();
+  public event = jest.fn(() => ({ dispose: jest.fn() }));
   fire = jest.fn((_data?: T) => {});
   dispose = jest.fn();
 }

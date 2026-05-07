@@ -511,7 +511,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     );
 
     // Track active panel
-    setActiveWebviewPanel(webviewPanel);
+    setActiveWebviewPanel(webviewPanel, document);
 
     // Send initial content to webview
     this.updateWebview(document, webviewPanel.webview);
@@ -528,7 +528,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
-        e.affectsConfiguration('markdownForHumans.display.editorTheme')
+        e.affectsConfiguration('markdownForHumans.display.editorTheme') ||
+        e.affectsConfiguration('markdownForHumans.enableMath')
       ) {
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -557,6 +558,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         const blankLineMode = this.getBlankLineMode();
         const editorTheme = this.getEditorTheme();
         const vscodeIsDark = this.isVscodeDark();
+        const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
           void this.syncMarkdownlintMd012(blankLineMode).catch(error => {
             console.warn('[MD4H] Failed syncing markdownlint MD012 rule:', error);
@@ -584,6 +586,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           blankLineMode,
           editorTheme,
           vscodeIsDark,
+          enableMath: enableMath,
         });
       }
     });
@@ -603,7 +606,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     webviewPanel.onDidChangeViewState(() => {
       if (webviewPanel.active) {
-        setActiveWebviewPanel(webviewPanel);
+        setActiveWebviewPanel(webviewPanel, document);
       } else if (getActiveWebviewPanel() === webviewPanel) {
         setActiveWebviewPanel(undefined);
       }
@@ -696,6 +699,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
     const blankLineMode = this.getBlankLineMode();
     const editorTheme = this.getEditorTheme();
+    const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
 
     webview.postMessage({
       type: 'update',
@@ -711,6 +715,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       blankLineMode,
       editorTheme,
       vscodeIsDark: this.isVscodeDark(),
+      enableMath: enableMath,
     });
   }
 
@@ -788,6 +793,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
         const editorTheme = this.getEditorTheme();
+        const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         webview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
@@ -801,6 +807,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           blankLineMode,
           editorTheme,
           vscodeIsDark: this.isVscodeDark(),
+          enableMath: enableMath,
         });
         break;
       }

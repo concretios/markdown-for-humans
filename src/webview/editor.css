@@ -3453,3 +3453,148 @@ body.saving-feedback {
 .audit-fix-button.manual-fix:hover {
   background: var(--vscode-button-hoverBackground);
 }
+
+/* ========================================================================
+ * KaTeX / Math nodes
+ * ====================================================================== */
+
+/* Inline math */
+.md4h-inline-math {
+  display: inline-block;
+  vertical-align: baseline;
+  padding: 0 2px;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color 120ms ease;
+}
+
+.md4h-inline-math:hover {
+  background-color: var(--vscode-editor-hoverHighlightBackground, rgba(127, 127, 127, 0.12));
+}
+
+.md4h-inline-math.ProseMirror-selectednode {
+  outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);
+  outline-offset: 1px;
+}
+
+.md4h-inline-math.md4h-math-empty {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  font-style: italic;
+  padding: 0 4px;
+}
+
+.md4h-inline-math.md4h-math-error {
+  color: var(--vscode-errorForeground, #f48771);
+  background-color: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.08));
+  border: 1px dashed var(--vscode-inputValidation-errorBorder, #be1100);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0 4px;
+}
+
+/* Inline KaTeX rendering — keep a subtle size bump for readability inside text */
+.md4h-inline-math .katex {
+  font-size: 1.05em;
+  vertical-align: baseline;
+}
+
+/* Block / display math */
+.md4h-math-block {
+  position: relative;
+  display: block;
+  margin: 1em 0;
+  padding: 0.75em 1em;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.md4h-math-block:hover {
+  background-color: var(--vscode-editor-hoverHighlightBackground, rgba(127, 127, 127, 0.08));
+}
+
+.md4h-math-block.highlighted {
+  background-color: var(--vscode-editor-selectionHighlightBackground, rgba(127, 127, 127, 0.18));
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007acc);
+}
+
+.md4h-math-block.ProseMirror-selectednode {
+  outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);
+  outline-offset: 2px;
+}
+
+.md4h-math-block-render {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.5em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md4h-math-block-render .katex-display {
+  margin: 0;
+  padding: 0.25em 0;
+}
+
+.md4h-math-block-render .katex-display > .katex {
+  font-size: 1.21em;
+}
+
+.md4h-math-block-placeholder {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+.md4h-math-block.md4h-math-error {
+  background-color: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.08));
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
+.md4h-math-error-message {
+  color: var(--vscode-errorForeground, #f48771);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  margin-bottom: 6px;
+}
+
+.md4h-math-error-source {
+  margin: 0;
+  padding: 6px 10px;
+  background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  border-radius: 3px;
+}
+
+.md4h-math-block-tooltip {
+  position: absolute;
+  top: -28px;
+  right: 8px;
+  padding: 3px 8px;
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  border-radius: 3px;
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Math editor modal — let KaTeX preview inherit the host theme colours */
+.math-editor-preview .katex,
+.math-editor-preview .katex-display {
+  color: var(--vscode-editor-foreground);
+}

@@ -564,6 +564,30 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
         },
       })),
     },
+    {
+      type: 'dropdown',
+      label: 'Math',
+      title: `Insert math equation (${modKeyLabel}+Shift+E for display math)`,
+      icon: { name: 'symbol-numeric', fallback: '∑' },
+      requiresFocus: true,
+      isActive: () => editor.isActive('mathBlock') || editor.isActive('inlineMath'),
+      items: [
+        {
+          label: 'Display equation ($$…$$)',
+          icon: { fallback: '∑' },
+          action: () => {
+            window.dispatchEvent(new CustomEvent('insertMath', { detail: { mode: 'block' } }));
+          },
+        },
+        {
+          label: 'Inline equation ($…$)',
+          icon: { fallback: '𝑥' },
+          action: () => {
+            window.dispatchEvent(new CustomEvent('insertMath', { detail: { mode: 'inline' } }));
+          },
+        },
+      ],
+    },
     { type: 'separator' },
     {
       type: 'button',
