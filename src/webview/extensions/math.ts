@@ -126,8 +126,8 @@ export const MathBlock = Node.create({
     return {
       language: {
         default: 'latex',
-        parseHTML: (element) => element.getAttribute('data-language'),
-        renderHTML: (attributes) => ({
+        parseHTML: element => element.getAttribute('data-language'),
+        renderHTML: attributes => ({
           'data-language': attributes.language,
         }),
       },
@@ -254,9 +254,7 @@ export const MathBlock = Node.create({
             const pos = getPos?.();
             if (typeof pos === 'number') {
               const newNode = node.type.create(node.attrs, editor.schema.text(newSource));
-              editor.view.dispatch(
-                editor.state.tr.replaceWith(pos, pos + node.nodeSize, newNode)
-              );
+              editor.view.dispatch(editor.state.tr.replaceWith(pos, pos + node.nodeSize, newNode));
             }
           }
         };
@@ -285,7 +283,7 @@ export const MathBlock = Node.create({
 
       return {
         dom: container,
-        update: (updatedNode) => {
+        update: updatedNode => {
           if (updatedNode.type.name !== 'mathBlock') return false;
           const newSource = updatedNode.textContent || '';
           if (newSource !== source) {
@@ -322,8 +320,8 @@ export const MathInline = Node.create({
     return {
       latex: {
         default: '',
-        parseHTML: (element) => element.getAttribute('data-latex') || element.textContent || '',
-        renderHTML: (attributes) => ({
+        parseHTML: element => element.getAttribute('data-latex') || element.textContent || '',
+        renderHTML: attributes => ({
           'data-latex': attributes.latex,
         }),
       },
@@ -331,16 +329,16 @@ export const MathInline = Node.create({
   },
 
   parseHTML() {
-    return [
-      { tag: 'math-inline' },
-      { tag: 'span[data-type="mathInline"]' },
-    ];
+    return [{ tag: 'math-inline' }, { tag: 'span[data-type="mathInline"]' }];
   },
 
   renderHTML({ HTMLAttributes }) {
     return [
       'span',
-      mergeAttributes(HTMLAttributes, { 'data-type': 'mathInline', class: 'math-inline-container' }),
+      mergeAttributes(HTMLAttributes, {
+        'data-type': 'mathInline',
+        class: 'math-inline-container',
+      }),
       0,
     ];
   },
@@ -400,9 +398,7 @@ export const MathInline = Node.create({
             const pos = getPos?.();
             if (typeof pos === 'number') {
               const newNode = node.type.create({ latex: newSource }, editor.schema.text(newSource));
-              editor.view.dispatch(
-                editor.state.tr.replaceWith(pos, pos + node.nodeSize, newNode)
-              );
+              editor.view.dispatch(editor.state.tr.replaceWith(pos, pos + node.nodeSize, newNode));
             }
           }
         };
@@ -422,10 +418,9 @@ export const MathInline = Node.create({
 
       return {
         dom: container,
-        update: (updatedNode) => {
+        update: updatedNode => {
           if (updatedNode.type.name !== 'mathInline') return false;
-          const newSource =
-            (updatedNode.attrs.latex as string) || updatedNode.textContent || '';
+          const newSource = (updatedNode.attrs.latex as string) || updatedNode.textContent || '';
           if (newSource !== source) {
             source = newSource;
             doRender(source);

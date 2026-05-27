@@ -24,7 +24,7 @@ function createParseHelpers() {
   const createTextNode = jest.fn<
     ReturnType<MarkdownParseHelpers['createTextNode']>,
     Parameters<MarkdownParseHelpers['createTextNode']>
-  >((text) => ({ type: 'text', text }));
+  >(text => ({ type: 'text', text }));
 
   const helpers: MarkdownParseHelpers = {
     createNode,
@@ -179,7 +179,7 @@ describe('MathBlock markdown serialization', () => {
 
     const renderChildren = (children: JSONContent[] | undefined, _sep: string): string => {
       if (!children || children.length === 0) return '';
-      return children.map((c) => (c.type === 'text' ? c.text || '' : '')).join('');
+      return children.map(c => (c.type === 'text' ? c.text || '' : '')).join('');
     };
 
     const body = renderChildren(node.content, '\n');
@@ -197,7 +197,7 @@ describe('MathBlock markdown serialization', () => {
 
     const renderChildren = (children: JSONContent[] | undefined, _sep: string): string => {
       if (!children || children.length === 0) return '';
-      return children.map((c) => (c.type === 'text' ? c.text || '' : '')).join('');
+      return children.map(c => (c.type === 'text' ? c.text || '' : '')).join('');
     };
 
     const body = renderChildren(node.content, '\n');
@@ -216,7 +216,7 @@ describe('MathBlock markdown serialization', () => {
 
     const renderChildren = (children: JSONContent[] | undefined, _sep: string): string => {
       if (!children || children.length === 0) return '';
-      return children.map((c) => (c.type === 'text' ? c.text || '' : '')).join('');
+      return children.map(c => (c.type === 'text' ? c.text || '' : '')).join('');
     };
 
     const body = renderChildren(node.content, '\n');
