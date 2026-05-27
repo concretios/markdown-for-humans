@@ -32,6 +32,8 @@ const buildOptions = {
   loader: {
     '.css': 'css',
     '.ttf': 'file',
+    '.woff': 'file',
+    '.woff2': 'file',
   },
   // Use esbuild's built-in 'pure' option to remove console.log/debug/info
   // This properly handles parsing and removes the calls during minification

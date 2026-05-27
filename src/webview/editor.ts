@@ -7,6 +7,7 @@
 // Import CSS files (esbuild will bundle these)
 import './editor.css';
 import './codicon.css';
+import 'katex/dist/katex.min.css';
 
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -29,6 +30,7 @@ import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
 import { DraggableBlocks } from './extensions/draggableBlocks';
+import { MathBlock, MathInline, installMathMarkedExtensions } from './extensions/math';
 import { DocumentAuditExtension } from './features/auditDocument';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
@@ -611,6 +613,8 @@ function initializeEditor(initialContent: string) {
           getShowImageHoverOverlay: () => (window as any).showImageHoverOverlay,
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any),
+        MathBlock,
+        MathInline,
         DraggableBlocks,
         DocumentAuditExtension,
       ],
@@ -693,6 +697,8 @@ function initializeEditor(initialContent: string) {
         markdownStorage.markdown?.instance ?? markdownStorage.storage?.markdown?.instance;
       if (markedInstance) {
         installBlankLineLexerNormalizer(markedInstance);
+        // Install math block ($$...$$) marked extension for display math parsing
+        installMathMarkedExtensions(markedInstance);
       }
     } catch (error) {
       console.warn('[MD4H] Failed to install blank-line lexer normalizer:', error);

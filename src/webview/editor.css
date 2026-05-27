@@ -3183,3 +3183,140 @@ body.saving-feedback {
 .audit-fix-button.manual-fix:hover {
   background: var(--vscode-button-hoverBackground);
 }
+
+/* ─── Math Blocks ($$...$$) ─────────────────────────────────────────────── */
+
+.math-block-container {
+  position: relative;
+  margin: 1em 0;
+  padding: 1em 0.5em;
+  border-radius: 4px;
+  cursor: default;
+  transition: background-color 0.15s ease;
+}
+
+.math-block-container:hover {
+  background-color: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.1));
+}
+
+.math-block-container.highlighted {
+  background-color: var(--vscode-list-activeSelectionBackground, rgba(0, 127, 255, 0.2));
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+}
+
+.math-block-rendered {
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-height: 1.5em;
+}
+
+.math-block-rendered.rendered .katex {
+  font-size: 1.21em;
+}
+
+.math-block-rendered.katex-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--vscode-errorForeground, #f48771);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+  padding: 8px;
+}
+
+.math-error-icon {
+  font-size: 1.4em;
+}
+
+.math-error-msg {
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.math-placeholder {
+  color: var(--vscode-descriptionForeground, #999);
+  font-style: italic;
+  text-align: center;
+}
+
+.math-block-tooltip {
+  position: absolute;
+  top: -28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-editorWidget-foreground, #ccc);
+  padding: 2px 10px;
+  border-radius: 3px;
+  font-size: 0.8em;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.math-block-editor {
+  width: 100%;
+  min-width: 300px;
+  font-family: var(--vscode-editor-font-family, 'Courier New', monospace);
+  font-size: 0.95em;
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #ccc);
+  border: 1px solid var(--vscode-input-border, #555);
+  border-radius: 3px;
+  padding: 8px;
+  resize: vertical;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.math-block-editor:focus {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+}
+
+/* ─── Inline Math ($...$) ───────────────────────────────────────────────── */
+
+.math-inline-container {
+  display: inline;
+  cursor: default;
+  vertical-align: baseline;
+}
+
+.math-inline-rendered .katex {
+  font-size: 1.1em;
+}
+
+.math-inline-rendered .math-inline-error {
+  color: var(--vscode-errorForeground, #f48771);
+  cursor: help;
+}
+
+.math-inline-editor {
+  font-family: var(--vscode-editor-font-family, 'Courier New', monospace);
+  font-size: 0.95em;
+  background: var(--vscode-input-background, #3c3c3c);
+  color: var(--vscode-input-foreground, #ccc);
+  border: 1px solid var(--vscode-focusBorder, #007fd4);
+  border-radius: 2px;
+  padding: 1px 4px;
+  min-width: 80px;
+}
+
+.math-inline-editor:focus {
+  outline: none;
+}
+
+/* Override KaTeX font size for dark themes */
+.vscode-dark .math-block-rendered .katex,
+.vscode-high-contrast .math-block-rendered .katex {
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
+
+.vscode-dark .math-inline-rendered .katex,
+.vscode-high-contrast .math-inline-rendered .katex {
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
