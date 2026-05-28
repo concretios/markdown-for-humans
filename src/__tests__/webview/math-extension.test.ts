@@ -11,7 +11,7 @@ import type { MarkdownParseHelpers, MarkdownToken, JSONContent } from '@tiptap/c
 
 // ─── Inline math regex (same as in extensions/math.ts) ─────────────────────
 
-const INLINE_MATH_RE = /\$([^\s\d$][^$\n]*[^\s$]|[^\s\d$])\$/;
+const INLINE_MATH_RE = /\$([^\s$][^$\n]*[^\s$]|[^\s$])\$/;
 
 // ─── Test helpers ──────────────────────────────────────────────────────────
 
@@ -55,9 +55,16 @@ describe('Inline math regex', () => {
     expect(match![1]).toBe('E=mc^2');
   });
 
-  it('rejects dollar amounts (digit after $)', () => {
+  it('rejects unclosed dollar signs (currency style)', () => {
+    // $100 without closing $ should not match — it's a price, not math
     expect(INLINE_MATH_RE.test('$100')).toBe(false);
     expect(INLINE_MATH_RE.test('$50.00')).toBe(false);
+  });
+
+  it('matches pure numeric formulas', () => {
+    expect(INLINE_MATH_RE.test('$12345$')).toBe(true);
+    expect(INLINE_MATH_RE.test('$100$')).toBe(true);
+    expect(INLINE_MATH_RE.test('$3.14159$')).toBe(true);
   });
 
   it('rejects space after opening $', () => {

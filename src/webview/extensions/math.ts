@@ -72,12 +72,13 @@ export function installMathMarkedExtensions(markedInstance: unknown): void {
 // ─── Inline math regex ──────────────────────────────────────────────────────
 //
 // Matches $content$ where:
-//   - content does not start with a space, digit, or $
+//   - content does not start with a space or $
 //   - content does not contain a newline
 //   - content does not end with a space or $
-// This avoids matching dollar amounts ($100) while matching actual math.
+// Dollar amounts like $100 (no closing $) are not matched because the
+// regex requires a closing delimiter. $100$ is valid math (the number 100).
 
-const INLINE_MATH_RE = /\$([^\s\d$][^$\n]*[^\s$]|[^\s\d$])\$/;
+const INLINE_MATH_RE = /\$([^\s$][^$\n]*[^\s$]|[^\s$])\$/;
 
 // ─── KaTeX helpers ──────────────────────────────────────────────────────────
 
