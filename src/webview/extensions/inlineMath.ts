@@ -27,6 +27,7 @@
 import { Node, mergeAttributes } from '@tiptap/core';
 import type { JSONContent, MarkdownRendererHelpers, MarkdownToken } from '@tiptap/core';
 import katex from 'katex';
+import { preserveProseSpaces } from '../utils/preserveProseSpaces';
 
 interface InlineMathToken {
   type: string;
@@ -157,7 +158,7 @@ export const InlineMath = Node.create({
         span.classList.remove('md4h-math-empty');
 
         try {
-          span.innerHTML = katex.renderToString(currentLatex, {
+          span.innerHTML = katex.renderToString(preserveProseSpaces(currentLatex), {
             throwOnError: false,
             displayMode: false,
             output: 'html',

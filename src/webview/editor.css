@@ -1859,7 +1859,22 @@
     opacity: 0.5;
     margin: 0 6px;
   }
-  
+
+  /* Custom inline-SVG toolbar glyphs (e.g. the Math √x icon). The SVG uses
+     currentColor, so it inherits the button's text colour and active state. */
+  .toolbar-icon.uses-svg-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+  }
+
+  .toolbar-icon.uses-svg-icon svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+
   /* Toolbar Dropdown */
   .toolbar-dropdown {
     position: relative;
@@ -3597,4 +3612,51 @@ body.saving-feedback {
 .math-editor-preview .katex,
 .math-editor-preview .katex-display {
   color: var(--vscode-editor-foreground);
+}
+
+/* Contextual placeholder examples in the LaTeX input */
+.math-editor-textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+  opacity: 0.85;
+}
+
+/* Starter-template palette (chips above the LaTeX input) */
+.math-template-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.math-template-label {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+  margin-right: 2px;
+}
+
+.math-template-chip {
+  padding: 3px 9px;
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.math-template-chip:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.math-template-chip:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
 }

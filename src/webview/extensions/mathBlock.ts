@@ -18,6 +18,7 @@
 import { Node, mergeAttributes } from '@tiptap/core';
 import type { JSONContent, MarkdownRendererHelpers, MarkdownToken } from '@tiptap/core';
 import katex from 'katex';
+import { preserveProseSpaces } from '../utils/preserveProseSpaces';
 
 interface MathBlockToken {
   type: string;
@@ -149,7 +150,7 @@ export const MathBlock = Node.create({
         }
 
         try {
-          render.innerHTML = katex.renderToString(currentLatex, {
+          render.innerHTML = katex.renderToString(preserveProseSpaces(currentLatex), {
             throwOnError: false,
             displayMode: true,
             output: 'html',

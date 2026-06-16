@@ -16,6 +16,7 @@
  */
 
 import katex from 'katex';
+import { preserveProseSpaces } from '../utils/preserveProseSpaces';
 
 interface MathEditOptions {
   initialLatex: string;
@@ -29,6 +30,55 @@ interface MathEditResult {
 
 const PREVIEW_DEBOUNCE_MS = 150;
 const KATEX_DOCS_URL = 'https://katex.org/docs/supported.html';
+
+/**
+ * Starter templates for common formulas, grouped by area. Clicking a chip
+ * helps users get going without memorising KaTeX syntax.
+ *
+ * Two kinds:
+ * - `latex`: inserted verbatim at the caret.
+ * - `wrap`: surrounds the current selection (or, with no selection, drops the
+ *   pair and parks the caret inside). Used for `\text{…}`, where — unlike math
+ *   mode — KaTeX preserves the spaces between words. This keeps equations
+ *   standard while letting inline prose keep its spacing.
+ *
+ * The `title` (chip tooltip) defaults to the inserted/wrapping LaTeX.
+ */
+interface MathTemplate {
+  label: string;
+  latex?: string;
+  wrap?: { before: string; after: string };
+  title?: string;
+}
+
+const MATH_TEMPLATES: MathTemplate[] = [
+  // Text — preserves spaces (math mode collapses them). Select words first to
+  // wrap them, or click to drop an empty \text{} and type inside.
+  {
+    label: 'Text',
+    wrap: { before: '\\text{', after: '}' },
+    title: 'Wrap words in \\text{ } so spaces are preserved',
+  },
+  // Building blocks
+  { label: 'Fraction', latex: '\\frac{a}{b}' },
+  { label: 'Power xⁿ', latex: 'x^{2}' },
+  { label: 'Subscript xᵢ', latex: 'x_{i}' },
+  { label: 'Root', latex: '\\sqrt{x}' },
+  // Calculus
+  { label: 'Sum', latex: '\\sum_{i=1}^{n} i' },
+  { label: 'Integral', latex: '\\int_{a}^{b} f(x)\\,dx' },
+  { label: 'Limit', latex: '\\lim_{x \\to \\infty} f(x)' },
+  { label: 'Derivative', latex: '\\frac{d}{dx} f(x)' },
+  // Algebra / linear algebra
+  { label: 'Quadratic', latex: 'x = \\frac{-b \\pm \\sqrt{b^{2} - 4ac}}{2a}' },
+  { label: 'Matrix', latex: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}' },
+  // Statistics
+  { label: 'Mean x̄', latex: '\\bar{x} = \\frac{1}{n} \\sum_{i=1}^{n} x_i' },
+  { label: 'Std dev σ', latex: '\\sigma = \\sqrt{\\frac{1}{n} \\sum_{i=1}^{n} (x_i - \\mu)^{2}}' },
+  // Physics / Greek
+  { label: 'E=mc²', latex: 'E = mc^{2}' },
+  { label: 'Greek', latex: '\\alpha\\,\\beta\\,\\gamma\\,\\pi\\,\\theta' },
+];
 
 export async function showMathEditor(options: MathEditOptions): Promise<MathEditResult> {
   return new Promise(resolve => {
@@ -130,6 +180,11 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
     textarea.className = 'math-editor-textarea';
     textarea.value = options.initialLatex;
     textarea.spellcheck = false;
+    // Contextual examples so the expected format is obvious at a glance. Display
+    // math leans on multi-part expressions; inline math shows compact snippets.
+    textarea.placeholder = options.displayMode
+      ? 'e.g.   \\sum_{i=1}^{n} i        \\int_{a}^{b} f(x)\\,dx        x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}'
+      : 'e.g.   x^{2}        \\frac{a}{b}        \\sqrt{x}        a + b';
     textarea.style.cssText = `
       flex: 1;
       padding: 16px 20px;
@@ -276,7 +331,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
       }
 
       try {
-        previewBox.innerHTML = katex.renderToString(latex, {
+        previewBox.innerHTML = katex.renderToString(preserveProseSpaces(latex), {
           throwOnError: true,
           displayMode: options.displayMode,
           output: 'html',
@@ -305,6 +360,55 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
 
     textarea.addEventListener('input', scheduleRender);
     renderPreview();
+
+    // Starter-template palette: clickable chips that insert common formulas at
+    // the caret (replacing any selection). Lives between the "LaTeX source"
+    // label and the textarea so it's discoverable without crowding the editor.
+    const applyTemplate = (template: MathTemplate) => {
+      const start = textarea.selectionStart ?? textarea.value.length;
+      const end = textarea.selectionEnd ?? textarea.value.length;
+      const selected = textarea.value.slice(start, end);
+
+      let inserted: string;
+      let cursor: number;
+      if (template.wrap) {
+        inserted = template.wrap.before + selected + template.wrap.after;
+        // With a selection, park the caret after the wrapped text; with none,
+        // park it between the wrappers so the user can type right away.
+        cursor = selected ? start + inserted.length : start + template.wrap.before.length;
+      } else {
+        inserted = template.latex ?? '';
+        cursor = start + inserted.length;
+      }
+
+      textarea.value = textarea.value.slice(0, start) + inserted + textarea.value.slice(end);
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+      renderPreview();
+    };
+
+    const templateBar = document.createElement('div');
+    templateBar.className = 'math-template-bar';
+    const templateBarLabel = document.createElement('span');
+    templateBarLabel.className = 'math-template-label';
+    templateBarLabel.textContent = 'Templates';
+    templateBar.appendChild(templateBarLabel);
+    MATH_TEMPLATES.forEach(template => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'math-template-chip';
+      chip.textContent = template.label;
+      chip.title =
+        template.title ??
+        template.latex ??
+        (template.wrap ? template.wrap.before + template.wrap.after : '');
+      // Keep focus in the textarea so the snippet lands at the caret instead of
+      // moving focus to the chip button.
+      chip.addEventListener('mousedown', e => e.preventDefault());
+      chip.addEventListener('click', () => applyTemplate(template));
+      templateBar.appendChild(chip);
+    });
+    editorPane.insertBefore(templateBar, textarea);
 
     setTimeout(() => {
       textarea.focus();

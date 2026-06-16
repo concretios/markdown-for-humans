@@ -78,9 +78,20 @@ let focusChangeListener: ((e: Event) => void) | null = null;
 
 type ToolbarIcon = {
   name?: string;
+  // Inline SVG markup. When set it takes precedence over `name`/`fallback` and
+  // is rendered as-is, letting a button use a purpose-drawn glyph instead of a
+  // codicon. Use `currentColor` for strokes/fills so it inherits the toolbar
+  // text colour and theme.
+  svg?: string;
   fallback: string;
   badge?: string;
 };
+
+// Custom "√x" radical glyph for the Math toolbar button. A codicon (previously
+// `symbol-numeric`) read as Slack-like and not obviously math; this stroke path
+// inherits the toolbar colour via `currentColor`, stays crisp at 16px, and is
+// visually distinct from every other toolbar icon.
+const MATH_RADICAL_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="2,12 5,12 8,20 12,4 23,4"></polyline><line x1="14.5" y1="10.5" x2="20" y2="16.5"></line><line x1="20" y1="10.5" x2="14.5" y2="16.5"></line></svg>`;
 
 type ToolbarActionButton = {
   type: 'button';
@@ -153,13 +164,18 @@ function createIconElement(icon: ToolbarIcon | undefined, baseClass: string): HT
 
   if (!icon) return span;
 
-  if (icon.name) {
+  if (icon.svg) {
+    span.classList.add('uses-svg-icon');
+    span.innerHTML = icon.svg;
+  } else if (icon.name) {
     span.classList.add('codicon', `codicon-${icon.name}`, 'uses-codicon');
   } else if (icon.fallback) {
     span.textContent = icon.fallback;
   }
 
-  if (icon.fallback) {
+  // SVG icons render their own glyph, so skip the codicon text-fallback path
+  // (otherwise the fallback string would appear alongside the SVG).
+  if (icon.fallback && !icon.svg) {
     span.setAttribute('data-fallback', icon.fallback);
     if (!icon.name) {
       span.textContent = icon.fallback;
@@ -568,7 +584,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       type: 'dropdown',
       label: 'Math',
       title: `Insert math equation (${modKeyLabel}+Shift+E for display math)`,
-      icon: { name: 'symbol-numeric', fallback: '∑' },
+      icon: { svg: MATH_RADICAL_ICON_SVG, fallback: '√x' },
       requiresFocus: true,
       isActive: () => editor.isActive('mathBlock') || editor.isActive('inlineMath'),
       items: [
