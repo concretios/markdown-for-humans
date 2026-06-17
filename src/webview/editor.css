@@ -975,6 +975,31 @@
     background-color: var(--md-subtle-bg);
     font-weight: 600;
     border-bottom: 2px solid var(--md-border);
+    cursor: pointer;
+  }
+
+  .markdown-editor table th:hover {
+    background-color: var(--md-hover-bg);
+  }
+
+  .markdown-editor table th::after {
+    content: "";
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid var(--md-muted);
+    opacity: 0;
+    transform: translateY(-50%);
+    transition: opacity 0.12s ease;
+    pointer-events: none;
+  }
+
+  .markdown-editor table th:hover::after {
+    opacity: 0.7;
   }
   
   .markdown-editor table tr:hover {

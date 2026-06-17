@@ -28,6 +28,7 @@ import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
 import { DraggableBlocks } from './extensions/draggableBlocks';
+import { TableSorting } from './extensions/tableSorting';
 import { DocumentAuditExtension } from './features/auditDocument';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
@@ -564,6 +565,7 @@ function initializeEditor(initialContent: string) {
         TableRow,
         TableHeader,
         TableCell,
+        TableSorting,
         ListKit.configure({
           orderedList: false,
           taskItem: {

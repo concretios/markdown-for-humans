@@ -5,9 +5,9 @@
  */
 
 import { Extension, type Editor } from '@tiptap/core';
-import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
+import { Plugin, PluginKey, Selection, type EditorState, type Transaction } from '@tiptap/pm/state';
 import { type EditorView } from '@tiptap/pm/view';
-import { Node as ProsemirrorNode } from '@tiptap/pm/model';
+import { Node as ProsemirrorNode, type ResolvedPos } from '@tiptap/pm/model';
 
 // ─── Type augmentation ────────────────────────────────────────────────────────
 
@@ -16,6 +16,8 @@ declare module '@tiptap/core' {
     draggableBlocks: {
       moveBlockUp: () => ReturnType;
       moveBlockDown: () => ReturnType;
+      moveLineUp: () => ReturnType;
+      moveLineDown: () => ReturnType;
     };
   }
 }
@@ -50,6 +52,23 @@ const BLOCK_TYPES = new Set([
   'indentedImageCodeBlock',
 ]);
 
+type DragUnitKind = 'block' | 'listItem' | 'tableRow';
+
+type DragUnit = {
+  node: ProsemirrorNode;
+  pos: number;
+  index: number;
+  parent: ProsemirrorNode;
+  parentPos: number;
+  kind: DragUnitKind;
+};
+
+type DropTarget = {
+  insertPos: number;
+  valid: boolean;
+  referenceDom?: HTMLElement | null;
+};
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export function isDraggableBlock(node: ProsemirrorNode): boolean {
@@ -81,21 +100,117 @@ function lastInsertablePos(doc: ProsemirrorNode): number {
   return pos;
 }
 
-function topLevelBlockAt(
-  view: EditorView,
-  pos: number
-): { node: ProsemirrorNode; pos: number; index: number } | null {
-  const $pos = view.state.doc.resolve(Math.max(0, Math.min(pos, view.state.doc.content.size - 1)));
+function topLevelBlockAt(state: EditorState, pos: number): DragUnit | null {
+  const $pos = state.doc.resolve(Math.max(0, Math.min(pos, state.doc.content.size - 1)));
   for (let d = $pos.depth; d >= 1; d--) {
     if ($pos.node(d - 1).type.name === 'doc' && $pos.node(d).isBlock) {
       return {
         node: $pos.node(d),
         pos: $pos.before(d),
         index: $pos.index(d - 1),
+        parent: $pos.node(d - 1),
+        parentPos: 0,
+        kind: 'block',
       };
     }
   }
   return null;
+}
+
+function isListItemNode(node: ProsemirrorNode): boolean {
+  return node.type.name === 'listItem' || node.type.name === 'taskItem';
+}
+
+function isTableRowNode(node: ProsemirrorNode): boolean {
+  return node.type.spec.tableRole === 'row' || node.type.name === 'tableRow';
+}
+
+function lineUnitAtResolvedPos($pos: ResolvedPos): DragUnit | null {
+  for (let depth = $pos.depth; depth > 0; depth--) {
+    const node = $pos.node(depth);
+    const parent = $pos.node(depth - 1);
+    const index = $pos.index(depth - 1);
+
+    if (isListItemNode(node)) {
+      return {
+        node,
+        pos: $pos.before(depth),
+        index,
+        parent,
+        parentPos: depth > 1 ? $pos.before(depth - 1) : 0,
+        kind: 'listItem',
+      };
+    }
+
+    if (isTableRowNode(node)) {
+      // Treat the first row as the table header for both sorting and dragging.
+      if (index === 0) return null;
+      return {
+        node,
+        pos: $pos.before(depth),
+        index,
+        parent,
+        parentPos: depth > 1 ? $pos.before(depth - 1) : 0,
+        kind: 'tableRow',
+      };
+    }
+  }
+  return null;
+}
+
+function dragUnitAt(view: EditorView, pos: number): DragUnit | null {
+  const clamped = Math.max(0, Math.min(pos, view.state.doc.content.size - 1));
+  const $pos = view.state.doc.resolve(clamped);
+  return lineUnitAtResolvedPos($pos) ?? topLevelBlockAt(view.state, pos);
+}
+
+function sameReorderScope(a: DragUnit, b: DragUnit): boolean {
+  return a.kind === b.kind && a.parent === b.parent && a.parentPos === b.parentPos;
+}
+
+function moveUnit(
+  unit: DragUnit,
+  direction: 'up' | 'down',
+  state: EditorState,
+  dispatch: ((tr: Transaction) => void) | undefined
+): boolean {
+  const siblingIndex = direction === 'up' ? unit.index - 1 : unit.index + 1;
+  if (siblingIndex < 0 || siblingIndex >= unit.parent.childCount) return false;
+  if (unit.kind === 'tableRow' && siblingIndex === 0) return false;
+
+  const sibling = unit.parent.child(siblingIndex);
+  if (unit.kind === 'block' && !isDraggableBlock(sibling)) return false;
+  if (unit.kind === 'listItem' && !isListItemNode(sibling)) return false;
+  if (unit.kind === 'tableRow' && !isTableRowNode(sibling)) return false;
+
+  if (dispatch) {
+    const tr = state.tr;
+    const fromOffset = state.selection.from - unit.pos;
+    const toOffset = state.selection.to - unit.pos;
+    const content = state.doc.slice(unit.pos, unit.pos + unit.node.nodeSize);
+    const insertPos =
+      direction === 'up' ? unit.pos - sibling.nodeSize : unit.pos + sibling.nodeSize;
+
+    tr.delete(unit.pos, unit.pos + unit.node.nodeSize);
+    tr.insert(insertPos, content.content);
+
+    const SelectionClass = state.selection.constructor as typeof Selection & {
+      create: (doc: ProsemirrorNode, from: number, to: number) => Selection;
+    };
+
+    tr.setSelection(SelectionClass.create(tr.doc, insertPos + fromOffset, insertPos + toOffset));
+    dispatch(tr.scrollIntoView());
+  }
+  return true;
+}
+
+function selectionLineUnit(state: EditorView['state']): DragUnit | null {
+  const { $from } = state.selection;
+  return lineUnitAtResolvedPos($from) ?? topLevelBlockAt(state, $from.pos);
+}
+
+function selectionBlockUnit(state: EditorView['state']): DragUnit | null {
+  return topLevelBlockAt(state, state.selection.$from.pos);
 }
 
 /**
@@ -111,7 +226,7 @@ function topLevelBlockAt(
 function findBlockByClientY(
   view: EditorView,
   clientY: number
-): { node: ProsemirrorNode; pos: number; dom: HTMLElement; hit: boolean } | null {
+): { unit: DragUnit; dom: HTMLElement; hit: boolean } | null {
   const doc = view.state.doc;
   let pos = 0;
   let closest: {
@@ -130,7 +245,8 @@ function findBlockByClientY(
     const rect = dom.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) continue;
     if (clientY >= rect.top && clientY <= rect.bottom) {
-      return { node, pos: blockPos, dom, hit: true };
+      const unit = topLevelBlockAt(view.state, blockPos);
+      return unit ? { unit, dom, hit: true } : null;
     }
     const dist = clientY < rect.top ? rect.top - clientY : clientY - rect.bottom;
     if (!closest || dist < closest.dist) {
@@ -138,7 +254,9 @@ function findBlockByClientY(
     }
   }
 
-  return closest ? { ...closest, hit: false } : null;
+  if (!closest) return null;
+  const unit = topLevelBlockAt(view.state, closest.pos);
+  return unit ? { unit, dom: closest.dom, hit: false } : null;
 }
 
 /**
@@ -151,10 +269,28 @@ function computeDropTarget(
   view: EditorView,
   clientX: number,
   clientY: number,
-  draggedPos: number
-): { insertPos: number; valid: boolean } {
+  draggedUnit: DragUnit
+): DropTarget {
   const editorRect = view.dom.getBoundingClientRect();
   const doc = view.state.doc;
+
+  if (draggedUnit.kind !== 'block') {
+    const coords = view.posAtCoords({ left: clientX, top: clientY });
+    const target = coords ? dragUnitAt(view, coords.pos) : null;
+    if (target && sameReorderScope(draggedUnit, target)) {
+      const targetDom = view.nodeDOM(target.pos) as HTMLElement | null;
+      if (targetDom) {
+        const rect = targetDom.getBoundingClientRect();
+        const after = clientY >= rect.top + rect.height / 2;
+        const insertPos = after ? target.pos + target.node.nodeSize : target.pos;
+        const valid =
+          insertPos !== draggedUnit.pos &&
+          insertPos !== draggedUnit.pos + draggedUnit.node.nodeSize;
+        return { insertPos, valid, referenceDom: targetDom };
+      }
+    }
+    return { insertPos: draggedUnit.pos, valid: false };
+  }
 
   // Drops past the last non-empty block would survive serialization as a
   // phantom blank line — clamp to the position before any trailing empties.
@@ -166,10 +302,8 @@ function computeDropTarget(
     // accidentally landing inside a codeBlock/mathBlock.
     const atDocLevel = $insert.parent.type.name === 'doc';
     // No-op self-drop: dropping on a block's own boundary leaves it in place.
-    const draggedNode = draggedPos >= 0 ? doc.resolve(draggedPos).nodeAfter : null;
-    const draggedSize = draggedNode ? draggedNode.nodeSize : 0;
-    const isSelfDrop =
-      draggedPos >= 0 && (clamped === draggedPos || clamped === draggedPos + draggedSize);
+    const draggedSize = draggedUnit.node.nodeSize;
+    const isSelfDrop = clamped === draggedUnit.pos || clamped === draggedUnit.pos + draggedSize;
     return { insertPos: clamped, valid: atDocLevel && !isSelfDrop };
   };
 
@@ -177,7 +311,7 @@ function computeDropTarget(
   // text/heading/list content.
   const coords = view.posAtCoords({ left: clientX, top: clientY });
   if (coords) {
-    const block = topLevelBlockAt(view, coords.pos);
+    const block = topLevelBlockAt(view.state, coords.pos);
     if (block) {
       const domNode = view.nodeDOM(block.pos) as HTMLElement | null;
       if (domNode) {
@@ -194,13 +328,14 @@ function computeDropTarget(
   const hit = findBlockByClientY(view, clientY);
   if (hit) {
     const rect = hit.dom.getBoundingClientRect();
-    const insertPos = clientY < rect.top + rect.height / 2 ? hit.pos : hit.pos + hit.node.nodeSize;
+    const insertPos =
+      clientY < rect.top + rect.height / 2 ? hit.unit.pos : hit.unit.pos + hit.unit.node.nodeSize;
     return validate(insertPos);
   }
 
   if (clientY <= editorRect.top) return validate(0);
   if (clientY >= editorRect.bottom) return validate(doc.content.size);
-  return { insertPos: draggedPos, valid: false };
+  return { insertPos: draggedUnit.pos, valid: false };
 }
 
 // ─── Drag-handle overlay controller ──────────────────────────────────────────
@@ -219,20 +354,20 @@ class DragHandleController {
   private readonly handle: HTMLElement;
   private readonly indicator: HTMLElement;
 
-  private hoveredBlock: { node: ProsemirrorNode; pos: number; index: number } | null = null;
-  private _handleBlock: { node: ProsemirrorNode; pos: number; index: number } | null = null;
+  private hoveredBlock: DragUnit | null = null;
+  private _handleBlock: DragUnit | null = null;
   private _hideTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Pointer-drag state — pendingDrag is "armed but not yet past threshold".
   private pendingDrag: {
-    block: { node: ProsemirrorNode; pos: number; index: number };
+    block: DragUnit;
     pointerX: number;
     pointerY: number;
     pointerId: number;
   } | null = null;
 
   private isDragging = false;
-  private draggedPos = -1;
+  private draggedUnit: DragUnit | null = null;
   private dropInsertPos = -1;
   private dropValid = false;
   private ghost: HTMLElement | null = null;
@@ -261,8 +396,8 @@ class DragHandleController {
     this.handle = document.createElement('div');
     this.handle.className = 'drag-block-handle';
     this.handle.setAttribute('role', 'button');
-    this.handle.setAttribute('aria-label', 'Drag to move block');
-    this.handle.setAttribute('title', 'Drag to move block');
+    this.handle.setAttribute('aria-label', 'Drag to move block or line');
+    this.handle.setAttribute('title', 'Drag to move block or line');
     this.handle.innerHTML = `<svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.8"/><circle cx="9" cy="3" r="1.8"/><circle cx="3" cy="9" r="1.8"/><circle cx="9" cy="9" r="1.8"/><circle cx="3" cy="15" r="1.8"/><circle cx="9" cy="15" r="1.8"/></svg>`;
     document.body.appendChild(this.handle);
 
@@ -298,21 +433,21 @@ class DragHandleController {
       this._hideTimeoutId = null;
     }
 
-    let block: { node: ProsemirrorNode; pos: number; index: number } | null = null;
+    let block: DragUnit | null = null;
     const coords = this.view.posAtCoords({ left: e.clientX, top: e.clientY });
     if (coords) {
-      block = topLevelBlockAt(this.view, coords.pos);
+      block = dragUnitAt(this.view, coords.pos);
     }
     // Fallback for NodeViews (Mermaid, etc.) where posAtCoords may fail over
     // opaque content — so the handle still works when hovering a diagram.
     if (!block) {
       const hit = findBlockByClientY(this.view, e.clientY);
       if (hit && hit.hit) {
-        block = { node: hit.node, pos: hit.pos, index: -1 };
+        block = hit.unit;
       }
     }
 
-    if (!block || !isDraggableBlock(block.node)) {
+    if (!block || (block.kind === 'block' && !isDraggableBlock(block.node))) {
       this.hideHandle();
       return;
     }
@@ -459,7 +594,7 @@ class DragHandleController {
     }
 
     this.isDragging = true;
-    this.draggedPos = block.pos;
+    this.draggedUnit = block;
     this.pendingDrag = null;
 
     const rect = blockDom.getBoundingClientRect();
@@ -493,12 +628,18 @@ class DragHandleController {
    */
   private refreshDropTarget(): void {
     if (!this.isDragging) return;
+    if (!this.draggedUnit) return;
     const clientX = this._lastPointerX;
     const clientY = this._lastPointerY;
-    const { insertPos, valid } = computeDropTarget(this.view, clientX, clientY, this.draggedPos);
+    const { insertPos, valid, referenceDom } = computeDropTarget(
+      this.view,
+      clientX,
+      clientY,
+      this.draggedUnit
+    );
     this.dropInsertPos = insertPos;
     this.dropValid = valid;
-    const indicatorPos = this.positionIndicator(clientY, insertPos, valid);
+    const indicatorPos = this.positionIndicator(clientY, insertPos, valid, referenceDom);
     if (this.ghost && indicatorPos) {
       // Ghost is pinned to the blue indicator (not the cursor) — so the
       // cursor leaving the window can't drag the ghost off-screen with it.
@@ -521,15 +662,29 @@ class DragHandleController {
   private positionIndicator(
     clientY: number,
     insertPos: number,
-    valid: boolean
+    valid: boolean,
+    referenceDom?: HTMLElement | null
   ): { left: number; top: number } | null {
     if (insertPos === -1) {
       this.indicator.style.display = 'none';
       return null;
     }
+    if (referenceDom) {
+      const rect = referenceDom.getBoundingClientRect();
+      const indicatorY = Math.max(
+        this.getViewportClampTop(),
+        clientY < rect.top + rect.height / 2 ? rect.top : rect.bottom
+      );
+      this.indicator.style.left = `${rect.left}px`;
+      this.indicator.style.width = `${rect.width}px`;
+      this.indicator.style.top = `${indicatorY}px`;
+      this.indicator.style.display = 'block';
+      this.indicator.classList.toggle('drag-block-indicator--invalid', !valid);
+      return { left: rect.left, top: indicatorY };
+    }
     const editorRect = this.view.dom.getBoundingClientRect();
     let indicatorY = clientY;
-    const block = topLevelBlockAt(this.view, Math.max(0, insertPos - 1));
+    const block = topLevelBlockAt(this.view.state, Math.max(0, insertPos - 1));
     if (block) {
       const blockDom = this.view.nodeDOM(block.pos) as HTMLElement | null;
       if (blockDom) {
@@ -596,22 +751,23 @@ class DragHandleController {
     this.handle.classList.remove('drag-block-handle--active');
 
     const { state } = this.view;
-    const draggedNode = state.doc.resolve(this.draggedPos).nodeAfter;
+    const draggedNode = this.draggedUnit ? state.doc.resolve(this.draggedUnit.pos).nodeAfter : null;
     let landedAtPos: number | null = null;
     if (draggedNode && this.dropInsertPos !== -1 && this.dropValid) {
       const draggedSize = draggedNode.nodeSize;
       if (
-        this.dropInsertPos !== this.draggedPos &&
-        this.dropInsertPos !== this.draggedPos + draggedSize
+        this.draggedUnit &&
+        this.dropInsertPos !== this.draggedUnit.pos &&
+        this.dropInsertPos !== this.draggedUnit.pos + draggedSize
       ) {
         const tr = state.tr;
-        const content = state.doc.slice(this.draggedPos, this.draggedPos + draggedSize);
+        const content = state.doc.slice(this.draggedUnit.pos, this.draggedUnit.pos + draggedSize);
         tr.insert(this.dropInsertPos, content.content);
-        const mappedDragPos = tr.mapping.map(this.draggedPos);
+        const mappedDragPos = tr.mapping.map(this.draggedUnit.pos);
         tr.delete(mappedDragPos, mappedDragPos + draggedSize);
         // Final resting position of the dropped block, after the delete maps it.
         landedAtPos =
-          this.dropInsertPos > this.draggedPos
+          this.dropInsertPos > this.draggedUnit.pos
             ? this.dropInsertPos - draggedSize
             : this.dropInsertPos;
         this.view.dispatch(tr);
@@ -620,7 +776,7 @@ class DragHandleController {
 
     // After dispatch, the dragged block's DOM at `restingPos` is the freshly
     // mounted version (or the unchanged original if the drop was a no-op).
-    const restingPos = landedAtPos !== null ? landedAtPos : this.draggedPos;
+    const restingPos = landedAtPos !== null ? landedAtPos : (this.draggedUnit?.pos ?? -1);
     const restingDom = this.view.nodeDOM(restingPos) as HTMLElement | null;
     const ghost = this.ghost;
     this.ghost = null;
@@ -659,7 +815,9 @@ class DragHandleController {
     this.handle.classList.remove('drag-block-handle--active');
     if (this.ghost && this.ghost.parentNode) this.ghost.remove();
     this.ghost = null;
-    const blockDom = this.view.nodeDOM(this.draggedPos) as HTMLElement | null;
+    const blockDom = this.draggedUnit
+      ? (this.view.nodeDOM(this.draggedUnit.pos) as HTMLElement | null)
+      : null;
     if (blockDom) blockDom.classList.remove('drag-block-dragging');
     this.endDrag();
   }
@@ -691,7 +849,7 @@ class DragHandleController {
       clearTimeout(this._hideTimeoutId);
       this._hideTimeoutId = null;
     }
-    this.draggedPos = -1;
+    this.draggedUnit = null;
     this.dropInsertPos = -1;
     this.dropValid = false;
     this._handleBlock = null;
@@ -723,102 +881,29 @@ export const DraggableBlocks = Extension.create({
       moveBlockUp:
         () =>
         ({ state, dispatch }) => {
-          const { $from } = state.selection;
-          let startNode: ProsemirrorNode | null = null;
-          let startPos = -1;
-          for (let d = $from.depth; d > 0; d--) {
-            if ($from.node(d).isBlock && d === 1) {
-              startNode = $from.node(d);
-              startPos = $from.before(d);
-              break;
-            }
-          }
-          if (!startNode || startPos === -1) return false;
-
-          const $sp = state.doc.resolve(startPos);
-          const index = $sp.index();
-          if (index === 0) return false;
-
-          const prevNode = $sp.parent.child(index - 1);
-          // Treat empty paragraphs (including TipTap's trailing-node placeholder)
-          // as non-movable neighbors — otherwise Alt+↑ can drift past the boundary.
-          if (!isDraggableBlock(prevNode)) return false;
-          const prevPos = startPos - prevNode.nodeSize;
-
-          if (dispatch) {
-            const tr = state.tr;
-            const fromOffset = state.selection.from - startPos;
-            const toOffset = state.selection.to - startPos;
-            const content = state.doc.slice(startPos, startPos + startNode.nodeSize);
-
-            tr.delete(startPos, startPos + startNode.nodeSize);
-            tr.insert(prevPos, content.content);
-
-            // Use the runtime constructor (TextSelection / NodeSelection) instead
-            // of the imported Selection class — `instanceof` against the imported
-            // symbol can fail in tests where TipTap loads a separate ProseMirror
-            // copy. See vibe-coding-rules/image-and-dom-handling.md.
-            const SelectionClass = state.selection.constructor as typeof Selection & {
-              create: (doc: ProsemirrorNode, from: number, to: number) => Selection;
-            };
-
-            tr.setSelection(
-              SelectionClass.create(tr.doc, prevPos + fromOffset, prevPos + toOffset)
-            );
-            dispatch(tr.scrollIntoView());
-          }
-          return true;
+          const unit = selectionBlockUnit(state);
+          return unit ? moveUnit(unit, 'up', state, dispatch) : false;
         },
 
       moveBlockDown:
         () =>
         ({ state, dispatch }) => {
-          const { $from } = state.selection;
-          let startNode: ProsemirrorNode | null = null;
-          let startPos = -1;
-          for (let d = $from.depth; d > 0; d--) {
-            if ($from.node(d).isBlock && d === 1) {
-              startNode = $from.node(d);
-              startPos = $from.before(d);
-              break;
-            }
-          }
-          if (!startNode || startPos === -1) return false;
+          const unit = selectionBlockUnit(state);
+          return unit ? moveUnit(unit, 'down', state, dispatch) : false;
+        },
 
-          const $sp = state.doc.resolve(startPos);
-          const index = $sp.index();
-          if (index === $sp.parent.childCount - 1) return false;
+      moveLineUp:
+        () =>
+        ({ state, dispatch }) => {
+          const unit = selectionLineUnit(state);
+          return unit ? moveUnit(unit, 'up', state, dispatch) : false;
+        },
 
-          const nextNode = $sp.parent.child(index + 1);
-          // Treat empty paragraphs (including TipTap's trailing-node placeholder)
-          // as non-movable neighbors — otherwise Alt+↓ would keep moving past
-          // the visible end of the document as new trailing nodes are appended.
-          if (!isDraggableBlock(nextNode)) return false;
-
-          if (dispatch) {
-            const tr = state.tr;
-            const fromOffset = state.selection.from - startPos;
-            const toOffset = state.selection.to - startPos;
-            const content = state.doc.slice(startPos, startPos + startNode.nodeSize);
-
-            tr.delete(startPos, startPos + startNode.nodeSize);
-            const insertPos = startPos + nextNode.nodeSize;
-            tr.insert(insertPos, content.content);
-
-            // Use the runtime constructor (TextSelection / NodeSelection) instead
-            // of the imported Selection class — `instanceof` against the imported
-            // symbol can fail in tests where TipTap loads a separate ProseMirror
-            // copy. See vibe-coding-rules/image-and-dom-handling.md.
-            const SelectionClass = state.selection.constructor as typeof Selection & {
-              create: (doc: ProsemirrorNode, from: number, to: number) => Selection;
-            };
-
-            tr.setSelection(
-              SelectionClass.create(tr.doc, insertPos + fromOffset, insertPos + toOffset)
-            );
-            dispatch(tr.scrollIntoView());
-          }
-          return true;
+      moveLineDown:
+        () =>
+        ({ state, dispatch }) => {
+          const unit = selectionLineUnit(state);
+          return unit ? moveUnit(unit, 'down', state, dispatch) : false;
         },
     };
   },
@@ -827,6 +912,8 @@ export const DraggableBlocks = Extension.create({
     return {
       'Alt-ArrowUp': () => this.editor.commands.moveBlockUp(),
       'Alt-ArrowDown': () => this.editor.commands.moveBlockDown(),
+      'Alt-Shift-ArrowUp': () => this.editor.commands.moveLineUp(),
+      'Alt-Shift-ArrowDown': () => this.editor.commands.moveLineDown(),
     };
   },
 
