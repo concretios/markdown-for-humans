@@ -36,7 +36,6 @@ import { DocumentAuditExtension } from './features/auditDocument';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
-import { overrideClassFor, type EditorThemeSetting } from '../shared/editorTheme';
 import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
 import {
   setupImageDragDrop,
@@ -1857,13 +1856,6 @@ window.addEventListener('openExtensionSettings', () => {
   vscode.postMessage({ type: 'openExtensionSettings' });
 });
 
-// Handle theme toggle button from toolbar -> flip the global editorTheme setting.
-// The extension computes the opposite of the currently effective theme and
-// writes it back, which re-themes every open editor via settingsUpdate.
-window.addEventListener('toggleTheme', () => {
-  vscode.postMessage({ type: 'toggleTheme' });
-});
-
 // Zoom: applies zoom level from markdownForHumans.zoom setting (percentage, 100 = default).
 // We use a CSS calc() expression so the override stays live — if the user later changes
 // their VS Code editor font size, --md-base-size-override recomputes automatically
@@ -1879,64 +1871,9 @@ function applyZoomLevel(percent: number) {
     );
   }
 }
-// Editor theme override.
-//
-// When the requested direction already matches VS Code's active appearance, no
-// class is added and the editor inherits the real live theme (so "Always dark"
-// on a dark VS Code looks exactly like the user's actual dark theme); the
-// synthetic palette is applied only when forcing the opposite direction.
-// 'vscode' always inherits.
-//
-// The class goes on BOTH <html> and <body>:
-//  - <body> carries the --vscode-* variable overrides (they win there via
-//    inheritance; VS Code sets those vars inline on <html>, so a class rule on
-//    <html> could not override them) and satisfies the syntax-highlight guards
-//    (.vscode-dark:not(.mdfh-force-light)) that key off the body class.
-//  - <html> paints the overscroll/page background with a literal color so the
-//    area around the editor matches (see editor.css).
-//
-// Self-healing: VS Code reassigns body.className (not classList.add) during its
-// theme handshake, which can wipe our class right after the first apply. A
-// MutationObserver re-asserts the desired state whenever the class attribute
-// changes. reconcile only mutates when out of sync, so it settles in one pass
-// and cannot loop.
-let lastThemeSetting: EditorThemeSetting = 'vscode';
-let lastVscodeIsDark = false;
-let themeClassObserver: MutationObserver | null = null;
-
-function reconcileThemeClasses() {
-  const forced = overrideClassFor(lastThemeSetting, lastVscodeIsDark);
-  for (const el of [document.documentElement, document.body]) {
-    if (!el) continue;
-    const wantLight = forced === 'mdfh-force-light';
-    const wantDark = forced === 'mdfh-force-dark';
-    if (el.classList.contains('mdfh-force-light') !== wantLight) {
-      el.classList.toggle('mdfh-force-light', wantLight);
-    }
-    if (el.classList.contains('mdfh-force-dark') !== wantDark) {
-      el.classList.toggle('mdfh-force-dark', wantDark);
-    }
-  }
-}
-
-function ensureThemeClassObserver() {
-  if (themeClassObserver) return;
-  themeClassObserver = new MutationObserver(() => reconcileThemeClasses());
-  const opts: MutationObserverInit = { attributes: true, attributeFilter: ['class'] };
-  themeClassObserver.observe(document.documentElement, opts);
-  themeClassObserver.observe(document.body, opts);
-}
-
-function applyThemeOverride(setting: EditorThemeSetting, vscodeIsDark: boolean) {
-  lastThemeSetting = setting;
-  lastVscodeIsDark = vscodeIsDark;
-  reconcileThemeClasses();
-  ensureThemeClassObserver();
-}
-
 /**
- * Applies paragraph spacing, zoom, and theme-override settings from an incoming
- * message. Called from both the `update` and `settingsUpdate` handlers.
+ * Applies paragraph spacing and zoom settings from an incoming message.
+ * Called from both the `update` and `settingsUpdate` handlers.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyEditorSettings(message: Record<string, any>) {
@@ -1954,20 +1891,6 @@ function applyEditorSettings(message: Record<string, any>) {
   }
   if (typeof message.zoom === 'number') {
     applyZoomLevel(message.zoom);
-  }
-  if (
-    message.editorTheme === 'vscode' ||
-    message.editorTheme === 'defaultLight' ||
-    message.editorTheme === 'defaultDark'
-  ) {
-    // The extension reports VS Code's current appearance; fall back to the body
-    // class if an older message omits it.
-    const vscodeIsDark =
-      typeof message.vscodeIsDark === 'boolean'
-        ? message.vscodeIsDark
-        : document.body.classList.contains('vscode-dark') ||
-          document.body.classList.contains('vscode-high-contrast');
-    applyThemeOverride(message.editorTheme, vscodeIsDark);
   }
 }
 
