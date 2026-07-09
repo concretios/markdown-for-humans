@@ -170,6 +170,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return value === 'preserve' ? 'preserve' : 'strip';
   }
 
+  private getRenderSingleLineBreaks(): boolean {
+    const config = vscode.workspace.getConfiguration();
+    return config.get<boolean>('markdownForHumans.render.singleLineBreaks', true);
+  }
+
   private getEditorTheme(): EditorThemeSetting {
     const config = vscode.workspace.getConfiguration();
     const value = config.get<string>('markdownForHumans.display.editorTheme', 'vscode');
@@ -525,6 +530,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.imagePathBase') ||
         e.affectsConfiguration('markdownForHumans.imagePreview.hover.enabled') ||
         e.affectsConfiguration('markdownForHumans.blankLines.mode') ||
+        e.affectsConfiguration('markdownForHumans.render.singleLineBreaks') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
@@ -555,6 +561,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
+        const renderSingleLineBreaks = this.getRenderSingleLineBreaks();
         const editorTheme = this.getEditorTheme();
         const vscodeIsDark = this.isVscodeDark();
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
@@ -582,6 +589,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
           blankLineMode,
+          renderSingleLineBreaks,
           editorTheme,
           vscodeIsDark,
         });
@@ -695,6 +703,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
     const blankLineMode = this.getBlankLineMode();
+    const renderSingleLineBreaks = this.getRenderSingleLineBreaks();
     const editorTheme = this.getEditorTheme();
 
     webview.postMessage({
@@ -709,6 +718,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       paragraphSpacingAfter: paragraphSpacingAfter,
       zoom: zoom,
       blankLineMode,
+      renderSingleLineBreaks,
       editorTheme,
       vscodeIsDark: this.isVscodeDark(),
     });
