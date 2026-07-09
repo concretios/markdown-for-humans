@@ -204,6 +204,12 @@
           "default": "strip",
           "description": "Controls whether extra blank lines are preserved or removed in the editor and saved file."
         },
+        "markdownForHumans.render.singleLineBreaks": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "When enabled (the default), a single newline in the Markdown source is rendered as a hard line break (`<br>`). Disable to follow the CommonMark/GFM specification, where a single newline is a *soft* break (rendered as a space) so a hard-wrapped paragraph flows back into one continuous line, matching VS Code's built-in Markdown preview. This affects how the source is parsed, so changes take effect when a document is (re)opened.",
+          "scope": "application"
+        },
         "markdownForHumans.imagePreview.hover.enabled": {
           "type": "boolean",
           "default": true,

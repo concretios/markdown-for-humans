@@ -17,6 +17,13 @@ Choose the editor's color theme independently of the rest of VS Code:
 - When your active VS Code theme already matches the chosen appearance the editor uses that real theme; when forcing the opposite (for example a light editor while VS Code is dark) it falls back to a built-in light or dark theme
 - The forced appearance follows VS Code live: switching your VS Code theme re-evaluates the editor automatically
 
+#### CommonMark Soft Line Breaks (opt-in)
+Choose how a single newline in the Markdown source is rendered:
+- New `markdownForHumans.render.singleLineBreaks` setting: enabled by default (a single newline becomes a hard line break `<br>`, matching previous behavior)
+- Disable it to follow the CommonMark/GFM specification, where a single newline is a *soft* break (a space) so hard-wrapped paragraphs flow back into one continuous line, matching VS Code's built-in Markdown preview
+- Helpful when reading or editing hard-wrapped documents such as product documentation
+- Because `breaks` is a parse-time option, the change takes effect when a document is (re)opened
+
 ---
 
 ## [0.2.1] - 2026-05-19
