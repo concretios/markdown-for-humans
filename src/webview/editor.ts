@@ -232,6 +232,10 @@ let aiContextSessionSkipSave = false;
 // kept in sync via `update` and `settingsUpdate` messages from the host.
 let aiContextSkipSaveWarningSetting = false;
 let blankLineMode: BlankLineMode = 'strip';
+// Mirrors `markdownForHumans.formattingShortcuts.enabled`. When false, the
+// editor stops intercepting Cmd/Ctrl+B/I/U so those chords reach VS Code's own
+// keybindings instead of toggling bold/italic/underline in-editor.
+let formattingShortcutsEnabled = true;
 
 // Pending document-dirty queries, keyed by requestId. The host replies with
 // `documentDirtyResponse`; we look up the resolver here.
@@ -785,13 +789,7 @@ function initializeEditor(initialContent: string) {
 
       // Prevent VS Code from handling markdown formatting shortcuts
       // TipTap will handle these natively
-      const formattingShortcuts = [
-        'b', // Bold
-        'i', // Italic
-        'u', // Underline (some editors)
-      ];
-
-      if (isMod && formattingShortcuts.includes(e.key.toLowerCase())) {
+      if (shouldInterceptFormattingShortcut(e.key, isMod, formattingShortcutsEnabled)) {
         e.stopPropagation(); // Stop event from reaching VS Code
         // TipTap will handle the formatting
         return;
@@ -1809,6 +1807,27 @@ function applyThemeOverride(setting: EditorThemeSetting, vscodeIsDark: boolean) 
   ensureThemeClassObserver();
 }
 
+const FORMATTING_SHORTCUT_KEYS = [
+  'b', // Bold
+  'i', // Italic
+  'u', // Underline (some editors)
+];
+
+/**
+ * Whether a Cmd/Ctrl+B/I/U keydown should be captured here (and its
+ * propagation to VS Code stopped) so TipTap can handle it natively, per the
+ * `markdownForHumans.formattingShortcuts.enabled` setting.
+ */
+function shouldInterceptFormattingShortcut(
+  key: string,
+  isMod: boolean,
+  formattingShortcutsEnabled: boolean
+): boolean {
+  return (
+    isMod && formattingShortcutsEnabled && FORMATTING_SHORTCUT_KEYS.includes(key.toLowerCase())
+  );
+}
+
 /**
  * Applies paragraph spacing, zoom, and theme-override settings from an incoming
  * message. Called from both the `update` and `settingsUpdate` handlers.
@@ -1829,6 +1848,9 @@ function applyEditorSettings(message: Record<string, any>) {
   }
   if (typeof message.zoom === 'number') {
     applyZoomLevel(message.zoom);
+  }
+  if (typeof message.formattingShortcutsEnabled === 'boolean') {
+    formattingShortcutsEnabled = message.formattingShortcutsEnabled;
   }
   if (
     message.editorTheme === 'vscode' ||
@@ -1957,5 +1979,11 @@ export const __testing = {
   insertRawCodeTextForTests(text: string) {
     if (!editor) return;
     insertRawCodeText(editor, text);
+  },
+  isFormattingShortcutsEnabledForTests() {
+    return formattingShortcutsEnabled;
+  },
+  shouldInterceptFormattingShortcutForTests(key: string, isMod: boolean) {
+    return shouldInterceptFormattingShortcut(key, isMod, formattingShortcutsEnabled);
   },
 };

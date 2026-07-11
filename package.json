@@ -249,6 +249,12 @@
           "default": "vscode",
           "description": "Controls the editor's color theme. 'Follow VS Code theme' mirrors your active VS Code theme. 'Always light'/'Always dark' keep the editor light or dark regardless of VS Code: when VS Code's theme already matches that appearance the editor uses your real theme, otherwise it falls back to a built-in light/dark theme. The toolbar toggle switches between light and dark and applies to all open editors.",
           "scope": "application"
+        },
+        "markdownForHumans.formattingShortcuts.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, Cmd/Ctrl+B, +I, and +U toggle bold/italic/underline inside the editor. Disable this if you rely on VS Code keybindings that use the same chords (e.g. a sidebar toggle rebound to Cmd+B) and want them to keep working while a markdown file is open in this editor.",
+          "scope": "application"
         }
       }
     }

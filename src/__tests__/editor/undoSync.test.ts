@@ -210,6 +210,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingBefore: 0,
       paragraphSpacingAfter: 0,
       zoom: 100,
+      formattingShortcutsEnabled: true,
       editorTheme: 'vscode',
       vscodeIsDark: true,
     });
@@ -255,6 +256,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingBefore: 0,
       paragraphSpacingAfter: 0,
       zoom: 100,
+      formattingShortcutsEnabled: true,
       editorTheme: 'vscode',
       vscodeIsDark: true,
     });

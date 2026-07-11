@@ -528,7 +528,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
-        e.affectsConfiguration('markdownForHumans.display.editorTheme')
+        e.affectsConfiguration('markdownForHumans.display.editorTheme') ||
+        e.affectsConfiguration('markdownForHumans.formattingShortcuts.enabled')
       ) {
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -554,6 +555,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           0
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
+        const formattingShortcutsEnabled = config.get<boolean>(
+          'markdownForHumans.formattingShortcuts.enabled',
+          true
+        );
         const blankLineMode = this.getBlankLineMode();
         const editorTheme = this.getEditorTheme();
         const vscodeIsDark = this.isVscodeDark();
@@ -581,6 +586,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingBefore: paragraphSpacingBefore,
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
+          formattingShortcutsEnabled,
           blankLineMode,
           editorTheme,
           vscodeIsDark,
@@ -694,6 +700,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     );
     const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
+    const formattingShortcutsEnabled = config.get<boolean>(
+      'markdownForHumans.formattingShortcuts.enabled',
+      true
+    );
     const blankLineMode = this.getBlankLineMode();
     const editorTheme = this.getEditorTheme();
 
@@ -708,6 +718,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       paragraphSpacingBefore: paragraphSpacingBefore,
       paragraphSpacingAfter: paragraphSpacingAfter,
       zoom: zoom,
+      formattingShortcutsEnabled,
       blankLineMode,
       editorTheme,
       vscodeIsDark: this.isVscodeDark(),
@@ -786,6 +797,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           0
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
+        const formattingShortcutsEnabled = config.get<boolean>(
+          'markdownForHumans.formattingShortcuts.enabled',
+          true
+        );
         const blankLineMode = this.getBlankLineMode();
         const editorTheme = this.getEditorTheme();
         webview.postMessage({
@@ -798,6 +813,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingBefore: paragraphSpacingBefore,
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
+          formattingShortcutsEnabled,
           blankLineMode,
           editorTheme,
           vscodeIsDark: this.isVscodeDark(),
