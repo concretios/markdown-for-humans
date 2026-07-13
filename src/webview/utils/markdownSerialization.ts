@@ -11,6 +11,40 @@ type MarkdownManager = {
   serialize?: (json: JSONContent) => string;
 };
 
+/**
+ * Reorders each text node's `marks` array so `code` always comes first.
+ *
+ * Why this is needed: `@tiptap/markdown` opens/closes a text node's marks in
+ * `marks` array order, with later marks ending up outermost. That array order
+ * comes from the schema's mark rank (set when the doc is built via
+ * `Node.fromJSON`/`Mark.setFrom`, which sorts by registration order in the
+ * extensions list), not from how the marks were originally nested in the
+ * source markdown. Every other inline mark here (bold/italic/strike/link) is
+ * "transparent" - wrapping one in another still parses fine regardless of
+ * order - but `code` is not: a markdown code span's content is always
+ * literal, so if `code` ends up outermost, any mark nested inside it (e.g. a
+ * link's `[text](url)`) gets swallowed as literal text instead of being
+ * parsed. Moving `code` to the front keeps it innermost regardless of the
+ * schema's rank order, matching how it was actually written in the source.
+ */
+export function reorderMarksForSerialization(node: JSONContent): JSONContent {
+  if (node.type === 'text') {
+    if (!Array.isArray(node.marks) || node.marks.length < 2) return node;
+    const codeIndex = node.marks.findIndex(mark => mark.type === 'code');
+    if (codeIndex <= 0) return node;
+    const marks = [...node.marks];
+    const [codeMark] = marks.splice(codeIndex, 1);
+    marks.unshift(codeMark);
+    return { ...node, marks };
+  }
+
+  if (Array.isArray(node.content)) {
+    return { ...node, content: node.content.map(reorderMarksForSerialization) };
+  }
+
+  return node;
+}
+
 function isMeaningfulInlineNode(node: JSONContent): boolean {
   if (!node || typeof node.type !== 'string') return false;
 
@@ -115,7 +149,8 @@ export function getEditorMarkdownForSync(
     return getFallbackMarkdown();
   }
 
-  const serialize = markdownManager.serialize.bind(markdownManager);
+  const rawSerialize = markdownManager.serialize.bind(markdownManager);
+  const serialize = (json: JSONContent): string => rawSerialize(reorderMarksForSerialization(json));
 
   try {
     const json = editor.getJSON();
