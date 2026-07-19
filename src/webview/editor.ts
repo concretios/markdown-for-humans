@@ -1877,12 +1877,33 @@ window.addEventListener('exportDocument', async (event: Event) => {
   }
 });
 
+/**
+ * Whether a paste event is aimed at the document (TipTap's contenteditable)
+ * rather than at an overlay input such as the Cmd/Ctrl+F search box or the
+ * link dialog. The document-level capture handler below must leave those
+ * pastes alone: a null target is treated as editor-bound for backwards
+ * compatibility with synthetic events.
+ */
+function isPasteTargetedAtEditor(target: EventTarget | null): boolean {
+  if (!editor || !target) return true;
+  const editorDom = editor.view?.dom as Node | undefined;
+  if (!editorDom || typeof editorDom.contains !== 'function') return true;
+  const node = target as Node;
+  if (typeof node.nodeType !== 'number') return true;
+  return editorDom.contains(node);
+}
+
 // Handle paste - convert markdown to HTML for proper TipTap rendering
 // Must use capture phase to intercept BEFORE TipTap's default handling
 document.addEventListener(
   'paste',
   (event: ClipboardEvent) => {
     if (!editor) return;
+
+    // Pastes into overlay inputs (search, link dialog) must reach that input:
+    // rerouting them here inserted clipboard HTML/markdown into the document
+    // instead of the focused field.
+    if (!isPasteTargetedAtEditor(event.target)) return;
 
     const clipboardData = event.clipboardData;
     if (!clipboardData) return;
@@ -1957,5 +1978,8 @@ export const __testing = {
   insertRawCodeTextForTests(text: string) {
     if (!editor) return;
     insertRawCodeText(editor, text);
+  },
+  isPasteTargetedAtEditorForTests(target: EventTarget | null) {
+    return isPasteTargetedAtEditor(target);
   },
 };
