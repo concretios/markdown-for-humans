@@ -605,6 +605,15 @@ function initializeEditor(initialContent: string) {
           class: 'markdown-editor',
           spellcheck: 'true',
         },
+        // Runs before TipTap's own keymaps (StarterKit binds Mod-b/i/u), which
+        // would otherwise apply formatting even with the setting disabled while
+        // the chord simultaneously reaches VS Code — e.g. Ctrl+B toggling the
+        // sidebar AND bolding text. Returning true swallows the keymap without
+        // stopping propagation, so VS Code still receives the chord.
+        handleKeyDown: (_view, event) => {
+          const isMod = event.metaKey || event.ctrlKey;
+          return shouldSuppressFormattingShortcut(event.key, isMod, formattingShortcutsEnabled);
+        },
         // Prevent default image drop handling - let our custom handler manage it
         handleDrop: (_view, event, _slice, _moved) => {
           const dt = event.dataTransfer;
@@ -1829,6 +1838,23 @@ function shouldInterceptFormattingShortcut(
 }
 
 /**
+ * Whether a Cmd/Ctrl+B/I/U keydown must be swallowed inside TipTap (via
+ * `editorProps.handleKeyDown`) because formatting shortcuts are disabled.
+ * TipTap's StarterKit registers its own Mod-b/i/u keymaps that fire whenever
+ * the editor has focus; without this gate, disabling the setting lets the
+ * chord reach VS Code but STILL applies formatting, so both actions run.
+ */
+function shouldSuppressFormattingShortcut(
+  key: string,
+  isMod: boolean,
+  formattingShortcutsEnabled: boolean
+): boolean {
+  return (
+    isMod && !formattingShortcutsEnabled && FORMATTING_SHORTCUT_KEYS.includes(key.toLowerCase())
+  );
+}
+
+/**
  * Applies paragraph spacing, zoom, and theme-override settings from an incoming
  * message. Called from both the `update` and `settingsUpdate` handlers.
  */
@@ -1985,5 +2011,8 @@ export const __testing = {
   },
   shouldInterceptFormattingShortcutForTests(key: string, isMod: boolean) {
     return shouldInterceptFormattingShortcut(key, isMod, formattingShortcutsEnabled);
+  },
+  shouldSuppressFormattingShortcutForTests(key: string, isMod: boolean) {
+    return shouldSuppressFormattingShortcut(key, isMod, formattingShortcutsEnabled);
   },
 };

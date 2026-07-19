@@ -86,6 +86,7 @@ jest.mock('./../../webview/utils/scrollToHeading', () => ({ scrollToHeading: jes
 type TestingModule = {
   isFormattingShortcutsEnabledForTests: () => boolean;
   shouldInterceptFormattingShortcutForTests: (key: string, isMod: boolean) => boolean;
+  shouldSuppressFormattingShortcutForTests: (key: string, isMod: boolean) => boolean;
 };
 
 describe('formattingShortcuts.enabled setting', () => {
@@ -191,5 +192,46 @@ describe('formattingShortcuts.enabled setting', () => {
     } as unknown as MessageEvent);
 
     expect(testing.isFormattingShortcutsEnabledForTests()).toBe(false);
+  });
+
+  describe('TipTap keymap suppression (handleKeyDown gate)', () => {
+    it('does not suppress TipTap formatting while enabled (default)', () => {
+      for (const key of ['b', 'i', 'u']) {
+        expect(testing.shouldSuppressFormattingShortcutForTests(key, true)).toBe(false);
+      }
+    });
+
+    it('suppresses TipTap Mod+B/I/U once disabled, so formatting is not applied', () => {
+      messageHandler({
+        data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+      } as unknown as MessageEvent);
+
+      for (const key of ['b', 'i', 'u']) {
+        expect(testing.shouldSuppressFormattingShortcutForTests(key, true)).toBe(true);
+      }
+    });
+
+    it('never suppresses non-formatting keys or bare keypresses', () => {
+      messageHandler({
+        data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+      } as unknown as MessageEvent);
+
+      expect(testing.shouldSuppressFormattingShortcutForTests('s', true)).toBe(false);
+      expect(testing.shouldSuppressFormattingShortcutForTests('b', false)).toBe(false);
+    });
+
+    it('is mutually exclusive with interception: exactly one gate is active per state', () => {
+      // Enabled: intercept (stopPropagation to VS Code), don't suppress TipTap.
+      expect(testing.shouldInterceptFormattingShortcutForTests('b', true)).toBe(true);
+      expect(testing.shouldSuppressFormattingShortcutForTests('b', true)).toBe(false);
+
+      messageHandler({
+        data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+      } as unknown as MessageEvent);
+
+      // Disabled: let the chord reach VS Code, suppress TipTap formatting.
+      expect(testing.shouldInterceptFormattingShortcutForTests('b', true)).toBe(false);
+      expect(testing.shouldSuppressFormattingShortcutForTests('b', true)).toBe(true);
+    });
   });
 });
