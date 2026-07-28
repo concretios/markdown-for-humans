@@ -57,6 +57,7 @@ import {
   findMatches,
   showSearchOverlay,
   hideSearchOverlay,
+  isSearchVisible,
 } from '../../webview/features/searchOverlay';
 
 type MockEditor = {
@@ -166,6 +167,13 @@ function createMockEditor(content: string) {
       },
     },
   };
+}
+
+function setWindowScrollPosition(x: number, y: number) {
+  Object.defineProperty(window, 'scrollX', { configurable: true, value: x });
+  Object.defineProperty(window, 'scrollY', { configurable: true, value: y });
+  Object.defineProperty(window, 'pageXOffset', { configurable: true, value: x });
+  Object.defineProperty(window, 'pageYOffset', { configurable: true, value: y });
 }
 
 describe('Search Overlay', () => {
@@ -319,6 +327,7 @@ describe('Search Overlay UI behaviors', () => {
     document.body.innerHTML = '';
     // Mock window.scrollTo (not implemented in jsdom)
     window.scrollTo = jest.fn();
+    setWindowScrollPosition(0, 0);
     editor = createMockEditorWithView('hello hello');
   });
 
@@ -331,6 +340,77 @@ describe('Search Overlay UI behaviors', () => {
     const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
     expect(input).toBeTruthy();
     expect(document.activeElement).toBe(input);
+  });
+
+  it('keeps the search overlay open and refocuses the input when shown again', () => {
+    showSearchOverlay(editor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    const outsideButton = document.createElement('button');
+    document.body.appendChild(outsideButton);
+    outsideButton.focus();
+
+    expect(document.activeElement).toBe(outsideButton);
+
+    showSearchOverlay(editor as unknown as Editor);
+
+    expect(isSearchVisible()).toBe(true);
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
+  it('preserves the existing query when refocusing an already open overlay', () => {
+    showSearchOverlay(editor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    input.value = 'zzz';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.setSelectionRange(1, 1);
+
+    showSearchOverlay(editor as unknown as Editor);
+
+    expect(isSearchVisible()).toBe(true);
+    expect(input.value).toBe('zzz');
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(input.value.length);
+  });
+
+  it('retries focus when the first focus attempt is ignored', () => {
+    jest.useFakeTimers();
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    Object.defineProperty(window, 'requestAnimationFrame', {
+      configurable: true,
+      value: undefined,
+    });
+    const originalFocus = HTMLInputElement.prototype.focus;
+    let attempts = 0;
+    const focusSpy = jest.spyOn(HTMLInputElement.prototype, 'focus').mockImplementation(function (
+      this: HTMLInputElement,
+      options?: FocusOptions
+    ) {
+      attempts += 1;
+      if (attempts >= 3) {
+        originalFocus.call(this, options);
+      }
+    });
+
+    try {
+      showSearchOverlay(editor as unknown as Editor);
+      const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+      expect(document.activeElement).not.toBe(input);
+
+      jest.runAllTimers();
+
+      expect(document.activeElement).toBe(input);
+      expect(focusSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      focusSpy.mockRestore();
+      Object.defineProperty(window, 'requestAnimationFrame', {
+        configurable: true,
+        value: originalRequestAnimationFrame,
+      });
+      jest.useRealTimers();
+    }
   });
 
   it('Cmd/Ctrl+A selects all text within the search input', () => {
@@ -366,6 +446,55 @@ describe('Search Overlay UI behaviors', () => {
     expect(secondSelection?.from).toBeGreaterThan(firstSelection.from);
     expect(document.activeElement).toBe(input);
   });
+
+  it('keeps the current match selected when closing after a search', () => {
+    editor.state.selection = { from: 0, to: 0 };
+    editor.state.doc.textBetween.mockReturnValue('');
+
+    showSearchOverlay(editor as unknown as Editor);
+    const input = document.querySelector('.search-overlay-input') as HTMLInputElement;
+    input.value = 'hello';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    const matchSelection = editor.commands.setTextSelection.mock.calls.at(-1)?.[0];
+    expect(matchSelection).toEqual({ from: 1, to: 6 });
+
+    hideSearchOverlay(editor as unknown as Editor);
+
+    expect(editor.commands.setTextSelection).not.toHaveBeenLastCalledWith({ from: 0, to: 0 });
+    expect(editor.commands.setTextSelection).toHaveBeenLastCalledWith(matchSelection);
+  });
+
+  it('restores cursor position when closed without navigation or manual scrolling', () => {
+    editor.state.selection = { from: 3, to: 3 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    setWindowScrollPosition(0, 120);
+
+    showSearchOverlay(editor as unknown as Editor);
+    editor.commands.setTextSelection.mockClear();
+    editor.commands.focus.mockClear();
+
+    hideSearchOverlay(editor as unknown as Editor);
+
+    expect(editor.commands.setTextSelection).toHaveBeenCalledWith({ from: 3, to: 3 });
+    expect(editor.commands.focus).toHaveBeenCalledWith();
+  });
+
+  it('does not jump back to the open position when closing after manual scrolling', () => {
+    editor.state.selection = { from: 4, to: 4 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    setWindowScrollPosition(0, 100);
+
+    showSearchOverlay(editor as unknown as Editor);
+    editor.commands.setTextSelection.mockClear();
+    editor.commands.focus.mockClear();
+
+    setWindowScrollPosition(0, 900);
+    hideSearchOverlay(editor as unknown as Editor);
+
+    expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+    expect(editor.commands.focus).toHaveBeenCalledWith(undefined, { scrollIntoView: false });
+  });
 });
 
 describe('Search Overlay UI behavior (future tests)', () => {
@@ -373,6 +502,5 @@ describe('Search Overlay UI behavior (future tests)', () => {
   describe('integration tests requiring full TipTap', () => {
     it.todo('should highlight all matches with ProseMirror decorations');
     it.todo('should wrap around from last to first match');
-    it.todo('should restore cursor position when closed without navigation');
   });
 });
