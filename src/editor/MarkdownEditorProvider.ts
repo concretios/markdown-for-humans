@@ -17,11 +17,6 @@ import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
 import { hasSameBlankLineLayout, isMarkdownStructurallyEquivalent } from './markdownAstEquivalence';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
-import {
-  appearanceFromKind,
-  resolveToggleTarget,
-  type EditorThemeSetting,
-} from '../shared/editorTheme';
 
 /**
  * Coerce text to end with exactly one `\n` (markdownlint MD047). An empty
@@ -170,18 +165,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return value === 'preserve' ? 'preserve' : 'strip';
   }
 
-  private getEditorTheme(): EditorThemeSetting {
-    const config = vscode.workspace.getConfiguration();
-    const value = config.get<string>('markdownForHumans.display.editorTheme', 'vscode');
-    return value === 'defaultLight' || value === 'defaultDark' ? value : 'vscode';
-  }
-
-  /** Whether VS Code's active color theme is a dark variant (incl. high contrast). */
-  private isVscodeDark(): boolean {
-    const kind = vscode.window.activeColorTheme?.kind;
-    return typeof kind === 'number' ? appearanceFromKind(kind) === 'dark' : false;
-  }
-
   private async syncMarkdownlintMd012(mode: BlankLineMode): Promise<void> {
     const markdownlintConfig = vscode.workspace.getConfiguration('markdownlint');
     const existing =
@@ -255,6 +238,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   // first time a custom editor opens so tests that never call `resolveCustomTextEditor`
   // don't need this VS Code API on their mock.
   private windowStateListener: vscode.Disposable | undefined;
+  // Debounce timers for `markdownForHumans.autoSave.enabled`, keyed by document
+  // URI. This setting is independent of VS Code's own `files.autoSave` — it's
+  // MFH saving on the user's behalf a short delay after typing stops, separate
+  // from the `flushAndSaveIfDirty` bridge (which only fires on focus/window
+  // changes and depends on `files.autoSave` being set to onFocusChange/onWindowChange).
+  private autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly AUTO_SAVE_DEBOUNCE_MS = 1000;
   // --- Audit Search Tuning ---
   /**
    * Minimum length required to attempt ANY file suggestions.
@@ -511,7 +501,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     );
 
     // Track active panel
-    setActiveWebviewPanel(webviewPanel);
+    setActiveWebviewPanel(webviewPanel, document);
 
     // Send initial content to webview
     this.updateWebview(document, webviewPanel.webview);
@@ -528,7 +518,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
-        e.affectsConfiguration('markdownForHumans.display.editorTheme')
+        e.affectsConfiguration('markdownForHumans.enableMath')
       ) {
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -555,8 +545,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
-        const editorTheme = this.getEditorTheme();
-        const vscodeIsDark = this.isVscodeDark();
+        const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
           void this.syncMarkdownlintMd012(blankLineMode).catch(error => {
             console.warn('[MD4H] Failed syncing markdownlint MD012 rule:', error);
@@ -582,28 +571,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
           blankLineMode,
-          editorTheme,
-          vscodeIsDark,
+          enableMath: enableMath,
         });
       }
     });
 
-    // When VS Code's active color theme changes, re-send the theme settings so
-    // the webview can re-evaluate the override. This matters for the "inherit
-    // when the active appearance matches" behavior: e.g. an editor set to
-    // "Always dark" that was inheriting a live dark theme must switch to the
-    // synthetic dark palette if the user flips VS Code to a light theme.
-    const themeChangeSubscription = vscode.window.onDidChangeActiveColorTheme(() => {
-      webviewPanel.webview.postMessage({
-        type: 'settingsUpdate',
-        editorTheme: this.getEditorTheme(),
-        vscodeIsDark: this.isVscodeDark(),
-      });
-    });
-
     webviewPanel.onDidChangeViewState(() => {
       if (webviewPanel.active) {
-        setActiveWebviewPanel(webviewPanel);
+        setActiveWebviewPanel(webviewPanel, document);
       } else if (getActiveWebviewPanel() === webviewPanel) {
         setActiveWebviewPanel(undefined);
       }
@@ -627,12 +602,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webviewPanel.onDidDispose(() => {
       changeDocumentSubscription.dispose();
       configChangeSubscription.dispose();
-      themeChangeSubscription.dispose();
       // Clean up pending edits tracking for this document
       const docUri = document.uri.toString();
       this.pendingEdits.delete(docUri);
       this.lastWebviewContent.delete(docUri);
       this.inFlightApplyEdits.delete(docUri);
+      const autoSaveTimer = this.autoSaveTimers.get(docUri);
+      if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer);
+        this.autoSaveTimers.delete(docUri);
+      }
       if (this.openPanels.get(docUri)?.panel === webviewPanel) {
         this.openPanels.delete(docUri);
       }
@@ -695,7 +674,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
     const blankLineMode = this.getBlankLineMode();
-    const editorTheme = this.getEditorTheme();
+    const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
 
     webview.postMessage({
       type: 'update',
@@ -709,8 +688,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       paragraphSpacingAfter: paragraphSpacingAfter,
       zoom: zoom,
       blankLineMode,
-      editorTheme,
-      vscodeIsDark: this.isVscodeDark(),
+      enableMath: enableMath,
     });
   }
 
@@ -730,14 +708,23 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         // explicit `save` message (Ctrl+S), when `copyAiContextRef` saves after
         // user confirmation, or when the autosave bridge fires `document.save()`.
         const docUri = document.uri.toString();
+        const editReason =
+          (message.editReason as 'typing' | 'save-policy-enforce' | undefined) ?? 'typing';
         const editPromise = this.applyEdit(message.content as string, document, {
-          editReason:
-            (message.editReason as 'typing' | 'save-policy-enforce' | undefined) ?? 'typing',
+          editReason,
         });
         // Track the latest in-flight edit so `flushAndSaveIfDirty` can await
         // it before persisting; otherwise an in-flight WorkspaceEdit could
         // land after save() and the saved bytes would be stale.
         this.inFlightApplyEdits.set(docUri, editPromise);
+        // `markdownForHumans.autoSave.enabled` debounced save — only for
+        // ordinary typing edits. Save-policy-enforce edits are already saved
+        // (or prompted for) by `handleBlankLineModeSavePolicy`.
+        if (editReason === 'typing') {
+          void editPromise.then(success => {
+            if (success) this.scheduleAutoSave(document);
+          });
+        }
         void editPromise.finally(() => {
           if (this.inFlightApplyEdits.get(docUri) === editPromise) {
             this.inFlightApplyEdits.delete(docUri);
@@ -787,7 +774,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
         const blankLineMode = this.getBlankLineMode();
-        const editorTheme = this.getEditorTheme();
+        const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         webview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
@@ -799,8 +786,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
           blankLineMode,
-          editorTheme,
-          vscodeIsDark: this.isVscodeDark(),
+          enableMath: enableMath,
         });
         break;
       }
@@ -837,9 +823,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           'workbench.action.openSettings',
           '@ext:concretio.markdown-for-humans'
         );
-        break;
-      case 'toggleTheme':
-        void this.handleToggleTheme();
         break;
       case 'exportDocument':
         this.handleExportDocument(message, document);
@@ -3268,28 +3251,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   /**
-   * Toggle button: write the opposite of the currently effective appearance to
-   * the global `editorTheme` setting. The write fires each open panel's own
-   * `onDidChangeConfiguration` subscription, so every editor re-themes at once.
-   */
-  private async handleToggleTheme(): Promise<void> {
-    try {
-      const current = this.getEditorTheme();
-      const kind = vscode.window.activeColorTheme.kind as number;
-      const target = resolveToggleTarget(current, kind);
-      const config = vscode.workspace.getConfiguration();
-      await config.update(
-        'markdownForHumans.display.editorTheme',
-        target,
-        vscode.ConfigurationTarget.Global
-      );
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error(`[MD4H] Failed to toggle editor theme: ${errorMessage}`);
-    }
-  }
-
-  /**
    * Handle setting update request from webview
    */
   private async handleUpdateSetting(
@@ -3403,6 +3364,37 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     } catch (error) {
       console.error('[MD4H] Autosave document.save() failed:', error);
     }
+  }
+
+  /**
+   * Debounced save for `markdownForHumans.autoSave.enabled`. Unlike
+   * `flushAndSaveIfDirty` (which bridges VS Code's own `files.autoSave` focus
+   * events), this setting is MFH-specific: it saves a short delay after the
+   * user stops typing, regardless of focus and regardless of `files.autoSave`.
+   * Off by default, so the original explicit-save behavior is unchanged unless
+   * a user opts in.
+   *
+   * No-ops for untitled documents — saving those would pop a "Save As" dialog.
+   */
+  private scheduleAutoSave(document: vscode.TextDocument): void {
+    if (document.uri.scheme === 'untitled') return;
+
+    const config = vscode.workspace.getConfiguration();
+    const enabled = config.get<boolean>('markdownForHumans.autoSave.enabled', false);
+    if (!enabled) return;
+
+    const docUri = document.uri.toString();
+    const existing = this.autoSaveTimers.get(docUri);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.autoSaveTimers.delete(docUri);
+      if (!document.isDirty) return;
+      void document.save().then(undefined, (error: unknown) => {
+        console.error('[MD4H] Auto-save document.save() failed:', error);
+      });
+    }, MarkdownEditorProvider.AUTO_SAVE_DEBOUNCE_MS);
+    this.autoSaveTimers.set(docUri, timer);
   }
 
   /**
@@ -3538,7 +3530,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const frontmatterBlock = match[0].replace(/\s+$/, ''); // keep delimiters
     const body = content.slice(match[0].length);
 
-    const pieces = ['```yaml', frontmatterBlock, '```'];
+    // Choose a fence longer than the longest backtick run inside the
+    // frontmatter. If a YAML value contains a ``` (e.g. a fenced code sample in
+    // a multiline scalar), a plain 3-backtick fence would be closed early by the
+    // webview's markdown parser, fragmenting the frontmatter and losing fields
+    // on save. CommonMark requires the closing fence to be at least as long as
+    // the opening one, so a longer fence keeps the whole block intact. Mirrors
+    // prosemirror-markdown's own code_block fence logic so a re-serialized block
+    // round-trips through unwrapFrontmatterFromWebview.
+    const backtickRuns = frontmatterBlock.match(/`{3,}/g);
+    const fence = backtickRuns
+      ? '`'.repeat(Math.max(...backtickRuns.map(run => run.length)) + 1)
+      : '```';
+
+    const pieces = [`${fence}yaml`, frontmatterBlock, fence];
     if (body.length > 0) {
       // Ensure exactly one blank line between fenced block and body
       const trimmedBody =
@@ -3560,12 +3565,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const newline = usesCrLf ? '\r\n' : '\n';
     const lines = content.split(newline);
 
-    const firstLine = lines[0].trim().toLowerCase();
-    if (firstLine !== '```yaml' && firstLine !== '```yml' && firstLine !== '```json') {
+    // Accept a fence of 3+ backticks: wrapFrontmatterForWebview lengthens it when
+    // the frontmatter contains an embedded ``` run, and prosemirror-markdown does
+    // the same on re-serialize. The closing fence must match the opener's length.
+    const fenceMatch = lines[0]
+      .trim()
+      .toLowerCase()
+      .match(/^(`{3,})(yaml|yml|json)$/);
+    if (!fenceMatch) {
       return content;
     }
+    const fence = fenceMatch[1];
 
-    const closingIndex = lines.findIndex((line, idx) => idx > 0 && line.trim() === '```');
+    const closingIndex = lines.findIndex((line, idx) => idx > 0 && line.trim() === fence);
     if (closingIndex === -1) return content;
 
     const insideLines = lines.slice(1, closingIndex);

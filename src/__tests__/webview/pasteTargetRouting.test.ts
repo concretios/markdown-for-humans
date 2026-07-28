@@ -16,7 +16,22 @@
 jest.mock('@tiptap/core', () => ({
   Editor: jest.fn(),
   Extension: { create: (config: unknown) => config },
+  Node: { create: (config: unknown) => config },
+  Mark: { create: (config: unknown) => config },
+  mergeAttributes: (...args: unknown[]) => Object.assign({}, ...(args as object[])),
+  InputRule: class {
+    constructor(config: unknown) {
+      Object.assign(this, config as object);
+    }
+  },
 }));
+jest.mock('katex', () => ({
+  __esModule: true,
+  default: { renderToString: jest.fn(() => ''), render: jest.fn() },
+  renderToString: jest.fn(() => ''),
+  render: jest.fn(),
+}));
+jest.mock('katex/dist/katex.min.css', () => ({}), { virtual: true });
 jest.mock('@tiptap/pm/state', () => ({
   Plugin: class {},
   PluginKey: class {},
@@ -154,6 +169,10 @@ describe('document paste handler target routing', () => {
     };
     // isCodeContextForPaste references HTMLElement, which the node test env lacks
     (global as unknown as { HTMLElement: unknown }).HTMLElement = class {};
+    // isEventInsideModalOverlay (the math-overlay guard that runs before the
+    // target check) references Element; the fake nodes below are plain objects,
+    // so the instanceof checks fall through and the handler proceeds as normal.
+    (global as unknown as { Element: unknown }).Element = class {};
 
     const mod = await import('../../webview/editor');
     testing = mod.__testing as unknown as TestingModule;

@@ -22,7 +22,7 @@ jobs:
 
     strategy:
       matrix:
-        node-version: [18.x, 20.x]
+        node-version: [22.x, 24.x]
 
     steps:
       # actions/checkout@v4
@@ -49,7 +49,7 @@ jobs:
       - name: Upload coverage reports
         # codecov/codecov-action@v3
         uses: codecov/codecov-action@ab904c41d6ece82784817410c45d8b8c02684457
-        if: matrix.node-version == '20.x'
+        if: matrix.node-version == '24.x'
         with:
           files: ./coverage/lcov.info
           fail_ci_if_error: false
@@ -70,11 +70,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Use Node.js 20.x
+      - name: Use Node.js 24.x
         # actions/setup-node@v4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
-          node-version: 20.x
+          node-version: 24.x
           cache: 'npm'
 
       - name: Install dependencies

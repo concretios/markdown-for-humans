@@ -9,7 +9,22 @@
 jest.mock('@tiptap/core', () => ({
   Editor: jest.fn(),
   Extension: { create: (config: unknown) => config },
+  Node: { create: (config: unknown) => config },
+  Mark: { create: (config: unknown) => config },
+  mergeAttributes: (...args: unknown[]) => Object.assign({}, ...(args as object[])),
+  InputRule: class {
+    constructor(config: unknown) {
+      Object.assign(this, config as object);
+    }
+  },
 }));
+jest.mock('katex', () => ({
+  __esModule: true,
+  default: { renderToString: jest.fn(() => ''), render: jest.fn() },
+  renderToString: jest.fn(() => ''),
+  render: jest.fn(),
+}));
+jest.mock('katex/dist/katex.min.css', () => ({}), { virtual: true });
 jest.mock('@tiptap/pm/state', () => ({
   Plugin: class {},
   PluginKey: class {},
@@ -48,6 +63,9 @@ jest.mock('./../../webview/extensions/customImage', () => ({
   CustomImage: { configure: () => ({}) },
 }));
 jest.mock('./../../webview/extensions/mermaid', () => ({ Mermaid: {} }));
+jest.mock('./../../webview/extensions/inlineMath', () => ({ InlineMath: {} }));
+jest.mock('./../../webview/extensions/mathBlock', () => ({ MathBlock: {} }));
+jest.mock('./../../webview/extensions/mathSlashCommand', () => ({ MathSlashCommand: {} }));
 jest.mock('./../../webview/extensions/tabIndentation', () => ({ TabIndentation: {} }));
 jest.mock('./../../webview/extensions/imageEnterSpacing', () => ({ ImageEnterSpacing: {} }));
 jest.mock('./../../webview/extensions/markdownParagraph', () => ({ MarkdownParagraph: {} }));
@@ -66,7 +84,7 @@ jest.mock('./../../webview/features/imageDragDrop', () => ({
   getPendingImageCount: jest.fn(() => 0),
 }));
 jest.mock('./../../webview/features/tocOverlay', () => ({ toggleTocOverlay: jest.fn() }));
-jest.mock('./../../webview/features/searchOverlay', () => ({ toggleSearchOverlay: jest.fn() }));
+jest.mock('./../../webview/features/searchOverlay', () => ({ showSearchOverlay: jest.fn() }));
 jest.mock('./../../webview/utils/exportContent', () => ({
   collectExportContent: jest.fn(),
   getDocumentTitle: jest.fn(),
@@ -86,6 +104,13 @@ type TestingModule = {
   updateEditorContentForTests: (content: string) => void;
   isCodeContextForPasteForTests: (event: ClipboardEvent) => boolean;
   insertRawCodeTextForTests: (text: string) => void;
+  isPlainFindShortcutForTests: (event: {
+    key: string;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+  }) => boolean;
 };
 
 describe('webview undo/redo guards', () => {
@@ -220,5 +245,16 @@ describe('webview undo/redo guards', () => {
       type: 'text',
       text: '<table class="sq-table"><tr><td>Alice</td></tr></table>',
     });
+  });
+
+  it('handles only the plain find shortcut inside the webview', () => {
+    expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true })).toBe(true);
+    expect(testing.isPlainFindShortcutForTests({ key: 'F', metaKey: true })).toBe(true);
+    expect(testing.isPlainFindShortcutForTests({ key: 'F', ctrlKey: true, shiftKey: true })).toBe(
+      false
+    );
+    expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true, altKey: true })).toBe(
+      false
+    );
   });
 });

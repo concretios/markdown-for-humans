@@ -1,138 +1,4 @@
 /* ============================================
-   Forced Theme Override (Display: Editor Theme)
-
-   When markdownForHumans.display.editorTheme is set to a fixed theme, the
-   webview adds .mdfh-force-light / .mdfh-force-dark to <body>. Both the editor
-   content and the toolbar read --vscode-* tokens, so redefining that token set
-   on body (closer + at least as specific as VS Code's :root declarations) is
-   enough to re-skin everything with one class and no per-rule edits. Values
-   mirror VS Code's stock Light Modern and Dark Modern palettes. When the
-   setting is "vscode", no class is applied and VS Code's own theme drives the
-   appearance exactly as before.
-   ============================================ */
-
-  body.mdfh-force-light {
-    --vscode-editor-background: #ffffff;
-    --vscode-editor-foreground: #3b3b3b;
-    --vscode-foreground: #3b3b3b;
-    --vscode-descriptionForeground: #767676;
-    --vscode-editorWidget-background: #f8f8f8;
-    --vscode-editorWidget-border: #d4d4d4;
-    --vscode-editorWidget-foreground: #3b3b3b;
-    --vscode-widget-border: #d4d4d4;
-    --vscode-widget-shadow: rgba(0, 0, 0, 0.16);
-    --vscode-panel-border: #e5e5e5;
-    --vscode-focusBorder: #005fb8;
-    --vscode-button-background: #005fb8;
-    --vscode-button-foreground: #ffffff;
-    --vscode-button-hoverBackground: #0258a8;
-    --vscode-button-activeBackground: #005fb8;
-    --vscode-button-border: rgba(0, 0, 0, 0.1);
-    --vscode-list-hoverBackground: #f0f0f0;
-    --vscode-list-activeSelectionBackground: #e8e8e8;
-    --vscode-editor-selectionBackground: #add6ff;
-    --vscode-textLink-foreground: #005fb8;
-    --vscode-textLink-activeForeground: #005fb8;
-    --vscode-textCodeBlock-background: #f0f0f0;
-    --vscode-textPreformat-foreground: #a31515;
-    --vscode-textBlockQuote-background: #f8f8f8;
-    --vscode-textBlockQuote-border: #d4d4d4;
-    --vscode-dropdown-background: #ffffff;
-    --vscode-dropdown-border: #cecece;
-    --vscode-dropdown-foreground: #3b3b3b;
-    --vscode-input-background: #ffffff;
-    --vscode-input-border: #cecece;
-    --vscode-input-foreground: #3b3b3b;
-    --vscode-input-placeholderForeground: #767676;
-    --vscode-menu-background: #ffffff;
-    --vscode-menu-border: #cecece;
-    --vscode-menu-foreground: #3b3b3b;
-    --vscode-menu-selectionBackground: #005fb8;
-    --vscode-menu-selectionForeground: #ffffff;
-    --vscode-menu-separatorBackground: #d4d4d4;
-    --vscode-editorHoverWidget-background: #f8f8f8;
-    --vscode-editorHoverWidget-border: #d4d4d4;
-    --vscode-editorHoverWidget-foreground: #3b3b3b;
-    --vscode-editorError-foreground: #e51400;
-    --vscode-errorForeground: #e51400;
-    --vscode-charts-green: #388a34;
-    --vscode-terminal-ansiGreen: #00bc00;
-    --vscode-terminal-ansiRed: #cd3131;
-    --vscode-editor-findMatchBackground: #a8ac94;
-    --vscode-editor-findMatchHighlightBackground: rgba(234, 92, 0, 0.33);
-    color-scheme: light;
-    background-color: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
-  }
-
-  /* Root (overscroll/page) background. Uses a literal color, not the variable,
-     because VS Code sets --vscode-* inline on <html>, so a class rule can only
-     override the background property there, not the variables. */
-  html.mdfh-force-light {
-    background-color: #ffffff;
-    color-scheme: light;
-  }
-
-  body.mdfh-force-dark {
-    --vscode-editor-background: #1f1f1f;
-    --vscode-editor-foreground: #cccccc;
-    --vscode-foreground: #cccccc;
-    --vscode-descriptionForeground: #9d9d9d;
-    --vscode-editorWidget-background: #202020;
-    --vscode-editorWidget-border: #454545;
-    --vscode-editorWidget-foreground: #cccccc;
-    --vscode-widget-border: #313131;
-    --vscode-widget-shadow: rgba(0, 0, 0, 0.36);
-    --vscode-panel-border: #2b2b2b;
-    --vscode-focusBorder: #0078d4;
-    --vscode-button-background: #0078d4;
-    --vscode-button-foreground: #ffffff;
-    --vscode-button-hoverBackground: #026ec1;
-    --vscode-button-activeBackground: #0078d4;
-    --vscode-button-border: rgba(255, 255, 255, 0.07);
-    --vscode-list-hoverBackground: #2a2d2e;
-    --vscode-list-activeSelectionBackground: #04395e;
-    --vscode-editor-selectionBackground: #264f78;
-    --vscode-textLink-foreground: #4daafc;
-    --vscode-textLink-activeForeground: #4daafc;
-    --vscode-textCodeBlock-background: #2a2a2a;
-    --vscode-textPreformat-foreground: #d7ba7d;
-    --vscode-textBlockQuote-background: #2a2a2a;
-    --vscode-textBlockQuote-border: #616161;
-    --vscode-dropdown-background: #313131;
-    --vscode-dropdown-border: #3c3c3c;
-    --vscode-dropdown-foreground: #cccccc;
-    --vscode-input-background: #313131;
-    --vscode-input-border: #3c3c3c;
-    --vscode-input-foreground: #cccccc;
-    --vscode-input-placeholderForeground: #989898;
-    --vscode-menu-background: #1f1f1f;
-    --vscode-menu-border: #454545;
-    --vscode-menu-foreground: #cccccc;
-    --vscode-menu-selectionBackground: #0078d4;
-    --vscode-menu-selectionForeground: #ffffff;
-    --vscode-menu-separatorBackground: #454545;
-    --vscode-editorHoverWidget-background: #202020;
-    --vscode-editorHoverWidget-border: #454545;
-    --vscode-editorHoverWidget-foreground: #cccccc;
-    --vscode-editorError-foreground: #f14c4c;
-    --vscode-errorForeground: #f14c4c;
-    --vscode-charts-green: #89d185;
-    --vscode-terminal-ansiGreen: #23d18b;
-    --vscode-terminal-ansiRed: #f14c4c;
-    --vscode-editor-findMatchBackground: #9e6a03;
-    --vscode-editor-findMatchHighlightBackground: rgba(234, 92, 0, 0.33);
-    color-scheme: dark;
-    background-color: var(--vscode-editor-background);
-    color: var(--vscode-editor-foreground);
-  }
-
-  html.mdfh-force-dark {
-    background-color: #1f1f1f;
-    color-scheme: dark;
-  }
-
-/* ============================================
    Theme-Aware Color System
    All colors derive from VS Code theme
    ============================================ */
@@ -578,152 +444,105 @@
      for better contrast and visibility in dark themes.
      ============================================ */
   
-    .vscode-dark:not(.mdfh-force-light) .code-block-highlighted,
-  .mdfh-force-dark .code-block-highlighted,
-  .vscode-high-contrast:not(.mdfh-force-light) .code-block-highlighted {
+  .vscode-dark .code-block-highlighted,
+  .vscode-high-contrast .code-block-highlighted {
     background-color: #161b22;
     border-color: #30363d;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-doctag,
-  .mdfh-force-dark .code-block-highlighted .hljs-doctag,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-keyword,
-  .mdfh-force-dark .code-block-highlighted .hljs-keyword,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-meta .hljs-keyword,
-  .mdfh-force-dark .code-block-highlighted .hljs-meta .hljs-keyword,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-template-tag,
-  .mdfh-force-dark .code-block-highlighted .hljs-template-tag,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-template-variable,
-  .mdfh-force-dark .code-block-highlighted .hljs-template-variable,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-type,
-  .mdfh-force-dark .code-block-highlighted .hljs-type,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-variable.language_,
-  .mdfh-force-dark .code-block-highlighted .hljs-variable.language_ {
+  
+  .vscode-dark .code-block-highlighted .hljs-doctag,
+  .vscode-dark .code-block-highlighted .hljs-keyword,
+  .vscode-dark .code-block-highlighted .hljs-meta .hljs-keyword,
+  .vscode-dark .code-block-highlighted .hljs-template-tag,
+  .vscode-dark .code-block-highlighted .hljs-template-variable,
+  .vscode-dark .code-block-highlighted .hljs-type,
+  .vscode-dark .code-block-highlighted .hljs-variable.language_ {
     color: #ff7b72;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-title,
-  .mdfh-force-dark .code-block-highlighted .hljs-title,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-title.class_,
-  .mdfh-force-dark .code-block-highlighted .hljs-title.class_,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-title.class_.inherited__,
-  .mdfh-force-dark .code-block-highlighted .hljs-title.class_.inherited__,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-title.function_,
-  .mdfh-force-dark .code-block-highlighted .hljs-title.function_ {
+  
+  .vscode-dark .code-block-highlighted .hljs-title,
+  .vscode-dark .code-block-highlighted .hljs-title.class_,
+  .vscode-dark .code-block-highlighted .hljs-title.class_.inherited__,
+  .vscode-dark .code-block-highlighted .hljs-title.function_ {
     color: #d2a8ff;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-attr,
-  .mdfh-force-dark .code-block-highlighted .hljs-attr,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-attribute,
-  .mdfh-force-dark .code-block-highlighted .hljs-attribute,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-literal,
-  .mdfh-force-dark .code-block-highlighted .hljs-literal,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-meta,
-  .mdfh-force-dark .code-block-highlighted .hljs-meta,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-number,
-  .mdfh-force-dark .code-block-highlighted .hljs-number,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-operator,
-  .mdfh-force-dark .code-block-highlighted .hljs-operator,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-variable,
-  .mdfh-force-dark .code-block-highlighted .hljs-variable,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-selector-attr,
-  .mdfh-force-dark .code-block-highlighted .hljs-selector-attr,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-selector-class,
-  .mdfh-force-dark .code-block-highlighted .hljs-selector-class,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-selector-id,
-  .mdfh-force-dark .code-block-highlighted .hljs-selector-id {
+  
+  .vscode-dark .code-block-highlighted .hljs-attr,
+  .vscode-dark .code-block-highlighted .hljs-attribute,
+  .vscode-dark .code-block-highlighted .hljs-literal,
+  .vscode-dark .code-block-highlighted .hljs-meta,
+  .vscode-dark .code-block-highlighted .hljs-number,
+  .vscode-dark .code-block-highlighted .hljs-operator,
+  .vscode-dark .code-block-highlighted .hljs-variable,
+  .vscode-dark .code-block-highlighted .hljs-selector-attr,
+  .vscode-dark .code-block-highlighted .hljs-selector-class,
+  .vscode-dark .code-block-highlighted .hljs-selector-id {
     color: #79c0ff;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-regexp,
-  .mdfh-force-dark .code-block-highlighted .hljs-regexp,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-string,
-  .mdfh-force-dark .code-block-highlighted .hljs-string,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-meta .hljs-string,
-  .mdfh-force-dark .code-block-highlighted .hljs-meta .hljs-string {
+  
+  .vscode-dark .code-block-highlighted .hljs-regexp,
+  .vscode-dark .code-block-highlighted .hljs-string,
+  .vscode-dark .code-block-highlighted .hljs-meta .hljs-string {
     color: #a5d6ff;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-built_in,
-  .mdfh-force-dark .code-block-highlighted .hljs-built_in,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-symbol,
-  .mdfh-force-dark .code-block-highlighted .hljs-symbol {
+  
+  .vscode-dark .code-block-highlighted .hljs-built_in,
+  .vscode-dark .code-block-highlighted .hljs-symbol {
     color: #ffa657;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-comment,
-  .mdfh-force-dark .code-block-highlighted .hljs-comment,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-code,
-  .mdfh-force-dark .code-block-highlighted .hljs-code,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-formula,
-  .mdfh-force-dark .code-block-highlighted .hljs-formula {
+  
+  .vscode-dark .code-block-highlighted .hljs-comment,
+  .vscode-dark .code-block-highlighted .hljs-code,
+  .vscode-dark .code-block-highlighted .hljs-formula {
     color: #8b949e;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-name,
-  .mdfh-force-dark .code-block-highlighted .hljs-name,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-quote,
-  .mdfh-force-dark .code-block-highlighted .hljs-quote,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-selector-tag,
-  .mdfh-force-dark .code-block-highlighted .hljs-selector-tag,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-selector-pseudo,
-  .mdfh-force-dark .code-block-highlighted .hljs-selector-pseudo {
+  
+  .vscode-dark .code-block-highlighted .hljs-name,
+  .vscode-dark .code-block-highlighted .hljs-quote,
+  .vscode-dark .code-block-highlighted .hljs-selector-tag,
+  .vscode-dark .code-block-highlighted .hljs-selector-pseudo {
     color: #7ee787;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-subst,
-  .mdfh-force-dark .code-block-highlighted .hljs-subst {
+  
+  .vscode-dark .code-block-highlighted .hljs-subst {
     color: #c9d1d9;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-section,
-  .mdfh-force-dark .code-block-highlighted .hljs-section {
+  
+  .vscode-dark .code-block-highlighted .hljs-section {
     color: #1f6feb;
     font-weight: bold;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-bullet,
-  .mdfh-force-dark .code-block-highlighted .hljs-bullet {
+  
+  .vscode-dark .code-block-highlighted .hljs-bullet {
     color: #f2cc60;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-emphasis,
-  .mdfh-force-dark .code-block-highlighted .hljs-emphasis {
+  
+  .vscode-dark .code-block-highlighted .hljs-emphasis {
     color: #c9d1d9;
     font-style: italic;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-strong,
-  .mdfh-force-dark .code-block-highlighted .hljs-strong {
+  
+  .vscode-dark .code-block-highlighted .hljs-strong {
     color: #c9d1d9;
     font-weight: bold;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-addition,
-  .mdfh-force-dark .code-block-highlighted .hljs-addition {
+  
+  .vscode-dark .code-block-highlighted .hljs-addition {
     color: #aff5b4;
     background-color: #033a16;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-deletion,
-  .mdfh-force-dark .code-block-highlighted .hljs-deletion {
+  
+  .vscode-dark .code-block-highlighted .hljs-deletion {
     color: #ffdcd7;
     background-color: #67060c;
   }
-
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-char.escape_,
-  .mdfh-force-dark .code-block-highlighted .hljs-char.escape_,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-link,
-  .mdfh-force-dark .code-block-highlighted .hljs-link,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-params,
-  .mdfh-force-dark .code-block-highlighted .hljs-params,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-property,
-  .mdfh-force-dark .code-block-highlighted .hljs-property,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-punctuation,
-  .mdfh-force-dark .code-block-highlighted .hljs-punctuation,
-  .vscode-dark:not(.mdfh-force-light) .code-block-highlighted .hljs-tag,
-  .mdfh-force-dark .code-block-highlighted .hljs-tag {
+  
+  .vscode-dark .code-block-highlighted .hljs-char.escape_,
+  .vscode-dark .code-block-highlighted .hljs-link,
+  .vscode-dark .code-block-highlighted .hljs-params,
+  .vscode-dark .code-block-highlighted .hljs-property,
+  .vscode-dark .code-block-highlighted .hljs-punctuation,
+  .vscode-dark .code-block-highlighted .hljs-tag {
     color: #c9d1d9;
   }
   
@@ -1859,7 +1678,22 @@
     opacity: 0.5;
     margin: 0 6px;
   }
-  
+
+  /* Custom inline-SVG toolbar glyphs (e.g. the Math √x icon). The SVG uses
+     currentColor, so it inherits the button's text colour and active state. */
+  .toolbar-icon.uses-svg-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+  }
+
+  .toolbar-icon.uses-svg-icon svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+
   /* Toolbar Dropdown */
   .toolbar-dropdown {
     position: relative;
@@ -3452,4 +3286,196 @@ body.saving-feedback {
 
 .audit-fix-button.manual-fix:hover {
   background: var(--vscode-button-hoverBackground);
+}
+
+/* ========================================================================
+ * KaTeX / Math nodes
+ * ====================================================================== */
+
+/* Inline math */
+.md4h-inline-math {
+  display: inline-block;
+  vertical-align: baseline;
+  padding: 0 2px;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color 120ms ease;
+}
+
+.md4h-inline-math:hover {
+  background-color: var(--vscode-editor-hoverHighlightBackground, rgba(127, 127, 127, 0.12));
+}
+
+.md4h-inline-math.ProseMirror-selectednode {
+  outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);
+  outline-offset: 1px;
+}
+
+.md4h-inline-math.md4h-math-empty {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  font-style: italic;
+  padding: 0 4px;
+}
+
+.md4h-inline-math.md4h-math-error {
+  color: var(--vscode-errorForeground, #f48771);
+  background-color: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.08));
+  border: 1px dashed var(--vscode-inputValidation-errorBorder, #be1100);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0 4px;
+}
+
+/* Inline KaTeX rendering — keep a subtle size bump for readability inside text */
+.md4h-inline-math .katex {
+  font-size: 1.05em;
+  vertical-align: baseline;
+}
+
+/* Block / display math */
+.md4h-math-block {
+  position: relative;
+  display: block;
+  margin: 1em 0;
+  padding: 0.75em 1em;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.md4h-math-block:hover {
+  background-color: var(--vscode-editor-hoverHighlightBackground, rgba(127, 127, 127, 0.08));
+}
+
+.md4h-math-block.highlighted {
+  background-color: var(--vscode-editor-selectionHighlightBackground, rgba(127, 127, 127, 0.18));
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007acc);
+}
+
+.md4h-math-block.ProseMirror-selectednode {
+  outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);
+  outline-offset: 2px;
+}
+
+.md4h-math-block-render {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.5em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md4h-math-block-render .katex-display {
+  margin: 0;
+  padding: 0.25em 0;
+}
+
+.md4h-math-block-render .katex-display > .katex {
+  font-size: 1.21em;
+}
+
+.md4h-math-block-placeholder {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+.md4h-math-block.md4h-math-error {
+  background-color: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.08));
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
+.md4h-math-error-message {
+  color: var(--vscode-errorForeground, #f48771);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  margin-bottom: 6px;
+}
+
+.md4h-math-error-source {
+  margin: 0;
+  padding: 6px 10px;
+  background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  border-radius: 3px;
+}
+
+.md4h-math-block-tooltip {
+  position: absolute;
+  top: -28px;
+  right: 8px;
+  padding: 3px 8px;
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  border-radius: 3px;
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Math editor modal — let KaTeX preview inherit the host theme colours */
+.math-editor-preview .katex,
+.math-editor-preview .katex-display {
+  color: var(--vscode-editor-foreground);
+}
+
+/* Contextual placeholder examples in the LaTeX input */
+.math-editor-textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+  opacity: 0.85;
+}
+
+/* Starter-template palette (chips above the LaTeX input) */
+.math-template-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.math-template-label {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+  margin-right: 2px;
+}
+
+.math-template-chip {
+  padding: 3px 9px;
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.math-template-chip:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.math-template-chip:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
 }

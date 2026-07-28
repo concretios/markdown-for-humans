@@ -12,6 +12,7 @@ import { JSDOM } from 'jsdom';
 import {
   showImageMetadataFooter,
   hideImageMetadataFooter,
+  clearPendingImageMetadataRequests,
 } from '../../webview/features/imageMetadata';
 
 // Mock vscode API
@@ -57,7 +58,10 @@ describe('Image Hover Overlay Toggle', () => {
   });
 
   afterEach(() => {
+    clearPendingImageMetadataRequests();
     document.body.innerHTML = '';
+    delete (window as any)._metadataCallbacks;
+    jest.useRealTimers();
     jest.clearAllMocks();
   });
 
@@ -90,6 +94,19 @@ describe('Image Hover Overlay Toggle', () => {
       const footer = wrapper.querySelector('.image-metadata-footer') as HTMLElement;
       expect(footer).toBeTruthy();
       expect(footer.style.display).toBe('none');
+    });
+
+    it('clears pending metadata request timers', () => {
+      jest.useFakeTimers();
+      (window as any).showImageHoverOverlay = true;
+
+      showImageMetadataFooter(img, wrapper, mockVscodeApi);
+
+      expect(jest.getTimerCount()).toBeGreaterThan(0);
+
+      clearPendingImageMetadataRequests();
+
+      expect(jest.getTimerCount()).toBe(0);
     });
   });
 
