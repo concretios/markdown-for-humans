@@ -30,7 +30,7 @@ Most markdown editors force you to memorize syntax, fight with split panes, or m
 
 As natural as it gets in Microsoft Word or Google Docs etc. 
 
-![Table Editing](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/table_operations_with_right_click_menu.gif)
+![Table Editing](https://raw.githubusercontent.com/concretios/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/table_operations_with_right_click_menu.gif)
 
 **Drag column borders to resize. Right-click to add rows. No syntax to memorize.**
 
@@ -47,7 +47,7 @@ As natural as it gets in Microsoft Word or Google Docs etc.
 
 > Press shift while dragging images, in case your face issues on drag drop in editor
 
-![Large Size Image Suggestion](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/large_size_image_size_suggestion.gif)
+![Large Size Image Suggestion](https://raw.githubusercontent.com/concretios/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/large_size_image_size_suggestion.gif)
 
 **Drag images in. Resize with handles. Rename inline. No manual file operations.**
 
@@ -62,7 +62,7 @@ As natural as it gets in Microsoft Word or Google Docs etc.
 
 *Adjust image width with intuitive resize handles for perfect layout control.*
 
-![Image Rename Functionality](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/image_rename_functionality.gif)
+![Image Rename Functionality](https://raw.githubusercontent.com/concretios/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/image_rename_functionality.gif)
 
 *Rename images directly from the editor to keep your assets organized.*
 
@@ -71,7 +71,7 @@ As natural as it gets in Microsoft Word or Google Docs etc.
 ## Built on True WYSIWYG Editing
 Humans work that way.
 
-![WYSIWYG Editing](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/basic_introduction.gif)
+![WYSIWYG Editing](https://raw.githubusercontent.com/concretios/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/basic_introduction.gif)
 
 **See your formatted output as you type. No split panes. No preview mode. Just write.**
 
@@ -180,7 +180,7 @@ Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Set
 
 ### Mermaid Diagrams
 
-![Mermaid Diagrams](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/mermaid_diagram_with_one_diagram_only.gif)
+![Mermaid Diagrams](https://raw.githubusercontent.com/concretios/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/mermaid_diagram_with_one_diagram_only.gif)
 
 *Create flowcharts, sequence diagrams, Gantt charts, and more with 15 built-in templates.*
 
@@ -192,7 +192,7 @@ Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Set
 
 ### GitHub Alerts
 
-![GitHub Alerts](https://raw.githubusercontent.com/concretios/markdown-for-humans/integration/marketplace-assets/gifs/github_alerts.gif)
+![GitHub Alerts](https://raw.githubusercontent.com/concretios/markdown-for-humans/4bf7defb6a3e7ee56b34e6dd9dc0a55e471740ec/marketplace-assets/gifs/github_alerts.gif)
 
 *Create beautiful GitHub-style alert boxes for notes, warnings, tips, and important information.*
 

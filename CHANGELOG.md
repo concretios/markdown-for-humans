@@ -10,6 +10,69 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [0.2.1] - 2026-05-19
+
+### Fixed
+
+- Fixed broken GIF images on the marketplace README page (were pointing to a deleted `integration` branch, now pinned to a stable commit SHA)
+
+---
+
+## [0.2.0] - 2026-05-19
+
+### What's New
+
+#### Drag-and-Drop Block Reordering
+A six-dot handle now appears on any block, letting you drag it to a new position:
+- Smooth pointer-event-based drag with a ghost element preview
+- Visual drop indicator shows exactly where the block will land
+- Works with all block types including Mermaid diagrams
+- Regression tests added for drop position handling
+
+#### Paragraph Spacing and Zoom Level
+Two new settings give you fine control over the editor appearance:
+- `markdownForHumans.paragraphSpacing` — adjust spacing between paragraphs
+- `markdownForHumans.zoomLevel` — zoom editor content without OS-level zoom
+- Heading-to-paragraph spacing now honors the paragraph spacing setting
+
+#### AI Coding Tool Reference
+New "Copy AI Ref" button in the formatting toolbar:
+- Copies a structured context reference for the current document
+- Useful for feeding document context into AI coding tools (Claude Code, Cursor, etc.)
+- Enhanced handling for AI context references across the audit panel
+
+#### Open with Markdown for Humans (Context Menu)
+Right-click any editor tab to open the file in the Markdown for Humans WYSIWYG editor,
+without changing it as your default editor.
+
+#### Markdown Serialization Improvements
+- Consistent blank line preservation between blocks
+- Better handling of empty elements and edge cases in markdown output
+- Font size resets to default normal on open (prevents stale font-size state)
+
+### Bug Fixes
+
+- Fixed `applyZoomLevel` function improperly closed, causing a runtime error
+- Fixed heading-to-paragraph spacing not respecting the paragraph spacing setting
+- Fixed blank line preservation config not restoring on editor initialization
+- Fixed tab indentation regression that removed code from the extension on certain edits
+
+### Security
+
+- Closed path-traversal vulnerability in image rename/resize operations and PDF export
+- Enhanced HTML sanitization with strict image path validation
+- CI: pinned all third-party GitHub Actions to commit SHAs (supply-chain hardening)
+
+### Technical Improvements
+
+- Extracted `applyEditorSettings` helper for cleaner settings application
+- Removed duplicate `applyZoomLevel` function
+- Added tests for `ensureSingleTrailingNewline` and `isMarkdownStructurallyEquivalent`
+- Configuration properties now declare proper VS Code scope
+- Removed debug `console.log` statements from tab indentation code
+
+---
+
 ## [0.1.7] - 2026-04-21
 
 ### Fixed
@@ -202,7 +265,10 @@ This release includes several under-the-hood improvements that make the extensio
 
 ---
 
-[Unreleased]: https://github.com/concretios/markdown-for-humans/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/concretios/markdown-for-humans/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/concretios/markdown-for-humans/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/concretios/markdown-for-humans/compare/v0.1.7...v0.2.0
+[0.1.7]: https://github.com/concretios/markdown-for-humans/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/concretios/markdown-for-humans/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/concretios/markdown-for-humans/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/concretios/markdown-for-humans/compare/v0.1.3...v0.1.4

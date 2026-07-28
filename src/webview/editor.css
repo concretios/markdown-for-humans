@@ -239,6 +239,95 @@
     line-height: 1.5;
     overflow-x: auto;
   }
+
+  .code-block-wrapper {
+    position: relative;
+    margin: 1em 0;
+  }
+
+  .code-block-wrapper .code-block-highlighted {
+    margin: 0;
+    padding-right: 60px;
+  }
+
+  .code-block-copy-button {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--vscode-editorWidget-border, var(--md-border));
+    border-radius: 6px;
+    background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-editorWidget-foreground, var(--md-foreground));
+    cursor: pointer;
+    opacity: 0.8;
+    user-select: none;
+    transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  }
+
+  .code-block-copy-button:hover {
+    background-color: var(--vscode-list-hoverBackground);
+    opacity: 1;
+  }
+
+  .code-block-copy-button:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+    opacity: 1;
+  }
+
+  .code-block-copy-button:active {
+    background-color: var(--vscode-list-activeSelectionBackground);
+  }
+
+  .code-block-copy-button .codicon {
+    font-size: 18px;
+  }
+
+  .code-block-copy-button.is-copied {
+    color: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+    opacity: 1;
+  }
+
+  .code-block-copy-tooltip {
+    position: absolute;
+    top: 8px;
+    right: 48px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--vscode-editorWidget-border, var(--md-border));
+    border-radius: 6px;
+    background-color: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+    color: var(--vscode-editorWidget-foreground, var(--md-foreground));
+    font-family: var(--vscode-font-family);
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(4px);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
+  }
+
+  .code-block-copy-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(0);
+  }
+
+  .code-block-copy-tooltip.is-error {
+    color: var(--vscode-errorForeground);
+  }
   
   /* ============================================
      Syntax Highlighting - GitHub Theme (Light)
@@ -1589,7 +1678,22 @@
     opacity: 0.5;
     margin: 0 6px;
   }
-  
+
+  /* Custom inline-SVG toolbar glyphs (e.g. the Math √x icon). The SVG uses
+     currentColor, so it inherits the button's text colour and active state. */
+  .toolbar-icon.uses-svg-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+  }
+
+  .toolbar-icon.uses-svg-icon svg {
+    width: 16px;
+    height: 16px;
+    display: block;
+  }
+
   /* Toolbar Dropdown */
   .toolbar-dropdown {
     position: relative;
@@ -3182,4 +3286,196 @@ body.saving-feedback {
 
 .audit-fix-button.manual-fix:hover {
   background: var(--vscode-button-hoverBackground);
+}
+
+/* ========================================================================
+ * KaTeX / Math nodes
+ * ====================================================================== */
+
+/* Inline math */
+.md4h-inline-math {
+  display: inline-block;
+  vertical-align: baseline;
+  padding: 0 2px;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background-color 120ms ease;
+}
+
+.md4h-inline-math:hover {
+  background-color: var(--vscode-editor-hoverHighlightBackground, rgba(127, 127, 127, 0.12));
+}
+
+.md4h-inline-math.ProseMirror-selectednode {
+  outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);
+  outline-offset: 1px;
+}
+
+.md4h-inline-math.md4h-math-empty {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  font-style: italic;
+  padding: 0 4px;
+}
+
+.md4h-inline-math.md4h-math-error {
+  color: var(--vscode-errorForeground, #f48771);
+  background-color: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.08));
+  border: 1px dashed var(--vscode-inputValidation-errorBorder, #be1100);
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0 4px;
+}
+
+/* Inline KaTeX rendering — keep a subtle size bump for readability inside text */
+.md4h-inline-math .katex {
+  font-size: 1.05em;
+  vertical-align: baseline;
+}
+
+/* Block / display math */
+.md4h-math-block {
+  position: relative;
+  display: block;
+  margin: 1em 0;
+  padding: 0.75em 1em;
+  border-radius: 4px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.md4h-math-block:hover {
+  background-color: var(--vscode-editor-hoverHighlightBackground, rgba(127, 127, 127, 0.08));
+}
+
+.md4h-math-block.highlighted {
+  background-color: var(--vscode-editor-selectionHighlightBackground, rgba(127, 127, 127, 0.18));
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder, #007acc);
+}
+
+.md4h-math-block.ProseMirror-selectednode {
+  outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);
+  outline-offset: 2px;
+}
+
+.md4h-math-block-render {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.5em;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md4h-math-block-render .katex-display {
+  margin: 0;
+  padding: 0.25em 0;
+}
+
+.md4h-math-block-render .katex-display > .katex {
+  font-size: 1.21em;
+}
+
+.md4h-math-block-placeholder {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  font-style: italic;
+}
+
+.md4h-math-block.md4h-math-error {
+  background-color: var(--vscode-inputValidation-errorBackground, rgba(255, 0, 0, 0.08));
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
+.md4h-math-error-message {
+  color: var(--vscode-errorForeground, #f48771);
+  font-family: var(--vscode-font-family);
+  font-size: 0.9em;
+  margin-bottom: 6px;
+}
+
+.md4h-math-error-source {
+  margin: 0;
+  padding: 6px 10px;
+  background-color: var(--vscode-textCodeBlock-background, rgba(127, 127, 127, 0.1));
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
+  font-size: 0.85em;
+  white-space: pre-wrap;
+  border-radius: 3px;
+}
+
+.md4h-math-block-tooltip {
+  position: absolute;
+  top: -28px;
+  right: 8px;
+  padding: 3px 8px;
+  background: var(--vscode-editorHoverWidget-background, #252526);
+  color: var(--vscode-editorHoverWidget-foreground, #cccccc);
+  border: 1px solid var(--vscode-editorHoverWidget-border, #454545);
+  border-radius: 3px;
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Math editor modal — let KaTeX preview inherit the host theme colours */
+.math-editor-preview .katex,
+.math-editor-preview .katex-display {
+  color: var(--vscode-editor-foreground);
+}
+
+/* Contextual placeholder examples in the LaTeX input */
+.math-editor-textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground, var(--vscode-descriptionForeground));
+  opacity: 0.85;
+}
+
+/* Starter-template palette (chips above the LaTeX input) */
+.math-template-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.math-template-label {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+  margin-right: 2px;
+}
+
+.math-template-chip {
+  padding: 3px 9px;
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.math-template-chip:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.math-template-chip:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
 }

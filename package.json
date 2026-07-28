@@ -2,7 +2,7 @@
   "name": "markdown-for-humans",
   "displayName": "Markdown for Humans: WYSIWYG Editor",
   "description": "A full-featured WYSIWYG Markdown editor with visual table editing, drag-and-drop images, Mermaid diagrams, and distraction-free writing—all inside VS Code.",
-  "version": "0.1.7",
+  "version": "0.2.1",
   "publisher": "concretio",
   "author": {
     "name": "Abhinav",
@@ -215,21 +215,29 @@
           "default": 0,
           "minimum": 0,
           "maximum": 72,
-          "description": "Space before paragraphs in points (margin-top). Default: 0pt"
+          "description": "Space before paragraphs in points (margin-top). Default: 0pt",
+          "scope": "application"
         },
         "markdownForHumans.paragraph.spacingAfter": {
           "type": "number",
           "default": 0,
           "minimum": 0,
           "maximum": 72,
-          "description": "Space after paragraphs in points (margin-bottom). Default: 0pt"
+          "description": "Space after paragraphs in points (margin-bottom). Default: 0pt",
+          "scope": "application"
         },
         "markdownForHumans.zoom": {
           "type": "number",
           "default": 100,
           "minimum": 50,
           "maximum": 200,
-          "description": "Zoom level for the editor as a percentage. 100 = default size, 150 = 50% larger, etc."
+          "description": "Zoom level for the editor as a percentage. 100 = default size, 150 = 50% larger, etc.",
+          "scope": "application"
+        },
+        "markdownForHumans.enableMath": {
+          "type": "boolean",
+          "default": true,
+          "description": "Render LaTeX math expressions using KaTeX. Use $...$ for inline math and $$...$$ for display math. Toggling this setting requires reopening the editor."
         }
       }
     }
