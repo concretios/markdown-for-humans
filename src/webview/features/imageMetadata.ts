@@ -27,6 +27,23 @@ export interface ImageMetadata {
 
 // Cache metadata per image to avoid refetching on every hover
 const metadataCache = new Map<string, ImageMetadata>();
+const pendingMetadataTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+type MetadataCallback = (metadata: ImageMetadata | null) => void;
+
+function getMetadataCallbacks(): Map<string, MetadataCallback> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const windowWithCallbacks = window as any;
+  windowWithCallbacks._metadataCallbacks = windowWithCallbacks._metadataCallbacks || new Map();
+  return windowWithCallbacks._metadataCallbacks;
+}
+
+function maybeUnrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const maybeNodeTimer = timer as unknown as { unref?: () => void };
+  if (typeof maybeNodeTimer.unref === 'function') {
+    maybeNodeTimer.unref();
+  }
+}
 
 /**
  * Get cached metadata for an image path
@@ -47,6 +64,20 @@ export function clearImageMetadataCache(imagePath?: string): void {
   } else {
     metadataCache.clear();
   }
+}
+
+/**
+ * Clear unresolved metadata requests and their timeout handles.
+ * This is used when the webview/test DOM is reset before the extension host responds.
+ */
+export function clearPendingImageMetadataRequests(): void {
+  for (const timeout of pendingMetadataTimeouts.values()) {
+    clearTimeout(timeout);
+  }
+  pendingMetadataTimeouts.clear();
+
+  const callbacks = getMetadataCallbacks();
+  callbacks.clear();
 }
 
 /**
@@ -159,10 +190,15 @@ export function getImageMetadata(
     const requestId = `metadata-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
     // Store callback
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any)._metadataCallbacks = (window as any)._metadataCallbacks || new Map();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any)._metadataCallbacks.set(requestId, (metadata: ImageMetadata | null) => {
+    const callbacks = getMetadataCallbacks();
+    callbacks.set(requestId, (metadata: ImageMetadata | null) => {
+      callbacks.delete(requestId);
+      const timeout = pendingMetadataTimeouts.get(requestId);
+      if (timeout) {
+        clearTimeout(timeout);
+        pendingMetadataTimeouts.delete(requestId);
+      }
+
       if (metadata) {
         // Preserve existing dimensions if they were set (e.g., from resize)
         // This ensures correct dimensions are shown even if image hasn't fully loaded yet
@@ -186,14 +222,15 @@ export function getImageMetadata(
     });
 
     // Timeout after 5 seconds
-    setTimeout(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const callbacks = (window as any)._metadataCallbacks;
+    const timeout = setTimeout(() => {
+      pendingMetadataTimeouts.delete(requestId);
       if (callbacks && callbacks.has(requestId)) {
         callbacks.delete(requestId);
         resolve(null);
       }
     }, 5000);
+    maybeUnrefTimer(timeout);
+    pendingMetadataTimeouts.set(requestId, timeout);
   });
 }
 
