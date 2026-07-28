@@ -23,7 +23,8 @@
   },
   "homepage": "https://github.com/concretios/markdown-for-humans#readme",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.85.0",
+    "node": ">=22"
   },
   "categories": [
     "Other",
@@ -274,7 +275,7 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^8.48.1",
     "@typescript-eslint/parser": "^8.48.1",
-    "@vscode/vsce": "^3.7.1",
+    "@vscode/vsce": "^3.9.2",
     "concurrently": "^8.2.2",
     "esbuild": "^0.27.1",
     "eslint": "^9.39.1",
