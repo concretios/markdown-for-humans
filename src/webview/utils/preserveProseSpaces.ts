@@ -32,8 +32,7 @@
 export function preserveProseSpaces(latex: string): string {
   if (!latex || latex.indexOf(' ') === -1) return latex;
 
-  const isLetter = (ch: string): boolean =>
-    (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+  const isLetter = (ch: string): boolean => (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
 
   let out = '';
   let depth = 0;
