@@ -49,6 +49,7 @@ const CRITICAL_FEATURES = {
       'skipResizeWarning', // Setting name
       'resizeImage', // Message type
       'copyLocalImageToWorkspace', // Feature
+      'toggleTheme', // Editor theme toggle message
     ],
   },
   webviewCss: {
@@ -59,6 +60,7 @@ const CRITICAL_FEATURES = {
       '.image-resize-modal-overlay',
       '.image-wrapper',
       '.markdown-image',
+      '.mdfh-force-dark', // Forced editor theme palette
     ],
   },
   extensionJs: {
@@ -67,6 +69,7 @@ const CRITICAL_FEATURES = {
       'resizeImage',
       'checkImageInWorkspace',
       'copyLocalImageToWorkspace',
+      'toggleTheme', // Editor theme toggle handler
     ],
   },
 };

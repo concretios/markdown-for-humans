@@ -660,6 +660,17 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       isActive: () => false,
       className: 'settings-button',
     },
+    {
+      type: 'button',
+      label: 'Toggle light/dark theme',
+      title: 'Toggle light/dark theme (applies to all open editors)',
+      icon: { name: 'color-mode', fallback: '◐' },
+      action: () => {
+        window.dispatchEvent(new CustomEvent('toggleTheme'));
+      },
+      isActive: () => false,
+      className: 'theme-toggle-button',
+    },
   ];
 
   const actionButtons: Array<{ config: ToolbarActionButton; element: HTMLButtonElement }> = [];

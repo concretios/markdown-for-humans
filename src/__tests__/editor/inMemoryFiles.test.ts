@@ -39,6 +39,8 @@ jest.mock('vscode', () => ({
   window: {
     showInformationMessage: jest.fn(),
     showErrorMessage: jest.fn(),
+    activeColorTheme: { kind: 2 }, // ColorThemeKind.Dark
+    onDidChangeActiveColorTheme: jest.fn(() => ({ dispose: jest.fn() })),
   },
   workspace: {
     getWorkspaceFolder: jest.fn(),

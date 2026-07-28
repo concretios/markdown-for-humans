@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### What's New
+
+#### Editor Theme Override
+Choose the editor's color theme independently of the rest of VS Code:
+- New `markdownForHumans.display.editorTheme` setting: Follow VS Code theme (default), Always use a light theme, or Always use a dark theme
+- A light/dark toggle button at the end of the editor toolbar flips between light and dark and applies to all open editors
+- When your active VS Code theme already matches the chosen appearance the editor uses that real theme; when forcing the opposite (for example a light editor while VS Code is dark) it falls back to a built-in light or dark theme
+- The forced appearance follows VS Code live: switching your VS Code theme re-evaluates the editor automatically
+
 ---
 
 ## [0.2.1] - 2026-05-19
