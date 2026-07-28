@@ -238,6 +238,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   // first time a custom editor opens so tests that never call `resolveCustomTextEditor`
   // don't need this VS Code API on their mock.
   private windowStateListener: vscode.Disposable | undefined;
+  // Debounce timers for `markdownForHumans.autoSave.enabled`, keyed by document
+  // URI. This setting is independent of VS Code's own `files.autoSave` — it's
+  // MFH saving on the user's behalf a short delay after typing stops, separate
+  // from the `flushAndSaveIfDirty` bridge (which only fires on focus/window
+  // changes and depends on `files.autoSave` being set to onFocusChange/onWindowChange).
+  private autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private static readonly AUTO_SAVE_DEBOUNCE_MS = 1000;
   // --- Audit Search Tuning ---
   /**
    * Minimum length required to attempt ANY file suggestions.
@@ -600,6 +607,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       this.pendingEdits.delete(docUri);
       this.lastWebviewContent.delete(docUri);
       this.inFlightApplyEdits.delete(docUri);
+      const autoSaveTimer = this.autoSaveTimers.get(docUri);
+      if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer);
+        this.autoSaveTimers.delete(docUri);
+      }
       if (this.openPanels.get(docUri)?.panel === webviewPanel) {
         this.openPanels.delete(docUri);
       }
@@ -696,14 +708,23 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         // explicit `save` message (Ctrl+S), when `copyAiContextRef` saves after
         // user confirmation, or when the autosave bridge fires `document.save()`.
         const docUri = document.uri.toString();
+        const editReason =
+          (message.editReason as 'typing' | 'save-policy-enforce' | undefined) ?? 'typing';
         const editPromise = this.applyEdit(message.content as string, document, {
-          editReason:
-            (message.editReason as 'typing' | 'save-policy-enforce' | undefined) ?? 'typing',
+          editReason,
         });
         // Track the latest in-flight edit so `flushAndSaveIfDirty` can await
         // it before persisting; otherwise an in-flight WorkspaceEdit could
         // land after save() and the saved bytes would be stale.
         this.inFlightApplyEdits.set(docUri, editPromise);
+        // `markdownForHumans.autoSave.enabled` debounced save — only for
+        // ordinary typing edits. Save-policy-enforce edits are already saved
+        // (or prompted for) by `handleBlankLineModeSavePolicy`.
+        if (editReason === 'typing') {
+          void editPromise.then(success => {
+            if (success) this.scheduleAutoSave(document);
+          });
+        }
         void editPromise.finally(() => {
           if (this.inFlightApplyEdits.get(docUri) === editPromise) {
             this.inFlightApplyEdits.delete(docUri);
@@ -3343,6 +3364,37 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     } catch (error) {
       console.error('[MD4H] Autosave document.save() failed:', error);
     }
+  }
+
+  /**
+   * Debounced save for `markdownForHumans.autoSave.enabled`. Unlike
+   * `flushAndSaveIfDirty` (which bridges VS Code's own `files.autoSave` focus
+   * events), this setting is MFH-specific: it saves a short delay after the
+   * user stops typing, regardless of focus and regardless of `files.autoSave`.
+   * Off by default, so the original explicit-save behavior is unchanged unless
+   * a user opts in.
+   *
+   * No-ops for untitled documents — saving those would pop a "Save As" dialog.
+   */
+  private scheduleAutoSave(document: vscode.TextDocument): void {
+    if (document.uri.scheme === 'untitled') return;
+
+    const config = vscode.workspace.getConfiguration();
+    const enabled = config.get<boolean>('markdownForHumans.autoSave.enabled', false);
+    if (!enabled) return;
+
+    const docUri = document.uri.toString();
+    const existing = this.autoSaveTimers.get(docUri);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.autoSaveTimers.delete(docUri);
+      if (!document.isDirty) return;
+      void document.save().then(undefined, (error: unknown) => {
+        console.error('[MD4H] Auto-save document.save() failed:', error);
+      });
+    }, MarkdownEditorProvider.AUTO_SAVE_DEBOUNCE_MS);
+    this.autoSaveTimers.set(docUri, timer);
   }
 
   /**
