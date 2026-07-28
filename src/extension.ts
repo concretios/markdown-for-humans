@@ -142,6 +142,25 @@ export function activate(context: vscode.ExtensionContext) {
       }
     })
   );
+
+  // Flip the persisted setting (not just webview-local state) so it survives
+  // reloads and stays in sync with settings.json, reusing the same
+  // onDidChangeConfiguration -> postMessage sync path the setting already has.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('markdownForHumans.toggleFormattingShortcuts', async () => {
+      const config = vscode.workspace.getConfiguration();
+      const current = config.get<boolean>('markdownForHumans.formattingShortcuts.enabled', true);
+      await config.update(
+        'markdownForHumans.formattingShortcuts.enabled',
+        !current,
+        vscode.ConfigurationTarget.Global
+      );
+      vscode.window.setStatusBarMessage(
+        `Markdown for Humans: formatting shortcuts ${!current ? 'enabled' : 'disabled'}`,
+        3000
+      );
+    })
+  );
 }
 
 export function deactivate() {

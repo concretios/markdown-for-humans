@@ -1,8 +1,15 @@
 /**
- * Regression tests for webview undo/redo guards.
+ * Regression tests for paste-target routing in the document-level paste handler.
  *
- * We avoid initializing TipTap by mocking document.readyState as "loading"
- * so initializeEditor is never invoked during module import.
+ * Bug: the capture-phase `document` paste listener intercepted EVERY paste in
+ * the webview — including pastes aimed at the Cmd/Ctrl+F search input. When
+ * clipboard content was rich HTML or looked like markdown, the handler
+ * preventDefault()ed the paste into the input and inserted the content into
+ * the TipTap document instead.
+ *
+ * Same harness as undo-sync.test.ts: document.readyState is mocked as
+ * "loading" so initializeEditor never runs, and the paste listener registered
+ * at module import is captured from the mocked document.addEventListener.
  */
 
 // Mock TipTap and related heavy dependencies to avoid DOM requirements
@@ -63,9 +70,6 @@ jest.mock('./../../webview/extensions/customImage', () => ({
   CustomImage: { configure: () => ({}) },
 }));
 jest.mock('./../../webview/extensions/mermaid', () => ({ Mermaid: {} }));
-jest.mock('./../../webview/extensions/inlineMath', () => ({ InlineMath: {} }));
-jest.mock('./../../webview/extensions/mathBlock', () => ({ MathBlock: {} }));
-jest.mock('./../../webview/extensions/mathSlashCommand', () => ({ MathSlashCommand: {} }));
 jest.mock('./../../webview/extensions/tabIndentation', () => ({ TabIndentation: {} }));
 jest.mock('./../../webview/extensions/imageEnterSpacing', () => ({ ImageEnterSpacing: {} }));
 jest.mock('./../../webview/extensions/markdownParagraph', () => ({ MarkdownParagraph: {} }));
@@ -84,7 +88,7 @@ jest.mock('./../../webview/features/imageDragDrop', () => ({
   getPendingImageCount: jest.fn(() => 0),
 }));
 jest.mock('./../../webview/features/tocOverlay', () => ({ toggleTocOverlay: jest.fn() }));
-jest.mock('./../../webview/features/searchOverlay', () => ({ showSearchOverlay: jest.fn() }));
+jest.mock('./../../webview/features/searchOverlay', () => ({ toggleSearchOverlay: jest.fn() }));
 jest.mock('./../../webview/utils/exportContent', () => ({
   collectExportContent: jest.fn(),
   getDocumentTitle: jest.fn(),
@@ -104,28 +108,36 @@ jest.mock('./../../webview/utils/scrollToHeading', () => ({ scrollToHeading: jes
 export {};
 
 type TestingModule = {
-  resetSyncState: () => void;
   setMockEditor: (editor: unknown) => void;
-  trackSentContentForTests: (content: string) => void;
-  updateEditorContentForTests: (content: string) => void;
-  isCodeContextForPasteForTests: (event: ClipboardEvent) => boolean;
-  insertRawCodeTextForTests: (text: string) => void;
-  isPlainFindShortcutForTests: (event: {
-    key: string;
-    ctrlKey?: boolean;
-    metaKey?: boolean;
-    shiftKey?: boolean;
-    altKey?: boolean;
-  }) => boolean;
+  isPasteTargetedAtEditorForTests: (target: EventTarget | null) => boolean;
 };
 
-describe('webview undo/redo guards', () => {
+type FakeNode = {
+  nodeType: number;
+  closest: () => null;
+};
+
+function makeNode(): FakeNode {
+  return { nodeType: 1, closest: () => null };
+}
+
+describe('document paste handler target routing', () => {
   let testing: TestingModule;
+  let pasteHandler: (event: unknown) => void;
+  let processPasteContent: jest.Mock;
+  let editorDom: FakeNode & { contains: (n: unknown) => boolean };
+  let insideNode: FakeNode;
+  let outsideNode: FakeNode;
+  let mockEditor: {
+    view: { dom: unknown };
+    commands: { insertContent: jest.Mock };
+    isActive: jest.Mock;
+    state: { selection: Record<string, never> };
+  };
 
   const setupModule = async () => {
     jest.resetModules();
 
-    // Minimal globals to satisfy editor.ts on import without creating the editor
     (
       global as unknown as { document: { readyState: string; addEventListener: jest.Mock } }
     ).document = {
@@ -161,106 +173,102 @@ describe('webview undo/redo guards', () => {
     (global as unknown as { performance: { now: () => number } }).performance = {
       now: () => 0,
     };
+    // isCodeContextForPaste references HTMLElement, which the node test env lacks
+    (global as unknown as { HTMLElement: unknown }).HTMLElement = class {};
+    // isEventInsideModalOverlay (the math-overlay guard that runs before the
+    // target check) references Element; the fake nodes below are plain objects,
+    // so the instanceof checks fall through and the handler proceeds as normal.
+    (global as unknown as { Element: unknown }).Element = class {};
 
     const mod = await import('../../webview/editor');
-    testing = mod.__testing;
+    testing = mod.__testing as unknown as TestingModule;
+
+    // Re-import after resetModules so we hold the same mock instance editor.ts uses
+    const pasteMod = await import('./../../webview/utils/pasteHandler');
+    processPasteContent = pasteMod.processPasteContent as jest.Mock;
+
+    const addEventListener = (global as unknown as { document: { addEventListener: jest.Mock } })
+      .document.addEventListener;
+    const pasteRegistration = addEventListener.mock.calls.find(
+      ([type]: [string]) => type === 'paste'
+    );
+    expect(pasteRegistration).toBeDefined();
+    pasteHandler = pasteRegistration[1];
   };
+
+  const makeEvent = (target: unknown) => ({
+    target,
+    clipboardData: {
+      getData: jest.fn(() => ''),
+      types: [],
+      files: [],
+    },
+    preventDefault: jest.fn(),
+    stopPropagation: jest.fn(),
+  });
 
   beforeEach(async () => {
     await setupModule();
-    testing.resetSyncState();
-  });
 
-  it('skips update when content matches recently sent hash', () => {
-    const mockEditor = {
-      getMarkdown: jest.fn().mockReturnValue('old'),
-      state: { selection: { from: 0, to: 0 }, doc: { content: { size: 0 } } },
-      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
+    insideNode = makeNode();
+    outsideNode = makeNode(); // e.g. the search overlay input
+    editorDom = {
+      ...makeNode(),
+      contains: (n: unknown) => n === insideNode || n === editorDom,
     };
-
-    testing.setMockEditor(mockEditor);
-    // Track content we "sent" - this should cause the update to be skipped
-    testing.trackSentContentForTests('new');
-
-    testing.updateEditorContentForTests('new');
-
-    expect(mockEditor.commands.setContent).not.toHaveBeenCalled();
-  });
-
-  it('skips update when content is unchanged', () => {
-    const mockEditor = {
-      getMarkdown: jest.fn().mockReturnValue('same'),
-      state: { selection: { from: 1, to: 1 }, doc: { content: { size: 10 } } },
-      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
-    };
-
-    testing.setMockEditor(mockEditor);
-
-    testing.updateEditorContentForTests('same');
-
-    expect(mockEditor.commands.setContent).not.toHaveBeenCalled();
-  });
-
-  it('applies update when content changes', () => {
-    const mockEditor = {
-      getMarkdown: jest.fn().mockReturnValue('old'),
-      state: { selection: { from: 2, to: 4 }, doc: { content: { size: 5 } } },
-      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
-    };
-
-    testing.setMockEditor(mockEditor);
-
-    testing.updateEditorContentForTests('new content');
-
-    // @tiptap/markdown v3 requires contentType option
-    expect(mockEditor.commands.setContent).toHaveBeenCalledWith('new content', {
-      contentType: 'markdown',
-    });
-    expect(mockEditor.commands.setTextSelection).toHaveBeenCalledWith({ from: 2, to: 4 });
-  });
-
-  it('detects code context paste when selection is a codeBlock node', () => {
-    const mockEditor = {
+    mockEditor = {
+      view: { dom: editorDom },
+      commands: { insertContent: jest.fn() },
       isActive: jest.fn(() => false),
-      state: {
-        selection: {
-          node: { type: { name: 'codeBlock' } },
-        },
-      },
+      state: { selection: {} },
     };
-
     testing.setMockEditor(mockEditor);
 
-    const fakeEvent = { target: null } as unknown as ClipboardEvent;
-    expect(testing.isCodeContextForPasteForTests(fakeEvent)).toBe(true);
-  });
-
-  it('inserts pasted code as plain text node (no HTML parsing)', () => {
-    const insertContent = jest.fn();
-    const mockEditor = {
-      commands: {
-        insertContent,
-      },
-    };
-
-    testing.setMockEditor(mockEditor);
-
-    testing.insertRawCodeTextForTests('<table class="sq-table"><tr><td>Alice</td></tr></table>');
-
-    expect(insertContent).toHaveBeenCalledWith({
-      type: 'text',
-      text: '<table class="sq-table"><tr><td>Alice</td></tr></table>',
+    // Simulate clipboard content that "needs conversion" (rich HTML/markdown),
+    // the case that used to hijack pastes aimed at the search input.
+    processPasteContent.mockReturnValue({
+      isImage: false,
+      wasConverted: true,
+      isHtml: true,
+      content: '<p>converted</p>',
     });
   });
 
-  it('handles only the plain find shortcut inside the webview', () => {
-    expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true })).toBe(true);
-    expect(testing.isPlainFindShortcutForTests({ key: 'F', metaKey: true })).toBe(true);
-    expect(testing.isPlainFindShortcutForTests({ key: 'F', ctrlKey: true, shiftKey: true })).toBe(
+  it('leaves pastes aimed at inputs outside the editor alone (search overlay)', () => {
+    const event = makeEvent(outsideNode);
+
+    pasteHandler(event);
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(event.stopPropagation).not.toHaveBeenCalled();
+    expect(mockEditor.commands.insertContent).not.toHaveBeenCalled();
+  });
+
+  it('still converts and inserts pastes aimed at the editor content', () => {
+    const event = makeEvent(insideNode);
+
+    pasteHandler(event);
+
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(event.stopPropagation).toHaveBeenCalled();
+    expect(mockEditor.commands.insertContent).toHaveBeenCalledWith('<p>converted</p>');
+  });
+
+  it('treats a missing target as editor-bound (synthetic events)', () => {
+    const event = makeEvent(null);
+
+    pasteHandler(event);
+
+    expect(mockEditor.commands.insertContent).toHaveBeenCalledWith('<p>converted</p>');
+  });
+
+  it('exposes the predicate: editor children in, overlay nodes out', () => {
+    expect(testing.isPasteTargetedAtEditorForTests(insideNode as unknown as EventTarget)).toBe(
+      true
+    );
+    expect(testing.isPasteTargetedAtEditorForTests(outsideNode as unknown as EventTarget)).toBe(
       false
     );
-    expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true, altKey: true })).toBe(
-      false
-    );
+    expect(testing.isPasteTargetedAtEditorForTests(null)).toBe(true);
   });
 });

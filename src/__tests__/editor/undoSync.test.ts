@@ -211,6 +211,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingAfter: 0,
       zoom: 100,
       enableMath: true,
+      formattingShortcutsEnabled: true,
     });
   });
 
@@ -255,6 +256,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       paragraphSpacingAfter: 0,
       zoom: 100,
       enableMath: true,
+      formattingShortcutsEnabled: true,
     });
 
     getConfigurationSpy.mockRestore();

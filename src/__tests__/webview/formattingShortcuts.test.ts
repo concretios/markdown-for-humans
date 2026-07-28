@@ -1,8 +1,12 @@
 /**
- * Regression tests for webview undo/redo guards.
+ * Regression tests for the `markdownForHumans.formattingShortcuts.enabled` setting.
  *
  * We avoid initializing TipTap by mocking document.readyState as "loading"
- * so initializeEditor is never invoked during module import.
+ * so initializeEditor is never invoked during module import (same harness as
+ * undo-sync.test.ts). The `keydownHandler` closure that calls
+ * shouldInterceptFormattingShortcut() is only created inside initializeEditor(),
+ * so this suite drives the underlying gate directly via the `__testing` hook
+ * instead of dispatching real keydown events.
  */
 
 // Mock TipTap and related heavy dependencies to avoid DOM requirements
@@ -63,9 +67,6 @@ jest.mock('./../../webview/extensions/customImage', () => ({
   CustomImage: { configure: () => ({}) },
 }));
 jest.mock('./../../webview/extensions/mermaid', () => ({ Mermaid: {} }));
-jest.mock('./../../webview/extensions/inlineMath', () => ({ InlineMath: {} }));
-jest.mock('./../../webview/extensions/mathBlock', () => ({ MathBlock: {} }));
-jest.mock('./../../webview/extensions/mathSlashCommand', () => ({ MathSlashCommand: {} }));
 jest.mock('./../../webview/extensions/tabIndentation', () => ({ TabIndentation: {} }));
 jest.mock('./../../webview/extensions/imageEnterSpacing', () => ({ ImageEnterSpacing: {} }));
 jest.mock('./../../webview/extensions/markdownParagraph', () => ({ MarkdownParagraph: {} }));
@@ -84,7 +85,7 @@ jest.mock('./../../webview/features/imageDragDrop', () => ({
   getPendingImageCount: jest.fn(() => 0),
 }));
 jest.mock('./../../webview/features/tocOverlay', () => ({ toggleTocOverlay: jest.fn() }));
-jest.mock('./../../webview/features/searchOverlay', () => ({ showSearchOverlay: jest.fn() }));
+jest.mock('./../../webview/features/searchOverlay', () => ({ toggleSearchOverlay: jest.fn() }));
 jest.mock('./../../webview/utils/exportContent', () => ({
   collectExportContent: jest.fn(),
   getDocumentTitle: jest.fn(),
@@ -104,34 +105,26 @@ jest.mock('./../../webview/utils/scrollToHeading', () => ({ scrollToHeading: jes
 export {};
 
 type TestingModule = {
-  resetSyncState: () => void;
-  setMockEditor: (editor: unknown) => void;
-  trackSentContentForTests: (content: string) => void;
-  updateEditorContentForTests: (content: string) => void;
-  isCodeContextForPasteForTests: (event: ClipboardEvent) => boolean;
-  insertRawCodeTextForTests: (text: string) => void;
-  isPlainFindShortcutForTests: (event: {
-    key: string;
-    ctrlKey?: boolean;
-    metaKey?: boolean;
-    shiftKey?: boolean;
-    altKey?: boolean;
-  }) => boolean;
+  isFormattingShortcutsEnabledForTests: () => boolean;
+  shouldInterceptFormattingShortcutForTests: (key: string, isMod: boolean) => boolean;
+  shouldSuppressFormattingShortcutForTests: (key: string, isMod: boolean) => boolean;
 };
 
-describe('webview undo/redo guards', () => {
+describe('formattingShortcuts.enabled setting', () => {
   let testing: TestingModule;
+  let messageHandler: (event: MessageEvent) => void;
 
   const setupModule = async () => {
     jest.resetModules();
 
-    // Minimal globals to satisfy editor.ts on import without creating the editor
     (
       global as unknown as { document: { readyState: string; addEventListener: jest.Mock } }
     ).document = {
       readyState: 'loading',
       addEventListener: jest.fn(),
     };
+
+    const windowListeners = new Map<string, (event: unknown) => void>();
     (
       global as unknown as {
         window: {
@@ -143,7 +136,9 @@ describe('webview undo/redo guards', () => {
     ).window = {
       setTimeout,
       clearTimeout,
-      addEventListener: jest.fn(),
+      addEventListener: jest.fn((type: string, handler: (event: unknown) => void) => {
+        windowListeners.set(type, handler);
+      }),
     };
     (
       global as unknown as {
@@ -163,104 +158,101 @@ describe('webview undo/redo guards', () => {
     };
 
     const mod = await import('../../webview/editor');
-    testing = mod.__testing;
+    testing = mod.__testing as unknown as TestingModule;
+
+    messageHandler = windowListeners.get('message') as (event: MessageEvent) => void;
   };
 
   beforeEach(async () => {
     await setupModule();
-    testing.resetSyncState();
   });
 
-  it('skips update when content matches recently sent hash', () => {
-    const mockEditor = {
-      getMarkdown: jest.fn().mockReturnValue('old'),
-      state: { selection: { from: 0, to: 0 }, doc: { content: { size: 0 } } },
-      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
-    };
+  it('defaults to enabled, so Cmd+B/I/U are intercepted', () => {
+    expect(testing.isFormattingShortcutsEnabledForTests()).toBe(true);
 
-    testing.setMockEditor(mockEditor);
-    // Track content we "sent" - this should cause the update to be skipped
-    testing.trackSentContentForTests('new');
-
-    testing.updateEditorContentForTests('new');
-
-    expect(mockEditor.commands.setContent).not.toHaveBeenCalled();
+    for (const key of ['b', 'i', 'u']) {
+      expect(testing.shouldInterceptFormattingShortcutForTests(key, true)).toBe(true);
+    }
   });
 
-  it('skips update when content is unchanged', () => {
-    const mockEditor = {
-      getMarkdown: jest.fn().mockReturnValue('same'),
-      state: { selection: { from: 1, to: 1 }, doc: { content: { size: 10 } } },
-      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
-    };
-
-    testing.setMockEditor(mockEditor);
-
-    testing.updateEditorContentForTests('same');
-
-    expect(mockEditor.commands.setContent).not.toHaveBeenCalled();
+  it('does not intercept when the mod key is not held', () => {
+    expect(testing.shouldInterceptFormattingShortcutForTests('b', false)).toBe(false);
   });
 
-  it('applies update when content changes', () => {
-    const mockEditor = {
-      getMarkdown: jest.fn().mockReturnValue('old'),
-      state: { selection: { from: 2, to: 4 }, doc: { content: { size: 5 } } },
-      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
-    };
+  it('does not intercept keys outside b/i/u', () => {
+    expect(testing.shouldInterceptFormattingShortcutForTests('s', true)).toBe(false);
+  });
 
-    testing.setMockEditor(mockEditor);
+  it('stops intercepting Cmd/Ctrl+B/I/U once disabled via a settingsUpdate message', () => {
+    messageHandler({
+      data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+    } as unknown as MessageEvent);
 
-    testing.updateEditorContentForTests('new content');
+    expect(testing.isFormattingShortcutsEnabledForTests()).toBe(false);
 
-    // @tiptap/markdown v3 requires contentType option
-    expect(mockEditor.commands.setContent).toHaveBeenCalledWith('new content', {
-      contentType: 'markdown',
+    for (const key of ['b', 'i', 'u']) {
+      expect(testing.shouldInterceptFormattingShortcutForTests(key, true)).toBe(false);
+    }
+  });
+
+  it('resumes intercepting once re-enabled via a settingsUpdate message', () => {
+    messageHandler({
+      data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+    } as unknown as MessageEvent);
+    messageHandler({
+      data: { type: 'settingsUpdate', formattingShortcutsEnabled: true },
+    } as unknown as MessageEvent);
+
+    expect(testing.isFormattingShortcutsEnabledForTests()).toBe(true);
+    expect(testing.shouldInterceptFormattingShortcutForTests('b', true)).toBe(true);
+  });
+
+  it('also updates via an update message (initial host payload)', () => {
+    messageHandler({
+      data: { type: 'update', content: '', formattingShortcutsEnabled: false },
+    } as unknown as MessageEvent);
+
+    expect(testing.isFormattingShortcutsEnabledForTests()).toBe(false);
+  });
+
+  describe('TipTap keymap suppression (handleKeyDown gate)', () => {
+    it('does not suppress TipTap formatting while enabled (default)', () => {
+      for (const key of ['b', 'i', 'u']) {
+        expect(testing.shouldSuppressFormattingShortcutForTests(key, true)).toBe(false);
+      }
     });
-    expect(mockEditor.commands.setTextSelection).toHaveBeenCalledWith({ from: 2, to: 4 });
-  });
 
-  it('detects code context paste when selection is a codeBlock node', () => {
-    const mockEditor = {
-      isActive: jest.fn(() => false),
-      state: {
-        selection: {
-          node: { type: { name: 'codeBlock' } },
-        },
-      },
-    };
+    it('suppresses TipTap Mod+B/I/U once disabled, so formatting is not applied', () => {
+      messageHandler({
+        data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+      } as unknown as MessageEvent);
 
-    testing.setMockEditor(mockEditor);
-
-    const fakeEvent = { target: null } as unknown as ClipboardEvent;
-    expect(testing.isCodeContextForPasteForTests(fakeEvent)).toBe(true);
-  });
-
-  it('inserts pasted code as plain text node (no HTML parsing)', () => {
-    const insertContent = jest.fn();
-    const mockEditor = {
-      commands: {
-        insertContent,
-      },
-    };
-
-    testing.setMockEditor(mockEditor);
-
-    testing.insertRawCodeTextForTests('<table class="sq-table"><tr><td>Alice</td></tr></table>');
-
-    expect(insertContent).toHaveBeenCalledWith({
-      type: 'text',
-      text: '<table class="sq-table"><tr><td>Alice</td></tr></table>',
+      for (const key of ['b', 'i', 'u']) {
+        expect(testing.shouldSuppressFormattingShortcutForTests(key, true)).toBe(true);
+      }
     });
-  });
 
-  it('handles only the plain find shortcut inside the webview', () => {
-    expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true })).toBe(true);
-    expect(testing.isPlainFindShortcutForTests({ key: 'F', metaKey: true })).toBe(true);
-    expect(testing.isPlainFindShortcutForTests({ key: 'F', ctrlKey: true, shiftKey: true })).toBe(
-      false
-    );
-    expect(testing.isPlainFindShortcutForTests({ key: 'f', ctrlKey: true, altKey: true })).toBe(
-      false
-    );
+    it('never suppresses non-formatting keys or bare keypresses', () => {
+      messageHandler({
+        data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+      } as unknown as MessageEvent);
+
+      expect(testing.shouldSuppressFormattingShortcutForTests('s', true)).toBe(false);
+      expect(testing.shouldSuppressFormattingShortcutForTests('b', false)).toBe(false);
+    });
+
+    it('is mutually exclusive with interception: exactly one gate is active per state', () => {
+      // Enabled: intercept (stopPropagation to VS Code), don't suppress TipTap.
+      expect(testing.shouldInterceptFormattingShortcutForTests('b', true)).toBe(true);
+      expect(testing.shouldSuppressFormattingShortcutForTests('b', true)).toBe(false);
+
+      messageHandler({
+        data: { type: 'settingsUpdate', formattingShortcutsEnabled: false },
+      } as unknown as MessageEvent);
+
+      // Disabled: let the chord reach VS Code, suppress TipTap formatting.
+      expect(testing.shouldInterceptFormattingShortcutForTests('b', true)).toBe(false);
+      expect(testing.shouldSuppressFormattingShortcutForTests('b', true)).toBe(true);
+    });
   });
 });
