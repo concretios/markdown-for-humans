@@ -43,7 +43,7 @@ import {
   getPendingImageCount,
 } from './features/imageDragDrop';
 import { toggleTocOverlay } from './features/tocOverlay';
-import { toggleSearchOverlay } from './features/searchOverlay';
+import { showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
@@ -226,6 +226,12 @@ const scheduleOutlineUpdate = () => {
   }, OUTLINE_UPDATE_DEBOUNCE_MS);
 };
 
+function isPlainFindShortcut(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>
+): boolean {
+  const hasPrimaryModifier = Boolean(event.metaKey) !== Boolean(event.ctrlKey);
+  return hasPrimaryModifier && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f';
+}
 // Pending AI context reference requests, keyed by requestId. The host saves the
 // document and replies with `aiContextRefResponse`; we look up the resolver here.
 const aiContextRefCallbacks = new Map<
@@ -906,11 +912,11 @@ function initializeEditor(initialContent: string) {
       }
 
       // Intercept Cmd/Ctrl+F for in-document search
-      if (isMod && e.key === 'f') {
+      if (isPlainFindShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (editor) {
-          toggleSearchOverlay(editor);
+          showSearchOverlay(editor);
         }
         return;
       }
@@ -2023,5 +2029,20 @@ export const __testing = {
   insertRawCodeTextForTests(text: string) {
     if (!editor) return;
     insertRawCodeText(editor, text);
+  },
+  isPlainFindShortcutForTests(event: {
+    key: string;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+  }) {
+    return isPlainFindShortcut({
+      key: event.key,
+      ctrlKey: Boolean(event.ctrlKey),
+      metaKey: Boolean(event.metaKey),
+      shiftKey: Boolean(event.shiftKey),
+      altKey: Boolean(event.altKey),
+    });
   },
 };
