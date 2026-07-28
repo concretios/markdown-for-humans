@@ -25,12 +25,43 @@ const searchPluginKey = new PluginKey('search-highlight');
 let searchOverlayElement: HTMLElement | null = null;
 let isVisible = false;
 let savedSelection: { from: number; to: number } | null = null;
+let savedScrollPosition: { x: number; y: number } | null = null;
 let currentQuery = '';
 let currentMatches: Array<{ from: number; to: number }> = [];
 let currentMatchIndex = -1;
 let searchPlugin: Plugin | null = null;
+let focusRequestId = 0;
+const SCROLL_CHANGE_EPSILON = 1;
 const isOverlayInDom = () =>
   Boolean(searchOverlayElement && document.body.contains(searchOverlayElement));
+
+function getWindowScrollPosition(): { x: number; y: number } {
+  return {
+    x: typeof window.scrollX === 'number' ? window.scrollX : window.pageXOffset || 0,
+    y: typeof window.scrollY === 'number' ? window.scrollY : window.pageYOffset || 0,
+  };
+}
+
+function hasScrolledSinceSearchOpened(): boolean {
+  if (!savedScrollPosition) {
+    return false;
+  }
+
+  const currentScrollPosition = getWindowScrollPosition();
+  return (
+    Math.abs(currentScrollPosition.x - savedScrollPosition.x) > SCROLL_CHANGE_EPSILON ||
+    Math.abs(currentScrollPosition.y - savedScrollPosition.y) > SCROLL_CHANGE_EPSILON
+  );
+}
+
+function focusEditor(editor: Editor, preventScroll: boolean) {
+  if (preventScroll) {
+    editor.commands.focus(undefined, { scrollIntoView: false });
+    return;
+  }
+
+  editor.commands.focus();
+}
 
 /**
  * Create the search plugin for decorations
@@ -409,15 +440,52 @@ export function createSearchOverlay(editor: Editor): HTMLElement {
 }
 
 function focusSearchInput(selectText = true) {
-  const searchInput = searchOverlayElement?.querySelector(
-    '.search-overlay-input'
-  ) as HTMLInputElement | null;
-  if (!searchInput) return;
+  const requestId = ++focusRequestId;
+  let attempts = 0;
+  let initialValue: string | null = null;
+  const maxAttempts = 6;
 
-  searchInput.focus();
-  if (selectText) {
-    searchInput.select();
-  }
+  const scheduleNextAttempt = () => {
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(applyFocus);
+    } else {
+      window.setTimeout(applyFocus, 16);
+    }
+  };
+
+  const applyFocus = () => {
+    if (!isVisible || !isOverlayInDom()) return;
+    if (requestId !== focusRequestId) return;
+
+    const searchInput = searchOverlayElement?.querySelector(
+      '.search-overlay-input'
+    ) as HTMLInputElement | null;
+    if (!searchInput) return;
+    if (initialValue === null) {
+      initialValue = searchInput.value;
+    }
+
+    if (document.activeElement !== searchInput) {
+      searchInput.focus({ preventScroll: true });
+    }
+    if (
+      selectText &&
+      searchInput.value === initialValue &&
+      document.activeElement === searchInput
+    ) {
+      searchInput.select();
+    }
+
+    attempts += 1;
+    if (document.activeElement !== searchInput && attempts < maxAttempts) {
+      scheduleNextAttempt();
+    }
+  };
+
+  applyFocus();
+  // TipTap and Chromium can both settle focus after the keyboard event that opens find.
+  // Verify on the next frame even when immediate focus initially succeeds.
+  scheduleNextAttempt();
 }
 
 /**
@@ -426,6 +494,7 @@ function focusSearchInput(selectText = true) {
 export function showSearchOverlay(editor: Editor): void {
   // Ensure search plugin is registered
   ensureSearchPlugin(editor);
+  const wasVisible = isVisible && isOverlayInDom();
 
   if (!isOverlayInDom()) {
     searchOverlayElement = null;
@@ -437,6 +506,7 @@ export function showSearchOverlay(editor: Editor): void {
   // Save current selection
   const { from, to } = editor.state.selection;
   savedSelection = { from, to };
+  savedScrollPosition = getWindowScrollPosition();
 
   // Get selected text as initial query
   const selectedText = editor.state.doc.textBetween(from, to, ' ');
@@ -444,6 +514,11 @@ export function showSearchOverlay(editor: Editor): void {
   // Show overlay
   searchOverlayElement.classList.add('visible');
   isVisible = true;
+
+  if (wasVisible) {
+    focusSearchInput();
+    return;
+  }
 
   // Focus input and set selected text
   const searchInput = searchOverlayElement.querySelector(
@@ -465,6 +540,9 @@ export function showSearchOverlay(editor: Editor): void {
  */
 export function hideSearchOverlay(editor: Editor, restorePosition = true): void {
   if (!searchOverlayElement) return;
+
+  const hadActiveMatch = currentMatches.length > 0 && currentMatchIndex >= 0;
+  const shouldPreventFocusScroll = restorePosition && hasScrolledSinceSearchOpened();
 
   searchOverlayElement.classList.remove('visible');
   isVisible = false;
@@ -495,8 +573,10 @@ export function hideSearchOverlay(editor: Editor, restorePosition = true): void 
     searchInput.classList.remove('no-results');
   }
 
-  // Restore previous position if requested
-  if (restorePosition && savedSelection) {
+  // Restore previous position only when search did not navigate to a match.
+  // When a match is active, leaving the match selected avoids snapping scroll
+  // back to the stale cursor location from before find opened.
+  if (restorePosition && !hadActiveMatch && !shouldPreventFocusScroll && savedSelection) {
     try {
       editor.commands.setTextSelection(savedSelection);
     } catch {
@@ -504,8 +584,9 @@ export function hideSearchOverlay(editor: Editor, restorePosition = true): void 
     }
   }
 
-  // Focus editor
-  editor.commands.focus();
+  focusEditor(editor, shouldPreventFocusScroll);
+  savedSelection = null;
+  savedScrollPosition = null;
 }
 
 /**
