@@ -3590,7 +3590,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const frontmatterBlock = match[0].replace(/\s+$/, ''); // keep delimiters
     const body = content.slice(match[0].length);
 
-    const pieces = ['```yaml', frontmatterBlock, '```'];
+    // Choose a fence longer than the longest backtick run inside the
+    // frontmatter. If a YAML value contains a ``` (e.g. a fenced code sample in
+    // a multiline scalar), a plain 3-backtick fence would be closed early by the
+    // webview's markdown parser, fragmenting the frontmatter and losing fields
+    // on save. CommonMark requires the closing fence to be at least as long as
+    // the opening one, so a longer fence keeps the whole block intact. Mirrors
+    // prosemirror-markdown's own code_block fence logic so a re-serialized block
+    // round-trips through unwrapFrontmatterFromWebview.
+    const backtickRuns = frontmatterBlock.match(/`{3,}/g);
+    const fence = backtickRuns
+      ? '`'.repeat(Math.max(...backtickRuns.map(run => run.length)) + 1)
+      : '```';
+
+    const pieces = [`${fence}yaml`, frontmatterBlock, fence];
     if (body.length > 0) {
       // Ensure exactly one blank line between fenced block and body
       const trimmedBody =
@@ -3612,12 +3625,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const newline = usesCrLf ? '\r\n' : '\n';
     const lines = content.split(newline);
 
-    const firstLine = lines[0].trim().toLowerCase();
-    if (firstLine !== '```yaml' && firstLine !== '```yml' && firstLine !== '```json') {
+    // Accept a fence of 3+ backticks: wrapFrontmatterForWebview lengthens it when
+    // the frontmatter contains an embedded ``` run, and prosemirror-markdown does
+    // the same on re-serialize. The closing fence must match the opener's length.
+    const fenceMatch = lines[0]
+      .trim()
+      .toLowerCase()
+      .match(/^(`{3,})(yaml|yml|json)$/);
+    if (!fenceMatch) {
       return content;
     }
+    const fence = fenceMatch[1];
 
-    const closingIndex = lines.findIndex((line, idx) => idx > 0 && line.trim() === '```');
+    const closingIndex = lines.findIndex((line, idx) => idx > 0 && line.trim() === fence);
     if (closingIndex === -1) return content;
 
     const insideLines = lines.slice(1, closingIndex);

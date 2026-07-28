@@ -22,6 +22,100 @@ const MAX_SUGGESTION_PILLS = 5;
 
 // Toast auto-dismiss timeout in milliseconds
 const TOAST_AUTO_DISMISS_MS = 3000;
+const TOAST_REMOVAL_ANIMATION_MS = 200;
+
+type ToastTimerHandle = ReturnType<typeof setTimeout>;
+type ToastFrameHandle = ReturnType<typeof requestAnimationFrame>;
+
+type ToastLifecycle = {
+  showFrame?: ToastFrameHandle;
+  autoDismiss?: ToastTimerHandle;
+  removal?: ToastTimerHandle;
+};
+
+const toastLifecycles = new Map<string, ToastLifecycle>();
+
+function getToastLifecycle(toastId: string): ToastLifecycle {
+  let lifecycle = toastLifecycles.get(toastId);
+  if (!lifecycle) {
+    lifecycle = {};
+    toastLifecycles.set(toastId, lifecycle);
+  }
+  return lifecycle;
+}
+
+function maybeUnrefTimer(timer: ToastTimerHandle): void {
+  const maybeNodeTimer = timer as unknown as { unref?: () => void };
+  if (typeof maybeNodeTimer.unref === 'function') {
+    maybeNodeTimer.unref();
+  }
+}
+
+function clearToastTimer(timer: ToastTimerHandle | undefined): void {
+  if (typeof timer !== 'undefined') {
+    clearTimeout(timer);
+  }
+}
+
+function clearToastLifecycle(toastId: string): void {
+  const lifecycle = toastLifecycles.get(toastId);
+  if (!lifecycle) return;
+
+  if (typeof lifecycle.showFrame !== 'undefined' && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(lifecycle.showFrame);
+  }
+  clearToastTimer(lifecycle.autoDismiss);
+  clearToastTimer(lifecycle.removal);
+  toastLifecycles.delete(toastId);
+}
+
+function scheduleToastFrame(toastId: string, callback: () => void): void {
+  if (typeof requestAnimationFrame !== 'function') {
+    callback();
+    return;
+  }
+
+  const lifecycle = getToastLifecycle(toastId);
+  lifecycle.showFrame = requestAnimationFrame(() => {
+    const activeLifecycle = toastLifecycles.get(toastId);
+    if (activeLifecycle) {
+      delete activeLifecycle.showFrame;
+    }
+    callback();
+  });
+}
+
+function scheduleToastTimer(
+  toastId: string,
+  key: 'autoDismiss' | 'removal',
+  callback: () => void,
+  delayMs: number
+): void {
+  const lifecycle = getToastLifecycle(toastId);
+  clearToastTimer(lifecycle[key]);
+
+  const timer = setTimeout(() => {
+    const activeLifecycle = toastLifecycles.get(toastId);
+    if (activeLifecycle) {
+      delete activeLifecycle[key];
+    }
+    callback();
+  }, delayMs);
+  maybeUnrefTimer(timer);
+  lifecycle[key] = timer;
+}
+
+function scheduleToastRemoval(toastId: string, toast: HTMLElement): void {
+  scheduleToastTimer(
+    toastId,
+    'removal',
+    () => {
+      toast.remove();
+      clearToastLifecycle(toastId);
+    },
+    TOAST_REMOVAL_ANIMATION_MS
+  );
+}
 
 /**
  * Display a toast notification.
@@ -62,18 +156,21 @@ export function showToast(message: string, type: 'success' | 'info' | 'loading' 
   toastContainer.appendChild(toast);
 
   // Trigger animation
-  requestAnimationFrame(() => {
+  scheduleToastFrame(toastId, () => {
     toast.classList.add('visible');
   });
 
   // Auto-dismiss only for non-loading toasts
   if (type !== 'loading') {
-    setTimeout(() => {
-      toast.classList.remove('visible');
-      setTimeout(() => {
-        toast.remove();
-      }, 200); // Wait for fade-out animation
-    }, TOAST_AUTO_DISMISS_MS);
+    scheduleToastTimer(
+      toastId,
+      'autoDismiss',
+      () => {
+        toast.classList.remove('visible');
+        scheduleToastRemoval(toastId, toast);
+      },
+      TOAST_AUTO_DISMISS_MS
+    );
   }
 
   return toastId;
@@ -87,11 +184,30 @@ export function showToast(message: string, type: 'success' | 'info' | 'loading' 
 export function dismissToast(toastId: string): void {
   const toast = document.getElementById(toastId);
   if (toast) {
+    const lifecycle = getToastLifecycle(toastId);
+    clearToastTimer(lifecycle.autoDismiss);
+    delete lifecycle.autoDismiss;
+
     toast.classList.remove('visible');
-    setTimeout(() => {
-      toast.remove();
-    }, 200); // Wait for fade-out animation
+    scheduleToastRemoval(toastId, toast);
+  } else {
+    clearToastLifecycle(toastId);
   }
+}
+
+/**
+ * Remove all active toasts and clear any scheduled toast timers.
+ * Useful when the webview or tests reset the DOM before auto-dismiss timers fire.
+ */
+export function clearToasts(): void {
+  for (const toastId of Array.from(toastLifecycles.keys())) {
+    clearToastLifecycle(toastId);
+  }
+
+  document.querySelectorAll('.toast').forEach(toast => {
+    toast.remove();
+  });
+  document.getElementById('toast-container')?.remove();
 }
 
 /**
