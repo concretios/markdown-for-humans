@@ -7,6 +7,7 @@
 // Import CSS files (esbuild will bundle these)
 import './editor.css';
 import './codicon.css';
+import 'katex/dist/katex.min.css';
 
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
@@ -17,6 +18,9 @@ import Link from '@tiptap/extension-link';
 import { CustomImage } from './extensions/customImage';
 import { lowlight } from 'lowlight';
 import { Mermaid } from './extensions/mermaid';
+import { InlineMath } from './extensions/inlineMath';
+import { MathBlock } from './extensions/mathBlock';
+import { MathSlashCommand } from './extensions/mathSlashCommand';
 import { IndentedImageCodeBlock } from './extensions/indentedImageCodeBlock';
 import { CodeBlockWithCopy } from './extensions/codeBlockWithCopy';
 import { SpaceFriendlyImagePaths } from './extensions/spaceFriendlyImagePaths';
@@ -32,7 +36,6 @@ import { DocumentAuditExtension } from './features/auditDocument';
 import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
-import { overrideClassFor, type EditorThemeSetting } from '../shared/editorTheme';
 import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
 import {
   setupImageDragDrop,
@@ -40,7 +43,7 @@ import {
   getPendingImageCount,
 } from './features/imageDragDrop';
 import { toggleTocOverlay } from './features/tocOverlay';
-import { toggleSearchOverlay } from './features/searchOverlay';
+import { showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
@@ -165,6 +168,11 @@ let isDomReady = document.readyState !== 'loading';
 let outlineUpdateTimeout: number | null = null;
 let allowNextHostSyncDespiteRecentEdit = false;
 let allowNextHostSyncDespiteEchoHash = false;
+// Math (KaTeX) feature flag. Captured from the first 'update'/'settingsUpdate'
+// message so the editor knows whether to register math extensions on init.
+// Toggling at runtime requires a reload — we surface a one-time notice.
+let enableMath = true;
+let mathFeatureRegistered = false;
 
 // Hash-based sync deduplication (replaces unreliable ignoreNextUpdate boolean)
 let lastSentContentHash: string | null = null;
@@ -218,6 +226,12 @@ const scheduleOutlineUpdate = () => {
   }, OUTLINE_UPDATE_DEBOUNCE_MS);
 };
 
+function isPlainFindShortcut(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey'>
+): boolean {
+  const hasPrimaryModifier = Boolean(event.metaKey) !== Boolean(event.ctrlKey);
+  return hasPrimaryModifier && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f';
+}
 // Pending AI context reference requests, keyed by requestId. The host saves the
 // document and replies with `aiContextRefResponse`; we look up the resolver here.
 const aiContextRefCallbacks = new Map<
@@ -254,6 +268,54 @@ function queryDocumentDirty(): Promise<boolean> {
       }
     }, 2000);
   });
+}
+
+/**
+ * Insert an empty math node at the current selection and immediately open the
+ * math editor modal. Shared by the keyboard shortcut and the toolbar button.
+ */
+async function insertAndEditMath(editorInstance: Editor, mode: 'inline' | 'block'): Promise<void> {
+  if (!enableMath) return;
+
+  const typeName = mode === 'block' ? 'mathBlock' : 'inlineMath';
+  const nodeType = editorInstance.schema.nodes[typeName];
+  if (!nodeType) {
+    console.warn(`[MD4H] Math node type "${typeName}" is not registered`);
+    return;
+  }
+
+  const { state } = editorInstance;
+  const { from } = state.selection;
+  const tr = state.tr.replaceSelectionWith(nodeType.create({ latex: '' }), false);
+  editorInstance.view.dispatch(tr);
+
+  // Locate the inserted node (search from the original selection forwards).
+  let insertedPos = -1;
+  editorInstance.state.doc.descendants((node, pos) => {
+    if (insertedPos !== -1) return false;
+    if (node.type.name === typeName && pos >= from - 1) {
+      insertedPos = pos;
+      return false;
+    }
+    return true;
+  });
+
+  const { showMathEditor } = await import('./features/mathEditor');
+  const result = await showMathEditor({
+    initialLatex: '',
+    displayMode: mode === 'block',
+  });
+  if (!result.wasSaved) return;
+
+  if (insertedPos === -1) return;
+  const node = editorInstance.state.doc.nodeAt(insertedPos);
+  if (!node || node.type.name !== typeName) return;
+  editorInstance.view.dispatch(
+    editorInstance.state.tr.setNodeMarkup(insertedPos, undefined, {
+      ...node.attrs,
+      latex: result.latex,
+    })
+  );
 }
 
 async function runCopyAiContextRef(): Promise<void> {
@@ -512,9 +574,15 @@ function initializeEditor(initialContent: string) {
 
     console.log('[MD4H] Initializing editor...');
 
+    const mathExtensions = enableMath ? [InlineMath, MathBlock, MathSlashCommand] : [];
+    mathFeatureRegistered = enableMath;
+
     const editorInstance = new Editor({
       element: editorElement,
       extensions: [
+        // Math must be before generic block/inline parsers so $$ and $...$
+        // are tokenised before paragraph fallback.
+        ...mathExtensions,
         // Mermaid must be before CodeBlockLowlight to intercept mermaid code blocks
         Mermaid,
         // Must be before CodeBlockLowlight to intercept indented "code" tokens containing images
@@ -752,6 +820,8 @@ function initializeEditor(initialContent: string) {
 
     // Store handler references for cleanup on editor destroy
     const contextMenuHandler = (e: MouseEvent) => {
+      // Don't override the native textarea context menu inside the math modal.
+      if (isEventInsideModalOverlay(e)) return;
       try {
         const target = e.target as HTMLElement;
         const tableCell = target.closest('td, th');
@@ -779,6 +849,11 @@ function initializeEditor(initialContent: string) {
     let ctrlKTimer: number | null = null;
 
     const keydownHandler = (e: KeyboardEvent) => {
+      // If the keystroke originated inside a self-contained modal (math
+      // editor), don't run any document-level shortcuts. The modal owns
+      // undo/redo, copy/paste, save, search, etc. for its own input.
+      if (isEventInsideModalOverlay(e)) return;
+
       const isMod = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows/Linux
 
       // Save shortcut - immediate save
@@ -844,11 +919,22 @@ function initializeEditor(initialContent: string) {
       }
 
       // Intercept Cmd/Ctrl+F for in-document search
-      if (isMod && e.key === 'f') {
+      if (isPlainFindShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
         if (editor) {
-          toggleSearchOverlay(editor);
+          showSearchOverlay(editor);
+        }
+        return;
+      }
+
+      // Ctrl+Shift+E (Cmd+Shift+E on macOS) — Insert a display math block and
+      // immediately open the math editor. No-op when math support is disabled.
+      if (enableMath && isMod && e.shiftKey && (e.code === 'KeyE' || e.key.toLowerCase() === 'e')) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (editor) {
+          void insertAndEditMath(editor, 'block');
         }
         return;
       }
@@ -1037,6 +1123,14 @@ window.addEventListener('message', (event: MessageEvent) => {
           (window as any).imagePathBase = message.imagePathBase;
         }
         applyEditorSettings(message);
+        // Capture enableMath once before the editor is initialized so the math
+        // extensions are registered (or skipped) consistently with the user's
+        // setting. Toggles after init are handled in the settingsUpdate branch.
+        if (typeof message.enableMath === 'boolean') {
+          enableMath = message.enableMath;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (window as any).enableMath = message.enableMath;
+        }
         // Initialize editor with first payload to seed undo history correctly
         if (!editor) {
           if (isDomReady) {
@@ -1075,6 +1169,25 @@ window.addEventListener('message', (event: MessageEvent) => {
           (window as any).showImageHoverOverlay = message.showImageHoverOverlay;
         }
         applyEditorSettings(message);
+        if (typeof message.enableMath === 'boolean') {
+          const previous = enableMath;
+          enableMath = message.enableMath;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (window as any).enableMath = message.enableMath;
+          // If the toggle changes after the editor is already initialised the
+          // math extension registration cannot change without a reload.
+          // Surface a one-time notice so the user knows to reopen the file.
+          if (editor && previous !== enableMath && mathFeatureRegistered !== enableMath) {
+            void import('./features/auditOverlay').then(({ showToast }) => {
+              showToast(
+                enableMath
+                  ? 'Math rendering enabled. Reopen this file to apply.'
+                  : 'Math rendering disabled. Reopen this file to apply.',
+                'info'
+              );
+            });
+          }
+        }
         break;
       case 'imageResized': {
         // Handle image resize completion
@@ -1728,6 +1841,23 @@ window.addEventListener('copyAiContextRef', () => {
   void runCopyAiContextRef();
 });
 
+// Handle insert-math from toolbar buttons
+window.addEventListener('insertMath', (event: Event) => {
+  if (!editor) return;
+  const detail = (event as CustomEvent).detail as { mode?: 'inline' | 'block' } | undefined;
+  const mode = detail?.mode === 'inline' ? 'inline' : 'block';
+  if (!enableMath) {
+    void import('./features/auditOverlay').then(({ showToast }) => {
+      showToast(
+        'Math rendering is disabled. Enable "markdownForHumans.enableMath" in settings.',
+        'info'
+      );
+    });
+    return;
+  }
+  void insertAndEditMath(editor, mode);
+});
+
 // Handle open source view from toolbar button
 window.addEventListener('openSourceView', () => {
   console.log('[MD4H] Opening source view...');
@@ -1737,13 +1867,6 @@ window.addEventListener('openSourceView', () => {
 // Handle settings button from toolbar -> open VS Code settings UI
 window.addEventListener('openExtensionSettings', () => {
   vscode.postMessage({ type: 'openExtensionSettings' });
-});
-
-// Handle theme toggle button from toolbar -> flip the global editorTheme setting.
-// The extension computes the opposite of the currently effective theme and
-// writes it back, which re-themes every open editor via settingsUpdate.
-window.addEventListener('toggleTheme', () => {
-  vscode.postMessage({ type: 'toggleTheme' });
 });
 
 // Zoom: applies zoom level from markdownForHumans.zoom setting (percentage, 100 = default).
@@ -1761,61 +1884,6 @@ function applyZoomLevel(percent: number) {
     );
   }
 }
-// Editor theme override.
-//
-// When the requested direction already matches VS Code's active appearance, no
-// class is added and the editor inherits the real live theme (so "Always dark"
-// on a dark VS Code looks exactly like the user's actual dark theme); the
-// synthetic palette is applied only when forcing the opposite direction.
-// 'vscode' always inherits.
-//
-// The class goes on BOTH <html> and <body>:
-//  - <body> carries the --vscode-* variable overrides (they win there via
-//    inheritance; VS Code sets those vars inline on <html>, so a class rule on
-//    <html> could not override them) and satisfies the syntax-highlight guards
-//    (.vscode-dark:not(.mdfh-force-light)) that key off the body class.
-//  - <html> paints the overscroll/page background with a literal color so the
-//    area around the editor matches (see editor.css).
-//
-// Self-healing: VS Code reassigns body.className (not classList.add) during its
-// theme handshake, which can wipe our class right after the first apply. A
-// MutationObserver re-asserts the desired state whenever the class attribute
-// changes. reconcile only mutates when out of sync, so it settles in one pass
-// and cannot loop.
-let lastThemeSetting: EditorThemeSetting = 'vscode';
-let lastVscodeIsDark = false;
-let themeClassObserver: MutationObserver | null = null;
-
-function reconcileThemeClasses() {
-  const forced = overrideClassFor(lastThemeSetting, lastVscodeIsDark);
-  for (const el of [document.documentElement, document.body]) {
-    if (!el) continue;
-    const wantLight = forced === 'mdfh-force-light';
-    const wantDark = forced === 'mdfh-force-dark';
-    if (el.classList.contains('mdfh-force-light') !== wantLight) {
-      el.classList.toggle('mdfh-force-light', wantLight);
-    }
-    if (el.classList.contains('mdfh-force-dark') !== wantDark) {
-      el.classList.toggle('mdfh-force-dark', wantDark);
-    }
-  }
-}
-
-function ensureThemeClassObserver() {
-  if (themeClassObserver) return;
-  themeClassObserver = new MutationObserver(() => reconcileThemeClasses());
-  const opts: MutationObserverInit = { attributes: true, attributeFilter: ['class'] };
-  themeClassObserver.observe(document.documentElement, opts);
-  themeClassObserver.observe(document.body, opts);
-}
-
-function applyThemeOverride(setting: EditorThemeSetting, vscodeIsDark: boolean) {
-  lastThemeSetting = setting;
-  lastVscodeIsDark = vscodeIsDark;
-  reconcileThemeClasses();
-  ensureThemeClassObserver();
-}
-
 const FORMATTING_SHORTCUT_KEYS = [
   'b', // Bold
   'i', // Italic
@@ -1855,8 +1923,8 @@ function shouldSuppressFormattingShortcut(
 }
 
 /**
- * Applies paragraph spacing, zoom, and theme-override settings from an incoming
- * message. Called from both the `update` and `settingsUpdate` handlers.
+ * Applies paragraph spacing and zoom settings from an incoming message.
+ * Called from both the `update` and `settingsUpdate` handlers.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyEditorSettings(message: Record<string, any>) {
@@ -1877,20 +1945,6 @@ function applyEditorSettings(message: Record<string, any>) {
   }
   if (typeof message.formattingShortcutsEnabled === 'boolean') {
     formattingShortcutsEnabled = message.formattingShortcutsEnabled;
-  }
-  if (
-    message.editorTheme === 'vscode' ||
-    message.editorTheme === 'defaultLight' ||
-    message.editorTheme === 'defaultDark'
-  ) {
-    // The extension reports VS Code's current appearance; fall back to the body
-    // class if an older message omits it.
-    const vscodeIsDark =
-      typeof message.vscodeIsDark === 'boolean'
-        ? message.vscodeIsDark
-        : document.body.classList.contains('vscode-dark') ||
-          document.body.classList.contains('vscode-high-contrast');
-    applyThemeOverride(message.editorTheme, vscodeIsDark);
   }
 }
 
@@ -1925,12 +1979,30 @@ window.addEventListener('exportDocument', async (event: Event) => {
   }
 });
 
+/**
+ * Returns true when the event originated inside (or focus is currently inside)
+ * a modal that owns its own keyboard/clipboard handling — currently the math
+ * editor overlay. The document-level handlers below must opt out for these
+ * events so Ctrl+Z / Ctrl+V / etc. stay scoped to the modal.
+ */
+function isEventInsideModalOverlay(event: Event): boolean {
+  const selector = '.math-editor-overlay';
+  const target = event.target;
+  if (target instanceof Element && target.closest(selector)) return true;
+  const active = document.activeElement;
+  if (active instanceof Element && active.closest(selector)) return true;
+  return false;
+}
+
 // Handle paste - convert markdown to HTML for proper TipTap rendering
 // Must use capture phase to intercept BEFORE TipTap's default handling
 document.addEventListener(
   'paste',
   (event: ClipboardEvent) => {
     if (!editor) return;
+    // When the math editor modal is open and the user pastes into it, leave
+    // the event entirely alone so the textarea's native paste runs.
+    if (isEventInsideModalOverlay(event)) return;
 
     const clipboardData = event.clipboardData;
     if (!clipboardData) return;
@@ -2005,6 +2077,21 @@ export const __testing = {
   insertRawCodeTextForTests(text: string) {
     if (!editor) return;
     insertRawCodeText(editor, text);
+  },
+  isPlainFindShortcutForTests(event: {
+    key: string;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+    shiftKey?: boolean;
+    altKey?: boolean;
+  }) {
+    return isPlainFindShortcut({
+      key: event.key,
+      ctrlKey: Boolean(event.ctrlKey),
+      metaKey: Boolean(event.metaKey),
+      shiftKey: Boolean(event.shiftKey),
+      altKey: Boolean(event.altKey),
+    });
   },
   isFormattingShortcutsEnabledForTests() {
     return formattingShortcutsEnabled;

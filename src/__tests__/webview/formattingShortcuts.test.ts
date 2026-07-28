@@ -13,7 +13,22 @@
 jest.mock('@tiptap/core', () => ({
   Editor: jest.fn(),
   Extension: { create: (config: unknown) => config },
+  Node: { create: (config: unknown) => config },
+  Mark: { create: (config: unknown) => config },
+  mergeAttributes: (...args: unknown[]) => Object.assign({}, ...(args as object[])),
+  InputRule: class {
+    constructor(config: unknown) {
+      Object.assign(this, config as object);
+    }
+  },
 }));
+jest.mock('katex', () => ({
+  __esModule: true,
+  default: { renderToString: jest.fn(() => ''), render: jest.fn() },
+  renderToString: jest.fn(() => ''),
+  render: jest.fn(),
+}));
+jest.mock('katex/dist/katex.min.css', () => ({}), { virtual: true });
 jest.mock('@tiptap/pm/state', () => ({
   Plugin: class {},
   PluginKey: class {},

@@ -75,8 +75,6 @@ export const window = {
   }),
   showSaveDialog: jest.fn(),
   showOpenDialog: jest.fn(),
-  activeColorTheme: { kind: 2 }, // ColorThemeKind.Dark
-  onDidChangeActiveColorTheme: jest.fn(() => ({ dispose: jest.fn() })),
   setStatusBarMessage: jest.fn(() => ({ dispose: jest.fn() })),
 };
 
@@ -114,14 +112,6 @@ export const Uri = {
 export const env = {
   openExternal: jest.fn(),
 };
-
-// Mock ColorThemeKind enum (matches VS Code's stable values)
-export enum ColorThemeKind {
-  Light = 1,
-  Dark = 2,
-  HighContrast = 3,
-  HighContrastLight = 4,
-}
 
 // Mock ConfigurationTarget enum
 export enum ConfigurationTarget {
@@ -205,7 +195,7 @@ export class TreeItem {
 }
 
 export class EventEmitter<T> {
-  public event = jest.fn();
+  public event = jest.fn(() => ({ dispose: jest.fn() }));
   fire = jest.fn((_data?: T) => {});
   dispose = jest.fn();
 }

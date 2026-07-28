@@ -32,6 +32,12 @@ const buildOptions = {
   loader: {
     '.css': 'css',
     '.ttf': 'file',
+    // KaTeX ships @font-face rules pointing at woff/woff2/eot files. esbuild
+    // copies them next to webview.css with hashed filenames so the bundled CSS
+    // resolves them via the webview's cspSource.
+    '.woff': 'file',
+    '.woff2': 'file',
+    '.eot': 'file',
   },
   // Use esbuild's built-in 'pure' option to remove console.log/debug/info
   // This properly handles parsing and removes the calls during minification

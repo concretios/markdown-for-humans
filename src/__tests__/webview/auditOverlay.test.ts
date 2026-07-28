@@ -7,7 +7,12 @@ import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import Link from '@tiptap/extension-link';
 import { CustomImage } from '../../webview/extensions/customImage';
-import { showAuditOverlay, showToast, dismissToast } from '../../webview/features/auditOverlay';
+import {
+  showAuditOverlay,
+  showToast,
+  dismissToast,
+  clearToasts,
+} from '../../webview/features/auditOverlay';
 import { AuditIssue } from '../../webview/features/auditDocument';
 
 let mockVscodeApi: { postMessage: jest.Mock };
@@ -45,10 +50,7 @@ describe('Audit Overlay UI', () => {
     if (overlay) {
       overlay.remove();
     }
-    const toastContainer = document.getElementById('toast-container');
-    if (toastContainer) {
-      toastContainer.remove();
-    }
+    clearToasts();
     delete (window as any).vscode;
     delete (window as any).resolveImagePath;
     jest.clearAllMocks();
@@ -516,10 +518,8 @@ describe('Audit Overlay UI', () => {
 
 describe('Toast Notifications', () => {
   afterEach(() => {
-    const toastContainer = document.getElementById('toast-container');
-    if (toastContainer) {
-      toastContainer.remove();
-    }
+    clearToasts();
+    jest.useRealTimers();
   });
 
   it('shows a success toast with correct styling', () => {
@@ -600,5 +600,16 @@ describe('Toast Notifications', () => {
       expect(stillHere).not.toBeNull();
       done();
     }, 3500);
+  });
+
+  it('clears pending toast animation and dismissal timers', () => {
+    jest.useFakeTimers();
+
+    showToast('Success message', 'success');
+    expect(jest.getTimerCount()).toBeGreaterThan(0);
+
+    clearToasts();
+
+    expect(jest.getTimerCount()).toBe(0);
   });
 });
