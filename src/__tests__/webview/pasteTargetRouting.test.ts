@@ -101,6 +101,12 @@ jest.mock('./../../webview/utils/copyMarkdown', () => ({ copySelectionAsMarkdown
 jest.mock('./../../webview/utils/outline', () => ({ buildOutlineFromEditor: jest.fn(() => []) }));
 jest.mock('./../../webview/utils/scrollToHeading', () => ({ scrollToHeading: jest.fn() }));
 
+// These tests load editor.ts via dynamic import(), so the file has no top-level
+// import/export and TypeScript would treat it as a global script -- leaking the
+// TestingModule alias below into the global scope, where it collides with the
+// identically-named alias in the sibling webview tests. Mark it as a module.
+export {};
+
 type TestingModule = {
   setMockEditor: (editor: unknown) => void;
   isPasteTargetedAtEditorForTests: (target: EventTarget | null) => boolean;

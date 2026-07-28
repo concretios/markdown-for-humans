@@ -518,7 +518,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
-        e.affectsConfiguration('markdownForHumans.enableMath')
+        e.affectsConfiguration('markdownForHumans.enableMath') ||
+        e.affectsConfiguration('markdownForHumans.formattingShortcuts.enabled')
       ) {
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -544,6 +545,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           0
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
+        const formattingShortcutsEnabled = config.get<boolean>(
+          'markdownForHumans.formattingShortcuts.enabled',
+          true
+        );
         const blankLineMode = this.getBlankLineMode();
         const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
@@ -570,6 +575,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingBefore: paragraphSpacingBefore,
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
+          formattingShortcutsEnabled,
           blankLineMode,
           enableMath: enableMath,
         });
@@ -673,6 +679,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     );
     const paragraphSpacingAfter = config.get<number>('markdownForHumans.paragraph.spacingAfter', 0);
     const zoom = config.get<number>('markdownForHumans.zoom', 100);
+    const formattingShortcutsEnabled = config.get<boolean>(
+      'markdownForHumans.formattingShortcuts.enabled',
+      true
+    );
     const blankLineMode = this.getBlankLineMode();
     const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
 
@@ -687,6 +697,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       paragraphSpacingBefore: paragraphSpacingBefore,
       paragraphSpacingAfter: paragraphSpacingAfter,
       zoom: zoom,
+      formattingShortcutsEnabled,
       blankLineMode,
       enableMath: enableMath,
     });
@@ -773,6 +784,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           0
         );
         const zoom = config.get<number>('markdownForHumans.zoom', 100);
+        const formattingShortcutsEnabled = config.get<boolean>(
+          'markdownForHumans.formattingShortcuts.enabled',
+          true
+        );
         const blankLineMode = this.getBlankLineMode();
         const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         webview.postMessage({
@@ -785,6 +800,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           paragraphSpacingBefore: paragraphSpacingBefore,
           paragraphSpacingAfter: paragraphSpacingAfter,
           zoom: zoom,
+          formattingShortcutsEnabled,
           blankLineMode,
           enableMath: enableMath,
         });

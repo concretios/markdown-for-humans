@@ -246,6 +246,10 @@ let aiContextSessionSkipSave = false;
 // kept in sync via `update` and `settingsUpdate` messages from the host.
 let aiContextSkipSaveWarningSetting = false;
 let blankLineMode: BlankLineMode = 'strip';
+// Mirrors `markdownForHumans.formattingShortcuts.enabled`. When false, the
+// editor stops intercepting Cmd/Ctrl+B/I/U so those chords reach VS Code's own
+// keybindings instead of toggling bold/italic/underline in-editor.
+let formattingShortcutsEnabled = true;
 
 // Pending document-dirty queries, keyed by requestId. The host replies with
 // `documentDirtyResponse`; we look up the resolver here.
@@ -669,6 +673,15 @@ function initializeEditor(initialContent: string) {
           class: 'markdown-editor',
           spellcheck: 'true',
         },
+        // Runs before TipTap's own keymaps (StarterKit binds Mod-b/i/u), which
+        // would otherwise apply formatting even with the setting disabled while
+        // the chord simultaneously reaches VS Code — e.g. Ctrl+B toggling the
+        // sidebar AND bolding text. Returning true swallows the keymap without
+        // stopping propagation, so VS Code still receives the chord.
+        handleKeyDown: (_view, event) => {
+          const isMod = event.metaKey || event.ctrlKey;
+          return shouldSuppressFormattingShortcut(event.key, isMod, formattingShortcutsEnabled);
+        },
         // Prevent default image drop handling - let our custom handler manage it
         handleDrop: (_view, event, _slice, _moved) => {
           const dt = event.dataTransfer;
@@ -860,13 +873,7 @@ function initializeEditor(initialContent: string) {
 
       // Prevent VS Code from handling markdown formatting shortcuts
       // TipTap will handle these natively
-      const formattingShortcuts = [
-        'b', // Bold
-        'i', // Italic
-        'u', // Underline (some editors)
-      ];
-
-      if (isMod && formattingShortcuts.includes(e.key.toLowerCase())) {
+      if (shouldInterceptFormattingShortcut(e.key, isMod, formattingShortcutsEnabled)) {
         e.stopPropagation(); // Stop event from reaching VS Code
         // TipTap will handle the formatting
         return;
@@ -1877,6 +1884,44 @@ function applyZoomLevel(percent: number) {
     );
   }
 }
+const FORMATTING_SHORTCUT_KEYS = [
+  'b', // Bold
+  'i', // Italic
+  'u', // Underline (some editors)
+];
+
+/**
+ * Whether a Cmd/Ctrl+B/I/U keydown should be captured here (and its
+ * propagation to VS Code stopped) so TipTap can handle it natively, per the
+ * `markdownForHumans.formattingShortcuts.enabled` setting.
+ */
+function shouldInterceptFormattingShortcut(
+  key: string,
+  isMod: boolean,
+  formattingShortcutsEnabled: boolean
+): boolean {
+  return (
+    isMod && formattingShortcutsEnabled && FORMATTING_SHORTCUT_KEYS.includes(key.toLowerCase())
+  );
+}
+
+/**
+ * Whether a Cmd/Ctrl+B/I/U keydown must be swallowed inside TipTap (via
+ * `editorProps.handleKeyDown`) because formatting shortcuts are disabled.
+ * TipTap's StarterKit registers its own Mod-b/i/u keymaps that fire whenever
+ * the editor has focus; without this gate, disabling the setting lets the
+ * chord reach VS Code but STILL applies formatting, so both actions run.
+ */
+function shouldSuppressFormattingShortcut(
+  key: string,
+  isMod: boolean,
+  formattingShortcutsEnabled: boolean
+): boolean {
+  return (
+    isMod && !formattingShortcutsEnabled && FORMATTING_SHORTCUT_KEYS.includes(key.toLowerCase())
+  );
+}
+
 /**
  * Applies paragraph spacing and zoom settings from an incoming message.
  * Called from both the `update` and `settingsUpdate` handlers.
@@ -1897,6 +1942,9 @@ function applyEditorSettings(message: Record<string, any>) {
   }
   if (typeof message.zoom === 'number') {
     applyZoomLevel(message.zoom);
+  }
+  if (typeof message.formattingShortcutsEnabled === 'boolean') {
+    formattingShortcutsEnabled = message.formattingShortcutsEnabled;
   }
 }
 
@@ -2065,6 +2113,15 @@ export const __testing = {
       shiftKey: Boolean(event.shiftKey),
       altKey: Boolean(event.altKey),
     });
+  },
+  isFormattingShortcutsEnabledForTests() {
+    return formattingShortcutsEnabled;
+  },
+  shouldInterceptFormattingShortcutForTests(key: string, isMod: boolean) {
+    return shouldInterceptFormattingShortcut(key, isMod, formattingShortcutsEnabled);
+  },
+  shouldSuppressFormattingShortcutForTests(key: string, isMod: boolean) {
+    return shouldSuppressFormattingShortcut(key, isMod, formattingShortcutsEnabled);
   },
   isPasteTargetedAtEditorForTests(target: EventTarget | null) {
     return isPasteTargetedAtEditor(target);

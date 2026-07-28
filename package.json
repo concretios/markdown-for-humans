@@ -112,6 +112,10 @@
       {
         "command": "markdownForHumans.copyAiContextRef",
         "title": "Markdown for Humans: Copy AI Context Reference (@file#lines)"
+      },
+      {
+        "command": "markdownForHumans.toggleFormattingShortcuts",
+        "title": "Markdown for Humans: Toggle Formatting Shortcuts (Cmd/Ctrl+B/I/U)"
       }
     ],
     "keybindings": [
@@ -119,6 +123,12 @@
         "command": "markdownForHumans.copyAiContextRef",
         "key": "alt+c",
         "mac": "alt+c",
+        "when": "activeCustomEditorId == 'markdownForHumans.editor'"
+      },
+      {
+        "command": "markdownForHumans.toggleFormattingShortcuts",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
         "when": "activeCustomEditorId == 'markdownForHumans.editor'"
       }
     ],
@@ -239,6 +249,12 @@
           "type": "boolean",
           "default": true,
           "description": "Render LaTeX math expressions using KaTeX. Use $...$ for inline math and $$...$$ for display math. Toggling this setting requires reopening the editor."
+        },
+        "markdownForHumans.formattingShortcuts.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, Cmd/Ctrl+B, +I, and +U toggle bold/italic/underline inside the editor. Disable this if you rely on VS Code keybindings that use the same chords (e.g. a sidebar toggle rebound to Cmd+B) and want them to keep working while a markdown file is open in this editor.",
+          "scope": "application"
         }
       }
     }

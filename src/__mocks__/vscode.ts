@@ -75,6 +75,7 @@ export const window = {
   }),
   showSaveDialog: jest.fn(),
   showOpenDialog: jest.fn(),
+  setStatusBarMessage: jest.fn(() => ({ dispose: jest.fn() })),
 };
 
 // Mock workspace API
