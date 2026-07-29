@@ -15,6 +15,7 @@
 
 const esbuild = require('esbuild');
 const fs = require('fs');
+const { consoleStripOptions } = require('./console-strip');
 
 const args = process.argv.slice(2);
 const isProduction = args.includes('--prod') || process.env.NODE_ENV === 'production';
@@ -31,8 +32,9 @@ const buildOptions = {
   sourcemap: !noSourcemap && !isProduction,
   minify: isProduction,
   treeShaking: true,
-  // Remove console.log/debug/info calls in production bundles (keep warn/error)
-  pure: isProduction ? ['console.log', 'console.debug', 'console.info'] : [],
+  // Remove console.log/debug/info calls in production bundles (keep warn/error).
+  // See scripts/console-strip.js for why 'pure' alone is insufficient.
+  ...consoleStripOptions(isProduction),
 };
 
 async function build() {
@@ -41,7 +43,7 @@ async function build() {
     const context = await esbuild.context({
       ...buildOptions,
       minify: false, // Never minify in watch mode
-      pure: [], // Keep all console logs in watch mode
+      ...consoleStripOptions(false), // Keep all console logs in watch mode
     });
 
     await context.watch();

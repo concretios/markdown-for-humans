@@ -15,6 +15,7 @@
 
 const esbuild = require('esbuild');
 const fs = require('fs');
+const { consoleStripOptions } = require('./console-strip');
 
 const args = process.argv.slice(2);
 const isProduction = args.includes('--prod') || process.env.NODE_ENV === 'production';
@@ -39,11 +40,11 @@ const buildOptions = {
     '.woff2': 'file',
     '.eot': 'file',
   },
-  // Use esbuild's built-in 'pure' option to remove console.log/debug/info
-  // This properly handles parsing and removes the calls during minification
-  // while keeping console.error and console.warn
-  pure: isProduction ? ['console.log', 'console.debug', 'console.info'] : [],
-  plugins: [], // No custom plugins needed - using 'pure' instead
+  // Strip console.log/debug/info from release bundles while keeping warn/error.
+  // 'pure' alone is not enough for value-position calls in dependencies -
+  // see scripts/console-strip.js for the full explanation.
+  ...consoleStripOptions(isProduction),
+  plugins: [],
 };
 
 async function build() {
@@ -52,7 +53,8 @@ async function build() {
     const context = await esbuild.context({
       ...buildOptions,
       minify: false, // Never minify in watch mode
-      plugins: [], // No console dropping in watch mode
+      ...consoleStripOptions(false), // Keep all console output in watch mode
+      plugins: [],
     });
 
     await context.watch();

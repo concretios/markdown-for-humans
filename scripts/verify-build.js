@@ -11,17 +11,59 @@
 
 const fs = require('fs');
 const path = require('path');
+const { STRIPPED_CONSOLE_METHODS } = require('./console-strip');
+
+// Matches calls on the *global* console only.
+//
+// The negative lookbehind for [\w$.] is essential: a plain substring search for
+// "console.log(" also matches property accesses inside bundled dependencies,
+// such as vscode-jsonrpc's `RAL().console.log('inspect')` (reachable through
+// mermaid). That `console` is a property of an abstraction layer object, not the
+// global console, so no esbuild option can or should rewrite it - flagging it
+// makes the check unfixable rather than useful.
+//
+// Known limitation: this is a lexical scan, so a literal "console.log(" inside a
+// string or comment in a dependency would still be reported. Nothing in the
+// current dependency tree does that; if it starts, add an explicit allowlist
+// rather than loosening the pattern.
+const GLOBAL_CONSOLE_CALL = new RegExp(
+  String.raw`(?<![\w$.])console\s*\.\s*(${STRIPPED_CONSOLE_METHODS.join('|')})\s*\(`,
+  'g'
+);
 
 function assertNoProdConsoleCalls(bundleName, content) {
-  const disallowed = ['console.log(', 'console.debug(', 'console.info('];
-  const found = disallowed.filter(token => content.includes(token));
-  if (found.length > 0) {
-    console.error(`   ❌ Production bundle contains disallowed console calls:`);
-    found.forEach(token => console.error(`      - ${token}`));
-    console.error(`   Fix: ensure the build uses esbuild 'pure' (or equivalent) for console.log/debug/info.\n`);
-    return false;
+  const matches = [];
+  for (const match of content.matchAll(GLOBAL_CONSOLE_CALL)) {
+    matches.push({
+      method: match[1],
+      line: content.slice(0, match.index).split('\n').length,
+      // Minified bundles have enormous lines, so show a local window instead.
+      snippet: content.slice(Math.max(0, match.index - 80), match.index + 60),
+    });
   }
-  return true;
+
+  if (matches.length === 0) {
+    return true;
+  }
+
+  console.error(
+    `   ❌ Production bundle contains ${matches.length} disallowed console call(s):`
+  );
+  matches.slice(0, 10).forEach(({ method, line, snippet }) => {
+    console.error(`      - console.${method}( at line ${line}`);
+    console.error(`        …${snippet.replace(/\s+/g, ' ')}…`);
+  });
+  if (matches.length > 10) {
+    console.error(`      … and ${matches.length - 10} more`);
+  }
+  console.error(
+    `   Fix: see scripts/console-strip.js - release builds must apply both 'pure'`
+  );
+  console.error(
+    `   and the 'define' + injected no-op, since 'pure' cannot remove calls whose`
+  );
+  console.error(`   return value is used (e.g. \`(m) => console.log(m)\`).\n`);
+  return false;
 }
 
 function assertNoSourcemapsInDist() {
@@ -163,11 +205,12 @@ console.log('');
 
 // Final summary
 if (hasErrors) {
-  console.error('❌ Build verification FAILED - critical features are missing!\n');
+  console.error('❌ Build verification FAILED - see the errors above.\n');
   console.error('Action required:');
-  console.error('1. Check that all CSS is properly imported in editor.ts');
-  console.error('2. Rebuild with: npm run build');
-  console.error('3. Run this script again: node scripts/verify-build.js\n');
+  console.error('1. Read the specific ❌ lines above; each one names its own fix');
+  console.error('2. For missing CSS, check that it is imported in editor.ts');
+  console.error('3. Rebuild with: npm run build:release');
+  console.error('4. Run this script again: node scripts/verify-build.js\n');
   process.exit(1);
 } else if (hasWarnings) {
   console.warn('⚠️  Build verification passed with warnings\n');
