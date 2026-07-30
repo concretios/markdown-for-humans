@@ -2630,6 +2630,33 @@
     opacity: 1;
   }
 
+  /* Narrow images (< 70px wide): the 28px button would cover the picture, so
+     it moves beside the image instead.
+
+     The gutter is padding on the wrapper, not margin, so the button and the
+     space around it stay INSIDE the wrapper's hit area. With margin the strip
+     between the image and the button belonged to the paragraph, so moving the
+     pointer toward the button fired mouseleave on the wrapper and the button
+     was hidden before it could be hovered or clicked. */
+  .image-wrapper.image-narrow {
+    --md-image-menu-gutter: 38px;
+    padding-right: var(--md-image-menu-gutter);
+  }
+
+  .image-wrapper.image-narrow .image-menu-button {
+    top: 0;
+    right: 5px;
+  }
+
+  /* Keep the hover backdrop and metadata card over the image, not the gutter. */
+  .image-wrapper.image-narrow::before {
+    right: var(--md-image-menu-gutter);
+  }
+
+  .image-wrapper.image-narrow .image-metadata-footer {
+    left: calc(50% - (var(--md-image-menu-gutter) / 2));
+  }
+
   /* ============================================
      Image Metadata Footer - Centered Overlay
      ============================================ */
@@ -3260,10 +3287,31 @@
   white-space: nowrap;
 }
 
-.audit-issue-separator{
-  border: none;
+/* Row divider drawn on the row itself, not as a standalone <hr>.
+   Removing a fixed row therefore removes its divider too, so the list
+   reflows with no blank placeholder gaps left behind. Rendered as a
+   pseudo-element so the row keeps its rounded hover highlight. */
+.audit-overlay-item {
+  position: relative;
+}
+
+.audit-overlay-item + .audit-overlay-item {
+  margin-top: 21px;
+}
+
+.audit-overlay-item + .audit-overlay-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -11px;
   border-top: 1px solid var(--vscode-widget-border, #ccc);
-  margin: 10px 0;
+  pointer-events: none;
+}
+
+/* Legacy standalone separators: keep any stale nodes from leaving a gap. */
+.audit-issue-separator {
+  display: none;
 }
 
 body {

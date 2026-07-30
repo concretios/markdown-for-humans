@@ -24,6 +24,7 @@ import {
   showImageMenu,
   hideImageMenu,
   isExternalImage,
+  observeNarrowImageLayout,
 } from '../features/imageMenu';
 import { showImageMetadataFooter, hideImageMetadataFooter } from '../features/imageMetadata';
 
@@ -339,6 +340,15 @@ export const CustomImage = Image.extend({
       wrapper.addEventListener('mouseenter', handleMouseEnter);
       wrapper.addEventListener('mouseleave', handleMouseLeave);
 
+      // For narrow images the button sits beside the picture rather than on it,
+      // so the pointer can reach the button without crossing the image. Re-assert
+      // the hover state there so the button cannot vanish out from under it.
+      menuButton.addEventListener('mouseenter', () => {
+        if (isImageLoaded && dom.complete && !isExternal) {
+          wrapper.classList.add('image-menu-active');
+        }
+      });
+
       // Click menu button to show/hide dropdown
       menuButton.addEventListener('click', e => {
         e.preventDefault();
@@ -357,9 +367,16 @@ export const CustomImage = Image.extend({
       wrapper.appendChild(menuButton);
       wrapper.appendChild(menu);
 
+      // Small images cannot host the menu button without covering the picture,
+      // so track the rendered width and move the button outside when narrow.
+      const stopNarrowLayoutObserver = observeNarrowImageLayout(wrapper, dom);
+
       // No need to setup image click handler - only icon opens modal
       return {
         dom: wrapper,
+        destroy: () => {
+          stopNarrowLayoutObserver();
+        },
       };
     };
   },

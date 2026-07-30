@@ -514,6 +514,67 @@ describe('Audit Overlay UI', () => {
     const browseBtn = document.querySelector('.audit-browse-btn');
     expect(browseBtn).toBeNull();
   });
+
+  describe('list reflow after fixing issues', () => {
+    /**
+     * Build N manual-fix link issues anchored to real positions in the doc so
+     * applyFix can dispatch a transaction for each one.
+     */
+    function buildLinkIssues(count: number): AuditIssue[] {
+      return Array.from({ length: count }, (_, index) => ({
+        type: 'link' as const,
+        message: `Broken link ${index + 1}`,
+        target: `missing-${index + 1}.md`,
+        suggestions: [],
+        pos: 1,
+        nodeSize: 1,
+      }));
+    }
+
+    it('renders no standalone separator nodes between issues', () => {
+      showAuditOverlay(editor, buildLinkIssues(3));
+
+      const overlay = document.getElementById('audit-overlay') as HTMLElement;
+      expect(overlay.querySelectorAll('.audit-overlay-item')).toHaveLength(3);
+      expect(overlay.querySelectorAll('.audit-issue-separator')).toHaveLength(0);
+      expect(overlay.querySelectorAll('hr')).toHaveLength(0);
+    });
+
+    it('leaves no empty placeholder rows after fixing several issues', () => {
+      showAuditOverlay(editor, buildLinkIssues(4));
+
+      const overlay = document.getElementById('audit-overlay') as HTMLElement;
+      const list = overlay.querySelector('.audit-overlay-list') as HTMLElement;
+
+      // Fix the first two issues via their manual Fix buttons.
+      for (let i = 0; i < 2; i++) {
+        const fixBtn = list.querySelector('.audit-fix-button.manual-fix') as HTMLButtonElement;
+        expect(fixBtn).not.toBeNull();
+        fixBtn.click();
+      }
+
+      // Every remaining child must be a real issue row, not a leftover divider.
+      const children = Array.from(list.children);
+      expect(children).toHaveLength(2);
+      children.forEach(child => {
+        expect(child.classList.contains('audit-overlay-item')).toBe(true);
+      });
+    });
+
+    it('keeps the header count in sync with the remaining rows', () => {
+      showAuditOverlay(editor, buildLinkIssues(3));
+
+      const overlay = document.getElementById('audit-overlay') as HTMLElement;
+      const title = overlay.querySelector('.audit-overlay-title') as HTMLElement;
+      expect(title.textContent).toContain('3 issues');
+
+      (overlay.querySelector('.audit-fix-button.manual-fix') as HTMLButtonElement).click();
+      expect(title.textContent).toContain('2 issues');
+
+      (overlay.querySelector('.audit-fix-button.manual-fix') as HTMLButtonElement).click();
+      expect(title.textContent).toContain('1 issue');
+    });
+  });
 });
 
 describe('Toast Notifications', () => {

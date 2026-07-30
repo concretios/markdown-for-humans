@@ -80,17 +80,24 @@ export function createImageMenu(isLocal: boolean = true): HTMLElement {
   return menu;
 }
 
+// Gap kept between the menu and the viewport edges when clamping.
+const MENU_VIEWPORT_MARGIN_PX = 8;
+
 /**
- * Position the menu relative to the button
- * Shows below button by default, above if near bottom of viewport
+ * Position the menu relative to the button.
+ * Vertically: below the button by default, above if near the bottom of the viewport.
+ * Horizontally: right-aligned to the wrapper by default, then clamped into the
+ * viewport. Narrow images (e.g. a small image at the start of a line) would
+ * otherwise push the 160px-wide menu off the left edge, where it gets clipped.
  */
 function positionMenu(menu: HTMLElement, button: HTMLElement): void {
   const buttonRect = button.getBoundingClientRect();
-  // Measure actual menu height (temporarily show it)
+  // Measure actual menu size (temporarily show it)
   const wasVisible = menu.style.display !== 'none';
   menu.style.display = 'block';
   menu.style.visibility = 'hidden';
   const menuHeight = menu.offsetHeight;
+  const menuWidth = menu.offsetWidth;
   menu.style.visibility = '';
   if (!wasVisible) {
     menu.style.display = 'none';
@@ -114,6 +121,40 @@ function positionMenu(menu: HTMLElement, button: HTMLElement): void {
     menu.style.marginTop = '0';
     menu.style.marginBottom = '0';
   }
+
+  positionMenuHorizontally(menu, menuWidth);
+}
+
+/**
+ * Resolve the menu's horizontal offset within its positioned ancestor
+ * (the .image-wrapper), clamping it so the menu stays fully on screen.
+ */
+function positionMenuHorizontally(menu: HTMLElement, menuWidth: number): void {
+  const anchor = (menu.offsetParent as HTMLElement | null) ?? menu.parentElement;
+  if (!anchor || menuWidth <= 0) {
+    return;
+  }
+
+  const anchorRect = anchor.getBoundingClientRect();
+  const viewportWidth = window.innerWidth;
+  const margin = MENU_VIEWPORT_MARGIN_PX;
+
+  // Preferred placement: right edge of the menu aligned with the wrapper's right edge.
+  let left = anchorRect.width - menuWidth;
+
+  // Clamp against the right viewport edge first, then the left edge so a menu
+  // wider than the viewport still starts on screen.
+  const maxLeft = viewportWidth - margin - menuWidth - anchorRect.left;
+  if (left > maxLeft) {
+    left = maxLeft;
+  }
+  const minLeft = margin - anchorRect.left;
+  if (left < minLeft) {
+    left = minLeft;
+  }
+
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.right = 'auto';
 }
 
 /**
@@ -294,4 +335,49 @@ export function hideImageMenu(menu: HTMLElement): void {
  */
 export function isExternalImage(src: string): boolean {
   return src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:');
+}
+
+/**
+ * Images narrower than this cannot host the 28px menu button without covering
+ * most of the picture, so the button is moved just outside the right edge.
+ */
+export const NARROW_IMAGE_MAX_WIDTH_PX = 70;
+
+/** Marker class that switches the menu button to outside-the-image placement. */
+export const NARROW_IMAGE_CLASS = 'image-narrow';
+
+/**
+ * Toggle the narrow-image layout class based on the image's rendered width.
+ * Width is only trusted once it is non-zero; an unloaded or detached image
+ * measures 0 and must not be misclassified as narrow.
+ */
+export function syncNarrowImageLayout(wrapper: HTMLElement, img: HTMLImageElement): void {
+  const width = img.getBoundingClientRect().width || img.offsetWidth;
+  if (width <= 0) {
+    return;
+  }
+  wrapper.classList.toggle(NARROW_IMAGE_CLASS, width < NARROW_IMAGE_MAX_WIDTH_PX);
+}
+
+/**
+ * Keep the narrow-image layout in sync as the image loads and is resized.
+ *
+ * @returns A cleanup function that stops observing.
+ */
+export function observeNarrowImageLayout(wrapper: HTMLElement, img: HTMLImageElement): () => void {
+  const sync = () => syncNarrowImageLayout(wrapper, img);
+  sync();
+
+  img.addEventListener('load', sync);
+
+  let resizeObserver: ResizeObserver | undefined;
+  if (typeof ResizeObserver === 'function') {
+    resizeObserver = new ResizeObserver(sync);
+    resizeObserver.observe(img);
+  }
+
+  return () => {
+    img.removeEventListener('load', sync);
+    resizeObserver?.disconnect();
+  };
 }
