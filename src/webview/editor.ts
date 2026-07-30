@@ -45,7 +45,7 @@ import {
 import { toggleTocOverlay } from './features/tocOverlay';
 import { showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
-import { processPasteContent, parseFencedCode, setPasteHtmlHandling } from './utils/pasteHandler';
+import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
 import { copyAiContextReference, type SelectionBlockRange } from './utils/aiContextReference';
 import { shouldAutoLink } from './utils/linkValidation';
@@ -1945,9 +1945,6 @@ function applyEditorSettings(message: Record<string, any>) {
   }
   if (typeof message.formattingShortcutsEnabled === 'boolean') {
     formattingShortcutsEnabled = message.formattingShortcutsEnabled;
-  }
-  if (typeof message.pasteHtmlHandling === 'string') {
-    setPasteHtmlHandling(message.pasteHtmlHandling);
   }
 }
 

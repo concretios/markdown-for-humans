@@ -519,7 +519,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
         e.affectsConfiguration('markdownForHumans.enableMath') ||
-        e.affectsConfiguration('markdownForHumans.paste.htmlHandling') ||
         e.affectsConfiguration('markdownForHumans.formattingShortcuts.enabled')
       ) {
         const config = vscode.workspace.getConfiguration();
@@ -552,10 +551,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const blankLineMode = this.getBlankLineMode();
         const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
-        const pasteHtmlHandling = config.get<string>(
-          'markdownForHumans.paste.htmlHandling',
-          'preserveHtml'
-        );
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
           void this.syncMarkdownlintMd012(blankLineMode).catch(error => {
             console.warn('[MD4H] Failed syncing markdownlint MD012 rule:', error);
@@ -583,7 +578,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           formattingShortcutsEnabled,
           blankLineMode,
           enableMath: enableMath,
-          pasteHtmlHandling,
         });
       }
     });
@@ -691,10 +685,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     );
     const blankLineMode = this.getBlankLineMode();
     const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
-    const pasteHtmlHandling = config.get<string>(
-      'markdownForHumans.paste.htmlHandling',
-      'preserveHtml'
-    );
 
     webview.postMessage({
       type: 'update',
@@ -710,7 +700,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       formattingShortcutsEnabled,
       blankLineMode,
       enableMath: enableMath,
-      pasteHtmlHandling,
     });
   }
 
@@ -801,10 +790,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
         const blankLineMode = this.getBlankLineMode();
         const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
-        const pasteHtmlHandling = config.get<string>(
-          'markdownForHumans.paste.htmlHandling',
-          'preserveHtml'
-        );
         webview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
@@ -818,7 +803,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           formattingShortcutsEnabled,
           blankLineMode,
           enableMath: enableMath,
-          pasteHtmlHandling,
         });
         break;
       }

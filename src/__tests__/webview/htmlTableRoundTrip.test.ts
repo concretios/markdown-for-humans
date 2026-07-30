@@ -28,6 +28,7 @@ import {
   mergeSplitHtmlBlocks,
 } from '../../webview/utils/markedLexerNormalizer';
 import { htmlToMarkdown, processPasteContent } from '../../webview/utils/pasteHandler';
+import { getEditorMarkdownForSync } from '../../webview/utils/markdownSerialization';
 
 const CLIPBOARD_TABLE_HTML = [
   '<table class="data">',
@@ -96,6 +97,31 @@ function readTableCells(editor: Editor): string[][] {
   return (table.content ?? []).map(row =>
     (row.content ?? []).map(cell => collectText(cell).trim())
   );
+}
+
+/**
+ * Top-level node types, minus the single empty paragraph TipTap always keeps at
+ * the end of the doc for cursor placement. Empty paragraphs anywhere else are
+ * reported as `EMPTY-P` — those are the visible blank lines under test.
+ */
+function nodeTypes(editor: Editor): string[] {
+  const doc = editor.getJSON() as JsonNode;
+  const nodes = [...(doc.content ?? [])];
+  const last = nodes[nodes.length - 1];
+  if (last && last.type === 'paragraph' && !last.content) {
+    nodes.pop();
+  }
+  return nodes.map(node =>
+    node.type === 'paragraph' && !node.content ? 'EMPTY-P' : (node.type ?? '?')
+  );
+}
+
+/** Paste, then report the markdown that would be written to disk. */
+function pasteAndSave(html: string, text: string): { editor: Editor; saved: string } {
+  const editor = createEditor();
+  const result = processPasteContent(fakeClipboard(html, text));
+  editor.commands.insertContent(result.content);
+  return { editor, saved: getEditorMarkdownForSync(editor, 'preserve') };
 }
 
 describe('HTML table paste', () => {
@@ -268,5 +294,85 @@ describe('mergeSplitHtmlBlocks', () => {
   it('does not open a scope for void or self-closing tags', () => {
     const tokens = [html('<img src="a.png">\n'), space('\n'), html('<br/>\n')];
     expect(mergeSplitHtmlBlocks(tokens)).toEqual(tokens);
+  });
+});
+
+describe('markdown-origin tables are never saved back as HTML', () => {
+  it('a pasted markdown pipe table is never saved back as HTML', () => {
+    // Plain-text markdown paste routes through markdown-it too, so a pasted
+    // pipe table hit the same htmlOrigin trap as an HTML table: every
+    // DOM-parsed table used to be tagged htmlOrigin regardless of how it was
+    // authored, which meant a plain markdown table would round-trip back out
+    // as `<table>` markup on the very first save.
+    const { editor, saved } = pasteAndSave('', '| A | B |\n| --- | --- |\n| 1 | 2 |');
+    try {
+      expect(saved).not.toContain('<table');
+      expect(saved).toMatch(/\|\s*A\s*\|\s*B\s*\|/);
+    } finally {
+      editor.destroy();
+    }
+  });
+});
+
+describe('document scaffolding no longer leaves blank lines', () => {
+  function load(markdown: string): string[] {
+    const editor = createEditor();
+    try {
+      editor.commands.setContent(markdown, { contentType: 'markdown' });
+      return nodeTypes(editor);
+    } finally {
+      editor.destroy();
+    }
+  }
+
+  /**
+   * `@tiptap/markdown` runs each HTML token through `generateJSON`, and a
+   * fragment with no renderable content still yields a doc holding one empty
+   * paragraph — which lands in the document as a blank line. So a bare
+   * doctype, the `<html>`/`<body>` wrapper, a comment, or a stray closing tag
+   * each inserted a visible gap. These assert that scaffolding is dropped
+   * instead.
+   */
+  it.each([
+    ['a doctype', '<!DOCTYPE html>'],
+    ['closing wrapper tags', '</body>\n</html>'],
+    ['an HTML comment', '<!-- just a note -->'],
+    ['a stray closing tag', '</p>'],
+  ])('drops %s instead of emitting an empty paragraph', (_label, scaffolding) => {
+    expect(load(scaffolding)).toEqual([]);
+  });
+
+  it('does not insert a gap between blocks separated by scaffolding', () => {
+    expect(load('# A\n\n<!-- note -->\n\n# B')).toEqual(['heading', 'heading']);
+    expect(load('# A\n\n# B')).toEqual(['heading', 'heading']);
+  });
+
+  it('keeps HTML that renders even though it carries no text', () => {
+    expect(load('<hr>')).toEqual(['horizontalRule']);
+    // A table of empty cells has no text either, but it is still real content —
+    // the emptiness heuristic must not swallow it.
+    expect(load('<table><tr><td></td><td></td></tr></table>')).toEqual(['table']);
+  });
+
+  it('renders a full HTML page without leading blank lines', () => {
+    expect(
+      load(
+        [
+          '<!DOCTYPE html>',
+          '<html>',
+          '<head>',
+          '<title>HTML Example</title>',
+          '</head>',
+          '<body>',
+          '',
+          '<h1>Welcome</h1>',
+          '',
+          '<table><tr><th>Name</th></tr><tr><td>Alice</td></tr></table>',
+          '',
+          '</body>',
+          '</html>',
+        ].join('\n')
+      )
+    ).toEqual(['heading', 'table']);
   });
 });

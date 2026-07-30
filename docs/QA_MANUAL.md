@@ -279,7 +279,25 @@ Hover an image to reveal a **three-dots** menu, with:
 **Expected**
 - Clipboard contains Markdown representing the selection (not HTML).
 
-### 5.13 Source view (split pane)
+### 5.13 Pasting code: copy button vs. copying from a source file
+
+This is **intentional, non-configurable behavior** — the editor's paste handling looks at what the clipboard actually contains, not a user setting, so the same paste action can produce different results depending on where the content was copied from. Both outcomes below are correct.
+
+**Why they differ**
+- The **copy button on a rendered code block** (top-right icon) copies **plain text only** — no HTML flavor is placed on the clipboard.
+- **Copying source code from a file** (a `.js`/`.py`/etc. file in an editor, a GitHub file view, another rich code viewer) typically puts a `<pre><code>` HTML fragment on the clipboard alongside the plain text.
+
+**What to do**
+- Click the copy-button on an existing code block, then paste into a normal paragraph (cursor **not** inside a code block).
+- Separately, open a source file, copy a few lines, and paste into a normal paragraph.
+- Repeat both pastes with the cursor already inside an existing code block.
+
+**Expected**
+- Copy-button paste (plain text, no HTML) into a normal paragraph: treated like any plain-text paste — Markdown-looking syntax (`#`, `**`, lists, etc.) renders as formatting; otherwise it lands as plain paragraph text. It is **not** re-wrapped in a fenced code block, since the clipboard carries no signal that it was code.
+- Source-file paste (HTML with `<pre><code>`) into a normal paragraph: recognized as rich HTML and converted into a properly fenced Markdown code block (` ``` `), including the language tag when the source annotates one (e.g. `class="language-ts"`).
+- Either paste with the cursor already inside an existing code block: inserted as literal text with no Markdown/HTML parsing at all, regardless of source (see §5.4).
+
+### 5.14 Source view (split pane)
 
 **How to use**
 - Toolbar → “Source” opens the default VS Code editor beside the WYSIWYG view.
@@ -290,7 +308,7 @@ Hover an image to reveal a **three-dots** menu, with:
 **Expected**
 - Two views stay in sync without duplication or “fight” loops.
 
-### 5.14 Export (PDF + Word)
+### 5.15 Export (PDF + Word)
 
 **How to use**
 - Toolbar → “Export” dropdown → “Export as PDF” or “Export as Word”
@@ -312,7 +330,7 @@ Hover an image to reveal a **three-dots** menu, with:
 - A save dialog appears with a sensible default filename in the document’s folder.
 - Success shows a VS Code info message; failures show a VS Code error message with useful guidance.
 
-### 5.15 Settings
+### 5.16 Settings
 
 Open settings via:
 - Toolbar → “Export settings” (gear) or

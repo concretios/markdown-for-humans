@@ -71,123 +71,20 @@ turndown.addRule('fencedCodeBlock', {
 turndown.keep(['sup', 'sub']);
 
 /**
- * How pasted HTML tables are represented in the document.
- *
- * - `preserveHtml`     keep the original `<table>` markup, so structure the
- *                      GFM grammar cannot express (colspan, rowspan, block
- *                      content in a cell, the class attribute) survives.
- * - `convertToMarkdown` rewrite the table as a GFM pipe table, so the saved
- *                      file stays plain markdown.
- *
- * Mirrors the `markdownForHumans.paste.htmlHandling` VS Code setting; the
- * extension host pushes the current value on load and whenever it changes.
- */
-export type PasteHtmlHandling = 'preserveHtml' | 'convertToMarkdown';
-
-const DEFAULT_PASTE_HTML_HANDLING: PasteHtmlHandling = 'preserveHtml';
-
-let pasteHtmlHandling: PasteHtmlHandling = DEFAULT_PASTE_HTML_HANDLING;
-
-/** Apply the user's paste-handling preference. Unknown values are ignored. */
-export function setPasteHtmlHandling(mode: string | undefined): void {
-  if (mode === 'preserveHtml' || mode === 'convertToMarkdown') {
-    pasteHtmlHandling = mode;
-  }
-}
-
-export function getPasteHtmlHandling(): PasteHtmlHandling {
-  return pasteHtmlHandling;
-}
-
-/** Escape the characters that would break out of a GFM table cell. */
-function escapePipeCell(text: string): string {
-  return text
-    .replace(/\|/g, '\\|')
-    .replace(/\s*\n+\s*/g, ' ')
-    .trim();
-}
-
-function directCells(row: Element): Element[] {
-  return Array.from(row.children).filter(child => {
-    const tag = child.tagName.toLowerCase();
-    return tag === 'th' || tag === 'td';
-  });
-}
-
-/**
- * Convert a cell's inner markup to inline markdown so bold, links and code
- * spans survive. Cells containing a nested table fall back to plain text —
- * GFM has no way to express a table inside a cell.
- */
-function cellToMarkdown(cell: Element): string {
-  if (cell.querySelector('table')) {
-    return escapePipeCell(cell.textContent ?? '');
-  }
-  try {
-    return escapePipeCell(turndown.turndown(cell.innerHTML));
-  } catch {
-    return escapePipeCell(cell.textContent ?? '');
-  }
-}
-
-/**
- * Render an HTML table as a GFM pipe table.
- *
- * GFM requires a header row and a uniform column count, so the first row is
- * promoted to the header (an empty header is synthesised when the table has no
- * `<th>`) and short rows are padded out.
- */
-function tableToGfm(table: Element): string {
-  const rows = Array.from(table.querySelectorAll('tr')).filter(
-    // Skip rows belonging to a nested table.
-    row => row.closest('table') === table
-  );
-  if (rows.length === 0) return '';
-
-  const grid = rows.map(row => directCells(row).map(cellToMarkdown));
-  const columnCount = grid.reduce((max, row) => Math.max(max, row.length), 0);
-  if (columnCount === 0) return '';
-
-  const pad = (row: string[]): string[] =>
-    Array.from({ length: columnCount }, (_, i) => row[i] ?? '');
-
-  const firstRowIsHeader = directCells(rows[0]).some(cell => cell.tagName.toLowerCase() === 'th');
-  const header = firstRowIsHeader ? pad(grid[0]) : Array.from({ length: columnCount }, () => '');
-  const bodyRows = firstRowIsHeader ? grid.slice(1) : grid;
-
-  const lines = [
-    `| ${header.join(' | ')} |`,
-    `| ${Array.from({ length: columnCount }, () => '---').join(' | ')} |`,
-    ...bodyRows.map(row => `| ${pad(row).join(' | ')} |`),
-  ];
-
-  return lines.join('\n');
-}
-
-/**
- * Tables need an explicit rule in both modes.
+ * Tables must be kept as raw HTML.
  *
  * Turndown ships no table rules, and TABLE/THEAD/TBODY/TR/TD/TH are all in its
- * block-element list, so without one every cell falls through to the default
- * block handler and comes out as its own paragraph — a 4x4 table pasted as 16
+ * block-element list, so without this every cell fell through to the default
+ * block handler and came out as its own paragraph — a 4x4 table pasted as 16
  * separate lines of text, with the grid destroyed.
  *
- * `preserveHtml` emits the element's outerHTML verbatim: markdown-it
- * (html: true) passes it through as an HTML block, TipTap parses it into a real
- * table node, and HtmlPreservingTable stamps `htmlOrigin` so it serialises back
- * to `<table>` markup on save. Source-specific noise (inline styles, wrapper
+ * Keeping the element emits its outerHTML verbatim. markdown-it (html: true)
+ * passes that through as an HTML block, TipTap parses it into a real table
+ * node, and HtmlPreservingTable stamps `htmlOrigin` so it serialises back to
+ * `<table>` markup on save. Source-specific noise (inline styles, wrapper
  * spans from Word/Docs) is discarded when TipTap parses it against the schema.
  */
-turndown.addRule('tableHandling', {
-  filter: 'table',
-  replacement: (_content: string, node: HTMLElement) => {
-    if (pasteHtmlHandling === 'preserveHtml') {
-      return `\n\n${node.outerHTML}\n\n`;
-    }
-    const gfm = tableToGfm(node);
-    return gfm ? `\n\n${gfm}\n\n` : '';
-  },
-});
+turndown.keep(['table']);
 
 // Remove elements that shouldn't be in markdown
 turndown.remove(['script', 'style', 'noscript', 'iframe', 'object', 'embed']);
@@ -459,33 +356,6 @@ export function processPasteContent(clipboardData: DataTransfer | null): {
   // Get both HTML and plain text
   const html = getHtmlContent(clipboardData);
   const plainText = getPlainText(clipboardData);
-
-  // Case 0: the plain text IS HTML markup — the user copied source, not
-  // rendered content.
-  //
-  // `isRichHtml` deliberately refuses to convert this so an HTML snippet pasted
-  // into prose stays literal, which is what `preserveHtml` means. Under
-  // `convertToMarkdown` the user has asked for the opposite, so honour it here:
-  // otherwise the setting would silently do nothing for exactly the paste most
-  // people use to test it.
-  //
-  // The markup lives in the plain-text flavour, not `text/html` — an editor
-  // puts syntax-highlighted spans on the latter, which would convert to noise.
-  if (pasteHtmlHandling === 'convertToMarkdown' && isHtmlSource(plainText)) {
-    try {
-      const markdown = htmlToMarkdown(plainText);
-      if (markdown) {
-        return {
-          content: markdownToHtml(markdown),
-          wasConverted: true,
-          isImage: false,
-          isHtml: true,
-        };
-      }
-    } catch {
-      // Fall through to the normal paths.
-    }
-  }
 
   // Case 1: Rich HTML from external source (Google Docs, Word, etc.)
   // Convert HTML → Markdown → HTML (to normalize formatting)

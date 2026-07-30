@@ -215,19 +215,6 @@
           "default": "strip",
           "description": "Controls whether extra blank lines are preserved or removed in the editor and saved file."
         },
-        "markdownForHumans.paste.htmlHandling": {
-          "type": "string",
-          "enum": [
-            "preserveHtml",
-            "convertToMarkdown"
-          ],
-          "enumDescriptions": [
-            "Keep the pasted HTML as-is. Structure that Markdown cannot express (merged cells, cell styling) survives, and the saved file contains HTML.",
-            "Rewrite pasted HTML as Markdown. The saved file stays plain Markdown; structure Markdown cannot express is simplified."
-          ],
-          "default": "preserveHtml",
-          "description": "Controls how rich HTML pasted into the editor is stored, most visibly for tables."
-        },
         "markdownForHumans.imagePreview.hover.enabled": {
           "type": "boolean",
           "default": true,
