@@ -138,6 +138,205 @@ function normalizeEmptyInlinesDeep(tokens: RawToken[] | undefined): void {
   }
 }
 
+/**
+ * Container tags whose fragments are destroyed, not merely unwrapped, when an
+ * HTML block is parsed in isolation.
+ *
+ * Marked ends an HTML block at the first blank line, so a pretty-printed table
+ * like
+ *
+ *     <table>
+ *       <thead>…</thead>
+ *
+ *       <tbody>…</tbody>
+ *     </table>
+ *
+ * arrives as several separate `html` tokens. Each is handed to the DOM parser
+ * on its own, and the HTML parsing spec drops table-scoped elements that are
+ * not inside a `<table>` — so the `<tbody>` fragment collapses to bare text and
+ * the table is flattened into a run of paragraphs. Merging the fragments back
+ * into one token before parsing is what keeps the grid intact.
+ */
+const MERGEABLE_CONTAINER_TAGS = new Set([
+  'table',
+  'thead',
+  'tbody',
+  'tfoot',
+  'tr',
+  'td',
+  'th',
+  'caption',
+  'colgroup',
+  'ul',
+  'ol',
+  'li',
+  'dl',
+  'details',
+  'blockquote',
+  'figure',
+  'div',
+]);
+
+/** Elements that never have a closing tag, so they must not open a scope. */
+const VOID_TAGS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+]);
+
+const TAG_PATTERN = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?(\/?)>/g;
+
+/**
+ * Track unclosed container tags across a run of HTML text.
+ *
+ * Returns the updated stack. A non-empty stack means the HTML so far opens a
+ * container it never closes, i.e. the block was cut short.
+ */
+function trackOpenContainers(html: string, stack: string[]): string[] {
+  // Comments and raw-text elements can contain angle brackets that are not
+  // markup; strip them so they cannot skew the balance.
+  const scannable = html
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, '')
+    .replace(/<(script|style|textarea)\b[\s\S]*?(?:<\/\1\s*>|$)/gi, '');
+
+  TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = TAG_PATTERN.exec(scannable)) !== null) {
+    const isClosing = match[1] === '/';
+    const tagName = match[2].toLowerCase();
+    const isSelfClosing = match[3] === '/';
+
+    if (!MERGEABLE_CONTAINER_TAGS.has(tagName) || VOID_TAGS.has(tagName) || isSelfClosing) {
+      continue;
+    }
+
+    if (isClosing) {
+      // Pop to the matching open tag. Unmatched closers (the tail half of a
+      // split block) are ignored rather than underflowing the stack.
+      const openIndex = stack.lastIndexOf(tagName);
+      if (openIndex !== -1) {
+        stack.length = openIndex;
+      }
+    } else {
+      stack.push(tagName);
+    }
+  }
+
+  return stack;
+}
+
+function tokenRawText(token: RawToken): string {
+  return typeof token.raw === 'string' ? token.raw : '';
+}
+
+/**
+ * Document-level scaffolding that carries no content of its own.
+ *
+ * These appear whenever a whole HTML page is dropped into a markdown file.
+ * `<title>` is included with its text because the title belongs to the document
+ * head, not the body — left alone it surfaces as a stray paragraph at the top
+ * of the editor.
+ */
+const STRUCTURAL_MARKUP =
+  /<!--[\s\S]*?(?:-->|$)|<!doctype[^>]*>|<\/?(?:html|head|body)\b[^>]*>|<title\b[^>]*>[\s\S]*?<\/title\s*>|<(?:meta|link|base)\b[^>]*>/gi;
+
+/** A run made up only of closing tags can never contribute content. */
+const CLOSING_TAGS_ONLY = /^(?:\s*<\/[a-zA-Z][a-zA-Z0-9-]*\s*>\s*)+$/;
+
+/**
+ * Detect `html` tokens that parse to nothing renderable.
+ *
+ * `@tiptap/markdown` runs each HTML token through `generateJSON`, and a
+ * fragment with no renderable content still yields a doc holding one empty
+ * paragraph — which lands in the document as a blank line. So `<!DOCTYPE html>`,
+ * the `<html><head>…<body>` wrapper, `</body></html>`, an HTML comment, or a
+ * stray `</p>` each inserted a visible gap. Dropping the token removes the gap
+ * without disturbing the blocks either side, which keep their own separators.
+ */
+function isContentFreeHtmlToken(token: RawToken): boolean {
+  if (token.type !== 'html') return false;
+
+  const remainder = tokenRawText(token).replace(STRUCTURAL_MARKUP, '').trim();
+  if (remainder.length === 0) return true;
+
+  return CLOSING_TAGS_ONLY.test(remainder);
+}
+
+/**
+ * Re-join `html` tokens that marked split apart at a blank line.
+ *
+ * Only `space` and `html` tokens are absorbed, and only while the accumulated
+ * HTML still has an unclosed container. If the run never balances, the original
+ * tokens are emitted untouched so this can never make a document worse than
+ * marked's own output.
+ */
+export function mergeSplitHtmlBlocks(tokens: RawToken[]): RawToken[] {
+  const out: RawToken[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+
+    if (!token || token.type !== 'html') {
+      out.push(token);
+      continue;
+    }
+
+    const stack = trackOpenContainers(tokenRawText(token), []);
+    if (stack.length === 0) {
+      out.push(token);
+      continue;
+    }
+
+    // Look ahead for the rest of the block.
+    let combined = tokenRawText(token);
+    let cursor = i + 1;
+    let balancedAt = -1;
+
+    while (cursor < tokens.length) {
+      const next = tokens[cursor];
+      if (!next || (next.type !== 'html' && next.type !== 'space')) {
+        break;
+      }
+
+      combined += tokenRawText(next);
+      if (next.type === 'html') {
+        trackOpenContainers(tokenRawText(next), stack);
+        if (stack.length === 0) {
+          balancedAt = cursor;
+          break;
+        }
+      }
+      cursor++;
+    }
+
+    if (balancedAt === -1) {
+      // Never closed — leave marked's tokens alone.
+      out.push(token);
+      continue;
+    }
+
+    out.push({
+      ...token,
+      raw: combined,
+      text: combined,
+    } as RawToken);
+    i = balancedAt;
+  }
+
+  return out;
+}
+
 const GREEDY_BLOCK_TYPES = new Set([
   'heading',
   'table',
@@ -179,8 +378,15 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
   // paragraphs (`Even deeper.\n[]()`) carry the original markdown forward as
   // literal text instead of letting the inline get stripped on parse.
   normalizeEmptyInlinesDeep(tokens);
+
+  // Re-join HTML blocks marked cut at a blank line before the greedy-newline
+  // split runs, so a merged block still gets its own trailing space token.
+  // Then drop scaffolding-only fragments, which would each render as a blank
+  // line. Merging first means a fragment is only judged once it is whole.
+  const merged = mergeSplitHtmlBlocks(tokens).filter(token => !isContentFreeHtmlToken(token));
+
   const out: RawToken[] = [];
-  for (const token of tokens) {
+  for (const token of merged) {
     if (token && typeof token.type === 'string' && GREEDY_BLOCK_TYPES.has(token.type)) {
       out.push(...splitTrailingNewlines(token));
     } else {

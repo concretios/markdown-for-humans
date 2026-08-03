@@ -70,6 +70,22 @@ turndown.addRule('fencedCodeBlock', {
 // Keep certain elements as-is (don't convert)
 turndown.keep(['sup', 'sub']);
 
+/**
+ * Tables must be kept as raw HTML.
+ *
+ * Turndown ships no table rules, and TABLE/THEAD/TBODY/TR/TD/TH are all in its
+ * block-element list, so without this every cell fell through to the default
+ * block handler and came out as its own paragraph — a 4x4 table pasted as 16
+ * separate lines of text, with the grid destroyed.
+ *
+ * Keeping the element emits its outerHTML verbatim. markdown-it (html: true)
+ * passes that through as an HTML block, TipTap parses it into a real table
+ * node, and HtmlPreservingTable stamps `htmlOrigin` so it serialises back to
+ * `<table>` markup on save. Source-specific noise (inline styles, wrapper
+ * spans from Word/Docs) is discarded when TipTap parses it against the schema.
+ */
+turndown.keep(['table']);
+
 // Remove elements that shouldn't be in markdown
 turndown.remove(['script', 'style', 'noscript', 'iframe', 'object', 'embed']);
 
@@ -118,6 +134,20 @@ const md = new MarkdownIt({
   breaks: true, // Preserve single newlines as <br> for plain text blocks
   linkify: true,
 });
+
+/**
+ * Marker for tables that markdown-it built from pipe syntax.
+ *
+ * Everything on the paste path reaches TipTap as HTML, so `HtmlPreservingTable`
+ * would otherwise stamp `htmlOrigin` on every pasted table and save it back as
+ * `<table>` markup — including tables the user asked to be converted to
+ * markdown, and plain pipe tables pasted as text. This attribute is set only by
+ * markdown-it's own table renderer; raw HTML blocks bypass renderer rules and
+ * pass through untouched, so it cleanly separates the two origins.
+ */
+export const MARKDOWN_TABLE_MARKER = 'data-markdown-table';
+
+md.renderer.rules.table_open = () => `<table ${MARKDOWN_TABLE_MARKER}="true">\n`;
 
 /**
  * Check if text looks like markdown (has syntax that needs parsing)
@@ -171,6 +201,19 @@ export function hasHtmlContent(clipboardData: DataTransfer | null): boolean {
   return Boolean(html && html.trim());
 }
 
+const RAW_HTML_SOURCE_PATTERN =
+  /<!doctype|<html\b|<head\b|<body\b|<table\b|<tr\b|<td\b|<th\b|<style\b|<\/[a-z][^>]*>/i;
+
+/**
+ * Whether a plain-text clipboard payload is itself HTML markup, i.e. the user
+ * copied source rather than rendered content.
+ *
+ * @param text - Plain text string
+ */
+export function isHtmlSource(text: string): boolean {
+  return Boolean(text) && RAW_HTML_SOURCE_PATTERN.test(text);
+}
+
 /**
  * Check if HTML content is "rich" enough to warrant conversion.
  * Simple wrappers (like VS Code's plain text in a span) should use plain text instead.
@@ -184,9 +227,7 @@ export function isRichHtml(html: string, plainText: string): boolean {
 
   // If plain text itself is raw HTML source, user likely copied code.
   // Preserve literal text instead of converting/rendering rich content.
-  const rawHtmlSourcePattern =
-    /<!doctype|<html\b|<head\b|<body\b|<table\b|<tr\b|<td\b|<th\b|<style\b|<\/[a-z][^>]*>/i;
-  if (rawHtmlSourcePattern.test(plainText)) {
+  if (isHtmlSource(plainText)) {
     return false;
   }
 

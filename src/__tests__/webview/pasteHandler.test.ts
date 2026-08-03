@@ -230,7 +230,9 @@ describe('pasteHandler', () => {
       const result = processPasteContent(mockDataTransfer);
       expect(result.wasConverted).toBe(true);
       expect(result.isHtml).toBe(true);
-      expect(result.content).toContain('<table>');
+      // Tables rendered from pipe syntax carry a marker so HtmlPreservingTable
+      // knows not to save them back as HTML.
+      expect(result.content).toContain('<table data-markdown-table="true">');
     });
 
     it('should convert markdown lists to HTML', () => {
@@ -328,7 +330,7 @@ describe('pasteHandler', () => {
     it('should convert tables', () => {
       const md = '| A | B |\n| --- | --- |\n| 1 | 2 |';
       const html = markdownToHtml(md);
-      expect(html).toContain('<table>');
+      expect(html).toContain('<table data-markdown-table="true">');
       expect(html).toContain('<th>');
       expect(html).toContain('<td>');
     });

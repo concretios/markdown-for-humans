@@ -60,7 +60,11 @@ export const HtmlPreservingTable = Table.extend({
       htmlOrigin: {
         default: false,
         rendered: false,
-        parseHTML: () => true,
+        // Any table built from DOM came from HTML — except one markdown-it
+        // rendered from pipe syntax, which the paste pipeline tags. Without
+        // that exemption a pasted markdown table (or one converted from HTML
+        // at the user's request) would be saved back as `<table>` markup.
+        parseHTML: element => element.getAttribute('data-markdown-table') !== 'true',
       },
     };
   },

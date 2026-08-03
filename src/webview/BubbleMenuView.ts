@@ -17,6 +17,7 @@ import { showTableInsertDialog } from './features/tableInsert';
 import { showLinkDialog } from './features/linkDialog';
 import { showImageInsertDialog } from './features/imageInsertDialog';
 import type { Editor } from '@tiptap/core';
+import type { Transaction } from '@tiptap/pm/state';
 
 // Store reference to refresh function so it can be called externally
 let toolbarRefreshFunction: (() => void) | null = null;
@@ -880,7 +881,32 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
 
   toolbarRefreshFunction = refreshActiveStates;
 
-  editor.on('selectionUpdate', refreshActiveStates);
+  // Button active states depend on the document as well as the selection.
+  // 'selectionUpdate' alone misses document-only changes: pressing Backspace to
+  // remove a code block leaves the cursor where it was, so no selection update
+  // fires and the Code button stayed lit until the next keystroke. Listen to
+  // 'transaction' too, skipping metadata-only transactions (decorations, plugin
+  // state) and de-duplicating so one transaction refreshes the toolbar once.
+  let lastRefreshedTransaction: unknown = null;
+
+  const refreshForEditorEvent = (props?: { transaction?: Transaction }) => {
+    const transaction = props?.transaction;
+
+    if (transaction) {
+      if (transaction === lastRefreshedTransaction) {
+        return;
+      }
+      if (!transaction.docChanged && !transaction.selectionSet) {
+        return;
+      }
+      lastRefreshedTransaction = transaction;
+    }
+
+    refreshActiveStates();
+  };
+
+  editor.on('transaction', refreshForEditorEvent);
+  editor.on('selectionUpdate', refreshForEditorEvent);
 
   // Listen for editor focus changes
   const handleEditorFocusChange = (e: Event) => {
@@ -904,7 +930,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     }
 
     if (typeof editor.off === 'function') {
-      editor.off('selectionUpdate', refreshActiveStates);
+      editor.off('transaction', refreshForEditorEvent);
+      editor.off('selectionUpdate', refreshForEditorEvent);
     }
   });
 

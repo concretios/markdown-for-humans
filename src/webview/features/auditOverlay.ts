@@ -250,16 +250,11 @@ export function showAuditOverlay(editor: Editor, issues: AuditIssue[]) {
 
   const listEl = overlay.querySelector('.audit-overlay-list');
   if (listEl) {
-    issues.forEach((issue, index) => {
-      const item = buildIssueItem(issue);
-      listEl.appendChild(item);
-
-      // Add a horizontal line if it's not the very last issue in the array
-      if (index < issues.length - 1) {
-        const separator = document.createElement('hr');
-        separator.className = 'audit-issue-separator';
-        listEl.appendChild(separator);
-      }
+    // Separators are drawn with a CSS adjacent-sibling border rather than <hr>
+    // nodes so that removing a fixed item reflows the list without leaving an
+    // orphaned divider behind (see .audit-overlay-item + .audit-overlay-item).
+    issues.forEach(issue => {
+      listEl.appendChild(buildIssueItem(issue));
     });
   }
 
@@ -876,11 +871,25 @@ function applyFix(
   item.remove();
   auditPreviewPopover.hide();
 
+  const remainingCount = overlay.querySelectorAll('.audit-overlay-item').length;
+  updateAuditTitleCount(overlay, remainingCount);
+
   // Show "all fixed" message if last issue resolved
-  if (overlay.querySelectorAll('.audit-overlay-item').length === 0) {
+  if (remainingCount === 0) {
     const list = overlay.querySelector('.audit-overlay-list');
     if (list) {
       list.innerHTML = `<div style="padding:20px;text-align:center;">All fixed! 🎉</div>`;
     }
   }
+}
+
+/**
+ * Keep the overlay header count in sync with the number of rows still listed.
+ */
+function updateAuditTitleCount(overlay: HTMLElement, remainingCount: number): void {
+  const titleEl = overlay.querySelector('.audit-overlay-title');
+  if (!titleEl) return;
+  titleEl.textContent = `Document Audit (${remainingCount} ${
+    remainingCount === 1 ? 'issue' : 'issues'
+  })`;
 }
