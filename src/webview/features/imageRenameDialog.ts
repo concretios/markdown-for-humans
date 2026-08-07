@@ -485,7 +485,8 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const getImageReferences = (window as any).getImageReferences as
-    ((path: string) => Promise<unknown>) | undefined;
+    | ((path: string) => Promise<unknown>)
+    | undefined;
 
   if (typeof getImageReferences === 'function' && imagePath) {
     getImageReferences(imagePath)
@@ -580,7 +581,8 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const checkImageRename = (window as any).checkImageRename as
-      ((oldPath: string, newName: string) => Promise<unknown>) | undefined;
+      | ((oldPath: string, newName: string) => Promise<unknown>)
+      | undefined;
     if (typeof checkImageRename === 'function') {
       renameBtn.disabled = true;
       renameBtn.style.opacity = '0.7';

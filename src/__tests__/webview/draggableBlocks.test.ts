@@ -268,7 +268,8 @@ describe('DraggableBlocks Extension', () => {
       const ext = editor.extensionManager.extensions.find(e => e.name === 'draggableBlocks');
       expect(ext).toBeDefined();
       const addKeyboardShortcuts = ext?.config.addKeyboardShortcuts as
-        ((this: { editor: Editor }) => Record<string, unknown>) | undefined;
+        | ((this: { editor: Editor }) => Record<string, unknown>)
+        | undefined;
       expect(addKeyboardShortcuts).toBeDefined();
       const shortcuts = addKeyboardShortcuts?.call({ editor });
       expect(shortcuts).toBeDefined();

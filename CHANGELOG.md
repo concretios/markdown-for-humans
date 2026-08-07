@@ -10,6 +10,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [0.3.0] - 2026-08-07
+
+### What's New
+
+#### Auto-Save
+New opt-in `markdownForHumans.autoSave.enabled` setting saves the document a short delay after you stop typing, independent of VS Code's built-in `files.autoSave`. Off by default, so nothing changes unless you turn it on.
+
+#### Formatting-Shortcut Control
+Cmd/Ctrl+B/I/U were previously hardcoded to stay inside the editor, which could permanently shadow a VS Code keybinding bound to the same chord. New `markdownForHumans.formattingShortcuts.enabled` setting (default on) lets you opt out, with a matching command and keybinding (Cmd/Ctrl+Alt+B) to toggle it without opening settings.
+
+#### Editor Theme Override
+New `markdownForHumans.display.editorTheme` setting (Follow VS Code theme / Always light / Always dark) plus a toolbar toggle next to the gear icon, so the editor's color mode no longer has to follow your OS/VS Code theme.
+
+#### Toolbar & Paste Improvements
+- Copy button added to code blocks
+- Toolbar active states now stay in sync with code blocks and document changes
+- Pasted HTML tables are preserved more reliably
+- Search box and other overlay inputs no longer have their pastes hijacked by the document paste handler
+
+#### Production Build Hardening
+Console output is now stripped from production builds, and the build verifier checks bundles for disallowed console calls.
+
+### Fixed
+
+- Prevented frontmatter data loss when a YAML value contained a triple-backtick fence
+- Fixed floating Find widget losing/stealing focus incorrectly
+- Fixed formatting-shortcut keymaps double-firing (both VS Code and the editor reacting to the same chord) when shortcuts were disabled
+- Resolved npm audit findings by refreshing vulnerable transitive dependencies
+
+### Technical Improvements
+
+- CI now tests against Node 22.x and 24.x
+- Added regression tests for code-block copy/paste, autosave, and toolbar state (900+ tests passing)
+
+---
+
 ## [0.2.1] - 2026-05-19
 
 ### Fixed
