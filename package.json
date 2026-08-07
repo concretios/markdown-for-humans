@@ -2,7 +2,7 @@
   "name": "markdown-for-humans",
   "displayName": "Markdown for Humans: WYSIWYG Editor",
   "description": "A full-featured WYSIWYG Markdown editor with visual table editing, drag-and-drop images, Mermaid diagrams, and distraction-free writing—all inside VS Code.",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "concretio",
   "author": {
     "name": "Abhinav",
