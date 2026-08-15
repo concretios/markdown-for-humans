@@ -32,10 +32,7 @@ jest.mock('vscode', () => ({
   },
   TreeItem: class TreeItem {
     public iconPath:
-      | vscode.Uri
-      | { light: vscode.Uri; dark: vscode.Uri }
-      | vscode.ThemeIcon
-      | undefined;
+      vscode.Uri | { light: vscode.Uri; dark: vscode.Uri } | vscode.ThemeIcon | undefined;
     public description?: string;
     public command?: vscode.Command;
     public contextValue?: string;
