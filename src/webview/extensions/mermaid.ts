@@ -151,8 +151,17 @@ export const Mermaid = Node.create({
       const renderElement = document.createElement('div');
       renderElement.classList.add('mermaid-render');
 
+      const zoomButton = document.createElement('button');
+      zoomButton.type = 'button';
+      zoomButton.classList.add('mermaid-zoom-btn');
+      zoomButton.title = 'Open diagram in full screen';
+      zoomButton.setAttribute('aria-label', 'Open diagram in full screen');
+      zoomButton.innerHTML = '<span class="codicon codicon-zoom-in"></span>';
+      zoomButton.hidden = true;
+
       container.append(codeElement);
       container.appendChild(renderElement);
+      container.appendChild(zoomButton);
 
       // Render mermaid diagram
       const renderDiagram = async () => {
@@ -160,6 +169,7 @@ export const Mermaid = Node.create({
         if (!content) {
           renderElement.innerHTML =
             '<div class="mermaid-placeholder">Enter Mermaid diagram code</div>';
+          zoomButton.hidden = true;
           return;
         }
 
@@ -180,6 +190,7 @@ export const Mermaid = Node.create({
           renderElement.innerHTML = svg;
           renderElement.classList.add('rendered');
           codeElement.classList.add('hidden');
+          zoomButton.hidden = false;
         } catch (error) {
           console.error('Mermaid rendering error:', error);
           const errorMsg = error instanceof Error ? error.message : 'Invalid diagram syntax';
@@ -190,6 +201,7 @@ export const Mermaid = Node.create({
           renderElement.appendChild(errorDiv);
           renderElement.classList.remove('rendered');
           codeElement.classList.remove('hidden');
+          zoomButton.hidden = true;
         }
       };
 
@@ -240,6 +252,21 @@ export const Mermaid = Node.create({
           renderDiagram();
         }
       };
+
+      // The wrapper turns mousedown into a node selection and dblclick into the
+      // code editor; the zoom button must trigger neither.
+      zoomButton.addEventListener('mousedown', event => event.stopPropagation());
+      zoomButton.addEventListener('dblclick', event => event.stopPropagation());
+      zoomButton.addEventListener('click', async event => {
+        event.stopPropagation();
+        try {
+          const { showMermaidLightbox } = await import('../features/mermaidLightbox');
+          showMermaidLightbox(renderElement.innerHTML);
+        } catch (error) {
+          // Non-critical: the diagram stays readable inline, so log rather than interrupt.
+          console.error('[MD4H] Failed to open mermaid lightbox:', error);
+        }
+      });
 
       // Helper: select this mermaid node in ProseMirror so copy / cut /
       // backspace / delete behave correctly. Without a NodeSelection on the

@@ -218,15 +218,20 @@ Pick one:
     ```
 - Single click highlights the block and shows “Double-click to edit”.
 - Double click opens a modal editor (textarea), `Cmd/Ctrl+S` saves inside the modal.
+- Hovering a rendered diagram reveals a magnifier button in its top-right corner, which opens the diagram in a full-pane viewer.
 
 **What to do**
 - Insert a template and verify rendering.
 - Edit to an invalid diagram and confirm an error UI appears (and source remains accessible).
+- Open the viewer, then zoom with the wheel, the `+`/`-` buttons, and the `+`/`-` keys; pan by dragging; press `0` or the fit button to re-fit; close with `Esc`, the close button, or a click on empty space.
+- Zoom well past 100% and check the diagram stays sharp (it is re-rendered vector, not an upscaled bitmap).
+- Tab through the viewer controls and confirm focus stays inside it and returns to the magnifier on close.
 
 **Expected**
 - Valid Mermaid renders as SVG.
-- Invalid Mermaid shows a clear error without breaking the editor.
-- Markdown round-trips as a fenced ` ```mermaid ` block.
+- Invalid Mermaid shows a clear error without breaking the editor, and the magnifier button is hidden.
+- Markdown round-trips as a fenced ` ```mermaid ` block; zooming and panning never modify the document.
+- The viewer opens fitted to the pane, and dragging the diagram does not dismiss it.
 
 ### 5.11 Images (insert, drag/drop, menu actions, resize, rename)
 
