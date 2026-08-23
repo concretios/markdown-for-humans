@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; connect-src 'self'; font-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>MD4H feedback annotation fixture</title>
+    <link rel="stylesheet" href="./assets/katex/katex.min.css" />
+    <link rel="stylesheet" href="./editor.css" />
+    <style>
+      :root {
+        font-family: system-ui, sans-serif;
+      }
+
+      html,
+      body {
+        min-width: 0;
+        margin: 0;
+      }
+
+      body {
+        --vscode-editor-background: #ffffff;
+        --vscode-editor-foreground: #25272b;
+        --vscode-foreground: #25272b;
+        --vscode-descriptionForeground: #5b6573;
+        --vscode-editorWidget-background: #f7f8fa;
+        --vscode-editorWidget-foreground: #25272b;
+        --vscode-editorWidget-border: #aeb7c3;
+        --vscode-widget-shadow: rgb(24 32 45 / 24%);
+        --vscode-focusBorder: #0969da;
+        --vscode-button-background: #0969da;
+        --vscode-button-foreground: #ffffff;
+        --vscode-editorWarning-foreground: #9a6700;
+        --vscode-textLink-foreground: #0969da;
+        --vscode-textCodeBlock-background: #f2f4f7;
+        --vscode-textPreformat-foreground: #25272b;
+        --vscode-textBlockQuote-background: #f7f8fa;
+        --vscode-textBlockQuote-border: #aeb7c3;
+        --vscode-font-family: system-ui, sans-serif;
+        --vscode-editor-font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        --vscode-editor-font-size: 15px;
+        color-scheme: light;
+        overflow-x: hidden;
+        color: var(--vscode-editor-foreground);
+        background: #e9edf2;
+      }
+
+      body[data-fixture-theme='dark'] {
+        --vscode-editor-background: #17191d;
+        --vscode-editor-foreground: #e6e8eb;
+        --vscode-foreground: #e6e8eb;
+        --vscode-descriptionForeground: #a8afb9;
+        --vscode-editorWidget-background: #22252a;
+        --vscode-editorWidget-foreground: #f0f2f4;
+        --vscode-editorWidget-border: #59616d;
+        --vscode-widget-shadow: rgb(0 0 0 / 55%);
+        --vscode-focusBorder: #58a6ff;
+        --vscode-button-background: #1f6feb;
+        --vscode-editorWarning-foreground: #e3b341;
+        --vscode-textLink-foreground: #79c0ff;
+        --vscode-textCodeBlock-background: #24272c;
+        --vscode-textPreformat-foreground: #e6e8eb;
+        --vscode-textBlockQuote-background: #202328;
+        --vscode-textBlockQuote-border: #59616d;
+        color-scheme: dark;
+        background: #0f1115;
+      }
+
+      body[data-fixture-theme='high-contrast'] {
+        --vscode-editor-background: #000000;
+        --vscode-editor-foreground: #ffffff;
+        --vscode-foreground: #ffffff;
+        --vscode-descriptionForeground: #ffffff;
+        --vscode-editorWidget-background: #000000;
+        --vscode-editorWidget-foreground: #ffffff;
+        --vscode-editorWidget-border: #ffffff;
+        --vscode-widget-shadow: #000000;
+        --vscode-focusBorder: #ffff00;
+        --vscode-contrastActiveBorder: #ffff00;
+        --vscode-button-background: #000000;
+        --vscode-button-foreground: #ffffff;
+        --vscode-editorWarning-foreground: #ffff00;
+        --vscode-textLink-foreground: #00ffff;
+        --vscode-textCodeBlock-background: #000000;
+        --vscode-textPreformat-foreground: #ffffff;
+        --vscode-textBlockQuote-background: #000000;
+        --vscode-textBlockQuote-border: #ffffff;
+        color-scheme: dark;
+        background: #000000;
+      }
+
+      #fixture-shell {
+        box-sizing: border-box;
+        width: min(1180px, calc(100vw - 32px));
+        margin: 16px auto 80px;
+      }
+
+      #fixture-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 400;
+        display: flex;
+        justify-content: center;
+        min-height: 42px;
+        padding: 8px;
+        color: var(--vscode-descriptionForeground);
+        background: color-mix(in srgb, var(--vscode-editor-background) 94%, transparent);
+        border: 1px solid var(--vscode-editorWidget-border);
+      }
+
+      #editor {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        background: var(--vscode-editor-background);
+        border: 0;
+        box-shadow: inset 0 0 0 1px var(--vscode-editorWidget-border);
+      }
+
+      #editor .markdown-editor {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        min-height: 100vh;
+        margin: 0;
+        padding: 34px 390px 50px 42px;
+        font-family: Georgia, 'Times New Roman', serif;
+      }
+
+      #editor .markdown-editor > * {
+        max-width: 680px;
+      }
+
+      #editor .markdown-editor p {
+        margin: 0 0 12px;
+      }
+
+      #editor .markdown-editor pre,
+      #editor .markdown-editor blockquote,
+      #editor .fixture-nodeview,
+      #editor .fixture-screenshot {
+        box-sizing: border-box;
+        margin: 18px 0;
+        padding: 14px;
+        overflow: hidden;
+        background: var(--vscode-textCodeBlock-background);
+        border: 1px solid var(--vscode-editorWidget-border);
+        border-radius: 8px;
+      }
+
+      #editor .markdown-editor code {
+        font-family: var(--vscode-editor-font-family);
+      }
+
+      #editor .markdown-editor table {
+        width: 100%;
+        margin: 18px 0;
+        border-collapse: collapse;
+        font-family: var(--vscode-font-family);
+        font-size: 13px;
+      }
+
+      #editor .markdown-editor th,
+      #editor .markdown-editor td {
+        padding: 7px 9px;
+        border: 1px solid var(--vscode-editorWidget-border);
+      }
+
+      .fixture-rich-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .fixture-nodeview svg,
+      .fixture-screenshot img,
+      .fixture-local-image {
+        display: block;
+        width: 100%;
+        max-height: 180px;
+        object-fit: contain;
+      }
+
+      .feedback-marker {
+        transition: transform 10s linear;
+      }
+
+      .feedback-card-layer .feedback-comment-card {
+        overflow: hidden;
+      }
+
+      .feedback-card-layer .feedback-comment-card[data-feedback-card-state='compact'] {
+        height: 56px;
+      }
+
+      .feedback-card-layer .feedback-comment-card[data-feedback-card-state='active'] {
+        height: 168px;
+      }
+
+      .feedback-comment-card[data-feedback-card-state='compact'] .fixture-card-detail {
+        display: none;
+      }
+
+      .feedback-comment-card[data-feedback-card-state='active'] .feedback-card-preview {
+        display: none;
+      }
+
+      .feedback-comment-card .fixture-card-detail {
+        margin-top: 10px;
+        font: 12px/1.45 var(--vscode-font-family);
+      }
+
+      .feedback-annotation-spacer {
+        height: var(--fixture-eof-space, 0px);
+      }
+
+      body[data-fixture-theme='high-contrast'] #fixture-toolbar,
+      body[data-fixture-theme='high-contrast'] .fixture-nodeview,
+      body[data-fixture-theme='high-contrast'] .fixture-screenshot {
+        border-width: 2px;
+      }
+
+      body[data-fixture-theme='high-contrast'] #editor {
+        box-shadow: inset 0 0 0 2px var(--vscode-editorWidget-border);
+      }
+
+      @media (max-width: 840px) {
+        #fixture-shell {
+          width: 100%;
+          margin: 0 0 60px;
+        }
+
+        #editor .markdown-editor {
+          padding: 28px 24px 44px;
+        }
+
+        #editor .markdown-editor > * {
+          max-width: 100%;
+        }
+
+        .fixture-rich-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="fixture-root" aria-live="polite"></div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

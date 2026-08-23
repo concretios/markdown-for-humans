@@ -314,6 +314,8 @@
     "lint": "eslint src --ext ts --max-warnings 0",
     "lint:fix": "eslint src --ext ts --fix",
     "test": "jest",
+    "test:feedback-capture": "node scripts/feedback-capture-fixture/run.mjs",
+    "test:feedback-annotations": "node --test scripts/feedback-annotation-fixture/verification.test.mjs && node scripts/feedback-annotation-fixture/run.mjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "precommit": "npm run lint && npm run test",

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; connect-src 'self'; font-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>MD4H feedback capture fixture</title>
+    <link rel="stylesheet" href="./assets/katex/katex.min.css" />
+    <style>
+      :root {
+        font-family: Georgia, 'Times New Roman', serif;
+      }
+
+      body {
+        --fixture-page: #e9edf2;
+        --fixture-surface: #ffffff;
+        --fixture-foreground: #25272b;
+        --fixture-border: #bac2cc;
+        --fixture-node: #f7f9fb;
+        color-scheme: light;
+        margin: 0;
+        padding: 24px;
+        background: var(--fixture-page);
+      }
+
+      body[data-fixture-theme='dark'] {
+        --fixture-page: #111317;
+        --fixture-surface: #1e1f22;
+        --fixture-foreground: #e7e9ed;
+        --fixture-border: #59616d;
+        --fixture-node: #282b31;
+        color-scheme: dark;
+      }
+
+      body[data-fixture-theme='high-contrast'] {
+        --fixture-page: #000000;
+        --fixture-surface: #000000;
+        --fixture-foreground: #ffffff;
+        --fixture-border: #ffffff;
+        --fixture-node: #000000;
+        color-scheme: dark;
+      }
+
+      main {
+        box-sizing: border-box;
+        width: 720px;
+        padding: 28px;
+        color: var(--fixture-foreground);
+        background: var(--fixture-surface);
+        border: 1px solid var(--fixture-border);
+        border-radius: 10px;
+      }
+
+      h1 {
+        margin: 0 0 14px;
+        font-size: 28px;
+      }
+
+      .fixture-grid {
+        display: grid;
+        grid-template-columns: 200px 1fr;
+        gap: 18px;
+        align-items: start;
+      }
+
+      img {
+        display: block;
+        width: 200px;
+        height: 120px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: system-ui, sans-serif;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        padding: 7px 9px;
+        border: 1px solid var(--fixture-border);
+        text-align: left;
+      }
+
+      th[data-table-marker] {
+        background: #00ff00;
+      }
+
+      .rendered-nodeviews {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+        margin-top: 20px;
+      }
+
+      .nodeview {
+        min-height: 116px;
+        padding: 10px;
+        color: var(--fixture-foreground);
+        background: var(--fixture-node);
+        border: 1px solid var(--fixture-border);
+        border-radius: 8px;
+      }
+
+      .nodeview > svg {
+        display: block;
+        width: 100%;
+        height: auto;
+        max-height: 150px;
+      }
+
+      [data-katex-output] {
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+
+      body[data-fixture-theme='high-contrast'] main,
+      body[data-fixture-theme='high-contrast'] .nodeview,
+      body[data-fixture-theme='high-contrast'] th,
+      body[data-fixture-theme='high-contrast'] td {
+        border-width: 2px;
+      }
+    </style>
+  </head>
+  <body>
+    <main data-capture-fixture>
+      <h1>Rendered Markdown capture</h1>
+      <div class="fixture-grid">
+        <img data-local-image src="./assets/local-image.svg" alt="Local fixture landscape" />
+        <table>
+          <thead>
+            <tr>
+              <th data-table-marker>Element</th>
+              <th>Expected</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Local image</td>
+              <td>Visible</td>
+            </tr>
+            <tr>
+              <td>Table borders</td>
+              <td>Crisp</td>
+            </tr>
+            <tr>
+              <td>Unicode</td>
+              <td>東京 ✓</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="rendered-nodeviews">
+        <div
+          class="nodeview"
+          data-mermaid-output
+          aria-label="Actual Mermaid rendered fixture"
+        ></div>
+        <div class="nodeview" data-katex-output aria-label="Actual KaTeX rendered fixture"></div>
+      </div>
+    </main>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
