@@ -131,6 +131,7 @@ Cursor position restored
 - **Mermaid** 10.6 - Diagram rendering
 - **KaTeX** 0.16 - Math typesetting (configured, not yet active)
 - **markdown-it** 14.0 - Fallback markdown parser
+- **modern-screenshot** 4.7.0 - DOM-to-PNG rasterization for Feedback evidence
 
 **Bundle Size:**
 - **webview.js**: ~4.3MB (includes all dependencies)
@@ -636,6 +637,54 @@ javascript, typescript, python, bash, json, markdown, css, html, xml, sql, java,
 - Relative paths saved in markdown; webview URIs resolved via extension
 - ❌ Resize handles (not yet implemented)
 
+### 7. Rich-View Feedback Sessions
+
+Feedback mode reviews one saved Markdown file against a frozen, host-owned snapshot. It does not create a second editable document model.
+
+**Start and integrity flow:**
+
+1. The webview enumerates canonical top-level ProseMirror blocks with their ordinals, normalized kinds, per-block Markdown, and content sizes, then sends the start request.
+2. The extension host asks the webview to flush its pending debounced edit, waits for the edit pipeline, and saves the `TextDocument`.
+3. The host reads the exact source bytes from disk and computes SHA-256.
+4. The host parses the frozen raw source with `markdown-it` and builds one exact line map. Leading frontmatter is represented as a synthetic raw block.
+5. The session starts only if canonical and raw block counts, order, and normalized kinds match. There is no fuzzy-search or nearest-line fallback.
+
+Selections are sent as inclusive top-level block ordinals and resolved by the host to exact, 1-based containing source lines. When the rendered target is character-addressable, the webview also sends a versioned, half-open, block-relative ProseMirror range. The host validates its bounds and adds canonical block hashes before persisting draft-only metadata. Text items retain the exact DOM-visible selection separately as `Focus`. Opaque NodeViews and legacy drafts use an honest containing-block target without fuzzy search. Sealing removes the draft-only rendered-range metadata from the agent-facing report.
+
+Saved annotations use a dynamically registered ProseMirror decoration plugin that exists only during Feedback mode. Exact inline ranges, including resolved cross-block ranges, are rendered as non-stacking interval segments. Opaque, screenshot, legacy, multi-block block-level fallback, and runtime-degraded targets use one continuous bracket drawn from the first through last containing block. A sibling annotation layer under `#editor` owns brackets, pins, SVG connectors, compact cards, and the composer. Because this layer and ProseMirror share document coordinates, normal scrolling performs no annotation geometry reads or writes. Resize, zoom, fonts, and annotated asynchronous content schedule one batched layout pass. Collision packing is deterministic and adds only the EOF space required by displaced cards.
+
+While the session is active, ProseMirror document-changing transactions and browser mutation inputs are blocked. Selection, copying, and search remain available. A later `TextDocument` change marks the session invalid with `MD4H-FB-SNAPSHOT-001`; the draft remains on disk, but item writes and sealing are refused. Sealing reads the source bytes again and requires the original SHA-256.
+
+Every start or resume also receives a fresh runtime session token that is distinct from the durable round ID. All active-session responses carry that token, and the webview ignores stale updates, errors, invalidations, diagnostics, finishes, or discards before they can touch pending mutations or UI state. An inactive-draft discard uses a separate response and can never deactivate a newer session.
+
+On a later editor load, the host scans only the source's mirrored Feedback directory for drafts whose source path and exact saved-byte hash still match. The webview receives content-free metadata and shows an opt-in recovery notice. It does not become read-only until the user chooses Resume. Resume strictly parses the deterministic report and revalidates its schema, state, round, hash, monotonic ID high-water mark, item ranges, contained paths, and PNG evidence before rebuilding the exact block map. Malformed candidates are isolated and never partially resumed. A structurally valid exact rendered range that no longer resolves is degraded per item to its host-validated continuous block bracket with `MD4H-FB-ANCHOR-001`; it never aborts the rest of the draft or searches for similar Focus text. Runtime geometry failures retain the last verified geometry when available and expose a persistent, content-free Retry notice instead of fabricating a position.
+
+**Host and webview boundaries:**
+
+- `src/shared/feedbackProtocol.ts` defines discriminated request and response unions. The host reconstructs and validates every `feedback.*` request before dispatch.
+- `src/editor/feedbackAnchors.ts` owns strict raw-source line mapping.
+- `src/editor/feedbackSessionStore.ts` owns serialized, atomic draft rewrites, stable `F<n>` allocation, bounded PNG decoding, per-asset SHA-256 bindings, sealing, and contained paths.
+- `src/webview/features/feedbackReview.ts` owns the read-only state, toolbar swap, same-scroll sibling layer, text composer, navigation, and session UI.
+- `src/webview/features/feedbackRenderedRange.ts` converts native or ProseMirror selections to exact block-relative ranges and validates their DOM-visible Focus without guessing.
+- `src/webview/features/feedbackAnnotations.ts` owns the Feedback-only decoration plugin, overlap segmentation, active state, and capture suspension.
+- `src/webview/features/feedbackAnnotationLayout.ts` performs pure marker clustering, compact/active card packing, connector geometry, and EOF overflow calculation.
+- `src/webview/features/feedbackCapture.ts` keeps annotation commands in bitmap coordinates and flattens them only when the user submits.
+- `src/webview/features/feedbackDomCapture.ts` adapts `modern-screenshot@4.7.0`; `feedbackCaptureWorkflow.ts` owns pointer and selected-block capture flows.
+
+**Bundle contract:**
+
+For `docs/guide.md`, a round is written below `.md4h/feedback/docs/guide.md--<UTC>-<suffix>/`. The directory contains `feedback.md` and `assets/F<n>.png` for screenshot items. The report frontmatter uses `schema: md4h-feedback/v1`, `state`, `round`, `source`, `source_sha256`, `created_at`, `next_id`, and `sealed_at` only after sealing. Text entries contain `path:start-end`, safely fenced focus text, and fenced feedback. Screenshot entries contain source, nearby lines, a relative PNG link, `Asset SHA-256`, and fenced feedback. IDs are monotonic and are not renumbered after deletion; `next_id` preserves the high-water mark across restart. One bundle accepts at most 2,000 allocated IDs and 64 MiB of screenshot evidence. Reports are size-bounded and line-counted before parsing. The extension does not mutate a sealed bundle.
+
+**Screenshot pipeline and limits:**
+
+- A pointer crop is clamped to the visible editor viewport and mapped through actual top-level DOM intersections before rasterization. A selected-block command provides a keyboard-accessible alternative.
+- The rasterizer suspends live annotations, stages clones of intersecting blocks at the original rendered width, waits for fonts, images, and the explicit pending/ready/error lifecycle of intersecting Mermaid output, filters review chrome, decorations, and editor controls, and restores annotations on every success, failure, retry, Retake, and Cancel path. Mermaid errors and the bounded readiness timeout fail with `MD4H-FB-CAPTURE-001` instead of capturing a placeholder.
+- Capture fails explicitly for resources outside the VS Code webview resource boundary. It does not use an Electron `WebContents` compositor capture and does not include VS Code chrome.
+- Output is capped at 12 megapixels and 10 MiB. The extension host performs a bounded PNG decode, validates chunk boundaries and CRCs, verifies dimensions, scanlines, filename, destination containment, and the persisted asset SHA-256.
+- Pen, rectangle, and ellipse commands are displayed as an SVG overlay in bitmap coordinates. One canvas is allocated only when flattening the submitted PNG; editable vector layers are not persisted.
+
+Feedback commands are contributed without default keyboard shortcuts. `src/extension.ts` forwards them to the active rich-view webview, where they share the toolbar code paths.
+
 ---
 
 ## Performance Optimizations
@@ -728,6 +777,7 @@ if (Date.now() - lastEditTimestamp < 2000) {
 - Tables with resize, context menu, toolbar dropdown
 - Mermaid diagrams with toggle view, template dropdown, double-click editing
 - Compact formatting toolbar
+- Snapshot-based Feedback sessions with exact text anchors and annotated PNG evidence
 - Theme support (light, dark, system)
 - Document outline sidebar with navigation
 - Image resize handles with modal editor
@@ -909,10 +959,11 @@ See [DEVELOPMENT.md](./DEVELOPMENT.md) for full design principles
 ```typescript
 const csp = `
   default-src 'none';
-  script-src ${webview.cspSource} 'nonce-${nonce}';
+  script-src 'nonce-${nonce}';
   style-src ${webview.cspSource} 'unsafe-inline';
   font-src ${webview.cspSource};
-  img-src ${webview.cspSource} https: data:;
+  connect-src ${webview.cspSource};
+  img-src ${webview.cspSource} https: data: blob:;
 `;
 ```
 
@@ -924,8 +975,9 @@ const csp = `
 **What This Allows:**
 - ✅ Scripts from extension (with nonce)
 - ✅ Styles from extension
-- ✅ Images (local, HTTPS, data URIs)
+- ✅ Images (webview resources, HTTPS, data, and blob URIs)
 - ✅ Fonts from extension
+- ✅ Connections to the webview resource origin
 
 ### User Content Sanitization
 
@@ -1133,6 +1185,7 @@ vsce publish patch  # Auto-bumps version and publishes
 | Mermaid | ~4MB | Diagram rendering |
 | KaTeX | ~1MB | Math typesetting (not yet active) |
 | markdown-it | ~500KB | Markdown parsing (fallback) |
+| modern-screenshot | Bundled | DOM-to-PNG capture for Feedback evidence |
 | Other | ~500KB | Utilities, polyfills |
 
 ---

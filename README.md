@@ -144,6 +144,112 @@ Built on TipTap with a **human-first design philosophy**:
 
 ---
 
+## Review Markdown with Feedback Sessions
+
+Feedback mode freezes one saved Markdown file so you can comment on the rich view without moving the underlying source. The resulting bundle is plain Markdown plus optional PNG evidence, ready to share through Git with Codex, Claude Code, Grok, or another workspace-aware agent.
+
+1. Open a saved Markdown file inside a workspace and click **Start feedback**.
+2. Select rendered text or code and use the floating comment button beside the selection. The focused composer records the exact visible quote and its containing source lines without opening older comment cards.
+3. For visual feedback, click **Capture area**, drag over the visible editor, optionally mark it with Pen, Rectangle, or Ellipse, and add a written instruction.
+4. Use **Comments** to hide or show document-aligned pins and cards. Exact text, including resolved cross-block text, is highlighted only in Feedback mode. Multi-block block-level fallbacks and opaque targets use one continuous edge bracket. Compact cards follow their targets as the document scrolls, and only the active card expands with the exact quote or capture preview plus source lines.
+5. Click **Finish & copy** to verify the frozen source hash, seal the bundle, and copy an agent handoff prompt.
+
+The formatting toolbar is replaced by Feedback actions while a session is active, and document editing is locked while text selection and search remain available. If the source changes outside the frozen rich view, the session is invalidated: its draft stays on disk, but new feedback and finishing are disabled.
+
+When the same saved source and SHA-256 have an existing draft, the editor announces it without entering Feedback mode. Choose **Resume**, **Reveal**, **Discard**, or **Not now**. Resume revalidates the complete report, its item IDs and line ranges, and every screenshot asset before it freezes the editor again. If one otherwise valid exact highlight cannot be reconstructed, that item keeps its exact source lines and appears with a continuous block bracket. A persistent `MD4H-FB-ANCHOR-001` notice lists the affected IDs and offers Retry instead of fuzzy re-anchoring or blocking the other comments.
+
+For `docs/guide.md`, one round is stored as:
+
+```text
+.md4h/feedback/docs/
+└── guide.md--20260821T093000Z-a4f9/
+    ├── feedback.md
+    └── assets/
+        └── F2.png
+```
+
+`feedback.md` starts with this contract:
+
+```yaml
+---
+schema: md4h-feedback/v1
+state: sealed
+round: 20260821T093000Z-a4f9
+source: 'docs/guide.md'
+source_sha256: <SHA-256 of the exact saved source bytes>
+created_at: '2026-08-21T09:30:00.000Z'
+next_id: F3
+sealed_at: '2026-08-21T09:35:00.000Z'
+---
+```
+
+A live draft uses `state: draft` and omits `sealed_at`.
+
+Items have these shapes:
+
+````markdown
+## F1
+
+**Target:** `docs/guide.md:12-14`
+
+**Focus:**
+
+```text
+exact visible selection
+```
+
+### Feedback
+
+```markdown
+Describe the requested change.
+```
+
+## F2 · screenshot
+
+**Source:** `docs/guide.md`
+
+**Nearby source:** lines 18-24
+
+### Evidence
+
+![F2 screenshot](./assets/F2.png)
+
+**Asset SHA-256:** `<SHA-256 of the exact PNG bytes>`
+
+### Feedback
+
+```markdown
+Describe the requested visual change.
+```
+````
+
+Text items use stable, monotonic `F<n>` IDs and safely fence the exact visible focus and feedback. Screenshot items bind the evidence path to its exact PNG bytes with `Asset SHA-256`; resume and sealing reject missing, changed, malformed, oversized, or path-unsafe evidence. A bundle accepts at most 2,000 allocated feedback IDs and 64 MiB of screenshot evidence. `next_id` persists the allocation high-water mark across deletion and restart. Draft rewrites are atomic. Sealed bundles are immutable to the extension and are removed manually when no longer needed. `.md4h/feedback/` is not ignored, so it can be reviewed and committed like other project files.
+
+After sealing, **Finish & copy** places this provider-neutral instruction on the clipboard with the real workspace-relative path substituted:
+
+> Implement the sealed feedback bundle at `<workspace-relative-path>/feedback.md`. First verify the source SHA-256. Inspect every referenced image. Edit the workspace files required by the feedback, but do not modify or delete the feedback bundle. Address every feedback ID, run appropriate checks, report the outcome per ID, and stop if the source hash differs.
+
+Area capture is DOM-based and includes rendered Markdown content, not VS Code chrome. It is limited to the visible editor viewport, requires an exact mapped block intersection, rejects resources that are unavailable through the webview boundary, and caps PNG output at 12 megapixels and 10 MiB. **Capture selected blocks** is the keyboard-accessible alternative to dragging.
+
+### Feedback Commands
+
+Feedback commands are available in the Command Palette with no default keyboard shortcuts. Assign personal keybindings through VS Code if desired.
+
+| Command                         | Command ID                                         |
+| ------------------------------- | -------------------------------------------------- |
+| Start Feedback                  | `markdownForHumans.feedback.start`                 |
+| Add Feedback to Selection       | `markdownForHumans.feedback.commentSelection`      |
+| Capture Feedback Area           | `markdownForHumans.feedback.captureArea`           |
+| Capture Selected Blocks         | `markdownForHumans.feedback.captureSelectedBlocks` |
+| Toggle Feedback Comments        | `markdownForHumans.feedback.toggleComments`        |
+| Next Feedback                   | `markdownForHumans.feedback.next`                  |
+| Previous Feedback               | `markdownForHumans.feedback.previous`              |
+| Finish Feedback and Copy Prompt | `markdownForHumans.feedback.finish`                |
+| Reveal Feedback File            | `markdownForHumans.feedback.reveal`                |
+| Discard Feedback Draft          | `markdownForHumans.feedback.discard`               |
+
+---
+
 ## ⚙️ Configuration
 
 Customize the editor behavior through VS Code settings. Access via `Ctrl+,` (Settings) and search for "Markdown for Humans".
