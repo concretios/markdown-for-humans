@@ -32,6 +32,7 @@ function createFixture() {
 describe('Feedback peer split lock', () => {
   afterEach(() => {
     document.body.innerHTML = '';
+    document.body.className = '';
   });
 
   it('makes the duplicate rich view explicitly read-only and visibly explains why', () => {
@@ -118,6 +119,24 @@ describe('Feedback peer split lock', () => {
     expect(toolbar.hasAttribute('inert')).toBe(false);
     expect(document.body.classList.contains('feedback-peer-locked')).toBe(false);
     expect(document.querySelector('[data-feedback-peer-lock]')).toBeNull();
+  });
+
+  it('does not overwrite accessibility state after review mode atomically takes ownership', () => {
+    const { controller, editorDom, toolbar } = createFixture();
+    controller.lock('peer-session', 'Feedback is active elsewhere.');
+    document.body.classList.add('feedback-review-active');
+    editorDom.setAttribute('aria-readonly', 'true');
+    editorDom.setAttribute('tabindex', '0');
+    toolbar.removeAttribute('inert');
+    toolbar.removeAttribute('aria-disabled');
+
+    controller.unlock('peer-session');
+
+    expect(controller.isLocked()).toBe(false);
+    expect(editorDom.getAttribute('aria-readonly')).toBe('true');
+    expect(editorDom.getAttribute('tabindex')).toBe('0');
+    expect(toolbar.hasAttribute('inert')).toBe(false);
+    expect(toolbar.hasAttribute('aria-disabled')).toBe(false);
   });
 
   it('keeps peer-lock styling scoped, theme-aware, and high-contrast explicit', () => {

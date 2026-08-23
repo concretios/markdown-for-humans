@@ -53,6 +53,13 @@ type FeedbackMarkdownSerializer = {
   serialize?: (json: JSONContent) => string;
 };
 
+type FeedbackDraftBannerMode = 'saved' | 'active-owner' | 'active-peer';
+
+interface FeedbackDraftBannerOptions {
+  mode?: FeedbackDraftBannerMode;
+  focusResume?: boolean;
+}
+
 type ReviewEditor = Editor & {
   markdown?: FeedbackMarkdownSerializer;
   storage: Editor['storage'] & {
@@ -100,6 +107,7 @@ export interface FeedbackTextTarget {
 
 export type FeedbackDraftSurfaceKind =
   | 'text-composer'
+  | 'feedback-edit'
   | 'text-block-selector'
   | 'finish-checkpoint'
   | 'area-capture'
@@ -232,6 +240,10 @@ type PendingFeedbackMutation =
       settle: () => void;
     }
   | {
+      kind: 'edit';
+      id: string;
+    }
+  | {
       kind: 'delete';
       item: FeedbackItemSummary;
       button: HTMLButtonElement;
@@ -247,6 +259,14 @@ interface FeedbackCompletionSummary {
   itemCount: number;
   prompt: string;
   promptCopied: boolean;
+}
+
+interface FeedbackEditDraft {
+  id: string;
+  sessionId: string;
+  value: string;
+  pendingRequestId: string | null;
+  surface: FeedbackDraftSurfaceLease;
 }
 
 /** The Feedback-only document lock is absent from ordinary editor state. */
@@ -439,6 +459,34 @@ function topLevelOrdinalForNode(root: HTMLElement, node: Node | null): number | 
   return Array.prototype.indexOf.call(root.children, element) as number;
 }
 
+function nativeSelectionHasConnectedEndpoints(selection: Selection | null): selection is Selection {
+  return Boolean(selection?.anchorNode?.isConnected && selection.focusNode?.isConnected);
+}
+
+function nativeSelectionIsInsideEditor(
+  selection: Selection | null,
+  editorDom: HTMLElement
+): selection is Selection {
+  return Boolean(
+    nativeSelectionHasConnectedEndpoints(selection) &&
+    selection.anchorNode &&
+    selection.focusNode &&
+    editorDom.contains(selection.anchorNode) &&
+    editorDom.contains(selection.focusNode)
+  );
+}
+
+function nativeSelectionHasText(selection: Selection | null): selection is Selection {
+  return Boolean(
+    selection && selection.isCollapsed !== true && selection.toString().trim().length > 0
+  );
+}
+
+function nativeTextSelectionIsOutsideEditor(editorDom: HTMLElement): boolean {
+  const selection = window.getSelection();
+  return nativeSelectionHasText(selection) && !nativeSelectionIsInsideEditor(selection, editorDom);
+}
+
 export function getFeedbackSelectionTarget(
   editor: Editor,
   anchors: FeedbackAnchorView[]
@@ -449,15 +497,10 @@ export function getFeedbackSelectionTarget(
   let endOrdinal = -1;
   const mappedOrdinals = new Set(anchors.map(anchor => anchor.ordinal));
   const nativeSelection = window.getSelection();
-  const nativeSelectionInside = Boolean(
-    nativeSelection?.anchorNode &&
-    nativeSelection.focusNode &&
-    editorDom.contains(nativeSelection.anchorNode) &&
-    editorDom.contains(nativeSelection.focusNode)
-  );
+  const nativeSelectionInside = nativeSelectionIsInsideEditor(nativeSelection, editorDom);
+  const hasConnectedNativeEndpoints = nativeSelectionHasConnectedEndpoints(nativeSelection);
   const nativeFocus = nativeSelectionInside ? (nativeSelection?.toString() ?? '') : '';
-  const hasNativeSelection =
-    nativeSelectionInside && nativeSelection?.isCollapsed !== true && nativeFocus.trim().length > 0;
+  const hasNativeSelection = nativeSelectionInside && nativeSelectionHasText(nativeSelection);
   let renderedRange: FeedbackRenderedRangeInputV1 | undefined;
   let renderedFocus: string | undefined;
 
@@ -503,9 +546,10 @@ export function getFeedbackSelectionTarget(
         endOrdinal = Math.max(anchorOrdinal, focusOrdinal);
       }
     }
-  } else if (nativeSelectionInside) {
-    // A click inside the frozen document can leave ProseMirror's last range in
-    // state. Do not turn that stale range, or a native caret, into feedback.
+  } else if (hasConnectedNativeEndpoints) {
+    // A selection or caret outside the frozen document belongs to review
+    // chrome, while a caret inside can leave ProseMirror's last range in
+    // state. Neither may reuse that stale document range as a new target.
     return null;
   } else if (!empty && to > from) {
     try {
@@ -578,12 +622,15 @@ export function createFeedbackReviewController(options: {
   let annotationLayoutAlertSignature = '';
   let draftBanner: HTMLElement | null = null;
   let availableDrafts: FeedbackDraftSummary[] = [];
+  let draftBannerMode: FeedbackDraftBannerMode = 'saved';
   let pendingButton: HTMLButtonElement | null = null;
   let pendingButtonTarget: FeedbackTextTarget | null = null;
   let pendingSelectionRange: Range | null = null;
   let composer: HTMLElement | null = null;
   let composerTarget: FeedbackTextTarget | null = null;
   let composerDraftSurface: FeedbackDraftSurfaceLease | null = null;
+  let editDraft: FeedbackEditDraft | null = null;
+  let requestedEditFocusId: string | null = null;
   let blockSelector: HTMLFormElement | null = null;
   let blockSelectorReturnFocus: HTMLElement | null = null;
   let blockSelectorDraftSurface: FeedbackDraftSurfaceLease | null = null;
@@ -620,6 +667,7 @@ export function createFeedbackReviewController(options: {
     latestRevision: number;
   } | null = null;
   let transitionReturnFocus: HTMLElement | null = null;
+  let focusDraftResumeAfterTransition = false;
   let restoreFocusTo: HTMLElement | null = null;
   let annotationLayoutFrame: number | null = null;
   let annotationResizeObserver: ResizeObserver | null = null;
@@ -844,6 +892,7 @@ export function createFeedbackReviewController(options: {
   const removeDraftBanner = (): void => {
     draftBanner?.remove();
     draftBanner = null;
+    draftBannerMode = 'saved';
   };
 
   const setDraftBannerBusy = (busy: boolean): void => {
@@ -878,19 +927,38 @@ export function createFeedbackReviewController(options: {
     (draftAction ?? editorDom).focus({ preventScroll: true });
   };
 
-  const renderDraftBanner = (drafts: FeedbackDraftSummary[]): void => {
+  const renderDraftBanner = (
+    drafts: FeedbackDraftSummary[],
+    options: FeedbackDraftBannerOptions = {}
+  ): void => {
     availableDrafts = drafts.map(draft => ({ ...draft }));
     const renderedDrafts = availableDrafts;
     removeDraftBanner();
     if (session || renderedDrafts.length === 0) return;
 
+    draftBannerMode = options.mode ?? 'saved';
+    const isActiveOffer = draftBannerMode !== 'saved';
+    const isPeerOffer = draftBannerMode === 'active-peer';
+
     let selectedDraft = renderedDrafts[0];
     draftBanner = createElement('section', 'feedback-draft-banner');
     draftBanner.setAttribute('data-feedback-draft-banner', '');
+    if (isActiveOffer) draftBanner.setAttribute('data-feedback-resume-offer', '');
     draftBanner.setAttribute('role', 'region');
-    draftBanner.setAttribute('aria-label', 'Available Feedback drafts');
+    draftBanner.setAttribute(
+      'aria-label',
+      isActiveOffer ? 'Resume Feedback session' : 'Available Feedback drafts'
+    );
     const copy = createElement('div', 'feedback-draft-copy');
-    const title = createElement('strong', 'feedback-draft-title', 'Feedback draft available');
+    const title = createElement(
+      'strong',
+      'feedback-draft-title',
+      isPeerOffer
+        ? 'Feedback is active in another rich view'
+        : isActiveOffer
+          ? 'Resume Feedback session?'
+          : 'Feedback draft available'
+    );
     const detail = createElement('span', 'feedback-draft-detail');
     detail.setAttribute('aria-live', 'polite');
     const updateDetail = (): void => {
@@ -899,7 +967,11 @@ export function createFeedbackReviewController(options: {
       }`;
       detail.textContent =
         renderedDrafts.length === 1
-          ? `${countLabel} can be resumed from the saved snapshot.`
+          ? isPeerOffer
+            ? `${countLabel} ${selectedDraft.itemCount === 1 ? 'is' : 'are'} already saved. Resume here to move the Feedback session to this view.`
+            : isActiveOffer
+              ? `${countLabel} ${selectedDraft.itemCount === 1 ? 'is' : 'are'} already saved in this Feedback session.`
+              : `${countLabel} can be resumed from the saved snapshot.`
           : `${renderedDrafts.length} matching drafts found. Selected draft has ${countLabel}.`;
     };
     updateDetail();
@@ -923,7 +995,11 @@ export function createFeedbackReviewController(options: {
     copy.append(detail);
 
     const actions = createElement('div', 'feedback-draft-actions');
-    const resume = createElement('button', 'feedback-primary-button', 'Resume');
+    const resume = createElement(
+      'button',
+      'feedback-primary-button',
+      isPeerOffer ? 'Resume here' : 'Resume'
+    );
     resume.type = 'button';
     resume.setAttribute('data-feedback-draft-resume', '');
     resume.addEventListener('click', () => {
@@ -951,6 +1027,27 @@ export function createFeedbackReviewController(options: {
         round: selectedDraft.round,
         blocks,
       });
+    });
+    const startNew = createElement('button', 'feedback-secondary-button', 'Start new');
+    startNew.type = 'button';
+    startNew.setAttribute('data-feedback-start-new', '');
+    startNew.addEventListener('click', () => {
+      if (session || startRequestId || draftBannerMode !== 'saved') return;
+      let blocks: CanonicalFeedbackBlock[];
+      try {
+        blocks = enumerateCanonicalFeedbackBlocks(editor);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Cannot enumerate rendered blocks';
+        window.dispatchEvent(new CustomEvent('feedbackLocalError', { detail: { message } }));
+        return;
+      }
+      rememberTransitionFocus();
+      setDraftBannerBusy(true);
+      startRequestId = nextRequestId();
+      setReadOnly(true);
+      document.body.classList.add('feedback-review-starting');
+      setFeedbackToolbarState({ active: false, starting: true });
+      post({ type: 'feedback.start.new', requestId: startRequestId, blocks });
     });
     const reveal = createElement('button', 'feedback-secondary-button', 'Reveal');
     reveal.type = 'button';
@@ -982,11 +1079,13 @@ export function createFeedbackReviewController(options: {
     dismiss.addEventListener('click', () => {
       removeDraftBanner();
     });
-    actions.append(resume, reveal, discard, dismiss);
+    if (isActiveOffer) actions.append(resume);
+    else actions.append(resume, startNew, reveal, discard, dismiss);
     draftBanner.append(copy, actions);
 
     const shell = editorDom.closest('#editor')?.parentElement ?? editorDom.parentElement;
     shell?.append(draftBanner);
+    if (options.focusResume) resume.focus({ preventScroll: true });
   };
 
   const clearPendingTarget = (): void => {
@@ -1122,7 +1221,7 @@ export function createFeedbackReviewController(options: {
         active: true,
         count: session.items.length,
         commentsState,
-        commentsLocked: composer !== null,
+        commentsLocked: composer !== null || editDraft !== null,
         invalidated,
         closing: pendingFinishRequestId !== null || pendingClose !== null,
         captureState,
@@ -1530,6 +1629,11 @@ export function createFeedbackReviewController(options: {
   };
 
   const collapseRail = (restoreToolbarFocus = false): void => {
+    if (editDraft) {
+      focusFeedbackEdit(editDraft.id);
+      announce('Save or cancel the feedback edit before collapsing comments.');
+      return;
+    }
     clearActiveComment();
     const hasOnlyDeletedItems =
       composer === null && session?.items.length === 0 && deletedItems.size > 0;
@@ -1575,11 +1679,75 @@ export function createFeedbackReviewController(options: {
     restoreFocusTo = null;
   };
 
+  function focusFeedbackEdit(id: string): void {
+    setCommentsState('expanded');
+    panel
+      ?.querySelector<HTMLTextAreaElement>(`[data-feedback-edit-input="${id}"]`)
+      ?.focus({ preventScroll: true });
+  }
+
+  function closeFeedbackEdit(restoreFocus = true): void {
+    if (!editDraft) return;
+    if (editDraft.pendingRequestId !== null) {
+      focusFeedbackEdit(editDraft.id);
+      announce('Wait for the feedback edit to finish saving.');
+      return;
+    }
+    const id = editDraft.id;
+    editDraft.surface.release();
+    editDraft = null;
+    renderCards();
+    scheduleAnnotationLayout();
+    syncCommentsUi();
+    if (restoreFocus) {
+      panel
+        ?.querySelector<HTMLButtonElement>(`[data-feedback-edit-action="${id}"]`)
+        ?.focus({ preventScroll: true });
+    }
+  }
+
+  function openFeedbackEdit(item: FeedbackItemSummary): void {
+    if (!hasWritableSession() || !session) return;
+    if (editDraft) {
+      focusFeedbackEdit(editDraft.id);
+      if (editDraft.id !== item.id) {
+        announce(`Save or cancel the edit for ${editDraft.id} before editing ${item.id}.`);
+      }
+      return;
+    }
+    const focus = (): void => focusFeedbackEdit(item.id);
+    const surface = draftSurfaceGate.claim({ kind: 'feedback-edit', focus });
+    if (!surface) {
+      announce('Finish or cancel the current feedback action before editing a comment.');
+      return;
+    }
+    editDraft = {
+      id: item.id,
+      sessionId: session.sessionId,
+      value: item.feedback ?? '',
+      pendingRequestId: null,
+      surface,
+    };
+    renderCards();
+    const form = panel?.querySelector<HTMLElement>(`[data-feedback-edit-form="${item.id}"]`);
+    surface.update({ kind: 'feedback-edit', ...(form ? { element: form } : {}), focus });
+    scheduleAnnotationLayout();
+    focus();
+    announce(`Editing feedback ${item.id}.`);
+  }
+
   const activateFeedbackItem = (
     preferredId: string,
     authoritativeCluster?: readonly string[]
   ): void => {
     if (!session || composer || !session.items.some(item => item.id === preferredId)) return;
+    if (editDraft) {
+      focusFeedbackEdit(editDraft.id);
+      if (editDraft.id !== preferredId) {
+        announce(`Save or cancel the edit for ${editDraft.id} before opening ${preferredId}.`);
+      }
+      return;
+    }
     activeItemIds = authoritativeCluster
       ? [...authoritativeCluster].sort(compareFeedbackIds)
       : clusterIdsForItem(preferredId);
@@ -1607,6 +1775,15 @@ export function createFeedbackReviewController(options: {
     // same node attached preserves its value, selection, and focus when an
     // unrelated host update refreshes saved items.
     if (activeComposer && panel.contains(activeComposer)) return;
+    const focusedEditField =
+      document.activeElement instanceof HTMLTextAreaElement &&
+      document.activeElement.hasAttribute('data-feedback-edit-input')
+        ? document.activeElement
+        : null;
+    const focusedEditId = focusedEditField?.getAttribute('data-feedback-edit-input') ?? null;
+    const focusedEditSelection = focusedEditField
+      ? { start: focusedEditField.selectionStart, end: focusedEditField.selectionEnd }
+      : null;
     panel.replaceChildren();
     if (activeComposer) {
       panel.append(activeComposer);
@@ -1748,31 +1925,12 @@ export function createFeedbackReviewController(options: {
           capturePreview.append(unavailable);
         }
       }
-      const showTarget = createElement('button', 'feedback-card-action', 'Show target');
-      showTarget.type = 'button';
-      showTarget.addEventListener('click', () => {
-        const exactTarget = Array.from(
-          editorDom.querySelectorAll<HTMLElement>('[data-feedback-ids]')
-        ).find(element => element.dataset.feedbackIds?.split(',').includes(item.id));
-        const target =
-          exactTarget ?? (editorDom.children.item(item.startOrdinal) as HTMLElement | null);
-        target?.scrollIntoView({ behavior: 'auto', block: 'center' });
-      });
       const edit = createElement('button', 'feedback-card-action', 'Edit');
       edit.type = 'button';
       edit.disabled = !hasWritableSession();
+      edit.setAttribute('data-feedback-edit-action', item.id);
       edit.addEventListener('click', () => {
-        if (!hasWritableSession()) return;
-        const updated = window.prompt('Update feedback', item.feedback ?? '');
-        if (updated?.trim()) {
-          post({
-            type: 'feedback.item.edit',
-            requestId: nextRequestId(),
-            sessionId: session?.sessionId ?? '',
-            id: item.id,
-            feedback: updated.trim(),
-          });
-        }
+        openFeedbackEdit(item);
       });
       const remove = createElement('button', 'feedback-card-action', 'Delete');
       remove.type = 'button';
@@ -1789,6 +1947,86 @@ export function createFeedbackReviewController(options: {
           id: item.id,
         });
       });
+      if (editDraft?.id === item.id) {
+        const draft = editDraft;
+        const form = createElement('form', 'feedback-card-edit-form');
+        form.setAttribute('data-feedback-edit-form', item.id);
+        form.setAttribute('aria-label', `Edit feedback ${item.id}`);
+        const label = createElement('label', 'feedback-composer-label', `Edit feedback ${item.id}`);
+        const field = createElement('textarea', 'feedback-composer-input') as HTMLTextAreaElement;
+        field.id = `feedback-edit-${item.id}`;
+        field.value = draft.value;
+        field.rows = 4;
+        field.required = true;
+        field.readOnly = draft.pendingRequestId !== null || !hasWritableSession();
+        field.setAttribute('data-feedback-edit-input', item.id);
+        label.htmlFor = field.id;
+        const editActions = createElement('div', 'feedback-composer-actions');
+        const cancel = createElement('button', 'feedback-secondary-button', 'Cancel');
+        cancel.type = 'button';
+        cancel.disabled = draft.pendingRequestId !== null;
+        cancel.setAttribute('data-feedback-edit-cancel', item.id);
+        const save = createElement('button', 'feedback-primary-button', 'Save changes');
+        save.type = 'submit';
+        save.setAttribute('data-feedback-edit-save', item.id);
+        const refreshSaveState = (): void => {
+          save.disabled =
+            field.value.trim().length === 0 ||
+            field.value.trim() === (item.feedback ?? '').trim() ||
+            draft.pendingRequestId !== null ||
+            !hasWritableSession();
+        };
+        refreshSaveState();
+        field.addEventListener('input', () => {
+          draft.value = field.value;
+          refreshSaveState();
+        });
+        cancel.addEventListener('click', () => closeFeedbackEdit());
+        form.addEventListener('keydown', event => {
+          if (event.key !== 'Escape' || draft.pendingRequestId !== null) return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeFeedbackEdit();
+        });
+        form.addEventListener('submit', event => {
+          event.preventDefault();
+          const feedback = field.value.trim();
+          if (
+            !hasWritableSession() ||
+            !session ||
+            session.sessionId !== draft.sessionId ||
+            editDraft !== draft ||
+            draft.pendingRequestId !== null ||
+            feedback.length === 0 ||
+            feedback === (item.feedback ?? '').trim()
+          ) {
+            return;
+          }
+          const requestId = nextRequestId();
+          draft.value = field.value;
+          draft.pendingRequestId = requestId;
+          field.readOnly = true;
+          cancel.disabled = true;
+          save.disabled = true;
+          pendingMutations.set(requestId, { kind: 'edit', id: item.id });
+          post({
+            type: 'feedback.item.edit',
+            requestId,
+            sessionId: draft.sessionId,
+            id: item.id,
+            feedback,
+          });
+        });
+        editActions.append(cancel, save);
+        form.append(label, field, editActions);
+        card.append(title);
+        if (focusLabel && focus) card.append(focusLabel, focus);
+        card.append(location);
+        if (capturePreview) card.append(capturePreview);
+        card.append(form);
+        panel.append(card);
+        continue;
+      }
       if (item.kind === 'screenshot') {
         const replace = createElement('button', 'feedback-card-action', 'Replace capture');
         replace.type = 'button';
@@ -1803,7 +2041,6 @@ export function createFeedbackReviewController(options: {
         });
         actions.append(replace);
       }
-      actions.prepend(showTarget);
       actions.append(edit, remove);
       card.append(title);
       if (focusLabel && focus) {
@@ -1813,6 +2050,15 @@ export function createFeedbackReviewController(options: {
       if (capturePreview) card.append(capturePreview);
       card.append(body, actions);
       panel.append(card);
+    }
+    if (focusedEditId && focusedEditSelection) {
+      const refreshedField = panel.querySelector<HTMLTextAreaElement>(
+        `[data-feedback-edit-input="${focusedEditId}"]`
+      );
+      if (refreshedField) {
+        refreshedField.focus({ preventScroll: true });
+        refreshedField.setSelectionRange(focusedEditSelection.start, focusedEditSelection.end);
+      }
     }
   };
 
@@ -2393,6 +2639,11 @@ export function createFeedbackReviewController(options: {
       focusedCardId && focusedElement instanceof HTMLButtonElement
         ? focusedElement.textContent
         : null;
+    const focusedEditControl = (
+      ['data-feedback-edit-input', 'data-feedback-edit-cancel', 'data-feedback-edit-save'] as const
+    )
+      .map(attribute => ({ attribute, id: focusedElement?.getAttribute(attribute) ?? null }))
+      .find(control => control.id !== null);
     const focusedUndoId = focusedElement
       ?.closest<HTMLElement>('[data-feedback-undo-id]')
       ?.getAttribute('data-feedback-undo-id');
@@ -2447,6 +2698,11 @@ export function createFeedbackReviewController(options: {
       });
       marker.addEventListener('click', () => {
         if (composer) return;
+        if (editDraft) {
+          focusFeedbackEdit(editDraft.id);
+          announce('Save or cancel the current feedback edit before changing comments.');
+          return;
+        }
         removePendingButton();
         if (commentsState === 'expanded' && activeItemId && ids.includes(activeItemId)) {
           collapseRail();
@@ -2466,6 +2722,11 @@ export function createFeedbackReviewController(options: {
         panel?.querySelector<HTMLElement>(`[data-feedback-undo-id="${focusedUndoId}"]`) ?? null;
       restoredFocus ??=
         panel?.querySelector<HTMLElement>(`[data-feedback-card="${focusedUndoId}"]`) ?? null;
+    } else if (focusedEditControl?.id) {
+      restoredFocus =
+        panel?.querySelector<HTMLElement>(
+          `[${focusedEditControl.attribute}="${focusedEditControl.id}"]`
+        ) ?? null;
     } else if (focusedCardId) {
       const card = panel?.querySelector<HTMLElement>(`[data-feedback-card="${focusedCardId}"]`);
       restoredFocus =
@@ -2538,11 +2799,17 @@ export function createFeedbackReviewController(options: {
   const handleSelectionChange = (): void => {
     removePendingButton();
     if (!hasWritableSession() || !session || composer) return;
+    const nativeSelection = window.getSelection();
+    if (
+      !nativeSelectionIsInsideEditor(nativeSelection, editorDom) ||
+      !nativeSelectionHasText(nativeSelection)
+    ) {
+      return;
+    }
     const target = getFeedbackSelectionTarget(editor, session.anchors ?? []);
     if (!target) return;
 
-    const nativeSelection = window.getSelection();
-    if (nativeSelection && nativeSelection.rangeCount > 0) {
+    if (nativeSelection.rangeCount > 0) {
       try {
         const range = nativeSelection.getRangeAt(0);
         pendingSelectionRange = typeof range.cloneRange === 'function' ? range.cloneRange() : range;
@@ -2712,9 +2979,11 @@ export function createFeedbackReviewController(options: {
         ? 'Resume feedback or finish the current completion step'
         : kind === 'text-composer'
           ? 'Add or cancel the current feedback'
-          : kind === 'text-block-selector'
-            ? 'Choose a text block range or cancel'
-            : 'Complete or cancel the current capture';
+          : kind === 'feedback-edit'
+            ? 'Save or cancel the current feedback edit'
+            : kind === 'text-block-selector'
+              ? 'Choose a text block range or cancel'
+              : 'Complete or cancel the current capture';
     announce(`${instruction} before ${action}.`);
     return true;
   };
@@ -2768,6 +3037,7 @@ export function createFeedbackReviewController(options: {
         return;
       }
       rememberTransitionFocus();
+      setDraftBannerBusy(true);
       startRequestId = nextRequestId();
       setReadOnly(true);
       document.body.classList.add('feedback-review-starting');
@@ -2799,6 +3069,7 @@ export function createFeedbackReviewController(options: {
       restoreEditorFocusAfterClose = false;
       pendingTransitionRecovery = null;
       transitionReturnFocus = null;
+      focusDraftResumeAfterTransition = false;
       document.body.classList.remove('feedback-review-starting');
       invalidated = false;
       commentsState = 'collapsed';
@@ -2859,6 +3130,9 @@ export function createFeedbackReviewController(options: {
         }
       }
       pendingMutations.clear();
+      editDraft?.surface.release();
+      editDraft = null;
+      requestedEditFocusId = null;
       closeTextBlockSelector(false);
       closeComposer(false);
       removeCompletionDialog(false);
@@ -2909,6 +3183,7 @@ export function createFeedbackReviewController(options: {
       restoreEditorFocusAfterClose = false;
       pendingTransitionRecovery = null;
       transitionReturnFocus = null;
+      focusDraftResumeAfterTransition = false;
       invalidated = false;
       document.body.classList.remove(
         'feedback-review-active',
@@ -2937,6 +3212,8 @@ export function createFeedbackReviewController(options: {
         const submit = composer.querySelector<HTMLButtonElement>('[data-feedback-submit]');
         if (field) field.readOnly = true;
         if (submit) submit.disabled = true;
+        setCommentsState('expanded');
+      } else if (editDraft) {
         setCommentsState('expanded');
       } else {
         collapseRail();
@@ -2972,6 +3249,10 @@ export function createFeedbackReviewController(options: {
       if (!session) return;
       session.items = [...items];
       const liveIds = new Set(items.map(item => item.id));
+      if (editDraft && !liveIds.has(editDraft.id)) {
+        editDraft.surface.release();
+        editDraft = null;
+      }
       for (const id of lastValidTargetGeometry.keys()) {
         if (id !== '__composer__' && !liveIds.has(id)) lastValidTargetGeometry.delete(id);
       }
@@ -3015,6 +3296,14 @@ export function createFeedbackReviewController(options: {
         updateCompletionCheckpoint();
       }
       renderMarkers();
+      if (requestedEditFocusId) {
+        panel
+          ?.querySelector<HTMLButtonElement>(
+            `[data-feedback-edit-action="${requestedEditFocusId}"]`
+          )
+          ?.focus({ preventScroll: true });
+        requestedEditFocusId = null;
+      }
       if (focusUndoAfterRender) {
         panel
           ?.querySelector<HTMLButtonElement>(`[data-feedback-undo-id="${focusUndoAfterRender}"]`)
@@ -3145,6 +3434,10 @@ export function createFeedbackReviewController(options: {
 
     commentOnSelection() {
       if (!hasWritableSession() || !session) return false;
+      if (nativeTextSelectionIsOutsideEditor(editorDom)) {
+        announce('Select text in the Markdown document to add feedback.');
+        return false;
+      }
       const target = getFeedbackSelectionTarget(editor, session.anchors ?? []);
       if (!target) return openTextBlockSelector();
       controller.openTextComposer(target);
@@ -3505,7 +3798,13 @@ export function createFeedbackReviewController(options: {
       document.body.classList.remove('feedback-review-starting');
       setFeedbackToolbarState({ active: false, starting: false });
       setDraftBannerBusy(false);
-      if (retryHadFocus) {
+      if (focusDraftResumeAfterTransition) {
+        focusDraftResumeAfterTransition = false;
+        transitionReturnFocus = null;
+        draftBanner
+          ?.querySelector<HTMLButtonElement>('[data-feedback-draft-resume]')
+          ?.focus({ preventScroll: true });
+      } else if (retryHadFocus) {
         transitionReturnFocus = null;
         editorDom.focus({ preventScroll: true });
       } else {
@@ -3535,6 +3834,36 @@ export function createFeedbackReviewController(options: {
         case 'feedback.drafts.available':
           if (!session && !startRequestId && !completionDialog) renderDraftBanner(message.drafts);
           break;
+        case 'feedback.resume.available': {
+          if (
+            session ||
+            completionDialog ||
+            message.requestId !== startRequestId ||
+            message.drafts.length === 0
+          ) {
+            break;
+          }
+          const activeOffer = message.kind === 'active-owner' || message.kind === 'active-peer';
+          const transitionStillLocked = Boolean(
+            !activeOffer && pendingTransitionRecovery?.requestId === message.requestId
+          );
+          if (!transitionStillLocked) {
+            startRequestId = null;
+            setDraftBannerBusy(false);
+            setReadOnly(activeOffer);
+            document.body.classList.toggle('feedback-review-starting', activeOffer);
+            setFeedbackToolbarState({ active: false, starting: activeOffer });
+          }
+          renderDraftBanner(message.drafts, {
+            mode: message.kind === 'saved-draft' ? 'saved' : message.kind,
+            focusResume: !transitionStillLocked,
+          });
+          if (transitionStillLocked) {
+            focusDraftResumeAfterTransition = true;
+            setDraftBannerBusy(true);
+          }
+          break;
+        }
         case 'feedback.started':
           if (session || message.requestId !== startRequestId) break;
           controller.activate({
@@ -3546,6 +3875,10 @@ export function createFeedbackReviewController(options: {
             anchors: message.anchors,
             items: message.items,
           });
+          break;
+        case 'feedback.session.transferred':
+          if (!session || message.oldSessionId !== session.sessionId) break;
+          controller.deactivate();
           break;
         case 'feedback.transition.locked':
           if (
@@ -3574,6 +3907,13 @@ export function createFeedbackReviewController(options: {
             } else if (pending?.kind === 'text-add') {
               pending.settle();
               if (composer === pending.form) closeComposer();
+            } else if (pending?.kind === 'edit') {
+              if (editDraft?.id === pending.id) {
+                editDraft.surface.release();
+                editDraft = null;
+              }
+              requestedEditFocusId = pending.id;
+              announce(`Feedback ${pending.id} updated.`);
             } else if (
               pending?.kind === 'delete' &&
               !message.items.some(item => item.id === pending.item.id)
@@ -3717,6 +4057,32 @@ export function createFeedbackReviewController(options: {
                 pending.submit.disabled = pending.field.value.trim().length === 0;
                 pending.field.focus({ preventScroll: true });
               }
+            } else if (pending?.kind === 'edit' && editDraft?.id === pending.id) {
+              editDraft.pendingRequestId = null;
+              const field = panel?.querySelector<HTMLTextAreaElement>(
+                `[data-feedback-edit-input="${pending.id}"]`
+              );
+              const cancel = panel?.querySelector<HTMLButtonElement>(
+                `[data-feedback-edit-cancel="${pending.id}"]`
+              );
+              const save = panel?.querySelector<HTMLButtonElement>(
+                `[data-feedback-edit-save="${pending.id}"]`
+              );
+              if (field) {
+                field.readOnly = invalidated;
+                if (cancel) cancel.disabled = false;
+                if (save) {
+                  const savedFeedback =
+                    session?.items.find(item => item.id === pending.id)?.feedback?.trim() ?? '';
+                  save.disabled =
+                    invalidated ||
+                    field.value.trim().length === 0 ||
+                    field.value.trim() === savedFeedback;
+                }
+              }
+              if (field && !invalidated) {
+                field.focus({ preventScroll: true });
+              }
             } else if (pending?.kind === 'delete' && pending.button.isConnected) {
               pending.button.disabled = invalidated;
             } else if (pending?.kind === 'restore' && pending.button.isConnected) {
@@ -3741,12 +4107,23 @@ export function createFeedbackReviewController(options: {
             message.requestId === startRequestId &&
             pendingTransitionRecovery?.requestId !== message.requestId
           ) {
+            if (draftBannerMode === 'active-owner') {
+              availableDrafts = [];
+              removeDraftBanner();
+            }
+            const keepActiveOfferLocked = draftBannerMode === 'active-peer';
             startRequestId = null;
-            setReadOnly(false);
-            document.body.classList.remove('feedback-review-starting');
-            setFeedbackToolbarState({ active: false, starting: false });
+            setReadOnly(keepActiveOfferLocked);
+            document.body.classList.toggle('feedback-review-starting', keepActiveOfferLocked);
+            setFeedbackToolbarState({ active: false, starting: keepActiveOfferLocked });
             setDraftBannerBusy(false);
-            restoreTransitionFocus();
+            if (keepActiveOfferLocked) {
+              draftBanner
+                ?.querySelector<HTMLButtonElement>('[data-feedback-draft-resume]')
+                ?.focus({ preventScroll: true });
+            } else {
+              restoreTransitionFocus();
+            }
           }
           break;
         case 'feedback.command':

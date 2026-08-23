@@ -23,6 +23,7 @@ import {
   FeedbackSessionStore,
   type ScreenshotFeedbackItem,
 } from './feedbackSessionStore';
+import { renderFeedbackHandoffPrompt } from './feedbackHandoffPrompt';
 import {
   buildFeedbackAnchorMap,
   mapFeedbackSelection,
@@ -32,6 +33,7 @@ import {
   FEEDBACK_ERROR_CODES,
   parseFeedbackWebviewMessage,
   type CanonicalFeedbackBlock,
+  type FeedbackDraftSummary,
   type FeedbackHostMessage,
   type FeedbackItemSummary,
   type FeedbackRenderedRangeInputV1,
@@ -57,9 +59,11 @@ interface ActiveFeedbackSession {
   previewRevisions: Map<string, number>;
   /** Exact draft ranges that were structurally valid but no longer resolve. */
   degradedRenderedRangeIds: Set<string>;
-  phase: 'active' | 'finishing' | 'discarding';
+  phase: 'active' | 'resuming' | 'finishing' | 'discarding';
   pendingMutationCount: number;
   mutationIdleWaiters: Set<() => void>;
+  /** Durable Finish/Discard work that must settle before controller demotion. */
+  closeOperation?: Promise<void>;
   /** Correlated close handshake retained until an applied revision is still current. */
   pendingClose?: {
     requestId: string;
@@ -363,6 +367,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   // bundle handle needed to validate every mutation.
   private feedbackSessions = new Map<string, ActiveFeedbackSession>();
   private feedbackTransitions = new Map<string, FeedbackTransition>();
+  /** Serialize Start/Resume entry operations per document so retries become idempotent. */
+  private feedbackEntryOperations = new Map<string, Promise<void>>();
+  /** One-shot authorization for transferring or rehydrating a live runtime session. */
+  private feedbackActiveResumeOffers = new WeakMap<
+    vscode.Webview,
+    { documentKey: string; round: string; sessionId: string }
+  >();
   /** Every live rich-view webview, including duplicate split views. */
   private feedbackWebviews = new Map<string, Set<vscode.Webview>>();
   /** Last lock broadcast for each document, retained until peers are unlocked. */
@@ -1049,8 +1060,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       case 'ready': {
         // Webview is ready, send initial content and settings
         this.registerFeedbackWebview(document.uri.toString(), webview);
-        this.updateWebview(document, webview);
-        void this.announceMatchingFeedbackDrafts(document, webview);
+        if (!this.recoverFeedbackControllerOnReady(document, webview)) {
+          this.updateWebview(document, webview);
+          void this.announceMatchingFeedbackDrafts(document, webview);
+        }
         // Also send settings separately
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
@@ -1358,32 +1371,43 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     try {
       const sourceBytes = await readFile(document.uri.fsPath);
-      const discovery = await FeedbackSessionStore.findMatchingDrafts({
+      const drafts = await this.findFeedbackDraftSummaries(
         workspaceRoot,
-        sourcePath: document.uri.fsPath,
-        sourceBytes,
-      });
-      if (discovery.invalidCandidates.length > 0) {
-        console.warn(
-          `[MD4H] Ignored ${discovery.invalidCandidates.length} invalid feedback draft candidate(s).`
-        );
-      }
-      if (discovery.drafts.length === 0) return;
+        document.uri.fsPath,
+        sourceBytes
+      );
+      if (drafts.length === 0) return;
       this.postFeedbackMessage(webview, {
         type: 'feedback.drafts.available',
-        drafts: discovery.drafts.map(draft => ({
-          round: draft.round,
-          createdAt: draft.createdAt,
-          itemCount: draft.itemCount,
-          feedbackFile: path
-            .relative(workspaceRoot, draft.feedbackFilePath)
-            .split(path.sep)
-            .join('/'),
-        })),
+        drafts,
       });
     } catch (error) {
       console.error('[MD4H] Could not discover matching feedback drafts:', error);
     }
+  }
+
+  /** Discover safe, exact-hash draft summaries without exposing feedback content. */
+  private async findFeedbackDraftSummaries(
+    workspaceRoot: string,
+    sourcePath: string,
+    sourceBytes: Uint8Array
+  ): Promise<FeedbackDraftSummary[]> {
+    const discovery = await FeedbackSessionStore.findMatchingDrafts({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes,
+    });
+    if (discovery.invalidCandidates.length > 0) {
+      console.warn(
+        `[MD4H] Ignored ${discovery.invalidCandidates.length} invalid feedback draft candidate(s).`
+      );
+    }
+    return discovery.drafts.map(draft => ({
+      round: draft.round,
+      createdAt: draft.createdAt,
+      itemCount: draft.itemCount,
+      feedbackFile: path.relative(workspaceRoot, draft.feedbackFilePath).split(path.sep).join('/'),
+    }));
   }
 
   private invalidateFeedbackSession(documentKey: string, _webview?: vscode.Webview): void {
@@ -1719,14 +1743,25 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   ): Promise<void> {
     let trackedMutationSession: ActiveFeedbackSession | undefined;
     let requestSession: ActiveFeedbackSession | undefined;
+    let closeOperation:
+      | {
+          session: ActiveFeedbackSession;
+          promise: Promise<void>;
+          resolve: () => void;
+        }
+      | undefined;
     try {
-      if (message.type === 'feedback.start') {
-        await this.startFeedbackSession(message, document, webview);
+      if (message.type === 'feedback.start' || message.type === 'feedback.start.new') {
+        await this.runFeedbackEntryOperation(document.uri.toString(), () =>
+          this.startFeedbackSession(message, document, webview)
+        );
         return;
       }
 
       if (message.type === 'feedback.draft.resume') {
-        await this.resumeFeedbackSession(message, document, webview);
+        await this.runFeedbackEntryOperation(document.uri.toString(), () =>
+          this.resumeFeedbackSession(message, document, webview)
+        );
         return;
       }
 
@@ -1803,6 +1838,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
       const session = this.requireFeedbackSession(message, document, webview);
       requestSession = session;
+      if (message.type === 'feedback.finish' || message.type === 'feedback.discard') {
+        let resolveCloseOperation = (): void => undefined;
+        const promise = new Promise<void>(resolve => {
+          resolveCloseOperation = resolve;
+        });
+        session.closeOperation = promise;
+        closeOperation = { session, promise, resolve: resolveCloseOperation };
+      }
       if (message.type === 'feedback.close.retry') {
         if (
           session.pendingClose?.requestId !== message.requestId ||
@@ -2044,12 +2087,35 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
               new Date(),
               this.feedbackCommitGuard(session, document)
             );
+            const configuredPromptTemplate = vscode.workspace
+              .getConfiguration('markdownForHumans.feedback', document.uri)
+              .get<unknown>('handoffPromptTemplate');
+            const handoff = renderFeedbackHandoffPrompt(configuredPromptTemplate, {
+              feedbackFile: result.feedbackFileRelativePath,
+              source: result.source,
+              sourceSha256: result.sourceSha256,
+              itemCount: result.itemCount,
+              round: result.round,
+            });
+            if (handoff.warning !== undefined) {
+              const warningMessage =
+                'The feedback handoff prompt template is invalid. ' + handoff.warning.message;
+              try {
+                void Promise.resolve(vscode.window.showWarningMessage(warningMessage)).catch(
+                  warningError => {
+                    console.error('[MD4H] Feedback template warning failed:', warningError);
+                  }
+                );
+              } catch (warningError) {
+                console.error('[MD4H] Feedback template warning failed:', warningError);
+              }
+            }
             let promptCopied = false;
             try {
               if (!vscode.env.clipboard) {
                 throw new Error('Clipboard API is unavailable');
               }
-              await vscode.env.clipboard.writeText(result.prompt);
+              await vscode.env.clipboard.writeText(handoff.prompt);
               promptCopied = true;
             } catch (clipboardError) {
               console.error('[MD4H] Feedback clipboard write failed:', clipboardError);
@@ -2060,8 +2126,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
               requestId: message.requestId,
               sessionId: session.sessionId,
               feedbackFile: result.feedbackFileRelativePath,
-              itemCount: session.store.items.length,
-              prompt: result.prompt,
+              itemCount: result.itemCount,
+              prompt: handoff.prompt,
               promptCopied,
             });
             return;
@@ -2212,15 +2278,96 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       if (trackedMutationSession) {
         this.endFeedbackMutation(trackedMutationSession);
       }
+      if (closeOperation) {
+        closeOperation.resolve();
+        if (closeOperation.session.closeOperation === closeOperation.promise) {
+          closeOperation.session.closeOperation = undefined;
+        }
+      }
     }
   }
 
-  private async startFeedbackSession(
-    message: Extract<FeedbackWebviewMessage, { type: 'feedback.start' }>,
+  /**
+   * Serialize Feedback entry points without swallowing their structured errors.
+   * A second Start waits for the first one to either activate a session or
+   * finish recovery, then observes that authoritative state instead of racing
+   * into the generic "already active" guard.
+   */
+  private async runFeedbackEntryOperation(
+    documentKey: string,
+    operation: () => Promise<void>
+  ): Promise<void> {
+    const previous = this.feedbackEntryOperations.get(documentKey);
+    const current = previous ? previous.catch(() => undefined).then(operation) : operation();
+    this.feedbackEntryOperations.set(documentKey, current);
+    try {
+      await current;
+    } finally {
+      if (this.feedbackEntryOperations.get(documentKey) === current) {
+        this.feedbackEntryOperations.delete(documentKey);
+      }
+    }
+  }
+
+  /**
+   * Retire state that a same-view controller can no longer complete. Durable
+   * drafts remain untouched and are discovered again from exact source bytes.
+   */
+  private async prepareFeedbackStartRetry(
     document: vscode.TextDocument,
     webview: vscode.Webview
   ): Promise<void> {
     const documentKey = document.uri.toString();
+    const pendingEdit = this.inFlightApplyEdits.get(documentKey);
+    if (pendingEdit) await pendingEdit.catch(() => false);
+
+    let released = false;
+    const session = this.feedbackSessions.get(documentKey);
+    if (session?.ownerWebview === webview && session.invalidated) {
+      await this.waitForFeedbackMutations(session);
+      if (this.feedbackSessions.get(documentKey) === session) {
+        this.feedbackSessions.delete(documentKey);
+        session.mutationIdleWaiters.forEach(resolve => resolve());
+        session.mutationIdleWaiters.clear();
+        released = true;
+      }
+    }
+
+    const transition = this.feedbackTransitions.get(documentKey);
+    if (transition?.ownerWebview === webview) {
+      this.feedbackTransitions.delete(documentKey);
+      released = true;
+    }
+
+    if (released) {
+      this.feedbackActiveResumeOffers.delete(webview);
+      this.syncFeedbackPeerContent(document, webview);
+      this.updateWebview(document, webview, { force: true });
+      this.refreshFeedbackPeerLocks(documentKey);
+    }
+  }
+
+  private async startFeedbackSession(
+    message: Extract<FeedbackWebviewMessage, { type: 'feedback.start' | 'feedback.start.new' }>,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<void> {
+    const documentKey = document.uri.toString();
+    const retrySession = this.feedbackSessions.get(documentKey);
+    const retryTransition = this.feedbackTransitions.get(documentKey);
+    if (
+      this.inFlightApplyEdits.has(documentKey) ||
+      (retrySession?.ownerWebview === webview && retrySession.invalidated) ||
+      retryTransition?.ownerWebview === webview
+    ) {
+      await this.prepareFeedbackStartRetry(document, webview);
+    }
+    if (
+      message.type === 'feedback.start' &&
+      this.offerActiveFeedbackResume(message, document, webview)
+    ) {
+      return;
+    }
     const transitionToken = this.beginFeedbackTransition(documentKey, webview, message.requestId);
     try {
       const workspaceRoot = this.getWorkspaceFolderPath(document);
@@ -2235,6 +2382,23 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       const transition = this.assertFeedbackTransition(documentKey, transitionToken);
       this.postFeedbackTransitionOwnerLock(transition);
       this.lockFeedbackTransition(documentKey, transitionToken);
+      if (message.type === 'feedback.start') {
+        const drafts = await this.findFeedbackDraftSummaries(
+          workspaceRoot,
+          document.uri.fsPath,
+          sourceBytes
+        );
+        this.assertFeedbackTransition(documentKey, transitionToken);
+        if (drafts.length > 0) {
+          this.postFeedbackMessage(webview, {
+            type: 'feedback.resume.available',
+            requestId: message.requestId,
+            kind: 'saved-draft',
+            drafts,
+          });
+          return;
+        }
+      }
       const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
       if (!anchorResult.ok) {
         throw Object.assign(new Error(anchorResult.error.detail), {
@@ -2275,15 +2439,54 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     }
   }
 
+  /**
+   * Convert a repeated Start from a desynchronized rich view into an explicit
+   * Resume choice. Start alone never changes the existing owner or runtime token.
+   */
+  private offerActiveFeedbackResume(
+    message: { requestId: string },
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): boolean {
+    const session = this.feedbackSessions.get(document.uri.toString());
+    if (!session || session.phase !== 'active' || session.invalidated) return false;
+    const workspaceRoot = this.getWorkspaceFolderPath(document);
+    if (!workspaceRoot) return false;
+    const snapshot = session.store.snapshot;
+    this.feedbackActiveResumeOffers.set(webview, {
+      documentKey: document.uri.toString(),
+      round: snapshot.round,
+      sessionId: session.sessionId,
+    });
+    this.postFeedbackMessage(webview, {
+      type: 'feedback.resume.available',
+      requestId: message.requestId,
+      kind: session.ownerWebview === webview ? 'active-owner' : 'active-peer',
+      drafts: [
+        {
+          round: snapshot.round,
+          createdAt: snapshot.createdAt,
+          itemCount: session.store.items.length,
+          feedbackFile: path
+            .relative(workspaceRoot, session.store.feedbackFilePath)
+            .split(path.sep)
+            .join('/'),
+        },
+      ],
+    });
+    return true;
+  }
+
   private beginFeedbackTransition(
     documentKey: string,
     webview: vscode.Webview,
     requestId: string
   ): symbol {
+    this.reclaimOrphanedFeedbackState(documentKey, webview);
     if (this.feedbackSessions.has(documentKey) || this.feedbackTransitions.has(documentKey)) {
       throw new FeedbackSessionError(
         'MD4H-FB-STORE-001',
-        'A feedback session is already active or starting for this Markdown file.'
+        'Feedback state changed while Start was being prepared. Select Start feedback again to Resume or recover the draft.'
       );
     }
     const token = Symbol('feedback-transition');
@@ -2311,8 +2514,101 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     });
   }
 
+  /**
+   * A second `ready` from the owning webview means its JavaScript controller
+   * was recreated. Demote volatile ownership to the durable draft, restore
+   * authoritative Markdown, then let the normal draft banner offer Resume.
+   */
+  private recoverFeedbackControllerOnReady(
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): boolean {
+    const documentKey = document.uri.toString();
+    const session = this.feedbackSessions.get(documentKey);
+    const transition = this.feedbackTransitions.get(documentKey);
+    const ownedSession = session?.ownerWebview === webview ? session : undefined;
+    const ownedTransition = transition?.ownerWebview === webview ? transition : undefined;
+    if (!ownedSession && !ownedTransition) return false;
+
+    const lockId = ownedSession?.sessionId ?? ownedTransition?.lockId;
+    if (lockId) {
+      this.postFeedbackMessage(webview, {
+        type: 'feedback.peer.locked',
+        lockId,
+        message: 'Restoring the previous Feedback draft. This view is temporarily read-only.',
+      });
+    }
+    void this.demoteFeedbackOwnerAfterReady(document, webview).catch(error => {
+      console.error('[MD4H] Failed recovering Feedback after webview reload:', error);
+      this.postFeedbackMessage(webview, {
+        type: 'feedback.error',
+        message: 'The previous Feedback draft could not be restored. Try Start feedback again.',
+        recoverable: true,
+      });
+    });
+    return true;
+  }
+
+  /** Finish in-flight writes before releasing a controller that no longer exists. */
+  private async demoteFeedbackOwnerAfterReady(
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<void> {
+    const documentKey = document.uri.toString();
+    const entryOperation = this.feedbackEntryOperations.get(documentKey);
+    if (entryOperation) await entryOperation.catch(() => undefined);
+    const pendingEdit = this.inFlightApplyEdits.get(documentKey);
+    if (pendingEdit) await pendingEdit.catch(() => false);
+
+    const session = this.feedbackSessions.get(documentKey);
+    if (session?.ownerWebview === webview) {
+      const closeOperation = session.closeOperation;
+      if (closeOperation) await closeOperation.catch(() => undefined);
+      await this.waitForFeedbackMutations(session);
+    }
+    if (this.feedbackWebviews.get(documentKey)?.has(webview) !== true) return;
+
+    const latestSession = this.feedbackSessions.get(documentKey);
+    const latestTransition = this.feedbackTransitions.get(documentKey);
+    const stateMovedToPeer =
+      (latestSession && latestSession.ownerWebview !== webview) ||
+      (latestTransition && latestTransition.ownerWebview !== webview);
+    if (stateMovedToPeer) {
+      this.updateWebview(document, webview, { force: true });
+      this.postCurrentFeedbackPeerLock(documentKey, webview);
+      return;
+    }
+
+    if (latestSession?.ownerWebview === webview) {
+      // If the controller retained its pending Start request across an unusual
+      // duplicate ready event, explicitly deactivate the runtime it may just
+      // have accepted before demoting the host state to a saved draft.
+      this.postFeedbackMessage(webview, {
+        type: 'feedback.session.transferred',
+        oldSessionId: latestSession.sessionId,
+        lockId: latestSession.sessionId,
+        message: 'Feedback was restored as a saved draft after the rich view reloaded.',
+      });
+      this.syncFeedbackPeerContent(document, webview);
+      this.feedbackSessions.delete(documentKey);
+      latestSession.mutationIdleWaiters.forEach(resolve => resolve());
+      latestSession.mutationIdleWaiters.clear();
+    }
+    if (latestTransition?.ownerWebview === webview) {
+      this.syncFeedbackPeerContent(document, webview);
+      this.feedbackTransitions.delete(documentKey);
+    }
+    this.feedbackActiveResumeOffers.delete(webview);
+    // Content must arrive before the correlated unlock so the recreated
+    // controller is never briefly editable with an empty or stale document.
+    this.updateWebview(document, webview, { force: true });
+    this.refreshFeedbackPeerLocks(documentKey);
+    await this.announceMatchingFeedbackDrafts(document, webview);
+  }
+
   /** Track every split so Feedback ownership can be reflected in sibling UI. */
   private registerFeedbackWebview(documentKey: string, webview: vscode.Webview): void {
+    this.reclaimOrphanedFeedbackState(documentKey, webview);
     let webviews = this.feedbackWebviews.get(documentKey);
     if (!webviews) {
       webviews = new Set();
@@ -2320,6 +2616,37 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     }
     webviews.add(webview);
     this.postCurrentFeedbackPeerLock(documentKey, webview);
+  }
+
+  /**
+   * Reclaim volatile ownership left behind by a panel whose disposal cleanup
+   * did not complete. The draft bundle stays on disk and can be resumed; only
+   * an owner absent from both the registered set and the incoming view is
+   * considered orphaned.
+   */
+  private reclaimOrphanedFeedbackState(documentKey: string, incomingWebview: vscode.Webview): void {
+    // Keep sibling views locked until a departing owner's accepted edit has
+    // settled. A later Start retries reconciliation after the edit pipeline
+    // removes this marker.
+    if (this.inFlightApplyEdits.has(documentKey)) return;
+    const registered = this.feedbackWebviews.get(documentKey);
+    const ownerIsAvailable = (owner: vscode.Webview): boolean =>
+      owner === incomingWebview || registered?.has(owner) === true;
+    const session = this.feedbackSessions.get(documentKey);
+    const transition = this.feedbackTransitions.get(documentKey);
+    let reclaimed = false;
+
+    if (session && !ownerIsAvailable(session.ownerWebview)) {
+      this.feedbackSessions.delete(documentKey);
+      session.mutationIdleWaiters.forEach(resolve => resolve());
+      session.mutationIdleWaiters.clear();
+      reclaimed = true;
+    }
+    if (transition && !ownerIsAvailable(transition.ownerWebview)) {
+      this.feedbackTransitions.delete(documentKey);
+      reclaimed = true;
+    }
+    if (reclaimed) this.refreshFeedbackPeerLocks(documentKey);
   }
 
   /** Remove one disposed split without disturbing the document owner's session. */
@@ -2409,6 +2736,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     document?: vscode.TextDocument,
     settledEdit?: Promise<boolean>
   ): void {
+    this.feedbackActiveResumeOffers.delete(webview);
     const session = this.feedbackSessions.get(documentKey);
     const transition = this.feedbackTransitions.get(documentKey);
     const ownsFeedbackState =
@@ -2443,7 +2771,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     if (this.feedbackSessions.has(documentKey) || this.feedbackTransitions.has(documentKey)) {
       throw new FeedbackSessionError(
         'MD4H-FB-STORE-001',
-        'A feedback session is active or starting for this Markdown file.'
+        'Feedback changed since this draft action was shown. Select Start feedback to Resume or recover the current session.'
       );
     }
   }
@@ -2554,6 +2882,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webview: vscode.Webview
   ): Promise<void> {
     const documentKey = document.uri.toString();
+    if (await this.resumeActiveFeedbackSession(message, document, webview)) return;
     const transitionToken = this.beginFeedbackTransition(documentKey, webview, message.requestId);
     try {
       const workspaceRoot = this.getWorkspaceFolderPath(document);
@@ -2604,48 +2933,217 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         mutationIdleWaiters: new Set(),
         invalidated: false,
       };
-      for (const item of store.items) {
-        const target = this.findFeedbackOrdinalsForLines(
-          anchorResult.map,
-          item.startLine,
-          item.endLine
-        );
-        if (!target) {
-          throw Object.assign(
-            new Error(`Feedback item ${item.id} no longer maps to the frozen Markdown blocks.`),
-            { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
-          );
-        }
-        if (item.kind === 'text' && item.renderedRange !== undefined) {
-          if (!this.validatePersistedFeedbackRenderedRange(session, target, item.renderedRange)) {
-            session.degradedRenderedRangeIds.add(item.id);
-          }
-        }
-        targets.set(item.id, target);
-      }
+      this.restoreFeedbackTargets(session);
       transition.recoveryRequired = false;
       this.feedbackSessions.set(documentKey, session);
       this.postFeedbackSessionStarted(message.requestId, workspaceRoot, session, webview);
       this.refreshFeedbackPeerLocks(documentKey);
-      if (session.degradedRenderedRangeIds.size > 0) {
-        const degradedIds = [...session.degradedRenderedRangeIds].sort(
-          (left, right) => Number(left.slice(1)) - Number(right.slice(1))
-        );
-        const visibleIds = degradedIds.slice(0, 5).join(', ');
-        const remaining = degradedIds.length - Math.min(degradedIds.length, 5);
-        this.postFeedbackMessage(webview, {
-          type: 'feedback.error',
-          sessionId: session.sessionId,
-          code: FEEDBACK_ERROR_CODES.targetDoesNotMap,
-          message: `Exact highlighting could not be restored for ${visibleIds}${
-            remaining > 0 ? ` and ${remaining} more` : ''
-          }. Their source-line anchors are preserved and block markers are shown.`,
-          recoverable: true,
-        });
-      }
+      this.postDegradedFeedbackRangeWarning(session, webview);
     } finally {
       this.endFeedbackTransition(documentKey, transitionToken, document);
     }
+  }
+
+  /**
+   * Rehydrate or explicitly transfer an already-active durable round after a
+   * rich-view controller lost its local session state.
+   */
+  private async resumeActiveFeedbackSession(
+    message: Extract<FeedbackWebviewMessage, { type: 'feedback.draft.resume' }>,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<boolean> {
+    const documentKey = document.uri.toString();
+    const current = this.feedbackSessions.get(documentKey);
+    if (!current || current.store.snapshot.round !== message.round) return false;
+    const resumeOffer = this.feedbackActiveResumeOffers.get(webview);
+    const isAuthorizedOffer =
+      resumeOffer?.documentKey === documentKey &&
+      resumeOffer.round === message.round &&
+      resumeOffer.sessionId === current.sessionId;
+    if (current.invalidated) {
+      if (current.ownerWebview !== webview) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-SNAPSHOT-001',
+          'The source changed while Feedback was active in another rich view.'
+        );
+      }
+      await this.waitForFeedbackMutations(current);
+      if (this.feedbackSessions.get(documentKey) === current) {
+        this.feedbackSessions.delete(documentKey);
+        current.mutationIdleWaiters.forEach(resolve => resolve());
+        current.mutationIdleWaiters.clear();
+        this.updateWebview(document, webview, { force: true });
+        this.refreshFeedbackPeerLocks(documentKey);
+      }
+      return false;
+    }
+    if (!isAuthorizedOffer) {
+      // A saved-draft banner may have become stale after another split resumed
+      // this round. Convert that click into a fresh, explicit transfer offer.
+      return this.offerActiveFeedbackResume(message, document, webview);
+    }
+    this.feedbackActiveResumeOffers.delete(webview);
+    if (current.phase !== 'active') {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-001',
+        `This feedback session is already ${current.phase}. Wait for that operation to finish.`
+      );
+    }
+    current.phase = 'resuming';
+    try {
+      await this.waitForFeedbackMutations(current);
+      if (this.feedbackSessions.get(documentKey) !== current) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-STORE-001',
+          'The feedback session changed while Resume was being confirmed.'
+        );
+      }
+      const workspaceRoot = this.getWorkspaceFolderPath(document);
+      if (!workspaceRoot || document.uri.scheme !== 'file') {
+        throw new FeedbackSessionError(
+          'MD4H-FB-STORE-001',
+          'Open this saved Markdown file inside a workspace before resuming feedback.'
+        );
+      }
+      const sourceBytes = await readFile(document.uri.fsPath);
+      await this.assertFeedbackSourceSha256(document, current.store.snapshot.sourceSha256);
+      if (
+        this.feedbackSessions.get(documentKey) !== current ||
+        current.phase !== 'resuming' ||
+        current.invalidated
+      ) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-STORE-001',
+          'The feedback session changed while Resume was being confirmed.'
+        );
+      }
+      const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
+      if (!anchorResult.ok) {
+        throw Object.assign(new Error(anchorResult.error.detail), {
+          code: anchorResult.error.code,
+        });
+      }
+
+      const previousOwner = current.ownerWebview;
+      const previousSessionId = current.sessionId;
+      const nextSession: ActiveFeedbackSession = {
+        ...current,
+        ownerWebview: webview,
+        sessionId: crypto.randomBytes(16).toString('hex'),
+        anchorMap: anchorResult.map,
+        canonicalBlocks: this.buildFeedbackCanonicalBlocks(message.blocks),
+        targets: new Map(),
+        previewNonce: crypto.randomBytes(8).toString('hex'),
+        previewRevisions: new Map(
+          current.store.items
+            .filter((item): item is ScreenshotFeedbackItem => item.kind === 'screenshot')
+            .map(item => [item.id, 1])
+        ),
+        degradedRenderedRangeIds: new Set(),
+        phase: 'active',
+        pendingMutationCount: 0,
+        mutationIdleWaiters: new Set(),
+        pendingClose: undefined,
+        lastErrorCode: undefined,
+      };
+      this.restoreFeedbackTargets(nextSession);
+      this.feedbackSessions.set(documentKey, nextSession);
+      if (previousOwner !== webview) {
+        this.postFeedbackMessage(previousOwner, {
+          type: 'feedback.session.transferred',
+          oldSessionId: previousSessionId,
+          lockId: nextSession.sessionId,
+          message: 'Feedback resumed in another rich view. This view is now read-only.',
+        });
+      }
+      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, nextSession, webview);
+      // The new owner activates review mode while its old peer lock is still
+      // installed. The following unlock then hands off read-only ownership in
+      // one webview task without an editable interval.
+      this.refreshFeedbackPeerLocks(documentKey);
+      this.postDegradedFeedbackRangeWarning(nextSession, webview);
+      return true;
+    } catch (error) {
+      if (this.feedbackSessions.get(documentKey) === current) {
+        const candidateCode =
+          error instanceof FeedbackSessionError
+            ? error.code
+            : error instanceof Error && 'code' in error && typeof error.code === 'string'
+              ? error.code
+              : undefined;
+        if (current.ownerWebview === webview) {
+          // The controller asking to rehydrate has no usable active UI. Keep
+          // the durable bundle, but retire the volatile runtime so Start can
+          // perform a fresh exact-hash preflight instead of looping forever.
+          this.syncFeedbackPeerContent(document, webview);
+          this.feedbackSessions.delete(documentKey);
+          current.mutationIdleWaiters.forEach(resolve => resolve());
+          current.mutationIdleWaiters.clear();
+          this.updateWebview(document, webview, { force: true });
+          this.refreshFeedbackPeerLocks(documentKey);
+        } else {
+          current.phase = 'active';
+          if (candidateCode === FEEDBACK_ERROR_CODES.sourceChanged && !current.invalidated) {
+            current.invalidated = true;
+            this.postFeedbackMessage(current.ownerWebview, {
+              type: 'feedback.invalidated',
+              sessionId: current.sessionId,
+              code: FEEDBACK_ERROR_CODES.sourceChanged,
+              message: 'The Markdown source changed outside the frozen feedback snapshot.',
+            });
+          }
+        }
+      }
+      throw error;
+    }
+  }
+
+  /** Restore exact item-to-block targets from persisted inclusive source lines. */
+  private restoreFeedbackTargets(session: ActiveFeedbackSession): void {
+    for (const item of session.store.items) {
+      const target = this.findFeedbackOrdinalsForLines(
+        session.anchorMap,
+        item.startLine,
+        item.endLine
+      );
+      if (!target) {
+        throw Object.assign(
+          new Error(`Feedback item ${item.id} no longer maps to the frozen Markdown blocks.`),
+          { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+        );
+      }
+      if (
+        item.kind === 'text' &&
+        item.renderedRange !== undefined &&
+        !this.validatePersistedFeedbackRenderedRange(session, target, item.renderedRange)
+      ) {
+        session.degradedRenderedRangeIds.add(item.id);
+      }
+      session.targets.set(item.id, target);
+    }
+  }
+
+  /** Report restored exact-range degradation without blocking line-anchored work. */
+  private postDegradedFeedbackRangeWarning(
+    session: ActiveFeedbackSession,
+    webview: vscode.Webview
+  ): void {
+    if (session.degradedRenderedRangeIds.size === 0) return;
+    const degradedIds = [...session.degradedRenderedRangeIds].sort(
+      (left, right) => Number(left.slice(1)) - Number(right.slice(1))
+    );
+    const visibleIds = degradedIds.slice(0, 5).join(', ');
+    const remaining = degradedIds.length - Math.min(degradedIds.length, 5);
+    this.postFeedbackMessage(webview, {
+      type: 'feedback.error',
+      sessionId: session.sessionId,
+      code: FEEDBACK_ERROR_CODES.targetDoesNotMap,
+      message: `Exact highlighting could not be restored for ${visibleIds}${
+        remaining > 0 ? ` and ${remaining} more` : ''
+      }. Their source-line anchors are preserved and block markers are shown.`,
+      recoverable: true,
+    });
   }
 
   private postFeedbackSessionStarted(

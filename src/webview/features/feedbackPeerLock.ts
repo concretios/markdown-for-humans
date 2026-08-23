@@ -109,6 +109,7 @@ export function createFeedbackPeerLockController(options: {
 
   const deactivate = (): void => {
     if (lockId === null) return;
+    const reviewOwnsReadOnlyState = document.body.classList.contains('feedback-review-active');
     lockId = null;
     editorDom.removeEventListener('beforeinput', guardMutation, true);
     editorDom.removeEventListener('cut', guardMutation, true);
@@ -116,10 +117,18 @@ export function createFeedbackPeerLockController(options: {
     editorDom.removeEventListener('drop', guardMutation, true);
     nodeViewGuards.setActive(false);
     unregisterPlugin();
-    if (originalAriaReadonly === null) editorDom.removeAttribute('aria-readonly');
-    else editorDom.setAttribute('aria-readonly', originalAriaReadonly);
-    if (originalTabIndex === null) editorDom.removeAttribute('tabindex');
-    else editorDom.setAttribute('tabindex', originalTabIndex);
+    if (reviewOwnsReadOnlyState) {
+      // A transferred session activates the review controller before the old
+      // peer token retires. Preserve the new controller's accessibility state
+      // instead of restoring values captured before Feedback began.
+      editorDom.setAttribute('aria-readonly', 'true');
+      editorDom.setAttribute('tabindex', '0');
+    } else {
+      if (originalAriaReadonly === null) editorDom.removeAttribute('aria-readonly');
+      else editorDom.setAttribute('aria-readonly', originalAriaReadonly);
+      if (originalTabIndex === null) editorDom.removeAttribute('tabindex');
+      else editorDom.setAttribute('tabindex', originalTabIndex);
+    }
     if (toolbarHadInert) toolbar.setAttribute('inert', '');
     else toolbar.removeAttribute('inert');
     if (originalToolbarAriaDisabled === null) toolbar.removeAttribute('aria-disabled');

@@ -325,6 +325,27 @@ describe('Feedback editor host-message boundary', () => {
     expect(handleHostMessage).not.toHaveBeenCalled();
   });
 
+  it('atomically replaces a transferred review session with its new peer lock', () => {
+    testing.setFeedbackReviewControllerForTests({
+      handleHostMessage,
+      getSession: () => ({ sessionId: 'old-session' }),
+    });
+    const message = {
+      type: 'feedback.session.transferred',
+      oldSessionId: 'old-session',
+      lockId: 'new-session',
+      message: 'Feedback resumed in another rich view. This view is now read-only.',
+    };
+
+    messageHandler({ data: message } as MessageEvent);
+
+    expect(handleHostMessage).toHaveBeenCalledWith(message);
+    expect(lockPeer).toHaveBeenCalledWith('new-session', message.message);
+    expect(handleHostMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      lockPeer.mock.invocationCallOrder[0]
+    );
+  });
+
   it('does not invoke Feedback commands from a read-only peer split', () => {
     isPeerLocked.mockReturnValue(true);
 

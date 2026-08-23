@@ -38,6 +38,17 @@ describe('feedback protocol', () => {
     });
   });
 
+  it('accepts only an explicit new-round start bypass', () => {
+    const message = {
+      type: 'feedback.start.new',
+      requestId: 'request-new-1',
+      blocks: [{ ordinal: 0, kind: 'paragraph', markdown: 'Body', contentSize: 4 }],
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, skipResume: true })).toBeNull();
+  });
+
   it('accepts only an exact correlated close readiness message', () => {
     const message = {
       type: 'feedback.close.ready',
@@ -169,6 +180,48 @@ describe('feedback protocol', () => {
     expect(parseFeedbackHostMessage({ ...message, requestId: '' })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, lockId: '' })).toBeNull();
     expect(parseFeedbackWebviewMessage(message)).toBeNull();
+  });
+
+  it.each(['active-owner', 'active-peer', 'saved-draft'] as const)(
+    'accepts only an exact %s resume offer',
+    kind => {
+      const message = {
+        type: 'feedback.resume.available',
+        requestId: 'resume-offer-1',
+        kind,
+        drafts: [
+          {
+            round: '20260821T093000Z-k4p9',
+            createdAt: '2026-08-21T09:30:00.000Z',
+            itemCount: 2,
+            feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+          },
+        ],
+      };
+
+      expect(parseFeedbackHostMessage(message)).toEqual(message);
+      expect(parseFeedbackHostMessage({ ...message, requestId: '' })).toBeNull();
+      expect(parseFeedbackHostMessage({ ...message, kind: 'unknown' })).toBeNull();
+      expect(parseFeedbackHostMessage({ ...message, drafts: [] })).toBeNull();
+      expect(parseFeedbackHostMessage({ ...message, sessionId: 'must-not-cross' })).toBeNull();
+    }
+  );
+
+  it('accepts only a bounded session-transfer notice', () => {
+    const message = {
+      type: 'feedback.session.transferred',
+      oldSessionId: 'session-1',
+      lockId: 'session-2',
+      message: 'Feedback moved to another rich-view tab.',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, oldSessionId: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, lockId: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, message: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, message: `unsafe\0message` })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, message: 'x'.repeat(100_001) })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, requestId: 'must-not-cross' })).toBeNull();
   });
 
   it('accepts strictly increasing non-contiguous ProseMirror ordinals', () => {
@@ -538,6 +591,25 @@ describe('feedback protocol', () => {
         ],
       },
       {
+        type: 'feedback.resume.available',
+        requestId: 'resume-offer-1',
+        kind: 'active-owner',
+        drafts: [
+          {
+            round: '20260821T093000Z-k4p9',
+            createdAt: '2026-08-21T09:30:00.000Z',
+            itemCount: 2,
+            feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+          },
+        ],
+      },
+      {
+        type: 'feedback.session.transferred',
+        oldSessionId: 'session-previous',
+        lockId: 'session-current',
+        message: 'Feedback moved to another rich-view tab.',
+      },
+      {
         type: 'feedback.started',
         requestId: 'start-1',
         sessionId: 'session-1',
@@ -652,6 +724,8 @@ describe('feedback protocol', () => {
     expect(parseFeedbackHostMessage({ ...message, itemCount: 100_001 })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, prompt: undefined })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, prompt: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, prompt: `unsafe\0prompt` })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, prompt: 'x'.repeat(1_000_001) })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, leaked: true })).toBeNull();
   });
 
@@ -866,6 +940,20 @@ describe('feedback protocol', () => {
           itemCount: 0,
           feedbackFile: '.md4h/feedback/feedback.md',
           sourceText: 'must reject',
+        },
+      ],
+    },
+    {
+      type: 'feedback.resume.available',
+      requestId: 'resume-offer-1',
+      kind: 'active-owner',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 1,
+          feedbackFile: '.md4h/feedback/feedback.md',
+          feedback: 'must reject',
         },
       ],
     },

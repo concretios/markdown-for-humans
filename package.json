@@ -246,6 +246,14 @@
           "default": false,
           "description": "Skip the warning dialog when 'Copy AI Context Reference' needs to save the file first. When enabled, the document is saved silently before copying the reference."
         },
+        "markdownForHumans.feedback.handoffPromptTemplate": {
+          "type": "string",
+          "default": "Implement the sealed feedback bundle at {{feedbackFile}}. First verify the source SHA-256. Inspect every referenced image. Edit the workspace files required by the feedback, but do not modify or delete the feedback bundle. Address every feedback ID, run appropriate checks, report the outcome per ID, and stop if the source hash differs.",
+          "markdownDescription": "Prompt copied after a feedback bundle is sealed. `{{feedbackFile}}` is required and expands as Markdown inline code. Optional placeholders are `{{source}}` (also Markdown inline code), `{{sourceSha256}}`, `{{itemCount}}`, and `{{round}}`. Invalid or oversized templates safely fall back to this built-in prompt.",
+          "scope": "resource",
+          "editPresentation": "multilineText",
+          "maxLength": 16384
+        },
         "markdownForHumans.blankLines.mode": {
           "type": "string",
           "enum": [

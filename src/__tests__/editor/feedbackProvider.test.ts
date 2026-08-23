@@ -60,8 +60,11 @@ interface ProviderInternals {
     string,
     {
       store: FeedbackSessionStore;
+      sessionId: string;
       invalidated: boolean;
       ownerWebview: vscode.Webview;
+      phase: 'active' | 'resuming' | 'finishing' | 'discarding';
+      closeOperation?: Promise<void>;
       targets: Map<string, { startOrdinal: number; endOrdinal: number }>;
     }
   >;
@@ -115,6 +118,10 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       vscode.workspace as unknown as { workspaceFolders?: vscode.WorkspaceFolder[] }
     ).workspaceFolders = [workspaceFolder];
     (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue(workspaceFolder);
+    (vscode.workspace.getConfiguration as jest.Mock).mockImplementation(() => ({
+      get: jest.fn((_key: string, defaultValue?: unknown) => defaultValue),
+      update: jest.fn(),
+    }));
   });
 
   afterEach(async () => {
@@ -1351,7 +1358,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(diagnostics).not.toContain(SOURCE_TEXT);
   });
 
-  it('creates the bundle only in the workspace root containing the Markdown source', async () => {
+  it("uses the containing workspace root and that source resource's handoff template", async () => {
     const secondWorkspaceRoot = await mkdtemp(path.join(tmpdir(), 'md4h-feedback-provider-root2-'));
     try {
       const secondSourcePath = path.join(secondWorkspaceRoot, 'docs', 'guide.md');
@@ -1372,13 +1379,28 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       (vscode.workspace.getWorkspaceFolder as jest.Mock).mockImplementation((uri: vscode.Uri) =>
         uri.fsPath.startsWith(secondWorkspaceRoot + path.sep) ? secondFolder : firstFolder
       );
+      (vscode.workspace.getConfiguration as jest.Mock).mockImplementation(
+        (section: string, resource?: vscode.Uri) => ({
+          get: jest.fn((key: string, defaultValue?: unknown) => {
+            if (section !== 'markdownForHumans.feedback' || key !== 'handoffPromptTemplate') {
+              return defaultValue;
+            }
+            return resource?.fsPath.startsWith(secondWorkspaceRoot + path.sep)
+              ? 'Second root: {{feedbackFile}} for {{source}}.'
+              : 'First root: {{feedbackFile}}.';
+          }),
+          update: jest.fn(),
+        })
+      );
+      const writeText = jest.fn(async () => undefined);
+      (vscode.env as unknown as { clipboard: { writeText: typeof writeText } }).clipboard = {
+        writeText,
+      };
 
       const provider = createProvider(workspaceRoot);
       const document = createDocument(secondSourcePath, SOURCE_TEXT);
       const webview = createWebview(provider, document);
-      sendStart(provider, document, webview, 'start-second-root');
-
-      const started = await waitForMessage(webview, 'feedback.started', 'start-second-root');
+      const started = await startAndAddTextFeedback(provider, document, webview);
       const relativeFeedbackFile = started.feedbackFile as string;
       expect(relativeFeedbackFile).toMatch(
         /^\.md4h\/feedback\/docs\/guide\.md--\d{8}T\d{6}Z-[a-z0-9]{4}\/feedback\.md$/
@@ -1387,12 +1409,32 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
         true
       );
       await expect(pathExists(path.join(workspaceRoot, relativeFeedbackFile))).resolves.toBe(false);
+
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.finish',
+          requestId: 'finish-second-root',
+          sessionId: started.sessionId,
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      const finished = await waitForMessage(webview, 'feedback.finished', 'finish-second-root');
+      const expectedPrompt = `Second root: \`${relativeFeedbackFile}\` for \`docs/guide.md\`.`;
+      expect(finished).toEqual(
+        expect.objectContaining({ prompt: expectedPrompt, promptCopied: true })
+      );
+      expect(writeText).toHaveBeenCalledWith(expectedPrompt);
+      expect(vscode.workspace.getConfiguration).toHaveBeenCalledWith(
+        'markdownForHumans.feedback',
+        document.uri
+      );
     } finally {
       await rm(secondWorkspaceRoot, { recursive: true, force: true });
     }
   });
 
-  it('serializes rapid start requests so only one draft can be created', async () => {
+  it('serializes rapid Start requests and turns the second request into Resume', async () => {
     const provider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, SOURCE_TEXT);
     const webview = createWebview(provider, document);
@@ -1401,10 +1443,476 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     sendStart(provider, document, webview, 'start-second');
 
     await waitForMessage(webview, 'feedback.started', 'start-first');
-    const error = await waitForMessage(webview, 'feedback.error', 'start-second');
-    expect(error.message).toMatch(/already|starting/i);
+    await expect(
+      waitForMessage(webview, 'feedback.resume.available', 'start-second')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: 'active-owner',
+        drafts: [expect.objectContaining({ itemCount: 0 })],
+      })
+    );
+    expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
     const sourceFeedbackDirectory = path.join(workspaceRoot, '.md4h', 'feedback', 'docs');
     expect(await readdir(sourceFeedbackDirectory)).toHaveLength(1);
+  });
+
+  it('offers and rehydrates a same-owner session when Start is retried after UI state loss', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    const originalSession = internals(provider).feedbackSessions.get(document.uri.toString());
+
+    sendStart(provider, document, webview, 'start-after-ui-reset');
+
+    const offer = await waitForMessage(
+      webview,
+      'feedback.resume.available',
+      'start-after-ui-reset'
+    );
+    expect(offer).toEqual({
+      type: 'feedback.resume.available',
+      requestId: 'start-after-ui-reset',
+      kind: 'active-owner',
+      drafts: [
+        expect.objectContaining({
+          round: started.round,
+          itemCount: 1,
+          feedbackFile: started.feedbackFile,
+        }),
+      ],
+    });
+    expect(JSON.stringify(offer)).not.toContain('Make this explanation more concrete.');
+    expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())).toBe(originalSession);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-after-ui-reset',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const resumed = await waitForMessage(webview, 'feedback.started', 'resume-after-ui-reset');
+    expect(resumed).toEqual(
+      expect.objectContaining({
+        round: started.round,
+        items: [expect.objectContaining({ id: 'F1' })],
+      })
+    );
+    expect(resumed.sessionId).not.toBe(started.sessionId);
+    expect(internals(provider).feedbackSessions.size).toBe(1);
+    expect(await readdir(path.join(workspaceRoot, '.md4h', 'feedback', 'docs'))).toHaveLength(1);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-with-retired-runtime',
+        sessionId: started.sessionId,
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Paragraph.',
+        feedback: 'This stale write must fail.',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await expect(
+      waitForMessage(webview, 'feedback.error', 'add-with-retired-runtime')
+    ).resolves.toEqual(
+      expect.objectContaining({ message: expect.stringMatching(/no longer active/i) })
+    );
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-with-rehydrated-runtime',
+        sessionId: resumed.sessionId,
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Paragraph.',
+        feedback: 'Keep the recovered session writable.',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await expect(
+      waitForMessage(webview, 'feedback.updated', 'add-with-rehydrated-runtime')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        items: [expect.objectContaining({ id: 'F1' }), expect.objectContaining({ id: 'F2' })],
+      })
+    );
+  });
+
+  it('offers an exact saved draft from Start and creates a new round only on explicit bypass', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    internals(provider).releaseFeedbackStateForWebview(
+      document.uri.toString(),
+      webview as unknown as vscode.Webview,
+      document as unknown as vscode.TextDocument
+    );
+
+    sendStart(provider, document, webview, 'start-with-saved-draft');
+    const offer = await waitForMessage(
+      webview,
+      'feedback.resume.available',
+      'start-with-saved-draft'
+    );
+    expect(offer).toEqual(
+      expect.objectContaining({
+        kind: 'saved-draft',
+        drafts: [expect.objectContaining({ round: started.round, itemCount: 1 })],
+      })
+    );
+    expect(messagesOfType(webview, 'feedback.started')).toHaveLength(1);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.start.new',
+        requestId: 'start-explicit-new-round',
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const newRound = await waitForMessage(webview, 'feedback.started', 'start-explicit-new-round');
+    expect(newRound.round).not.toBe(started.round);
+    expect(await readdir(path.join(workspaceRoot, '.md4h', 'feedback', 'docs'))).toHaveLength(2);
+  });
+
+  it('does not transfer a live peer session until Resume is explicitly confirmed', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const owner = createWebview(provider, document);
+    const peer = createWebview(provider, document);
+    sendStart(provider, document, owner, 'start-owner-before-peer-recovery');
+    const started = await waitForMessage(
+      owner,
+      'feedback.started',
+      'start-owner-before-peer-recovery'
+    );
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      peer as unknown as vscode.Webview
+    );
+
+    sendStart(provider, document, peer, 'start-from-live-peer');
+    await expect(
+      waitForMessage(peer, 'feedback.resume.available', 'start-from-live-peer')
+    ).resolves.toEqual(expect.objectContaining({ kind: 'active-peer' }));
+    const beforeResume = internals(provider).feedbackSessions.get(document.uri.toString());
+    expect(beforeResume?.ownerWebview).toBe(owner);
+    expect(beforeResume?.sessionId).toBe(started.sessionId);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-in-peer',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      peer as unknown as vscode.Webview
+    );
+    const resumed = await waitForMessage(peer, 'feedback.started', 'resume-in-peer');
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())?.ownerWebview).toBe(
+      peer
+    );
+    expect(resumed.sessionId).not.toBe(started.sessionId);
+    const peerMessages = peer.postMessage.mock.calls.map(call => call[0] as FeedbackMessage);
+    const startedIndex = peerMessages.findIndex(
+      message => message.type === 'feedback.started' && message.requestId === 'resume-in-peer'
+    );
+    const retiredLockIndex = peerMessages.findIndex(
+      message => message.type === 'feedback.peer.unlocked' && message.lockId === started.sessionId
+    );
+    expect(startedIndex).toBeGreaterThanOrEqual(0);
+    expect(retiredLockIndex).toBeGreaterThan(startedIndex);
+    await expect(waitForMessage(owner, 'feedback.session.transferred')).resolves.toEqual({
+      type: 'feedback.session.transferred',
+      oldSessionId: started.sessionId,
+      lockId: resumed.sessionId,
+      message: 'Feedback resumed in another rich view. This view is now read-only.',
+    });
+  });
+
+  it('requires a fresh active-peer offer before a stale draft action can transfer ownership', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const owner = createWebview(provider, document);
+    const peer = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, owner);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      peer as unknown as vscode.Webview
+    );
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-from-stale-saved-banner',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      peer as unknown as vscode.Webview
+    );
+
+    await expect(
+      waitForMessage(peer, 'feedback.resume.available', 'resume-from-stale-saved-banner')
+    ).resolves.toEqual(expect.objectContaining({ kind: 'active-peer' }));
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())?.ownerWebview).toBe(
+      owner
+    );
+    expect(messagesOfType(peer, 'feedback.started')).toHaveLength(0);
+    expect(messagesOfType(owner, 'feedback.session.transferred')).toHaveLength(0);
+  });
+
+  it('releases a non-resumable same-owner session before handling Start again', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    const session = internals(provider).feedbackSessions.get(document.uri.toString());
+    if (!session) throw new Error('Expected an active feedback session.');
+    session.invalidated = true;
+
+    sendStart(provider, document, webview, 'start-after-invalidated-ui-loss');
+
+    await expect(
+      waitForMessage(webview, 'feedback.resume.available', 'start-after-invalidated-ui-loss')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        kind: 'saved-draft',
+        drafts: [expect.objectContaining({ round: started.round, itemCount: 1 })],
+      })
+    );
+    expect(internals(provider).feedbackSessions.size).toBe(0);
+    expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+  });
+
+  it('does not resurrect active ownership when the session changes during rehydration', async () => {
+    const provider = createProvider(workspaceRoot);
+    const providerState = internals(provider) as ProviderInternals & {
+      assertFeedbackSourceSha256: (
+        document: vscode.TextDocument,
+        expectedSha256: string
+      ) => Promise<void>;
+    };
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    sendStart(provider, document, webview, 'offer-before-session-race');
+    await waitForMessage(webview, 'feedback.resume.available', 'offer-before-session-race');
+
+    const originalAssert = providerState.assertFeedbackSourceSha256.bind(provider);
+    providerState.assertFeedbackSourceSha256 = async (targetDocument, expectedSha256) => {
+      await originalAssert(targetDocument, expectedSha256);
+      providerState.feedbackSessions.delete(document.uri.toString());
+    };
+    providerState.handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-after-session-race',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await expect(
+      waitForMessage(webview, 'feedback.error', 'resume-after-session-race')
+    ).resolves.toEqual(expect.objectContaining({ message: expect.stringMatching(/changed/i) }));
+    expect(providerState.feedbackSessions.size).toBe(0);
+    expect(
+      messagesOfType(webview, 'feedback.started').filter(
+        message => message.requestId === 'resume-after-session-race'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('releases same-owner runtime state when Resume discovers a delayed source change', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    sendStart(provider, document, webview, 'offer-before-delayed-source-change');
+    await waitForMessage(
+      webview,
+      'feedback.resume.available',
+      'offer-before-delayed-source-change'
+    );
+    await writeFile(sourcePath, '# Guide\n\nChanged outside VS Code.\n', 'utf8');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-after-delayed-source-change',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await expect(
+      waitForMessage(webview, 'feedback.error', 'resume-after-delayed-source-change')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        code: 'MD4H-FB-SNAPSHOT-001',
+        message: expect.stringMatching(/source changed/i),
+      })
+    );
+    expect(internals(provider).feedbackSessions.size).toBe(0);
+    expect(messagesOfType(webview, 'update')).toContainEqual(
+      expect.objectContaining({ type: 'update', force: true })
+    );
+  });
+
+  it('demotes volatile ownership when the same webview controller becomes ready again', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const peer = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      webview as unknown as vscode.Webview
+    );
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      peer as unknown as vscode.Webview
+    );
+    webview.postMessage.mockClear();
+    peer.postMessage.mockClear();
+
+    internals(provider).handleWebviewMessage(
+      { type: 'ready' },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitUntil(() =>
+      messagesOfType(webview, 'feedback.drafts.available').some(message =>
+        (message.drafts as Array<{ round: string }>).some(draft => draft.round === started.round)
+      )
+    );
+    expect(internals(provider).feedbackSessions.size).toBe(0);
+    expect(messagesOfType(webview, 'update')).toContainEqual(
+      expect.objectContaining({ type: 'update', force: true })
+    );
+    expect(messagesOfType(webview, 'feedback.session.transferred')).toContainEqual(
+      expect.objectContaining({
+        oldSessionId: started.sessionId,
+        lockId: started.sessionId,
+      })
+    );
+    expect(messagesOfType(webview, 'feedback.peer.unlocked')).toContainEqual(
+      expect.objectContaining({ lockId: started.sessionId })
+    );
+    const peerMessages = peer.postMessage.mock.calls.map(call => call[0] as FeedbackMessage);
+    const peerSyncIndex = peerMessages.findIndex(
+      message => message.type === 'update' && message.force === true
+    );
+    const peerUnlockIndex = peerMessages.findIndex(
+      message => message.type === 'feedback.peer.unlocked' && message.lockId === started.sessionId
+    );
+    expect(peerSyncIndex).toBeGreaterThanOrEqual(0);
+    expect(peerUnlockIndex).toBeGreaterThan(peerSyncIndex);
+  });
+
+  it('finishes an in-flight Start as a resumable draft when its controller reloads', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document, false);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      webview as unknown as vscode.Webview
+    );
+
+    sendStart(provider, document, webview, 'start-before-controller-reload');
+    await waitUntil(() => internals(provider).feedbackTransitions.size === 1);
+    const flush = messagesOfType(webview, 'flushPendingEdit').at(-1);
+    if (!flush || typeof flush.requestId !== 'string') {
+      throw new Error('Expected the pending Feedback flush request.');
+    }
+
+    internals(provider).handleWebviewMessage(
+      { type: 'ready' },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    internals(provider).handleWebviewMessage(
+      { type: 'flushPendingEditAck', requestId: flush.requestId, ok: true },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitUntil(() => messagesOfType(webview, 'feedback.drafts.available').length > 0);
+    expect(internals(provider).feedbackSessions.size).toBe(0);
+    expect(internals(provider).feedbackTransitions.size).toBe(0);
+    webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => {
+          internals(provider).handleWebviewMessage(
+            { type: 'flushPendingEditAck', requestId: message.requestId, ok: true },
+            document as unknown as vscode.TextDocument,
+            webview as unknown as vscode.Webview
+          );
+        });
+      }
+      return Promise.resolve(true);
+    });
+
+    sendStart(provider, document, webview, 'start-after-controller-reload');
+    await expect(
+      waitForMessage(webview, 'feedback.resume.available', 'start-after-controller-reload')
+    ).resolves.toEqual(expect.objectContaining({ kind: 'saved-draft' }));
+    expect(
+      messagesOfType(webview, 'feedback.error').filter(
+        message => message.requestId === 'start-after-controller-reload'
+      )
+    ).toHaveLength(0);
+  });
+
+  it('keeps a closing session reserved until its durable operation settles on reload', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    await startAndAddTextFeedback(provider, document, webview);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      webview as unknown as vscode.Webview
+    );
+    const session = internals(provider).feedbackSessions.get(document.uri.toString());
+    if (!session) throw new Error('Expected an active feedback session.');
+    let settleClose!: () => void;
+    session.phase = 'finishing';
+    session.closeOperation = new Promise<void>(resolve => {
+      settleClose = resolve;
+    });
+
+    internals(provider).handleWebviewMessage(
+      { type: 'ready' },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await Promise.resolve();
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())).toBe(session);
+
+    settleClose();
+    await waitUntil(() => internals(provider).feedbackSessions.size === 0);
+    expect(messagesOfType(webview, 'update')).toContainEqual(
+      expect.objectContaining({ type: 'update', force: true })
+    );
   });
 
   it('cleans a cancelled transition after bundle creation without activating an orphan session', async () => {
@@ -2093,6 +2601,100 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(internals(provider).feedbackSessions.size).toBe(0);
     expect(messagesOfType(webview, 'feedback.peer.unlocked')).toContainEqual(
       expect.objectContaining({ lockId: started.sessionId })
+    );
+  });
+
+  it('expands the resource-scoped handoff template with authoritative sealed metadata', async () => {
+    const writeText = jest.fn(async () => undefined);
+    (vscode.env as unknown as { clipboard: { writeText: typeof writeText } }).clipboard = {
+      writeText,
+    };
+    const template =
+      'Handle {{itemCount}} item from {{feedbackFile}} for {{source}}. Hash {{sourceSha256}}. Round {{round}}.';
+    const getConfiguration = vscode.workspace.getConfiguration as jest.Mock;
+    getConfiguration.mockImplementation((section: string, resource?: vscode.Uri) => ({
+      get: jest.fn((key: string, defaultValue?: unknown) =>
+        section === 'markdownForHumans.feedback' &&
+        key === 'handoffPromptTemplate' &&
+        resource?.toString() === fileUri(sourcePath).toString()
+          ? template
+          : defaultValue
+      ),
+      update: jest.fn(),
+    }));
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-custom-template',
+        sessionId: started.sessionId,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const finished = await waitForMessage(webview, 'feedback.finished', 'finish-custom-template');
+    const expectedPrompt =
+      `Handle 1 item from \`${started.feedbackFile as string}\` for \`docs/guide.md\`. ` +
+      `Hash ${createHash('sha256').update(SOURCE_BYTES).digest('hex')}. Round ${started.round as string}.`;
+    expect(finished).toEqual(
+      expect.objectContaining({ prompt: expectedPrompt, promptCopied: true })
+    );
+    expect(writeText).toHaveBeenCalledWith(expectedPrompt);
+    expect(getConfiguration).toHaveBeenCalledWith('markdownForHumans.feedback', document.uri);
+  });
+
+  it('falls back visibly to the built-in prompt when a custom template is invalid', async () => {
+    const writeText = jest.fn(async () => undefined);
+    (vscode.env as unknown as { clipboard: { writeText: typeof writeText } }).clipboard = {
+      writeText,
+    };
+    (vscode.workspace.getConfiguration as jest.Mock).mockImplementation(
+      (section: string, resource?: vscode.Uri) => ({
+        get: jest.fn((key: string, defaultValue?: unknown) =>
+          section === 'markdownForHumans.feedback' &&
+          key === 'handoffPromptTemplate' &&
+          resource?.toString() === fileUri(sourcePath).toString()
+            ? 'Handle {{source}} without locating the bundle.'
+            : defaultValue
+        ),
+        update: jest.fn(),
+      })
+    );
+    const showWarningMessage = vscode.window.showWarningMessage as jest.Mock;
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-invalid-template',
+        sessionId: started.sessionId,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const finished = await waitForMessage(webview, 'feedback.finished', 'finish-invalid-template');
+    const expectedDefault =
+      `Implement the sealed feedback bundle at \`${started.feedbackFile as string}\`. ` +
+      'First verify the source SHA-256. Inspect every referenced image. ' +
+      'Edit the workspace files required by the feedback, but do not modify or delete the feedback bundle. ' +
+      'Address every feedback ID, run appropriate checks, report the outcome per ID, ' +
+      'and stop if the source hash differs.';
+    expect(finished).toEqual(
+      expect.objectContaining({ prompt: expectedDefault, promptCopied: true })
+    );
+    expect(writeText).toHaveBeenCalledWith(expectedDefault);
+    await waitUntil(() => showWarningMessage.mock.calls.length > 0);
+    expect(showWarningMessage).toHaveBeenCalledWith(
+      expect.stringMatching(/prompt template.*invalid.*default prompt/i)
     );
   });
 
@@ -2826,7 +3428,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     const started = await startAndAddTextFeedback(firstProvider, document, firstWebview);
     const feedbackFile = path.join(workspaceRoot, started.feedbackFile as string);
     const report = await readFile(feedbackFile, 'utf8');
-    await writeFile(feedbackFile, report.replace('docs/guide.md:3`', 'docs/guide.md:3-999`'));
+    await writeFile(feedbackFile, report.replace('**Source lines:** 3', '**Source lines:** 3-999'));
 
     const recoveryProvider = createProvider(workspaceRoot);
     const recoveryWebview = createWebview(recoveryProvider, document);
@@ -3286,7 +3888,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       'feedback.error',
       'resume-during-discard'
     );
-    expect(resumeError.message).toMatch(/active|starting/i);
+    expect(resumeError.message).toMatch(/Start feedback again to Resume or recover the draft/i);
     expect(internals(recoveryProvider).feedbackSessions.size).toBe(0);
 
     resolveDiscardConfirmation('Discard draft');
@@ -3324,7 +3926,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       'feedback.error',
       'discard-active-through-draft-route'
     );
-    expect(error.message).toMatch(/active|starting/i);
+    expect(error.message).toMatch(/Start feedback to Resume or recover the current session/i);
     expect(deleteFromWorkspace).not.toHaveBeenCalled();
     expect(internals(provider).feedbackSessions.size).toBe(1);
   });
@@ -3482,6 +4084,10 @@ function sendStart(
   webview: ReturnType<typeof createWebview>,
   requestId: string
 ): void {
+  internals(provider).registerFeedbackWebview(
+    document.uri.toString(),
+    webview as unknown as vscode.Webview
+  );
   internals(provider).handleWebviewMessage(
     { type: 'feedback.start', requestId, blocks: START_BLOCKS },
     document as unknown as vscode.TextDocument,

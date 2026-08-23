@@ -91,6 +91,10 @@ export type FeedbackWebviewMessage =
       blocks: CanonicalFeedbackBlock[];
     })
   | (FeedbackRequestBase & {
+      type: 'feedback.start.new';
+      blocks: CanonicalFeedbackBlock[];
+    })
+  | (FeedbackRequestBase & {
       type: 'feedback.draft.resume';
       round: string;
       blocks: CanonicalFeedbackBlock[];
@@ -166,6 +170,21 @@ export type FeedbackHostMessage =
   | {
       type: 'feedback.drafts.available';
       drafts: FeedbackDraftSummary[];
+    }
+  | {
+      /** Correlated recovery offered after Start discovers reusable Feedback state. */
+      type: 'feedback.resume.available';
+      requestId: string;
+      kind: 'active-owner' | 'active-peer' | 'saved-draft';
+      drafts: FeedbackDraftSummary[];
+    }
+  | {
+      /** Tells the previous owner to leave review mode after an explicit handoff. */
+      type: 'feedback.session.transferred';
+      oldSessionId: string;
+      /** Replacement owner token installed atomically as this view's peer lock. */
+      lockId: string;
+      message: string;
     }
   | {
       type: 'feedback.started';
@@ -458,7 +477,7 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
     return null;
   }
 
-  if (value.type === 'feedback.start') {
+  if (value.type === 'feedback.start' || value.type === 'feedback.start.new') {
     if (!hasExactKeys(value, ['type', 'requestId', 'blocks'])) return null;
     const blocks = parseBlocks(value.blocks);
     return blocks ? { type: value.type, requestId: value.requestId, blocks } : null;
@@ -870,6 +889,40 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
       const drafts = parseFeedbackDrafts(value.drafts);
       return drafts === null ? null : { type: value.type, drafts };
     }
+
+    case 'feedback.resume.available': {
+      if (
+        !hasExactKeys(value, ['type', 'requestId', 'kind', 'drafts']) ||
+        !isRequestId(value.requestId) ||
+        (value.kind !== 'active-owner' &&
+          value.kind !== 'active-peer' &&
+          value.kind !== 'saved-draft')
+      ) {
+        return null;
+      }
+      const drafts = parseFeedbackDrafts(value.drafts);
+      return drafts === null || drafts.length === 0
+        ? null
+        : {
+            type: value.type,
+            requestId: value.requestId,
+            kind: value.kind,
+            drafts,
+          };
+    }
+
+    case 'feedback.session.transferred':
+      return hasExactKeys(value, ['type', 'oldSessionId', 'lockId', 'message']) &&
+        isSessionId(value.oldSessionId) &&
+        isSessionId(value.lockId) &&
+        isBoundedString(value.message, MAX_FEEDBACK_LENGTH)
+        ? {
+            type: value.type,
+            oldSessionId: value.oldSessionId,
+            lockId: value.lockId,
+            message: value.message,
+          }
+        : null;
 
     case 'feedback.started': {
       if (

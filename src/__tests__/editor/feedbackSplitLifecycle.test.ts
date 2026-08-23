@@ -57,6 +57,15 @@ interface MockRichView {
 
 const ORIGINAL_SOURCE = '# Guide\n\nOriginal paragraph.\n';
 const LATEST_SOURCE = '# Guide\n\nLatest owner edit.\n';
+const ORIGINAL_BLOCKS = [
+  { ordinal: 0, kind: 'heading', markdown: '# Guide', contentSize: 'Guide'.length },
+  {
+    ordinal: 1,
+    kind: 'paragraph',
+    markdown: 'Original paragraph.',
+    contentSize: 'Original paragraph.'.length,
+  },
+];
 const LATEST_BLOCKS = [
   { ordinal: 0, kind: 'heading', markdown: '# Guide', contentSize: 'Guide'.length },
   {
@@ -222,6 +231,284 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
       })
     );
     await expect(readFile(sourcePath, 'utf8')).resolves.toBe(LATEST_SOURCE);
+  });
+
+  it('releases an active session when its only tab closes and offers its draft on Start', async () => {
+    const provider = createProvider(workspaceRoot);
+    const providerInternals = internals(provider);
+    const document = createDocument(sourcePath, () => ORIGINAL_SOURCE);
+    const firstView = createRichView();
+    firstView.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => {
+          firstView.receive({
+            type: 'flushPendingEditAck',
+            requestId: message.requestId,
+            ok: true,
+          });
+        });
+      }
+      return Promise.resolve(true);
+    });
+
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      firstView.panel,
+      {} as vscode.CancellationToken
+    );
+    firstView.receive({
+      type: 'feedback.start',
+      requestId: 'start-before-only-tab-closes',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    await waitForOneOf(firstView, ['feedback.started'], 'start-before-only-tab-closes');
+    expect(providerInternals.feedbackSessions.size).toBe(1);
+
+    firstView.dispose();
+    expect(providerInternals.feedbackSessions.size).toBe(0);
+
+    const reopenedView = createRichView();
+    reopenedView.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => {
+          reopenedView.receive({
+            type: 'flushPendingEditAck',
+            requestId: message.requestId,
+            ok: true,
+          });
+        });
+      }
+      return Promise.resolve(true);
+    });
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      reopenedView.panel,
+      {} as vscode.CancellationToken
+    );
+    reopenedView.receive({ type: 'ready' });
+    await waitUntil(() =>
+      reopenedView.webview.postMessage.mock.calls.some(
+        call => call[0].type === 'feedback.drafts.available'
+      )
+    );
+    const draftNotice = reopenedView.webview.postMessage.mock.calls
+      .map(call => call[0] as FeedbackMessage)
+      .find(message => message.type === 'feedback.drafts.available');
+    expect(draftNotice?.drafts).toEqual([
+      expect.objectContaining({
+        itemCount: 0,
+        feedbackFile: expect.stringMatching(/feedback\.md$/),
+      }),
+    ]);
+    reopenedView.receive({
+      type: 'feedback.start',
+      requestId: 'start-after-only-tab-reopens',
+      blocks: ORIGINAL_BLOCKS,
+    });
+
+    const offer = await waitForOneOf(
+      reopenedView,
+      ['feedback.resume.available', 'feedback.error'],
+      'start-after-only-tab-reopens'
+    );
+    expect(offer).toEqual(
+      expect.objectContaining({ kind: 'saved-draft', drafts: draftNotice?.drafts })
+    );
+    const round = (offer.drafts as Array<{ round: string }>)[0]?.round;
+    reopenedView.receive({
+      type: 'feedback.draft.resume',
+      requestId: 'resume-after-only-tab-reopens',
+      round,
+      blocks: ORIGINAL_BLOCKS,
+    });
+    const resumed = await waitForOneOf(
+      reopenedView,
+      ['feedback.started', 'feedback.error'],
+      'resume-after-only-tab-reopens'
+    );
+    expect(resumed.type).toBe('feedback.started');
+    reopenedView.dispose();
+  });
+
+  it('reclaims an orphaned session when a replacement rich view registers', async () => {
+    const provider = createProvider(workspaceRoot);
+    const providerInternals = internals(provider);
+    const document = createDocument(sourcePath, () => ORIGINAL_SOURCE);
+    const orphanedOwner = createRichView();
+    orphanedOwner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => {
+          orphanedOwner.receive({
+            type: 'flushPendingEditAck',
+            requestId: message.requestId,
+            ok: true,
+          });
+        });
+      }
+      return Promise.resolve(true);
+    });
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      orphanedOwner.panel,
+      {} as vscode.CancellationToken
+    );
+    orphanedOwner.receive({
+      type: 'feedback.start',
+      requestId: 'start-before-owner-is-orphaned',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    await waitForOneOf(orphanedOwner, ['feedback.started'], 'start-before-owner-is-orphaned');
+
+    const documentKey = document.uri.toString();
+    providerInternals.feedbackWebviews.get(documentKey)?.delete(orphanedOwner.webview);
+    expect(providerInternals.feedbackSessions.size).toBe(1);
+
+    const replacement = createRichView();
+    replacement.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => {
+          replacement.receive({
+            type: 'flushPendingEditAck',
+            requestId: message.requestId,
+            ok: true,
+          });
+        });
+      }
+      return Promise.resolve(true);
+    });
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      replacement.panel,
+      {} as vscode.CancellationToken
+    );
+
+    expect(providerInternals.feedbackSessions.size).toBe(0);
+    expect(
+      replacement.webview.postMessage.mock.calls.some(
+        call => call[0].type === 'feedback.peer.locked'
+      )
+    ).toBe(false);
+
+    replacement.receive({
+      type: 'feedback.start',
+      requestId: 'start-after-orphan-reclaimed',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    const offer = await waitForOneOf(
+      replacement,
+      ['feedback.resume.available', 'feedback.error'],
+      'start-after-orphan-reclaimed'
+    );
+    expect(offer).toEqual(expect.objectContaining({ kind: 'saved-draft' }));
+    replacement.receive({
+      type: 'feedback.draft.resume',
+      requestId: 'resume-after-orphan-reclaimed',
+      round: (offer.drafts as Array<{ round: string }>)[0]?.round,
+      blocks: ORIGINAL_BLOCKS,
+    });
+    const resumed = await waitForOneOf(
+      replacement,
+      ['feedback.started', 'feedback.error'],
+      'resume-after-orphan-reclaimed'
+    );
+    expect(resumed.type).toBe('feedback.started');
+
+    replacement.dispose();
+    orphanedOwner.dispose();
+  });
+
+  it('keeps an orphan lock until its pending edit settles, then reclaims it on Start', async () => {
+    const provider = createProvider(workspaceRoot);
+    const providerInternals = internals(provider);
+    const document = createDocument(sourcePath, () => ORIGINAL_SOURCE);
+    const orphanedOwner = createRichView();
+    orphanedOwner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => {
+          orphanedOwner.receive({
+            type: 'flushPendingEditAck',
+            requestId: message.requestId,
+            ok: true,
+          });
+        });
+      }
+      return Promise.resolve(true);
+    });
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      orphanedOwner.panel,
+      {} as vscode.CancellationToken
+    );
+    orphanedOwner.receive({
+      type: 'feedback.start',
+      requestId: 'start-before-pending-orphan',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    await waitForOneOf(orphanedOwner, ['feedback.started'], 'start-before-pending-orphan');
+
+    const documentKey = document.uri.toString();
+    providerInternals.feedbackWebviews.get(documentKey)?.delete(orphanedOwner.webview);
+    let settleOwnerEdit: (() => void) | undefined;
+    const pendingOwnerEdit = new Promise<boolean>(resolve => {
+      settleOwnerEdit = () => resolve(true);
+    });
+    providerInternals.inFlightApplyEdits.set(documentKey, pendingOwnerEdit);
+
+    const replacement = createRichView();
+    replacement.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => {
+          replacement.receive({
+            type: 'flushPendingEditAck',
+            requestId: message.requestId,
+            ok: true,
+          });
+        });
+      }
+      return Promise.resolve(true);
+    });
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      replacement.panel,
+      {} as vscode.CancellationToken
+    );
+
+    expect(providerInternals.feedbackSessions.size).toBe(1);
+    expect(
+      replacement.webview.postMessage.mock.calls.some(
+        call => call[0].type === 'feedback.peer.locked'
+      )
+    ).toBe(true);
+
+    settleOwnerEdit?.();
+    await pendingOwnerEdit;
+    providerInternals.inFlightApplyEdits.delete(documentKey);
+    replacement.receive({
+      type: 'feedback.start',
+      requestId: 'start-after-pending-orphan-settles',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    const offer = await waitForOneOf(
+      replacement,
+      ['feedback.resume.available', 'feedback.error'],
+      'start-after-pending-orphan-settles'
+    );
+    expect(offer).toEqual(expect.objectContaining({ kind: 'active-peer' }));
+    replacement.receive({
+      type: 'feedback.draft.resume',
+      requestId: 'resume-after-pending-orphan-settles',
+      round: (offer.drafts as Array<{ round: string }>)[0]?.round,
+      blocks: ORIGINAL_BLOCKS,
+    });
+    const resumed = await waitForOneOf(
+      replacement,
+      ['feedback.started', 'feedback.error'],
+      'resume-after-pending-orphan-settles'
+    );
+    expect(resumed.type).toBe('feedback.started');
+
+    replacement.dispose();
+    orphanedOwner.dispose();
   });
 
   it("unregisters a disposed rich view without re-reading VS Code's invalid panel getter", async () => {

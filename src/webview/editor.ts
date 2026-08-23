@@ -1721,6 +1721,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         break;
       }
       case 'feedback.drafts.available':
+      case 'feedback.resume.available':
       case 'feedback.draft.discarded':
       case 'feedback.transition.locked':
       case 'feedback.started':
@@ -1734,6 +1735,23 @@ window.addEventListener('message', (event: MessageEvent) => {
         if (validatedFeedbackMessage) {
           feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
         }
+        break;
+      }
+      case 'feedback.session.transferred': {
+        if (validatedFeedbackMessage?.type !== 'feedback.session.transferred') break;
+        const currentSession = feedbackReviewController?.getSession();
+        if (!currentSession || currentSession.sessionId !== validatedFeedbackMessage.oldSessionId) {
+          break;
+        }
+        feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
+        pendingFeedbackPeerLock = {
+          lockId: validatedFeedbackMessage.lockId,
+          message: validatedFeedbackMessage.message,
+        };
+        feedbackPeerLockController?.lock(
+          validatedFeedbackMessage.lockId,
+          validatedFeedbackMessage.message
+        );
         break;
       }
       case 'feedback.close.sync': {

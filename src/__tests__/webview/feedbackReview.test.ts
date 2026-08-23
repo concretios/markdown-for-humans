@@ -20,6 +20,7 @@ import type {
   FeedbackItemSummary,
   FeedbackWebviewMessage,
 } from '../../shared/feedbackProtocol';
+import { FEEDBACK_ERROR_CODES } from '../../shared/feedbackProtocol';
 
 function createEditorFixture(): Editor {
   document.body.innerHTML = `
@@ -166,6 +167,7 @@ describe('Feedback review controller', () => {
   it('uses one exclusive draft-surface gate for every text and capture phase', () => {
     const kinds = [
       'text-composer',
+      'feedback-edit',
       'text-block-selector',
       'finish-checkpoint',
       'area-capture',
@@ -230,16 +232,20 @@ describe('Feedback review controller', () => {
     expect(manager.serialize).toHaveBeenCalledTimes(4);
   });
 
-  it('uses the ProseMirror focus when the browser selection escapes the editor', () => {
+  it('rejects a browser selection that crosses from the document into review chrome', () => {
     const editorDom = document.createElement('div');
     const inside = document.createTextNode('Alpha beta');
-    const outside = document.createTextNode('Toolbar');
+    const feedbackCard = document.createElement('aside');
+    const outside = document.createTextNode('Existing feedback');
     editorDom.append(inside);
-    document.body.append(editorDom, outside);
+    feedbackCard.append(outside);
+    document.body.append(editorDom, feedbackCard);
     const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
       anchorNode: inside,
       focusNode: outside,
-      toString: () => 'Alpha beta Toolbar',
+      isCollapsed: false,
+      rangeCount: 1,
+      toString: () => 'Alpha beta Existing feedback',
     } as unknown as Selection);
     const editor = {
       state: {
@@ -255,8 +261,8 @@ describe('Feedback review controller', () => {
     } as unknown as Editor;
 
     expect(
-      getFeedbackSelectionTarget(editor, [{ ordinal: 0, startLine: 1, endLine: 1 }])?.focus
-    ).toBe('Alpha beta');
+      getFeedbackSelectionTarget(editor, [{ ordinal: 0, startLine: 1, endLine: 1 }])
+    ).toBeNull();
     selectionSpy.mockRestore();
   });
 
@@ -1787,7 +1793,7 @@ describe('Feedback review controller', () => {
     }
   });
 
-  it('offers Copy again when the sealed handoff was not copied', async () => {
+  it('retains the exact customized multiline prompt for Copy again', async () => {
     const legacyConfirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
     const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
     const writeText = jest.fn(async () => undefined);
@@ -1816,7 +1822,9 @@ describe('Feedback review controller', () => {
         requestId: string;
         sessionId: string;
       };
-      const prompt = 'Implement the sealed feedback bundle at the reported path.';
+      const prompt =
+        'Review `.md4h/feedback/docs/guide.md--round-1/feedback.md`.\n' +
+        'Use our team workflow, keep {{round}} literal, and report every ID.';
       controller.handleHostMessage({
         type: 'feedback.finished',
         requestId: finish.requestId,
@@ -4575,12 +4583,9 @@ describe('Feedback review controller', () => {
     expect(document.activeElement).toBe(marker);
   });
 
-  it('shows an active comment target without moving focus away from its control', () => {
+  it('edits an active comment in an in-webview form and saves one trimmed update', () => {
     const editor = createEditorFixture();
-    const target = editor.view.dom.children[1] as HTMLElement & {
-      scrollIntoView: jest.Mock;
-    };
-    target.scrollIntoView = jest.fn();
+    const prompt = jest.spyOn(window, 'prompt').mockReturnValue(null);
     const controller = createFeedbackReviewController({ editor, host });
     controller.activate({
       sessionId: 'session-1',
@@ -4601,14 +4606,212 @@ describe('Feedback review controller', () => {
       ],
     });
     (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
-    const showTarget = Array.from(
+    const edit = Array.from(
       document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
-    ).find(button => button.textContent === 'Show target')!;
-    showTarget.focus();
-    showTarget.click();
+    ).find(button => button.textContent === 'Edit')!;
+    edit.click();
 
-    expect(target.scrollIntoView).toHaveBeenCalledWith({ behavior: 'auto', block: 'center' });
-    expect(document.activeElement).toBe(showTarget);
+    const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-edit-input="F1"]');
+    const save = document.querySelector<HTMLButtonElement>('[data-feedback-edit-save="F1"]');
+    expect(prompt).not.toHaveBeenCalled();
+    expect(field?.value).toBe('Clarify this.');
+    expect(document.activeElement).toBe(field);
+    expect(save?.disabled).toBe(true);
+
+    if (!field || !save) throw new Error('Inline feedback editor was not rendered.');
+    field.value = '  Make this more specific.  ';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(save.disabled).toBe(false);
+    save.click();
+    save.click();
+
+    const updates = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .filter(message => message.type === 'feedback.item.edit');
+    expect(updates).toHaveLength(1);
+    expect(updates[0]).toMatchObject({
+      type: 'feedback.item.edit',
+      sessionId: 'session-1',
+      id: 'F1',
+      feedback: 'Make this more specific.',
+    });
+    expect(save.disabled).toBe(true);
+
+    const requestId = updates[0]?.requestId;
+    if (!requestId) throw new Error('Edit request did not include a request ID.');
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId,
+      sessionId: 'session-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startLine: 3,
+          endLine: 3,
+          focus: 'Alpha beta',
+          feedback: 'Make this more specific.',
+        },
+      ],
+    });
+
+    expect(document.querySelector('[data-feedback-edit-input="F1"]')).toBeNull();
+    expect(
+      document.querySelector('[data-feedback-card="F1"] .feedback-card-body')?.textContent
+    ).toBe('Make this more specific.');
+    expect(document.activeElement?.textContent).toBe('Edit');
+    prompt.mockRestore();
+  });
+
+  it('retains a failed inline edit for retry and lets Cancel restore the Edit control', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startLine: 3,
+          endLine: 3,
+          focus: 'Alpha beta',
+          feedback: 'Clarify this.',
+        },
+      ],
+    });
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+    const edit = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+    ).find(button => button.textContent === 'Edit')!;
+    edit.click();
+    const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-edit-input="F1"]')!;
+    const save = document.querySelector<HTMLButtonElement>('[data-feedback-edit-save="F1"]')!;
+    field.value = 'Keep this draft';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(field);
+
+    controller.finish();
+    expect(document.querySelector('[data-feedback-completion-dialog]')).toBeNull();
+    expect(document.activeElement).toBe(field);
+
+    save.click();
+    const update = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .find(message => message.type === 'feedback.item.edit');
+    if (!update || update.type !== 'feedback.item.edit') {
+      throw new Error('Edit request was not posted.');
+    }
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: update.requestId,
+      sessionId: 'session-1',
+      code: 'MD4H-FB-STORE-001',
+      message: 'Could not save feedback.',
+      recoverable: true,
+    });
+
+    expect(field.value).toBe('Keep this draft');
+    expect(save.disabled).toBe(false);
+    expect(document.activeElement).toBe(field);
+
+    const cancel = document.querySelector<HTMLButtonElement>('[data-feedback-edit-cancel="F1"]')!;
+    cancel.click();
+    expect(document.querySelector('[data-feedback-edit-input="F1"]')).toBeNull();
+    expect(document.activeElement?.textContent).toBe('Edit');
+    expect(
+      (host.postMessage as jest.Mock).mock.calls
+        .map(call => call[0] as FeedbackWebviewMessage)
+        .filter(message => message.type === 'feedback.item.edit')
+    ).toHaveLength(1);
+  });
+
+  it('preserves an inline edit draft, caret, and screenshot preview across host refreshes', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    const item: FeedbackItemSummary = {
+      id: 'F1',
+      kind: 'screenshot',
+      startOrdinal: 1,
+      endOrdinal: 1,
+      startLine: 3,
+      endLine: 3,
+      imageUri: 'vscode-webview://feedback/F1.png',
+      feedback: 'Clarify this capture.',
+    };
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [item],
+    });
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+    const edit = document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F1"]')!;
+    edit.click();
+    const originalField = document.querySelector<HTMLTextAreaElement>(
+      '[data-feedback-edit-input="F1"]'
+    )!;
+    originalField.value = 'Keep this local edit';
+    originalField.dispatchEvent(new Event('input', { bubbles: true }));
+    originalField.setSelectionRange(5, 9);
+    originalField.focus();
+
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId: 'unrelated-refresh',
+      sessionId: 'session-1',
+      items: [item],
+    });
+
+    const refreshedField = document.querySelector<HTMLTextAreaElement>(
+      '[data-feedback-edit-input="F1"]'
+    )!;
+    expect(refreshedField).not.toBe(originalField);
+    expect(refreshedField.value).toBe('Keep this local edit');
+    expect(refreshedField.selectionStart).toBe(5);
+    expect(refreshedField.selectionEnd).toBe(9);
+    expect(document.activeElement).toBe(refreshedField);
+    expect(document.querySelector<HTMLImageElement>('[data-feedback-card-image]')?.src).toContain(
+      'vscode-webview://feedback/F1.png'
+    );
+  });
+
+  it('omits the redundant Show target action from document-aligned active cards', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startLine: 3,
+          endLine: 3,
+          focus: 'Alpha beta',
+          feedback: 'Clarify this.',
+        },
+      ],
+    });
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+    const actionLabels = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+    ).map(button => button.textContent);
+
+    expect(actionLabels).toEqual(['Edit', 'Delete']);
   });
 
   it('opens the matching comment when a saved highlight is clicked but not during text selection', () => {
@@ -5316,6 +5519,151 @@ describe('Feedback review controller', () => {
     selectionSpy.mockRestore();
   });
 
+  it('removes the selection action when the live browser range is cleared', () => {
+    const editor = createEditorFixture();
+    (
+      editor.state as unknown as { selection: { from: number; to: number; empty: boolean } }
+    ).selection = { from: 1, to: 6, empty: false };
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [{ ordinal: 0, startLine: 1, endLine: 1 }],
+      items: [],
+    });
+    const selectionRect = {
+      left: 180,
+      right: 240,
+      top: 220,
+      bottom: 242,
+      width: 60,
+      height: 22,
+      x: 180,
+      y: 220,
+      toJSON: () => ({}),
+    } as DOMRect;
+    let currentSelection = {
+      anchorNode: editor.view.dom.children[0].firstChild,
+      focusNode: editor.view.dom.children[0].firstChild,
+      anchorOffset: 0,
+      focusOffset: 5,
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () =>
+        ({
+          getClientRects: () => [selectionRect],
+          getBoundingClientRect: () => selectionRect,
+        }) as unknown as Range,
+      toString: () => 'Title',
+    } as unknown as Selection;
+    const selectionSpy = jest
+      .spyOn(window, 'getSelection')
+      .mockImplementation(() => currentSelection);
+
+    try {
+      document.dispatchEvent(new Event('selectionchange'));
+      expect(document.querySelector('[data-feedback-selection-action]')).not.toBeNull();
+
+      currentSelection = {
+        anchorNode: null,
+        focusNode: null,
+        isCollapsed: true,
+        rangeCount: 0,
+        toString: () => '',
+      } as unknown as Selection;
+      document.dispatchEvent(new Event('selectionchange'));
+
+      expect(document.querySelector('[data-feedback-selection-action]')).toBeNull();
+    } finally {
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('keeps explicit keyboard commenting available for a ProseMirror-only selection', () => {
+    const editor = createEditorFixture();
+    (
+      editor.state as unknown as { selection: { from: number; to: number; empty: boolean } }
+    ).selection = { from: 1, to: 6, empty: false };
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [{ ordinal: 0, startLine: 1, endLine: 1 }],
+      items: [],
+    });
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: null,
+      focusNode: null,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+
+    try {
+      expect(controller.commentOnSelection()).toBe(true);
+      expect(document.querySelector('.feedback-composer')).not.toBeNull();
+      expect(document.querySelector('[data-feedback-focus]')?.textContent).toBe('Title');
+      expect(document.querySelector('[data-feedback-text-block-selector]')).toBeNull();
+    } finally {
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('never turns text selected inside a feedback card into recursive feedback', () => {
+    const editor = createEditorFixture();
+    (
+      editor.state as unknown as { selection: { from: number; to: number; empty: boolean } }
+    ).selection = { from: 1, to: 6, empty: false };
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [{ ordinal: 0, startLine: 1, endLine: 1 }],
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 0,
+          endOrdinal: 0,
+          startLine: 1,
+          endLine: 1,
+          focus: 'Title',
+          feedback: 'Clarify this heading.',
+        },
+      ],
+    });
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+    const cardFocus = document.querySelector('[data-feedback-card-focus]') as HTMLElement;
+    const cardText = cardFocus.firstChild!;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: cardText,
+      focusNode: cardText,
+      anchorOffset: 0,
+      focusOffset: cardText.textContent?.length ?? 0,
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => document.createRange(),
+      toString: () => 'Title',
+    } as unknown as Selection);
+
+    try {
+      document.dispatchEvent(new Event('selectionchange'));
+
+      expect(document.querySelector('[data-feedback-selection-action]')).toBeNull();
+      expect(controller.commentOnSelection()).toBe(false);
+      expect(document.querySelector('.feedback-composer')).toBeNull();
+      expect(document.querySelector('[data-feedback-text-block-selector]')).toBeNull();
+    } finally {
+      selectionSpy.mockRestore();
+    }
+  });
+
   it('observes editor layout changes and disconnects the observer on destroy', () => {
     const originalResizeObserver = global.ResizeObserver;
     const observe = jest.fn();
@@ -5415,6 +5763,225 @@ describe('Feedback review controller', () => {
     });
     expect(resumeListener).toHaveBeenCalledTimes(1);
     window.removeEventListener('feedbackResumeRequested', resumeListener);
+  });
+
+  it('asks the host to revalidate a cached saved draft whenever Start is clicked', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.handleHostMessage({
+      type: 'feedback.drafts.available',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 2,
+          feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+        },
+      ],
+    });
+    const notNow = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('.feedback-draft-actions button')
+    ).find(button => button.textContent === 'Not now');
+    notNow?.click();
+    (host.postMessage as jest.Mock).mockClear();
+
+    controller.start();
+
+    expect(host.postMessage).toHaveBeenCalledWith({
+      type: 'feedback.start',
+      requestId: expect.any(String),
+      blocks: [
+        { ordinal: 0, kind: 'heading', markdown: '# Title', contentSize: 5 },
+        { ordinal: 1, kind: 'paragraph', markdown: 'Alpha beta', contentSize: 10 },
+        { ordinal: 3, kind: 'blockquote', markdown: '> Quote', contentSize: 7 },
+      ],
+    });
+  });
+
+  it('makes starting a new round explicit from a saved-draft prompt', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.handleHostMessage({
+      type: 'feedback.drafts.available',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 2,
+          feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+        },
+      ],
+    });
+
+    const startNew = document.querySelector<HTMLButtonElement>('[data-feedback-start-new]');
+    startNew?.click();
+    expect(host.postMessage).toHaveBeenCalledWith({
+      type: 'feedback.start.new',
+      requestId: expect.any(String),
+      blocks: [
+        { ordinal: 0, kind: 'heading', markdown: '# Title', contentSize: 5 },
+        { ordinal: 1, kind: 'paragraph', markdown: 'Alpha beta', contentSize: 10 },
+        { ordinal: 3, kind: 'blockquote', markdown: '> Quote', contentSize: 7 },
+      ],
+    });
+  });
+
+  it('turns a correlated active-session conflict into a focused Resume choice', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    const onLocalError = jest.fn();
+    window.addEventListener('feedbackLocalError', onLocalError);
+    controller.start();
+    const start = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .find(message => message.type === 'feedback.start');
+    if (!start) throw new Error('Start request was not posted.');
+
+    controller.handleHostMessage({
+      type: 'feedback.resume.available',
+      requestId: 'stale-start',
+      kind: 'active-owner',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 1,
+          feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+        },
+      ],
+    });
+    expect(document.querySelector('[data-feedback-resume-offer]')).toBeNull();
+
+    controller.handleHostMessage({
+      type: 'feedback.resume.available',
+      requestId: start.requestId,
+      kind: 'active-owner',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 1,
+          feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+        },
+      ],
+    });
+
+    const resume = document.querySelector<HTMLButtonElement>('[data-feedback-draft-resume]');
+    expect(document.querySelector('[data-feedback-resume-offer]')?.textContent).toContain(
+      'Resume Feedback session?'
+    );
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+    expect(document.activeElement).toBe(resume);
+    expect(onLocalError).not.toHaveBeenCalled();
+
+    resume?.click();
+    expect(host.postMessage).toHaveBeenCalledWith({
+      type: 'feedback.draft.resume',
+      requestId: expect.any(String),
+      round: '20260821T093000Z-k4p9',
+      blocks: expect.any(Array),
+    });
+    window.removeEventListener('feedbackLocalError', onLocalError);
+  });
+
+  it('explains that resuming an active peer moves the session and labels the action Resume here', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.start();
+    const start = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .find(message => message.type === 'feedback.start');
+    if (!start) throw new Error('Start request was not posted.');
+
+    controller.handleHostMessage({
+      type: 'feedback.resume.available',
+      requestId: start.requestId,
+      kind: 'active-peer',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 3,
+          feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+        },
+      ],
+    });
+
+    const offer = document.querySelector<HTMLElement>('[data-feedback-resume-offer]');
+    const resume = offer?.querySelector<HTMLButtonElement>('[data-feedback-draft-resume]');
+    expect(offer?.textContent).toMatch(/another rich view/i);
+    expect(offer?.textContent).toMatch(/move(?:s)? .*session.*this view/i);
+    expect(resume?.textContent).toBe('Resume here');
+  });
+
+  it('unlocks a stale active offer when exact source validation rejects Resume', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.start();
+    const start = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .find(message => message.type === 'feedback.start');
+    if (!start) throw new Error('Start request was not posted.');
+    controller.handleHostMessage({
+      type: 'feedback.resume.available',
+      requestId: start.requestId,
+      kind: 'active-owner',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 1,
+          feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+        },
+      ],
+    });
+    document.querySelector<HTMLButtonElement>('[data-feedback-draft-resume]')?.click();
+    const resume = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .reverse()
+      .find(message => message.type === 'feedback.draft.resume');
+    if (!resume) throw new Error('Resume request was not posted.');
+
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: resume.requestId,
+      code: FEEDBACK_ERROR_CODES.sourceChanged,
+      message: 'The source changed.',
+      recoverable: true,
+    });
+
+    expect(document.querySelector('[data-feedback-draft-banner]')).toBeNull();
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
+    expect(document.body.classList.contains('feedback-review-starting')).toBe(false);
+  });
+
+  it('deactivates only the matching old runtime after an explicit session transfer', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'old-session',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-k4p9',
+      items: [],
+    });
+
+    controller.handleHostMessage({
+      type: 'feedback.session.transferred',
+      oldSessionId: 'stale-session',
+      lockId: 'new-session',
+      message: 'Feedback moved elsewhere.',
+    });
+    expect(controller.getSession()?.sessionId).toBe('old-session');
+
+    controller.handleHostMessage({
+      type: 'feedback.session.transferred',
+      oldSessionId: 'old-session',
+      lockId: 'new-session',
+      message: 'Feedback moved elsewhere.',
+    });
+    expect(controller.getSession()).toBeNull();
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
   });
 
   it('moves focus from a resumed draft action to Finish when activation succeeds', () => {
