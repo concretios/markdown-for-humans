@@ -36,6 +36,24 @@ function passingScenario(overrides = {}) {
     composerSavedPlacementCount: 0,
     composerConnectorCount: 0,
     composerSpacerCssPx: 0,
+    feedbackPalette: {
+      theme: 'light',
+      warningColor: 'rgb(154, 103, 0)',
+      accentColor: 'rgb(154, 103, 0)',
+      actionSurfaceColor: 'rgb(186, 152, 85)',
+      savedTokenColor: 'rgba(154, 103, 0, 0.26)',
+      savedHighlightColor: 'rgba(154, 103, 0, 0.26)',
+      activeMarkerColor: 'rgb(186, 152, 85)',
+      primaryActionColor: 'rgb(186, 152, 85)',
+      widgetBackgroundColor: 'rgb(247, 248, 250)',
+      primaryActionTextColor: 'rgb(37, 39, 43)',
+      contrastBorderColor: 'rgb(255, 255, 0)',
+      savedHighlightEdge: 'none',
+      activeMarkerBorderColor: 'rgb(9, 105, 218)',
+      activeMarkerBorderWidthCssPx: 1.5,
+      primaryActionBorderColor: 'rgb(174, 183, 195)',
+      primaryActionBorderWidthCssPx: 1,
+    },
     ...overrides,
   };
 }
@@ -106,6 +124,97 @@ test('annotation scenario rejects missing or non-finite measurements', () => {
   assert.equal(result.passed, false);
   assert.match(result.failures[0], /maxTargetPinDriftCssPx was not a finite number/);
   assert.match(result.failures[1], /interactionMs was not a finite number/);
+});
+
+test('annotation scenario rejects light and dark Feedback palette regressions', () => {
+  const result = evaluateAnnotationScenario(
+    passingScenario({
+      feedbackPalette: {
+        ...passingScenario().feedbackPalette,
+        accentColor: 'rgb(9, 105, 218)',
+        savedHighlightColor: 'rgba(9, 105, 218, 0.28)',
+        activeMarkerColor: 'rgb(9, 105, 218)',
+        primaryActionColor: 'rgb(9, 105, 218)',
+      },
+    })
+  );
+
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.failures, [
+    'Feedback accent was rgb(9, 105, 218) (expected warning-derived rgb(154, 103, 0))',
+    'saved Feedback highlight was rgba(9, 105, 218, 0.28) (expected rgba(154, 103, 0, 0.26))',
+    'active Feedback marker was rgb(9, 105, 218) (expected rgb(186, 152, 85))',
+    'primary Feedback action was rgb(9, 105, 218) (expected rgb(186, 152, 85))',
+  ]);
+});
+
+test('annotation scenario rejects a dark Feedback action dulled below its warning accent', () => {
+  const mutedAction = 'rgb(161, 131, 57)';
+  const result = evaluateAnnotationScenario(
+    passingScenario({
+      feedbackPalette: {
+        ...passingScenario().feedbackPalette,
+        theme: 'dark',
+        warningColor: 'rgb(227, 179, 65)',
+        accentColor: 'rgb(227, 179, 65)',
+        actionSurfaceColor: mutedAction,
+        activeMarkerColor: mutedAction,
+        primaryActionColor: mutedAction,
+        widgetBackgroundColor: 'rgb(34, 37, 42)',
+        primaryActionTextColor: 'rgb(23, 25, 29)',
+      },
+    })
+  );
+
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.failures, [
+    'dark primary Feedback action retained 49% of its warning-accent luminance (minimum 90%)',
+  ]);
+});
+
+test('annotation scenario accepts a bright dark action with readable text and clear separation', () => {
+  const brightAction = 'color(srgb 0.891843 0.731059 0.348235)';
+  const result = evaluateAnnotationScenario(
+    passingScenario({
+      feedbackPalette: {
+        ...passingScenario().feedbackPalette,
+        theme: 'dark',
+        warningColor: 'rgb(227, 179, 65)',
+        accentColor: 'rgb(227, 179, 65)',
+        actionSurfaceColor: brightAction,
+        activeMarkerColor: brightAction,
+        primaryActionColor: brightAction,
+        widgetBackgroundColor: 'rgb(34, 37, 42)',
+        primaryActionTextColor: 'rgb(23, 25, 29)',
+      },
+    })
+  );
+
+  assert.deepEqual(result, { passed: true, failures: [] });
+});
+
+test('annotation scenario requires high-contrast Feedback borders and highlight edge', () => {
+  const result = evaluateAnnotationScenario(
+    passingScenario({
+      feedbackPalette: {
+        ...passingScenario().feedbackPalette,
+        theme: 'high-contrast',
+        savedHighlightColor: 'rgba(0, 0, 0, 0)',
+        savedHighlightEdge: 'none',
+        activeMarkerBorderColor: 'rgb(0, 255, 255)',
+        activeMarkerBorderWidthCssPx: 1,
+        primaryActionBorderColor: 'rgb(0, 255, 255)',
+        primaryActionBorderWidthCssPx: 1,
+      },
+    })
+  );
+
+  assert.equal(result.passed, false);
+  assert.deepEqual(result.failures, [
+    'high-contrast saved Feedback highlight did not retain the contrast edge',
+    'high-contrast active Feedback marker border was rgb(0, 255, 255) at 1 CSS px (expected rgb(255, 255, 0) at least 2 CSS px)',
+    'high-contrast primary Feedback action border was rgb(0, 255, 255) at 1 CSS px (expected rgb(255, 255, 0) at least 2 CSS px)',
+  ]);
 });
 
 test('stress evaluator bounds geometry to annotated targets and cards', () => {

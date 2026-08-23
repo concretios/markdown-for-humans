@@ -2,6 +2,18 @@ import { readFileSync } from 'fs';
 import * as path from 'path';
 
 const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
+const cssRules = css.match(/[^{}]+\{[^{}]*\}/g) ?? [];
+const feedbackCss = css.slice(css.indexOf('Snapshot Feedback review'));
+
+const ruleFor = (selector: string): string =>
+  cssRules.find(rule => {
+    const selectorList = rule
+      .slice(0, rule.indexOf('{'))
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(',')
+      .map(candidate => candidate.replace(/\s+/g, ' ').trim());
+    return selectorList.includes(selector);
+  }) ?? '';
 
 describe('Feedback annotation styles', () => {
   it('uses a document-positioned overlay without creating a second scroll surface', () => {
@@ -25,7 +37,7 @@ describe('Feedback annotation styles', () => {
     );
   });
 
-  it('uses the same warm review accent for pending and active fallback targets', () => {
+  it('uses the semantic yellow hierarchy for pending and active fallback targets', () => {
     const pending =
       css.match(
         /\.feedback-review-active\s+\.markdown-editor\s+\.feedback-pending-target\s*\{[^}]*\}/
@@ -35,29 +47,239 @@ describe('Feedback annotation styles', () => {
         /\.feedback-review-active\s+\.markdown-editor\s+\.feedback-active-target\s*\{[^}]*\}/
       )?.[0] ?? '';
 
-    expect(pending).toContain('--vscode-editorWarning-foreground');
-    expect(active).toContain('--vscode-editorWarning-foreground');
+    expect(pending).toContain('--md4h-feedback-highlight-saved');
+    expect(active).toContain('--md4h-feedback-highlight-active');
+    expect(active).toContain('--md4h-feedback-highlight-edge');
     expect(css).toMatch(
       /\.vscode-high-contrast\s+\.feedback-review-active\s+\.markdown-editor\s+\.feedback-pending-target[\s\S]*?outline:\s*2px\s+solid/
     );
   });
 
-  it('draws a layout-neutral theme-aware review perimeter only in Feedback mode', () => {
+  it('defines a Feedback-only semantic yellow palette from VS Code warning colors', () => {
+    const palette = ruleFor('body.feedback-review-active') || ruleFor('.feedback-review-active');
+    const paletteSelectors = palette.slice(0, palette.indexOf('{'));
+
+    for (const token of [
+      '--md4h-feedback-accent',
+      '--md4h-feedback-on-accent',
+      '--md4h-feedback-highlight-saved',
+      '--md4h-feedback-highlight-active',
+      '--md4h-feedback-highlight-edge',
+    ]) {
+      expect(palette).toContain(`${token}:`);
+    }
+    expect(palette).toMatch(
+      /--vscode-(?:editorWarning-foreground|statusBarItem-warning(?:Background|Foreground)|notificationsWarningIcon-foreground)/
+    );
+    expect(palette).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
+    expect(palette).not.toContain('--vscode-focusBorder');
+    expect(palette).not.toContain('--vscode-button-background');
+    expect(paletteSelectors).toContain('body.feedback-review-starting');
+    expect(paletteSelectors).toContain('body.feedback-completion-open');
+
+    const darkPalette =
+      ruleFor('body.vscode-dark.feedback-review-active') ||
+      ruleFor('.vscode-dark .feedback-review-active');
+    expect(darkPalette).toContain('--md4h-feedback-highlight-saved:');
+    expect(darkPalette).toContain('--md4h-feedback-highlight-active:');
+  });
+
+  it('keeps dark-theme action yellow bright instead of mixing it back into the widget', () => {
+    const darkPalette =
+      ruleFor('body.vscode-dark.feedback-review-active') ||
+      ruleFor('.vscode-dark .feedback-review-active');
+
+    expect(darkPalette).toContain('--md4h-feedback-action-surface:');
+    expect(darkPalette).toContain('--md4h-feedback-action-hover:');
+    expect(darkPalette).toContain('var(--md4h-feedback-accent)');
+    expect(darkPalette).toMatch(/var\(--vscode-editor-foreground/);
+    expect(darkPalette).not.toContain('--vscode-editorWidget-background');
+  });
+
+  it('paints saved, pending, and active targets with the semantic yellow hierarchy', () => {
+    const saved = ruleFor('.feedback-review-active .markdown-editor .md4h-feedback-highlight');
+    const active = ruleFor(
+      '.feedback-review-active .markdown-editor .md4h-feedback-highlight-active'
+    );
+    const pending = ruleFor(
+      ".feedback-review-active .markdown-editor .md4h-feedback-annotation-inline[data-feedback-ids*='__pending__']"
+    );
+    const fallbackPending = ruleFor(
+      '.feedback-review-active .markdown-editor .feedback-pending-target'
+    );
+    const fallbackActive = ruleFor(
+      '.feedback-review-active .markdown-editor .feedback-active-target'
+    );
+
+    expect(saved).toContain('var(--md4h-feedback-highlight-saved)');
+    expect(active).toContain('var(--md4h-feedback-highlight-active)');
+    expect(active).toContain('var(--md4h-feedback-highlight-edge)');
+    expect(pending).toContain('var(--md4h-feedback-highlight-active)');
+    expect(pending).toContain('var(--md4h-feedback-highlight-edge)');
+    expect(fallbackPending).toContain('var(--md4h-feedback-highlight-saved)');
+    expect(fallbackActive).toContain('var(--md4h-feedback-highlight-active)');
+    expect(fallbackActive).toContain('var(--md4h-feedback-highlight-edge)');
+  });
+
+  it('uses yellow for feedback pins and the contextual Add feedback bubble', () => {
+    const marker = ruleFor('.feedback-marker');
+    const activeMarker = ruleFor('.feedback-marker.active');
+    const selectionAction = ruleFor('.feedback-selection-action');
+    const activeCard = ruleFor(".feedback-comment-card[data-feedback-card-state='active']");
+
+    expect(marker).toContain('var(--md4h-feedback-accent)');
+    expect(activeMarker).toContain('var(--md4h-feedback-accent)');
+    expect(activeMarker).toContain('var(--md4h-feedback-on-accent)');
+    expect(selectionAction).toContain('var(--md4h-feedback-accent)');
+    expect(selectionAction).toContain('var(--md4h-feedback-on-accent)');
+    expect(activeCard).toContain('var(--md4h-feedback-highlight-edge)');
+
+    for (const rule of [marker, activeMarker, selectionAction, activeCard]) {
+      expect(rule).not.toContain('--vscode-button-background');
+    }
+  });
+
+  it('uses yellow for active feedback toolbar controls while keeping idle controls neutral', () => {
+    const idle = ruleFor(".feedback-comments-button[data-feedback-comments-state='hidden']");
+    const collapsed = ruleFor(
+      ".feedback-comments-button[data-feedback-comments-state='collapsed']"
+    );
+    const expanded = ruleFor(".feedback-comments-button[data-feedback-comments-state='expanded']");
+    const captureActive = ruleFor(".feedback-capture-button[aria-pressed='true']");
+    const toolbarHover = ruleFor('.feedback-toolbar-button:not(:disabled):hover');
+
+    expect(idle).not.toContain('var(--md4h-feedback-accent)');
+    expect(collapsed).toContain('var(--md4h-feedback-highlight-saved)');
+    expect(collapsed).toContain('var(--md4h-feedback-accent)');
+    expect(expanded).toContain('var(--md4h-feedback-accent)');
+    expect(expanded).toContain('var(--md4h-feedback-on-accent)');
+    expect(captureActive).toContain('var(--md4h-feedback-accent)');
+    expect(toolbarHover).toContain('var(--md4h-feedback-highlight-saved)');
+
+    for (const rule of [collapsed, expanded, captureActive, toolbarHover]) {
+      expect(rule).not.toContain('--vscode-button-background');
+    }
+  });
+
+  it('keeps Feedback toolbar glyphs yellow while leaving their labels theme-neutral', () => {
+    const feedbackIcon = ruleFor('.feedback-toolbar-button .toolbar-icon');
+    const startIcon = ruleFor('.feedback-start-button .toolbar-icon');
+    const expandedIcon = ruleFor(
+      ".feedback-comments-button[data-feedback-comments-state='expanded'] .toolbar-icon"
+    );
+    const captureIcon = ruleFor(".feedback-capture-button[aria-pressed='true'] .toolbar-icon");
+
+    expect(feedbackIcon).toContain('var(--md4h-feedback-accent)');
+    expect(startIcon).toContain('var(--md4h-feedback-accent)');
+    expect(expandedIcon).toContain('var(--md4h-feedback-on-accent)');
+    expect(captureIcon).toContain('var(--md4h-feedback-on-accent)');
+    expect(feedbackIcon).not.toContain('--vscode-button-background');
+    expect(startIcon).not.toContain('--vscode-button-background');
+  });
+
+  it('uses yellow for native review selection and the area-capture boundary only', () => {
+    const reviewSelection = ruleFor('.feedback-review-active .markdown-editor ::selection');
+    const captureSelection = ruleFor('.feedback-capture-active .markdown-editor ::selection');
+    const crop = ruleFor('.feedback-capture-selection');
+
+    expect(reviewSelection).toContain('var(--md4h-feedback-highlight-active)');
+    expect(captureSelection).toMatch(/background(?:-color)?:\s*transparent\s*!important/);
+    expect(crop).toContain('var(--md4h-feedback-highlight-edge)');
+    expect(crop).not.toContain('--vscode-focusBorder');
+  });
+
+  it('uses yellow for primary feedback actions including screenshot submission', () => {
+    const primary = ruleFor('.feedback-primary-button');
+    const screenshotAdd = ruleFor(".feedback-annotation-actions [data-feedback-action='add']");
+
+    for (const rule of [primary, screenshotAdd]) {
+      expect(rule).toContain('var(--md4h-feedback-accent)');
+      expect(rule).toContain('var(--md4h-feedback-on-accent)');
+      expect(rule).not.toContain('--vscode-button-background');
+      expect(rule).not.toContain('--vscode-focusBorder');
+    }
+  });
+
+  it('keeps yellow available on pre-session Start and draft-recovery actions', () => {
+    const start = ruleFor('.feedback-start-button');
+    const draftPrimary = ruleFor('.feedback-draft-banner .feedback-primary-button');
+    const warningThemeToken =
+      /--vscode-(?:editorWarning-foreground|statusBarItem-warning(?:Background|Foreground)|notificationsWarningIcon-foreground)/;
+
+    for (const rule of [start, draftPrimary]) {
+      expect(rule).toContain('--md4h-feedback-accent');
+      expect(rule).toMatch(warningThemeToken);
+      expect(rule).not.toContain('--vscode-button-background');
+    }
+  });
+
+  it('does not reintroduce purple or magenta accents into Feedback styling', () => {
+    expect(feedbackCss).not.toMatch(
+      /\b(?:purple|magenta)\b|#(?:8250df|a371f7|6f42c1|c586c0|bc8cff)\b/i
+    );
+  });
+
+  it('keeps keyboard focus theme-defined and structurally distinct from yellow activation', () => {
+    for (const selector of [
+      '.feedback-marker:focus-visible',
+      '.feedback-selection-action:focus-visible',
+      '.feedback-primary-button:focus-visible',
+      '.feedback-toolbar-button:focus-visible',
+    ]) {
+      const rule = ruleFor(selector);
+      expect(rule).toMatch(/outline:\s*(?:1px|2px)\s+solid\s+var\(--vscode-focusBorder/);
+      expect(rule).not.toContain('--md4h-feedback-accent');
+      expect(rule).not.toContain('--md4h-feedback-highlight-edge');
+    }
+  });
+
+  it('lets high-contrast button colors override the yellow primary-action fill', () => {
+    const darkHighContrast = ruleFor('.vscode-high-contrast .feedback-primary-button');
+    const lightHighContrast = ruleFor('.vscode-high-contrast-light .feedback-primary-button');
+
+    for (const rule of [darkHighContrast, lightHighContrast]) {
+      expect(rule).toContain('--vscode-contrastActiveBorder');
+      expect(rule).not.toContain('--md4h-feedback-highlight-saved');
+      expect(rule).not.toContain('--md4h-feedback-highlight-active');
+    }
+  });
+
+  it('keeps high-contrast action surfaces opaque through hover states', () => {
+    const highContrastPalette = ruleFor('body.vscode-high-contrast.feedback-review-active');
+    const paletteSelectors = highContrastPalette.slice(0, highContrastPalette.indexOf('{'));
+
+    expect(highContrastPalette).toContain('--md4h-feedback-action-surface:');
+    expect(highContrastPalette).toContain('--md4h-feedback-action-hover:');
+    expect(highContrastPalette).toContain('--vscode-editorWidget-background');
+    expect(highContrastPalette).toContain('--vscode-editorWidget-foreground');
+    expect(paletteSelectors).toContain('body.vscode-high-contrast-light.feedback-review-active');
+    expect(paletteSelectors).toContain('body.vscode-high-contrast.feedback-review-starting');
+    expect(paletteSelectors).toContain('body.vscode-high-contrast.feedback-completion-open');
+  });
+
+  it('draws a thick layout-neutral review perimeter outside the prose edge', () => {
     const perimeter =
       css.match(/\.feedback-review-active\s+\.markdown-editor::after\s*\{[^}]*\}/)?.[0] ?? '';
+    const editorBase = css.match(/^\s*\.markdown-editor\s*\{[^}]*\}/m)?.[0] ?? '';
 
     expect(perimeter).toMatch(/position:\s*absolute/);
-    expect(perimeter).toMatch(/inset:\s*0/);
+    expect(perimeter).toMatch(/inset:\s*6px\s+0/);
     expect(perimeter).toMatch(/pointer-events:\s*none/);
-    expect(perimeter).toMatch(/border:\s*2px\s+dashed/);
-    expect(perimeter).toContain('--vscode-editorWarning-foreground');
-    expect(perimeter).not.toMatch(/padding:|margin:/);
+    expect(perimeter).toMatch(/outline:\s*3px\s+dashed/);
+    expect(perimeter).toMatch(/outline-offset:\s*11px/);
+    expect(perimeter).toContain('--md4h-feedback-highlight-edge');
+    expect(perimeter).not.toMatch(/padding:|margin:|border:/);
     expect(css).not.toMatch(/^\.markdown-editor::after\s*\{/m);
+
+    const horizontalMargin = Number(editorBase.match(/margin:\s*\d+px\s+(\d+)px/)?.[1]);
+    const outlineWidth = Number(perimeter.match(/outline:\s*(\d+)px/)?.[1]);
+    const outlineOffset = Number(perimeter.match(/outline-offset:\s*(\d+)px/)?.[1]);
+    expect(horizontalMargin).toBeGreaterThan(outlineWidth + outlineOffset);
   });
 
   it('makes the review perimeter solid in high contrast and suppresses it for capture', () => {
     expect(css).toMatch(
-      /\.vscode-high-contrast[^\n]*\.feedback-review-active[^\n]*\.markdown-editor::after[\s\S]*?border-style:\s*solid/
+      /\.vscode-high-contrast[^\n]*\.feedback-review-active[^\n]*\.markdown-editor::after[\s\S]*?outline-style:\s*solid/
     );
     expect(css).toMatch(
       /\.feedback-capture-active\s+\.markdown-editor::after\s*\{[^}]*display:\s*none/
@@ -87,7 +309,11 @@ describe('Feedback annotation styles', () => {
 
     expect(panel).toMatch(/width:\s*min\(520px,\s*calc\(100vw\s*-\s*32px\)\)/);
     expect(panel).toMatch(/max-height:\s*min\(620px,\s*calc\(100vh\s*-\s*32px\)\)/);
-    expect(count).toContain('--vscode-editorWarning-foreground');
+    expect(count).toContain('--vscode-editor-foreground');
+    expect(count).toMatch(/font-weight:\s*400/);
+    expect(count).not.toContain('--md4h-feedback-accent');
+    expect(count).not.toContain('--md4h-feedback-highlight');
+    expect(count).not.toMatch(/background:|border:|padding:/);
     expect(path).toMatch(/overflow-wrap:\s*anywhere/);
     expect(path).toMatch(/user-select:\s*text/);
   });
@@ -165,6 +391,22 @@ describe('Feedback annotation styles', () => {
       expect(rule ?? '').toMatch(/opacity:\s*0?\.\d+/);
       expect(rule ?? '').toMatch(/cursor:\s*not-allowed/);
     }
+
+    const primaryDisabledRules = rules.filter(candidate =>
+      candidate.slice(0, candidate.indexOf('{')).includes('.feedback-primary-button:disabled')
+    );
+    expect(primaryDisabledRules.at(-1) ?? '').toContain('--vscode-button-secondaryBackground');
+    expect(feedbackCss).toContain('.feedback-primary-button:not(:disabled):hover');
+    expect(feedbackCss).toContain("[data-feedback-action='add']:not(:disabled):hover");
+  });
+
+  it('separates the inline feedback editor with theme-derived review styling', () => {
+    const editForm = ruleFor('.feedback-card-edit-form');
+
+    expect(editForm).toContain('border-top:');
+    expect(editForm).toContain('var(--md4h-feedback-highlight-edge)');
+    expect(editForm).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
+    expect(ruleFor('.feedback-card-edit-form .feedback-composer-actions')).toContain('margin-top:');
   });
 
   it('keeps saved highlights fully hidden in high-contrast themes', () => {

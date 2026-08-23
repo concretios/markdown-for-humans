@@ -13,6 +13,31 @@ const STRESS_LIMITS = Object.freeze({
   geometryReadSlack: 5,
 });
 
+const DARK_ACTION_MINIMUM_WARNING_LUMINANCE_RATIO = 0.9;
+const DARK_ACTION_MINIMUM_ADJACENT_CONTRAST = 3;
+const DARK_ACTION_MINIMUM_TEXT_CONTRAST = 4.5;
+
+function relativeLuminance(color) {
+  const serializedColor = String(color);
+  const rgb = serializedColor.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+  const srgb = serializedColor.match(/^color\(srgb\s+([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)/i);
+  const channels = rgb
+    ? rgb.slice(1, 4).map(channel => Number(channel) / 255)
+    : srgb?.slice(1, 4).map(Number);
+  if (!channels || channels.some(channel => !Number.isFinite(channel))) return undefined;
+  const [red, green, blue] = channels.map(channel =>
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  );
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastRatio(firstColor, secondColor) {
+  const first = relativeLuminance(firstColor);
+  const second = relativeLuminance(secondColor);
+  if (first === undefined || second === undefined) return undefined;
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
 function finiteNumber(metrics, key, failures) {
   const value = metrics[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -40,6 +65,107 @@ function expectZeroCssPixels(metrics, key, description, failures) {
   const value = finiteNumber(metrics, key, failures);
   if (value !== undefined && value !== 0) {
     failures.push(`${description} ${value} CSS px (expected 0)`);
+  }
+}
+
+function evaluateFeedbackPalette(metrics, failures) {
+  const palette = metrics.feedbackPalette;
+  if (!palette || typeof palette !== 'object' || Array.isArray(palette)) {
+    failures.push('feedbackPalette was not measured');
+    return;
+  }
+
+  if (palette.theme === 'light' || palette.theme === 'dark') {
+    if (palette.accentColor !== palette.warningColor) {
+      failures.push(
+        `Feedback accent was ${String(palette.accentColor)} (expected warning-derived ${String(palette.warningColor)})`
+      );
+    }
+    if (palette.savedHighlightColor !== palette.savedTokenColor) {
+      failures.push(
+        `saved Feedback highlight was ${String(palette.savedHighlightColor)} (expected ${String(palette.savedTokenColor)})`
+      );
+    }
+    if (palette.activeMarkerColor !== palette.actionSurfaceColor) {
+      failures.push(
+        `active Feedback marker was ${String(palette.activeMarkerColor)} (expected ${String(palette.actionSurfaceColor)})`
+      );
+    }
+    if (palette.primaryActionColor !== palette.actionSurfaceColor) {
+      failures.push(
+        `primary Feedback action was ${String(palette.primaryActionColor)} (expected ${String(palette.actionSurfaceColor)})`
+      );
+    }
+    if (palette.theme === 'dark') {
+      const warningLuminance = relativeLuminance(palette.warningColor);
+      const actionLuminance = relativeLuminance(palette.primaryActionColor);
+      if (
+        warningLuminance === undefined ||
+        actionLuminance === undefined ||
+        warningLuminance === 0
+      ) {
+        failures.push('dark Feedback action colors were not measurable RGB values');
+      } else {
+        const retainedLuminance = actionLuminance / warningLuminance;
+        if (retainedLuminance < DARK_ACTION_MINIMUM_WARNING_LUMINANCE_RATIO) {
+          failures.push(
+            `dark primary Feedback action retained ${Math.round(retainedLuminance * 100)}% of its warning-accent luminance (minimum ${Math.round(DARK_ACTION_MINIMUM_WARNING_LUMINANCE_RATIO * 100)}%)`
+          );
+        }
+      }
+
+      const adjacentContrast = contrastRatio(
+        palette.primaryActionColor,
+        palette.widgetBackgroundColor
+      );
+      if (
+        adjacentContrast === undefined ||
+        adjacentContrast < DARK_ACTION_MINIMUM_ADJACENT_CONTRAST
+      ) {
+        failures.push(
+          `dark primary Feedback action contrast against its widget was ${adjacentContrast?.toFixed(2) ?? 'unmeasurable'}:1 (minimum ${DARK_ACTION_MINIMUM_ADJACENT_CONTRAST}:1)`
+        );
+      }
+
+      const textContrast = contrastRatio(
+        palette.primaryActionColor,
+        palette.primaryActionTextColor
+      );
+      if (textContrast === undefined || textContrast < DARK_ACTION_MINIMUM_TEXT_CONTRAST) {
+        failures.push(
+          `dark primary Feedback action text contrast was ${textContrast?.toFixed(2) ?? 'unmeasurable'}:1 (minimum ${DARK_ACTION_MINIMUM_TEXT_CONTRAST}:1)`
+        );
+      }
+    }
+    return;
+  }
+
+  if (palette.theme !== 'high-contrast') {
+    failures.push(`feedbackPalette theme was ${String(palette.theme)}`);
+    return;
+  }
+
+  if (
+    palette.savedHighlightEdge === 'none' ||
+    !String(palette.savedHighlightEdge).includes(String(palette.contrastBorderColor))
+  ) {
+    failures.push('high-contrast saved Feedback highlight did not retain the contrast edge');
+  }
+  if (
+    palette.activeMarkerBorderColor !== palette.contrastBorderColor ||
+    palette.activeMarkerBorderWidthCssPx < 2
+  ) {
+    failures.push(
+      `high-contrast active Feedback marker border was ${String(palette.activeMarkerBorderColor)} at ${String(palette.activeMarkerBorderWidthCssPx)} CSS px (expected ${String(palette.contrastBorderColor)} at least 2 CSS px)`
+    );
+  }
+  if (
+    palette.primaryActionBorderColor !== palette.contrastBorderColor ||
+    palette.primaryActionBorderWidthCssPx < 2
+  ) {
+    failures.push(
+      `high-contrast primary Feedback action border was ${String(palette.primaryActionBorderColor)} at ${String(palette.primaryActionBorderWidthCssPx)} CSS px (expected ${String(palette.contrastBorderColor)} at least 2 CSS px)`
+    );
   }
 }
 
@@ -184,6 +310,7 @@ export function evaluateAnnotationScenario(metrics) {
       `composer-only layout produced ${composerSpacer} CSS px of phantom spacer (expected 0)`
     );
   }
+  evaluateFeedbackPalette(metrics, failures);
 
   return { passed: failures.length === 0, failures };
 }

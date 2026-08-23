@@ -40,6 +40,14 @@ render and interaction budgets, and zero annotation layout work during scroll. N
 scenarios pass production `cardVisible` semantics and require one active
 placement with no hidden-card connectors or phantom EOF overflow. Composer-only
 checks require saved cards to contribute no placements, connectors, or spacer.
+A computed-style gate also verifies that light and dark saved highlights, active
+markers, and primary Feedback actions resolve through the warning-derived
+palette. Dark primary actions must retain at least 90% of the warning accent's
+luminance, separate from the surrounding widget by at least 3:1, and keep at
+least 4.5:1 label contrast. The evaluator accepts both `rgb()` and Chromium's
+computed `color(srgb ...)` serialization. The high-contrast fixture deliberately
+gives focus and contrast borders different colors, then requires the paint-only
+highlight edge and 2px control borders to use the contrast color.
 A separate non-screenshot run creates 10,000 source lines and 500 comments, then
 checks bounded geometry reads, layout time, and final-target reachability.
 

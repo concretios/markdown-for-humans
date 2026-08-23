@@ -57,6 +57,26 @@ interface AnnotationScenarioMetrics {
   commentCount: number;
   denseClusterSize: number;
   initialViewportWidth: number;
+  feedbackPalette: FeedbackPaletteMetrics;
+}
+
+interface FeedbackPaletteMetrics {
+  theme: FixtureTheme;
+  warningColor: string;
+  accentColor: string;
+  actionSurfaceColor: string;
+  savedTokenColor: string;
+  savedHighlightColor: string;
+  activeMarkerColor: string;
+  primaryActionColor: string;
+  widgetBackgroundColor: string;
+  primaryActionTextColor: string;
+  contrastBorderColor: string;
+  savedHighlightEdge: string;
+  activeMarkerBorderColor: string;
+  activeMarkerBorderWidthCssPx: number;
+  primaryActionBorderColor: string;
+  primaryActionBorderWidthCssPx: number;
 }
 
 interface AnnotationScenarioResult {
@@ -227,6 +247,8 @@ function configureTheme(config: AnnotationScenarioConfig): void {
   document.body.dataset.fixtureTheme = config.theme;
   document.body.dataset.fixtureViewport = config.viewport;
   document.body.dataset.fixtureReducedMotion = String(config.reducedMotion);
+  document.body.classList.toggle('vscode-light', config.theme === 'light');
+  document.body.classList.toggle('vscode-dark', config.theme === 'dark');
   document.body.classList.toggle('vscode-high-contrast', config.theme === 'high-contrast');
   document.body.classList.remove('vscode-high-contrast-light');
   document.body.classList.add('feedback-review-active');
@@ -291,6 +313,7 @@ function buildLongDocument(config: AnnotationScenarioConfig): {
   shell: HTMLElement;
   editor: HTMLElement;
   prose: HTMLElement;
+  primaryAction: HTMLButtonElement;
   targets: Map<string, HTMLElement>;
   asyncReflowTarget: HTMLElement;
   wordCount: number;
@@ -304,9 +327,15 @@ function buildLongDocument(config: AnnotationScenarioConfig): {
   shell.id = 'fixture-shell';
   const toolbar = createElement('div');
   toolbar.id = 'fixture-toolbar';
-  toolbar.textContent = `Feedback review alignment · ${config.theme} · ${Math.round(
+  const toolbarLabel = createElement('span');
+  toolbarLabel.textContent = `Feedback review alignment · ${config.theme} · ${Math.round(
     config.zoom * 100
   )}%${config.reducedMotion ? ' · reduced motion' : ''}`;
+  const primaryAction = createElement('button', 'feedback-primary-button');
+  primaryAction.type = 'button';
+  primaryAction.dataset.fixturePrimaryFeedbackAction = '';
+  primaryAction.textContent = 'Add feedback';
+  toolbar.append(toolbarLabel, primaryAction);
   const editor = createElement('section', 'feedback-review-surface');
   editor.id = 'editor';
   const prose = createElement('article', 'markdown-editor');
@@ -430,7 +459,7 @@ function buildLongDocument(config: AnnotationScenarioConfig): {
       `Expected ${COMMENT_COUNT} targets and an async reflow target, found ${targets.size}.`
     );
   }
-  return { shell, editor, prose, targets, asyncReflowTarget, wordCount };
+  return { shell, editor, prose, primaryAction, targets, asyncReflowTarget, wordCount };
 }
 
 function createCard(id: string, active: boolean): HTMLElement {
@@ -548,6 +577,7 @@ function installAnnotationController(
         marker.type = 'button';
         marker.dataset.feedbackClusterId = cluster.id;
         marker.dataset.feedbackIds = cluster.memberIds.join(' ');
+        marker.classList.toggle('active', cluster.memberIds.includes(activeId));
         // Match FeedbackReview: CSS translateY(-50%) centers the fixed-diameter
         // marker on this document-space target coordinate.
         marker.style.top = `${cluster.targetY}px`;
@@ -839,6 +869,53 @@ function reducedMotionWasApplied(
   return style.transitionDuration === '0s' && style.animationName === 'none';
 }
 
+function resolveBackgroundColor(value: string): string {
+  const probe = createElement('span');
+  probe.setAttribute('aria-hidden', 'true');
+  probe.style.position = 'absolute';
+  probe.style.pointerEvents = 'none';
+  probe.style.backgroundColor = value;
+  document.body.append(probe);
+  const resolved = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  return resolved;
+}
+
+function measureFeedbackPalette(
+  config: AnnotationScenarioConfig,
+  controller: AnnotationController,
+  targets: ReadonlyMap<string, HTMLElement>,
+  primaryAction: HTMLButtonElement
+): FeedbackPaletteMetrics {
+  const savedTarget = targets.get('F16');
+  const activeMarker = controller.markerLayer.querySelector<HTMLElement>('.feedback-marker.active');
+  if (!savedTarget || !activeMarker) {
+    throw new Error('Feedback palette targets are missing from the annotation fixture.');
+  }
+
+  const savedStyle = getComputedStyle(savedTarget);
+  const activeMarkerStyle = getComputedStyle(activeMarker);
+  const primaryActionStyle = getComputedStyle(primaryAction);
+  return {
+    theme: config.theme,
+    warningColor: resolveBackgroundColor('var(--vscode-editorWarning-foreground)'),
+    accentColor: resolveBackgroundColor('var(--md4h-feedback-accent)'),
+    actionSurfaceColor: resolveBackgroundColor('var(--md4h-feedback-action-surface)'),
+    savedTokenColor: resolveBackgroundColor('var(--md4h-feedback-highlight-saved)'),
+    savedHighlightColor: savedStyle.backgroundColor,
+    activeMarkerColor: activeMarkerStyle.backgroundColor,
+    primaryActionColor: primaryActionStyle.backgroundColor,
+    widgetBackgroundColor: resolveBackgroundColor('var(--vscode-editorWidget-background)'),
+    primaryActionTextColor: primaryActionStyle.color,
+    contrastBorderColor: resolveBackgroundColor('var(--vscode-contrastActiveBorder)'),
+    savedHighlightEdge: savedStyle.boxShadow,
+    activeMarkerBorderColor: activeMarkerStyle.borderTopColor,
+    activeMarkerBorderWidthCssPx: Number.parseFloat(activeMarkerStyle.borderTopWidth),
+    primaryActionBorderColor: primaryActionStyle.borderTopColor,
+    primaryActionBorderWidthCssPx: Number.parseFloat(primaryActionStyle.borderTopWidth),
+  };
+}
+
 interface ReviewActivationGeometrySnapshot {
   elementCoordinates: number[];
   targetYs: number[];
@@ -933,7 +1010,8 @@ async function runAnnotationScenario(
   config: AnnotationScenarioConfig
 ): Promise<AnnotationScenarioResult> {
   configureTheme(config);
-  const { shell, editor, prose, targets, asyncReflowTarget, wordCount } = buildLongDocument(config);
+  const { shell, editor, prose, primaryAction, targets, asyncReflowTarget, wordCount } =
+    buildLongDocument(config);
   await renderRichNodes();
   const reviewActivationGeometry = await measureReviewActivationGeometry(editor, prose, targets);
 
@@ -1007,6 +1085,7 @@ async function runAnnotationScenario(
   const denseClusterSize = Math.max(
     ...controller.latestLayout.clusters.map(cluster => cluster.memberIds.length)
   );
+  const feedbackPalette = measureFeedbackPalette(config, controller, targets, primaryAction);
   const beforeDeactivateHtml = shell.outerHTML;
   deactivateAnnotations(controller);
   const deactivationArtifactCount =
@@ -1045,6 +1124,7 @@ async function runAnnotationScenario(
     commentCount: COMMENT_COUNT,
     denseClusterSize,
     initialViewportWidth: window.innerWidth,
+    feedbackPalette,
   };
   const verification = evaluateAnnotationScenario(metrics);
   if (!themeApplied) verification.failures.push(`theme styles did not apply for ${config.theme}`);
