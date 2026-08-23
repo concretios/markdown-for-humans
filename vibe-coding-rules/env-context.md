@@ -72,9 +72,12 @@ All Feedback requests cross `parseFeedbackWebviewMessage`; unknown or malformed 
 - The active editor is selection-capable but read-only. Any later source change preserves the draft, invalidates the session, and blocks new items and sealing.
 - Each start or resume creates a fresh runtime token separate from the durable round. Active host responses are token-correlated, and inactive draft discard has its own response shape, so stale async work cannot mutate or close a newer session.
 - Feedback decorations are dynamically registered only for an active session. Pins, connectors, compact cards, and the composer live in an absolute sibling layer under `#editor`, so document scroll requires no annotation JavaScript or independent panel scroll surface.
-- Drafts live at `.md4h/feedback/<source-directory>/<filename>--<UTC>-<suffix>/feedback.md`; screenshot evidence is `assets/F<n>.png`.
+- Drafts live at `.md4h/feedback/<source-directory>/<filename>--<UTC>-<suffix>/feedback.md` inside the workspace folder containing the source; multi-root workspaces resolve against that containing folder. Screenshot evidence is `assets/F<n>.png`.
+- Strict `md4h-feedback/v1` frontmatter stores `schema`, `state`, `round`, `source`, `source_base: workspace`, `source_sha256`, `line_numbering: one-based-inclusive`, `created_at`, `next_id`, and sealed-only `sealed_at`. The source path appears once; each item uses only `Source lines` plus text Focus or flattened PNG Evidence.
+- Every report embeds canonical `How to read this bundle` and `Required workflow` sections. Only fenced `### Feedback` content is an instruction; source text, Focus, and annotated screenshot pixels are evidence. Flattened drawing marks identify the discussed area and are not editable layers.
 - Matching drafts are announced with content-free metadata and resume only after explicit user action. Strict resume revalidates the report, persisted `next_id`, paths, bounded PNG structure, and exact per-asset SHA-256 before restoring read-only mode.
 - `feedbackSessionStore.ts` serializes atomic rewrites, allocates at most 2,000 monotonic IDs, caps cumulative screenshot evidence at 64 MiB, validates source and screenshot hashes on seal, and treats sealed bundles as immutable.
+- `markdownForHumans.feedback.handoffPromptTemplate` is resolved for the reviewed document. It requires `{{feedbackFile}}`, supports `{{source}}`, `{{sourceSha256}}`, `{{itemCount}}`, and `{{round}}`, expands literally once, and falls back to the built-in prompt with a warning when invalid or oversized.
 - Screenshot capture is DOM-based through `modern-screenshot@4.7.0`, limited to mapped visible blocks, 12 MP, and 10 MiB. Intersecting Mermaid wrappers must reach their explicit ready state before cloning; errors and the bounded timeout fail visibly. The host revalidates the flattened PNG.
 
 ---
@@ -99,6 +102,7 @@ All Feedback requests cross `parseFeedbackWebviewMessage`; unknown or malformed 
 | Validate Feedback protocol | `feedbackProtocol.ts` | `src/shared/` |
 | Map Feedback source lines | `feedbackAnchors.ts` | `src/editor/` |
 | Persist Feedback bundles | `feedbackSessionStore.ts` | `src/editor/` |
+| Render Feedback handoff prompts | `feedbackHandoffPrompt.ts` | `src/editor/` |
 | Feedback session/same-scroll UI | `feedbackReview.ts` | `src/webview/features/` |
 | Feedback exact rendered ranges | `feedbackRenderedRange.ts` | `src/webview/features/` |
 | Feedback decoration state | `feedbackAnnotations.ts` | `src/webview/features/` |

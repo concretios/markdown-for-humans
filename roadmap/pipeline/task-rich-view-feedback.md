@@ -280,6 +280,38 @@
 - **Verification:** The repository-wide Jest run passes 93 suites and 1,564 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build, bundle verification, both staged Electron fixtures, all 9 capture combinations, all 14 annotation scenarios, and the 10,000-line/500-comment stress gate pass.
 - **Delivery:** Work was committed locally in dependency-safe phases after explicit user approval. Nothing was pushed. The real Extension Host theme/zoom and 10-minute reading gate remains open.
 
+### 2026-08-23 - Closed-tab session recovery
+
+- **Lifecycle recovery:** Closing the only rich-view tab releases its volatile Feedback owner while preserving the Git-trackable draft. Reopening the Markdown file advertises the matching draft. Start reopens that Resume choice, while `Start new` is an explicit secondary action.
+- **Orphan reconciliation:** A replacement rich view now reclaims a session or startup transition whose owner is no longer registered. An accepted WorkspaceEdit remains fail-closed until it settles, then the next Start safely retries reconciliation.
+- **RED/GREEN coverage:** Added full resolve, start, dispose, reopen, draft discovery, and restart coverage, plus simulated incomplete-disposal and pending-edit races. Direct provider fixtures now register their webview owners to match the production lifecycle.
+- **Verification:** The repository-wide Jest run passes 93 suites and 1,567 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build, bundle verification, and `git diff --check` pass. No commit or push was made for this follow-up fix.
+
+### 2026-08-23 - Idempotent Start and lost-controller recovery
+
+- **Recovery entry point:** `Start feedback` now detects a host-active session or exact-hash saved draft and returns a correlated Resume prompt instead of the generic already-active error. The prompt exposes only round, count, timestamp, and bundle path metadata.
+- **Safe rehydration:** Confirming Resume rebuilds the strict host anchor map from the current rich-view blocks, waits for accepted feedback writes, verifies the frozen source hash, preserves all item IDs, and issues a fresh runtime token. A stale runtime token can no longer mutate the recovered session.
+- **Split behavior:** Start alone never changes ownership. An explicit Resume from another rich-view split transfers ownership, deactivates the old runtime, and replaces the peer-lock token without an editable gap at the host boundary.
+- **Duplicate-round control:** A dismissed draft is shown again when Start is selected. Creating another round requires the explicit `Start new` action and leaves older drafts untouched.
+- **Reload reconciliation:** Repeated Start and Resume entry operations are serialized per document. A recreated owner controller is locked while accepted writes and Finish/Discard close operations settle, then it and every sibling receive authoritative Markdown before volatile ownership is demoted to the durable draft and Resume is offered again. Invalidated same-owner runtimes no longer leave Start behind an impossible Resume loop.
+- **Transfer authorization:** A live-session Resume requires a fresh, one-shot host offer for that webview, round, and runtime token. Clicking a stale saved-draft banner first produces an explicit `Resume here` transfer warning and cannot silently take ownership from another split.
+- **Host-authoritative Start:** Start always asks the extension host to revalidate current source and draft state. Cached draft metadata no longer bypasses exact-hash preflight after later document edits.
+- **RED/GREEN coverage:** Added strict protocol parsing, same-owner controller-loss recovery, in-flight Start reload recovery, saved-draft preflight, explicit new-round creation, live-peer confirmation, stale-banner transfer rejection, closed-tab and orphaned-owner resume, stale-token and async-resurrection rejection, invalidation recovery, source-mismatch release, Finish/Discard reload ordering, peer handoff ordering, focus/read-only behavior, and editor-boundary routing tests.
+- **Verification:** The focused recovery matrix passes 6 suites and 325 tests. The deterministic repository-wide Jest run passes 94 suites and 1,640 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production build, bundle verification, and `git diff --check` pass. No commit or push was made.
+
+### 2026-08-23 - Inline comment editing and action cleanup
+
+- **Root cause:** Comment editing depended on `window.prompt()`, but VS Code webview iframes do not grant the browser `allow-modals` sandbox capability. The Edit click therefore had no reliable visible result even though the host edit protocol and persistence path were valid.
+- **Inline edit surface:** Edit now opens a labelled textarea inside the active card for text and screenshot feedback. Save trims and serializes one mutation, blocks duplicates, retains the draft and caret after a failed or unrelated host refresh, and restores focus after Save, Cancel, or Escape. The shared draft-surface gate prevents Finish, capture, navigation, rail collapse, or another comment from replacing an incomplete edit.
+- **Action cleanup:** Removed the obsolete `Show target` button. Cards, markers, and targets now share the document scroll coordinates, marker/card activation already strengthens the yellow target, and Next/Previous performs explicit offscreen navigation. A second scroll-only control was both redundant and visually imperceptible when the target was already beside the card.
+- **Verification:** The focused controller and style suites pass 156 tests. The repository-wide Jest run passes 94 suites and 1,644 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production build, and bundle verification pass. No commit or push was made.
+
+### 2026-08-23 - Review perimeter spacing and weight
+
+- **Visual separation:** Replaced the inset 2px border with a 3px theme-warning outline offset 11px from the Markdown surface. The stroke moves outward into the editor's existing margin, leaving prose geometry and line wrapping unchanged while creating a visibly calmer gap around the content.
+- **Narrow-layout correction:** The first negative-inset implementation failed the Electron narrow-view gate with 14px of horizontal overflow. The final offset-outline implementation preserves the same visual expansion without contributing to scroll overflow. High contrast remains solid and theme-derived, and capture still suppresses the perimeter.
+- **Verification:** The focused CSS contract passes 17 tests. The full 14-scenario Electron annotation matrix passes light, dark, high contrast, 100%, 125%, 200%, narrow, and reduced-motion cases with zero activation shift, zero scroll shift, and zero horizontal overflow. The repository-wide Jest run passes 93 suites and 1,567 tests. Repository lint, strict TypeScript, the production release build, bundle verification, and `git diff --check` pass.
+
 ---
 
 ## 8. Decisions & Tradeoffs
@@ -334,7 +366,7 @@ Additional behavior:
 - A pin, saved highlight, or compact card activates the same stable item or cluster. A click-drag that creates a text selection must never be mistaken for highlight activation.
 - The annotation region and pins remain in source order even when visual collision packing moves cards. Marker names include stable IDs, source lines, and a short Focus/type description; clusters announce their count and member IDs.
 - Marker navigation uses one roving tab stop with Up/Down/Home/End only while the region owns focus. Enter or Space opens details, Escape closes them, and unbound Next/Previous feedback commands provide Command Palette navigation without claiming VS Code shortcuts.
-- Activating an offscreen item scrolls its target/card pair into a safe central region. `Show target` keeps keyboard focus on its invoking control; Escape closes details and restores focus to the matching pin.
+- Activating an offscreen item through Next/Previous scrolls its target/card pair into a safe central region. Marker and compact-card activation strengthen the document-aligned target directly, so active cards do not duplicate that behavior with a separate target button. Escape closes details and restores focus to the matching pin.
 - Code blocks use exact text ranges because their NodeView exposes `contentDOM`. Images, Mermaid, rendered math, and other opaque/atomic NodeViews use block brackets and never pretend to support character-level anchoring.
 - On views at or below 840px, pins remain document-synchronous but inactive compact cards are suppressed. The one active card is nearly full width and anchored below or beside its target in the same scroll surface. This supersedes the independently scrolling bottom sheet.
 - Native selection remains stronger than saved highlights. All visual annotations disappear on finish, discard, deactivation, or ordinary editing mode.
@@ -385,7 +417,7 @@ interface FeedbackRenderedRangeV1 {
 - Edit, delete, Undo, restore, atomic rewrite, and host restart preserve draft metadata. Screenshot items and keyboard block-range comments cannot claim an inline range.
 - Resume reconstructs current absolute ProseMirror positions only when the source hash, canonical block hashes, ordinal bounds, offsets, and exact visible Focus all validate. DOM Range text is used for visible-text validation where the NodeView exposes content. Only CRLF normalization is allowed.
 - Any mismatch produces the stable containing-block bracket plus a safe diagnostic. It never searches for `Focus`, chooses a nearest line, clamps a bad range, or silently re-anchors.
-- Existing `md4h-feedback/v1` drafts without the optional comment remain valid and receive block brackets. Malformed metadata is rejected as an invalid draft rather than ignored. Sealed bundles need no rendered metadata because sealed sessions are not resumable.
+- During Phase 7, existing development `md4h-feedback/v1` drafts without the optional comment remained valid and received block brackets. Phase 8 supersedes that temporary compatibility rule by replacing the unreleased v1 grammar in place. Malformed metadata is rejected as an invalid draft rather than ignored. Sealed bundles need no rendered metadata because sealed sessions are not resumable.
 
 Protocol and model changes:
 
@@ -572,7 +604,111 @@ idle -> armed -> rasterizing -> annotation dialog
 
 ---
 
-## 11. Follow-up & Future Work
+## 11. Locked Phase 8 Plan: Agent-Ready Handoff Contract
+
+### 11.1 Outcome and compatibility boundary
+
+- Replace the unreleased development report shape in place. The first public contract remains `md4h-feedback/v1`; no v2 reader, development-draft migration, or dual-format writer is added.
+- Keep one bundle scoped to one Markdown source. Store the workspace-relative source once in frontmatter and remove the repeated path from every item.
+- Make `feedback.md` self-describing for humans and agents while retaining a strict, deterministic parser. Shared prose is fixed by the schema; only fenced `Feedback` blocks contain reviewer instructions.
+- Preserve the current detailed clipboard prompt as the built-in default and expose it as a resource-scoped, validated template so each workspace folder can tune wording independently.
+
+### 11.2 Clipboard prompt template
+
+- Contribute `markdownForHumans.feedback.handoffPromptTemplate` with resource scope and the current prompt text as its exact default, expressed with a required `{{feedbackFile}}` placeholder.
+- Support literal one-pass substitutions for `{{feedbackFile}}`, `{{source}}`, `{{sourceSha256}}`, `{{itemCount}}`, and `{{round}}`. Path values use the existing safe Markdown inline-code formatter.
+- Reject empty, oversized, control-character, missing-required-placeholder, and unknown-placeholder templates. Never execute shell, environment, VS Code variable, JavaScript, Mustache, or recursive substitutions.
+- Resolve the setting against the source document URI at Finish time. An invalid custom template never blocks or reverses sealing: copy the built-in default, show a concise warning, and retain the exact expanded prompt for `Copy again`.
+- Keep prompt formatting outside the storage class. Sealing returns authoritative bundle metadata; the provider applies the document-scoped template before clipboard delivery.
+
+### 11.3 Final `md4h-feedback/v1` report
+
+- Frontmatter remains flat and canonical: `schema`, `state`, `round`, JSON-quoted `source`, `source_base: workspace`, `source_sha256`, `line_numbering: one-based-inclusive`, `created_at`, `next_id`, and sealed-only `sealed_at`.
+- The body begins with `# Feedback handoff`, followed by fixed `## How to read this bundle` and `## Required workflow` sections. They define workspace-relative source resolution, exact-byte hashing, one-based inclusive containing ranges, rendered Focus text, flattened screenshot annotations, relative evidence paths and hashes, the evidence-versus-instruction boundary, immutability, checks, and per-ID reporting.
+- Text items use `## F<n> · text`, `**Source lines:** N[-M]`, safely fenced `Focus`, and safely fenced `Feedback`.
+- Screenshot items use `## F<n> · screenshot`, the same `Source lines` grammar, a report-relative `assets/F<n>.png` link, exact asset SHA-256, and safely fenced `Feedback`.
+- The parser accepts only this final v1 layout. Existing development drafts that use the earlier repeated-path grammar are unsupported and may be revealed or discarded; sealed development bundles remain untouched files.
+
+### 11.4 RED, GREEN, REFACTOR, VERIFY
+
+1. **Prompt RED:** Add pure helper tests for exact default output, every placeholder, resource-safe paths, CRLF normalization, size/control limits, required and unknown tokens, one-pass substitution, and safe fallback metadata. Add provider tests for multi-root resource lookup, invalid-setting warning, clipboard failure, and `Copy again` retaining the exact expanded prompt.
+2. **Prompt GREEN:** Add the configuration contribution and pure formatter, return authoritative seal metadata, and integrate resource-scoped formatting at Finish without changing the webview protocol shape.
+3. **Schema RED:** Replace golden render expectations and add strict parser tests for the shared path occurring once, fixed guide/workflow text, both item kinds, draft metadata, quoted and Unicode paths, line boundaries, malformed headings/fields, evidence tampering, and unsupported old development grammar.
+4. **Schema GREEN:** Replace the v1 writer and parser together, keeping atomic persistence, monotonic IDs, hash checks, asset containment, size limits, and sealed immutability unchanged.
+5. **REFACTOR:** Centralize fixed report prose, line-range parsing, placeholder validation, and Markdown-safe formatting. Keep the store independent of VS Code configuration and avoid adding a YAML dependency.
+6. **VERIFY:** Run focused helper/store/provider/protocol/webview suites, full Jest and coverage, strict TypeScript, repository lint, release build and bundle verification, `git diff --check`, and both Feedback Electron fixtures. Manually inspect one sealed text-and-screenshot bundle and paste its prompt into an agent from the same workspace.
+
+### 11.5 Scope boundaries
+
+- Do not add provider-specific presets, executable template logic, absolute-path placeholders, multi-source bundles, automatic draft migration, or schema negotiation.
+- Do not make the fixed bundle-reading contract configurable. The clipboard locator is customizable; the versioned report semantics remain stable.
+- Do not alter source anchoring, screenshot generation, annotation rendering, Finish correlation, sealed immutability, or bundle placement.
+- No commits or pushes are made without a new explicit user request.
+
+### 11.6 Implementation and verification
+
+- **Prompt template:** Added the resource-scoped, multiline `markdownForHumans.feedback.handoffPromptTemplate` setting with the current wording as its exact default. The pure formatter performs one literal pass over the five supported placeholders, uses adaptive CommonMark inline-code delimiters for paths, normalizes line endings, and falls back without blocking a sealed session when configuration is malformed, unsafe, or oversized.
+- **Finish boundary:** `FeedbackSessionStore.seal()` now returns only authoritative paths, source/hash, item count, and round. The provider resolves the setting against the reviewed document URI at Finish time, copies one resolved prompt, and sends that exact string to the completion dialog for clipboard retry. Invalid configuration reports a non-blocking warning while preserving the sealed result.
+- **Final v1 grammar:** Replaced the unreleased development grammar in place. The source path occurs once in canonical frontmatter with explicit base and line-number conventions. Fixed `How to read this bundle` and `Required workflow` sections explain containing ranges, flattened annotated screenshot evidence, hashes, immutability, and the evidence-versus-instruction boundary. Both item kinds use typed headings and one canonical `Source lines` field.
+- **Strictness:** Resume rejects the prior development grammar, changed guide text, non-canonical ranges, invalid frontmatter conventions, quoted-path corruption, altered screenshot references, asset-hash mismatches, and malformed draft metadata. No compatibility reader or migration path was added.
+- **Verification:** Focused prompt/store/provider/protocol/webview tests pass. The deterministic full Jest run passes 94 suites and 1,605 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Coverage is 85.79% statements, 80.11% branches, 89.49% functions, and 86.47% lines. Repository lint, strict TypeScript, the production release build and bundle verification, `git diff --check`, the 9-case capture matrix, and the 14-case annotation matrix pass. A generated sealed bundle containing both text and screenshot feedback was manually inspected together with a customized expanded prompt. A CPU-contended parallel Jest run briefly exceeded the existing 100 ms layout stress threshold; the isolated stress suite and clean in-band full run both pass, so no unrelated performance threshold or layout code was changed.
+- **Delivery:** User, architecture, and environment documentation now describe the exact contract and setting. The required 10-minute live Extension Host reading review remains a manual gate. No commit or push was made.
+
+---
+
+## 12. Locked Phase 9 Plan: Paper-Highlighter Feedback Palette
+
+### 12.1 Visual system
+
+- Replace purple or generic primary-button accents in Feedback chrome with one semantic yellow ladder derived from VS Code warning colors. Do not hard-code color values.
+- Scope the tokens and all visual effects to active Feedback surfaces. Normal rich view must retain its current toolbar, selection, focus, and content colors.
+- Use a pale, clean saved highlight; a stronger active/pending highlight; a crisp amber edge; outlined inactive comment markers; filled active markers; and filled yellow primary Feedback actions with contrast-safe dark ink in light and dark themes.
+- Keep keyboard focus visually independent through `--vscode-focusBorder`. High-contrast mode continues to prefer opaque surfaces, `--vscode-contrastActiveBorder`, and 2px non-color cues.
+
+### 12.2 Component coverage
+
+- Apply the semantic accent to Feedback toolbar icons and active Capture/Comments controls, the floating selection comment action, saved and clustered comment markers, active cards, target brackets, capture crop boundaries, `Add feedback`, completion buttons, and screenshot-annotation Add/selected-tool actions.
+- Keep neutral, destructive, disabled, and error actions in their existing semantic families. Disabled actions must not regain yellow through a more specific selector.
+- Preserve all capture suppression rules so no review highlight or yellow chrome enters generated screenshots.
+
+### 12.3 RED, GREEN, VERIFY
+
+1. Add CSS contract tests for token scope, warning-derived values, component use, absence of generic purple-prone button/focus colors as Feedback state accents, distinct focus-visible treatment, disabled priority, high contrast, and capture suppression.
+2. Introduce the smallest token set and replace component-local accent declarations without changing DOM, layout, geometry, or interaction code.
+3. Run focused style and Feedback UI suites, full Jest, lint, strict TypeScript, the release build, `git diff --check`, and the complete light/dark/high-contrast annotation fixture. Inspect the rendered matrix for contrast, hierarchy, overflow, and capture cleanliness.
+
+### 12.4 Implementation and verification
+
+- **Palette:** Added a Feedback-lifecycle token ladder derived from VS Code warning colors, with separate saved, active, edge, action, and hover roles. Dark mode strengthens translucent document highlights and keeps dark ink on the stronger yellow action surface. Normal rich view keeps its existing toolbar and selection colors.
+- **State hierarchy:** Feedback toolbar glyphs, collapsed and expanded Comments, armed Capture, contextual Add feedback, comment markers, active cards, target brackets, native review selection, crop boundaries, primary actions, and screenshot annotation controls now share the yellow family. Inactive markers stay outlined; active markers and primary actions are filled. The completion item count remains neutral body text so it does not compete with the irreversible action. Destructive, secondary, disabled, and error actions remain in their semantic families.
+- **Accessibility and capture:** Keyboard focus continues to use the independent VS Code focus color. High contrast uses opaque editor-widget surfaces and 2px contrast borders. Review selection, annotations, markers, and the perimeter remain suppressed during rasterization.
+- **RED/GREEN:** The focused stylesheet run began with 11 expected failures and 15 passing safeguards. It finishes with 28 passing contracts, including active-icon contrast and Feedback-only native selection.
+- **Electron verification:** The annotation harness now measures the production computed palette. All 14 light, dark, high-contrast, zoom, narrow, and reduced-motion scenarios pass with zero activation shift, zero scroll shift, and zero horizontal overflow. The 10,000-line/500-comment stress and real-controller gates pass. All 9 screenshot capture combinations pass.
+- **Repository verification:** The deterministic full Jest run passes 94 suites and 1,616 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build and bundle verification, and `git diff --check` pass. The live Extension Host visual review remains a manual gate. No commit or push was made.
+
+### 12.5 Feedback chrome target isolation
+
+- **Boundary:** An automatic Add feedback action requires a live, non-collapsed browser selection whose connected endpoints are both contained by the frozen TipTap document. Clearing that selection removes the action instead of reusing ProseMirror's last range. Selections inside comment cards, composers, toolbar chrome, dialogs, screenshot previews, or across the document boundary are never annotation targets.
+- **Commands:** Invoking `Comment on selection` while text is selected outside the Markdown document is a no-op with a polite instruction. A deliberate Command Palette or personal-keybinding invocation can still use a ProseMirror-only range when the browser exposes no endpoints, and the keyboard block-range fallback remains available when neither selection exists.
+- **Regression coverage:** Tests cover a document-to-chrome crossing selection, selection of the quoted focus inside an active feedback card while ProseMirror still holds a non-empty stale range, clearing a browser range, and the explicit ProseMirror-only command path. Existing native read-only, code-block, caret, and selection-local action tests remain green.
+- **Verification:** All 130 Feedback controller tests pass. The deterministic repository run passes 94 suites and 1,647 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build and bundle verification, and `git diff --check` pass.
+
+### 12.6 Dark-theme action luminance
+
+- **Root cause:** The shared action surface mixed only 66% of the warning accent into the dark editor-widget background. That retained roughly half of the warning color's luminance and produced a muddy mustard primary button.
+- **Palette correction:** Dark Feedback sessions now mix the warning accent toward the theme foreground for a crisp opaque action surface and a slightly brighter hover. Light mode remains unchanged. High-contrast sessions force opaque editor-widget action tokens so higher-specificity hover selectors cannot restore a yellow fill.
+- **Measured contract:** The Electron gate measures the rendered primary button, its label, the surrounding widget, and the warning accent. Dark actions must retain at least 90% of warning-accent luminance, provide at least 3:1 adjacent contrast, and retain at least 4.5:1 label contrast. The evaluator accepts both legacy `rgb()` and Chromium `color(srgb ...)` serialization.
+- **Verification:** The focused stylesheet suite passes 31 contracts and the pure annotation verifier passes 11 tests. The complete 14-case Electron matrix passes light, dark, high contrast, 100%, 125%, 200%, narrow, and reduced-motion scenarios with no layout regressions. The fixture's dark primary action retains 107% of warning-accent luminance, 8.41:1 widget separation, and 9.62:1 label contrast. The deterministic repository run passes 94 suites and 1,649 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build and bundle verification, formatting checks, and `git diff --check` pass.
+
+### 12.7 Neutral completion count
+
+- **Visual hierarchy:** The `feedback items ready to lock` summary now renders as ordinary editor foreground text at normal weight. It has no yellow text, highlight fill, dashed border, rounded container, or callout padding. Yellow remains reserved for the primary completion action.
+- **RED/GREEN:** The stylesheet contract first failed against the previous highlighted callout, then passed after the Feedback-only CSS was simplified.
+- **Verification:** The focused stylesheet suite passes all 31 contracts. The deterministic repository run passes 94 suites and 1,649 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build and bundle verification, and `git diff --check` pass.
+
+---
+
+## 13. Follow-up & Future Work
 
 - Optional arrow, label, redaction, and editable vector-layer tools.
 - Multi-document review bundles and collaborative reply threads if real usage requires them.

@@ -664,6 +664,7 @@ On a later editor load, the host scans only the source's mirrored Feedback direc
 - `src/shared/feedbackProtocol.ts` defines discriminated request and response unions. The host reconstructs and validates every `feedback.*` request before dispatch.
 - `src/editor/feedbackAnchors.ts` owns strict raw-source line mapping.
 - `src/editor/feedbackSessionStore.ts` owns serialized, atomic draft rewrites, stable `F<n>` allocation, bounded PNG decoding, per-asset SHA-256 bindings, sealing, and contained paths.
+- `src/editor/feedbackHandoffPrompt.ts` owns the bounded, literal handoff-template language, Markdown-safe path substitution, and non-blocking fallback to the built-in prompt.
 - `src/webview/features/feedbackReview.ts` owns the read-only state, toolbar swap, same-scroll sibling layer, text composer, navigation, and session UI.
 - `src/webview/features/feedbackRenderedRange.ts` converts native or ProseMirror selections to exact block-relative ranges and validates their DOM-visible Focus without guessing.
 - `src/webview/features/feedbackAnnotations.ts` owns the Feedback-only decoration plugin, overlap segmentation, active state, and capture suspension.
@@ -673,7 +674,74 @@ On a later editor load, the host scans only the source's mirrored Feedback direc
 
 **Bundle contract:**
 
-For `docs/guide.md`, a round is written below `.md4h/feedback/docs/guide.md--<UTC>-<suffix>/`. The directory contains `feedback.md` and `assets/F<n>.png` for screenshot items. The report frontmatter uses `schema: md4h-feedback/v1`, `state`, `round`, `source`, `source_sha256`, `created_at`, `next_id`, and `sealed_at` only after sealing. Text entries contain `path:start-end`, safely fenced focus text, and fenced feedback. Screenshot entries contain source, nearby lines, a relative PNG link, `Asset SHA-256`, and fenced feedback. IDs are monotonic and are not renumbered after deletion; `next_id` preserves the high-water mark across restart. One bundle accepts at most 2,000 allocated IDs and 64 MiB of screenshot evidence. Reports are size-bounded and line-counted before parsing. The extension does not mutate a sealed bundle.
+For `docs/guide.md`, a round is written below `.md4h/feedback/docs/guide.md--<UTC>-<suffix>/`. The directory contains `feedback.md` and `assets/F<n>.png` for screenshot items. In a multi-root workspace, the host chooses the deepest workspace folder containing the document. The bundle and all workspace-relative paths belong to that folder, not to the first folder in the workspace.
+
+The strict `md4h-feedback/v1` frontmatter fields, in serialized order, are:
+
+1. `schema: md4h-feedback/v1`
+2. `state: draft | sealed`
+3. `round: <UTC timestamp>-<four-character suffix>`
+4. `source: <JSON string containing the workspace-folder-relative Markdown path>`
+5. `source_base: workspace`
+6. `source_sha256: <64 lowercase hexadecimal characters>`
+7. `line_numbering: one-based-inclusive`
+8. `created_at: <JSON-string ISO timestamp>`
+9. `next_id: F<n>`
+10. `sealed_at: <JSON-string ISO timestamp>`, only when sealed
+
+The source path appears once, in frontmatter. Item sections never repeat it. After frontmatter, every generated report contains `# Feedback handoff`, `## How to read this bundle`, and `## Required workflow`. These sections define line-number semantics, relative evidence paths, source-hash verification, item order, and the requirement to keep the bundle immutable. The parser requires the canonical guide and item grammar so a malformed draft is rejected instead of being partially interpreted.
+
+Text items use this grammar:
+
+````markdown
+## F<n> · text
+
+**Source lines:** <start>[-<end>]
+
+**Focus:**
+
+```text
+<exact DOM-visible selection>
+```
+
+### Feedback
+
+```markdown
+<reviewer instruction>
+```
+````
+
+Screenshot items use this grammar:
+
+````markdown
+## F<n> · screenshot
+
+**Source lines:** <start>[-<end>]
+
+### Evidence
+
+![F<n> screenshot](./assets/F<n>.png)
+
+**Asset SHA-256:** `<64 lowercase hexadecimal characters>`
+
+### Feedback
+
+```markdown
+<reviewer instruction>
+```
+````
+
+Screenshot files are final, flattened PNG evidence. Pen strokes, rectangles, and ellipses are baked into the pixels and are not persisted as editable vector objects. The source range names the mapped Markdown blocks represented by the capture. Agents must inspect the image together with the written feedback and verify its asset hash.
+
+Only the fenced block below `### Feedback` is an instruction. The reviewed source, fenced `Focus`, and screenshot pixels are untrusted evidence that can contain arbitrary text. The generated `How to read` section makes this evidence-versus-instruction boundary explicit to receiving agents.
+
+Focus and feedback fences are canonical: each uses at least three backticks and one more backtick than the longest run inside its content. IDs are monotonic and are not renumbered after deletion; `next_id` preserves the high-water mark across restart. Draft-only rendered-range metadata can appear before `Focus`, but sealing removes it from the agent-facing report. One bundle accepts at most 2,000 allocated IDs and 64 MiB of screenshot evidence. Reports are size-bounded and line-counted before parsing. The extension does not mutate a sealed bundle.
+
+**Handoff prompt contract:**
+
+After sealing, the provider reads `markdownForHumans.feedback.handoffPromptTemplate` through `getConfiguration(..., document.uri)`, so the setting follows VS Code resource and workspace-folder scoping. `{{feedbackFile}}` is required. Optional placeholders are `{{source}}`, `{{sourceSha256}}`, `{{itemCount}}`, and `{{round}}`. The feedback-file and source substitutions are rendered as CommonMark-safe inline code; all substitutions are host-authoritative and expanded in one literal pass.
+
+Templates are bounded to 16,384 UTF-16 code units and expanded prompts to 32,768. Unknown, malformed, nested, or unmatched placeholders, unsafe control characters, a missing `{{feedbackFile}}`, and oversized values do not roll back or block sealing. The provider copies the unchanged built-in prompt, posts that same resolved prompt for **Copy again**, and surfaces a non-blocking warning.
 
 **Screenshot pipeline and limits:**
 
