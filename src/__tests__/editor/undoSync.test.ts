@@ -161,7 +161,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     );
   });
 
-  it('should skip webview update when content matches last sent payload', () => {
+  it('should skip an echo when content matches the payload sent by that webview', () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('same content');
     const webview = { postMessage: jest.fn() };
@@ -170,6 +170,11 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       document.uri.toString(),
       'same content'
     );
+    (
+      provider as unknown as {
+        lastWebviewContentSource: Map<string, { postMessage: jest.Mock }>;
+      }
+    ).lastWebviewContentSource.set(document.uri.toString(), webview);
 
     (
       provider as unknown as {
@@ -213,6 +218,53 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       enableMath: true,
       formattingShortcutsEnabled: true,
     });
+  });
+
+  it('should deliver an external revert to content last sent before a webview edit', async () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    let content = 'A\n';
+    const document = {
+      getText: jest.fn(() => content),
+      uri: { toString: () => 'file://external-revert.md' },
+      positionAt: jest.fn((offset: number) => new Position(0, offset)),
+    };
+    const webview = { postMessage: jest.fn() };
+
+    (workspace.applyEdit as jest.Mock).mockImplementation(async (edit: WorkspaceEdit) => {
+      const replaces = (edit as unknown as { replaces?: Array<{ text: string }> }).replaces ?? [];
+      content = replaces[0]?.text ?? content;
+      return true;
+    });
+
+    const internal = provider as unknown as {
+      applyEdit: (
+        nextContent: string,
+        doc: vscode.TextDocument,
+        options: { sourceWebview: vscode.Webview }
+      ) => Promise<boolean>;
+      pendingEdits: Map<string, number>;
+      updateWebview: (doc: vscode.TextDocument, target: vscode.Webview) => void;
+    };
+
+    internal.updateWebview(
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await internal.applyEdit('B\n', document as unknown as vscode.TextDocument, {
+      sourceWebview: webview as unknown as vscode.Webview,
+    });
+
+    content = 'A\n';
+    internal.pendingEdits.delete(document.uri.toString());
+    internal.updateWebview(
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    expect(webview.postMessage).toHaveBeenCalledTimes(2);
+    expect(webview.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: 'update', content: 'A\n' })
+    );
   });
 
   it('should respect showImageHoverOverlay config when disabled', () => {

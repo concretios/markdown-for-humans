@@ -3527,3 +3527,1698 @@ body.saving-feedback {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: 1px;
 }
+
+/* ============================================
+   Snapshot Feedback review
+   ============================================ */
+
+.toolbar-button-label {
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.toolbar-button.feedback-start-button,
+.feedback-toolbar-button {
+  width: auto;
+  height: 28px;
+  gap: 6px;
+  padding: 4px 9px;
+}
+
+.formatting-toolbar.feedback-toolbar-active {
+  justify-content: center;
+  z-index: 230;
+}
+
+.feedback-toolbar-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 100%;
+  gap: 6px;
+}
+
+.feedback-comments-button[data-feedback-comments-state='hidden'] {
+  color: var(--vscode-foreground);
+  opacity: 1;
+}
+
+.feedback-comments-button[data-feedback-comments-state='collapsed'] {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, var(--md-hover-bg));
+  border-color: var(--vscode-editorWidget-border);
+  opacity: 1;
+}
+
+.feedback-comments-button[data-feedback-comments-state='expanded'] {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border-color: var(--vscode-button-border, var(--vscode-focusBorder));
+  box-shadow: 0 2px 4px var(--vscode-widget-shadow);
+  opacity: 1;
+}
+
+.feedback-toolbar-group[aria-busy='true'] .feedback-toolbar-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.feedback-comments-button[data-feedback-comments-state='collapsed']:hover {
+  background: var(--vscode-list-hoverBackground, var(--vscode-toolbar-hoverBackground));
+}
+
+.feedback-comments-button[data-feedback-comments-state='expanded']:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+.feedback-more-menu {
+  position: absolute;
+  top: calc(100% + 9px);
+  right: 0;
+  z-index: 1200;
+  min-width: 190px;
+  max-width: calc(100vw - 16px);
+  padding: 5px;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border));
+  border-radius: 8px;
+  box-shadow: 0 8px 26px var(--vscode-widget-shadow);
+}
+
+.feedback-more-item {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.feedback-more-item:hover,
+.feedback-more-item:focus-visible {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+  color: var(--vscode-menu-selectionForeground, var(--vscode-foreground));
+  outline: none;
+}
+
+.feedback-more-item.danger {
+  color: var(--vscode-errorForeground);
+}
+
+.feedback-draft-banner {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  z-index: 190;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  width: min(680px, calc(100vw - 32px));
+  gap: 18px;
+  padding: 10px 12px;
+  color: var(--vscode-notifications-foreground, var(--vscode-foreground));
+  background: color-mix(
+    in srgb,
+    var(--vscode-notifications-background, var(--vscode-editorWidget-background)) 88%,
+    transparent
+  );
+  border: 1px solid var(--vscode-notifications-border, var(--vscode-editorWidget-border));
+  border-radius: 9px;
+  box-shadow: 0 8px 28px var(--vscode-widget-shadow);
+  transform: translateX(-50%);
+  backdrop-filter: blur(14px) saturate(120%);
+  font: 12px/1.4 var(--vscode-font-family);
+}
+
+.feedback-draft-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.feedback-draft-title,
+.feedback-draft-detail {
+  display: block;
+}
+
+.feedback-draft-detail {
+  color: var(--vscode-descriptionForeground);
+}
+
+.feedback-draft-picker {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 3px 0;
+  padding: 3px 6px;
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-editorWidget-border));
+  border-radius: 4px;
+  font: 11px/1.4 var(--vscode-font-family);
+}
+
+.feedback-draft-picker:focus-visible {
+  border-color: var(--vscode-focusBorder);
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.feedback-draft-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.feedback-peer-lock-banner {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  z-index: 210;
+  box-sizing: border-box;
+  width: min(620px, calc(100vw - 32px));
+  padding: 9px 12px;
+  color: var(--vscode-notifications-foreground, var(--vscode-foreground));
+  background: color-mix(
+    in srgb,
+    var(--vscode-notifications-background, var(--vscode-editorWidget-background)) 92%,
+    transparent
+  );
+  border: 1px solid var(--vscode-notifications-border, var(--vscode-editorWidget-border));
+  border-radius: 8px;
+  box-shadow: 0 8px 24px var(--vscode-widget-shadow);
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px) saturate(115%);
+  font: 12px/1.4 var(--vscode-font-family);
+  text-align: center;
+}
+
+.feedback-peer-locked .formatting-toolbar {
+  pointer-events: none;
+  opacity: 0.48;
+}
+
+.feedback-peer-locked .markdown-editor {
+  box-shadow: inset 0 0 0 1px var(--vscode-editorWidget-border, var(--vscode-focusBorder));
+  border-radius: 4px;
+  caret-color: transparent;
+}
+
+.feedback-peer-locked .drag-block-handle,
+.feedback-peer-locked .image-hover-overlay,
+.feedback-peer-locked .image-menu-button,
+.feedback-peer-locked .image-context-menu,
+.feedback-peer-locked .image-metadata-footer,
+.feedback-peer-locked .table-menu,
+.feedback-peer-locked .column-resize-handle,
+.feedback-peer-locked .mermaid-tooltip,
+.feedback-peer-locked .md4h-math-block-tooltip,
+.feedback-peer-locked .ProseMirror-gapcursor {
+  display: none !important;
+}
+
+.feedback-peer-locked .markdown-editor input[type='checkbox'] {
+  pointer-events: none;
+}
+
+.feedback-review-active .markdown-editor {
+  position: relative;
+  box-shadow: none;
+  border-radius: 6px;
+  caret-color: transparent;
+}
+
+/* Feedback mode is a frozen review surface. The perimeter is deliberately a
+   pseudo-element so it never changes prose width, capture coordinates, or the
+   document-synchronous comment geometry. */
+.feedback-review-active .markdown-editor::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 2px dashed var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+  border-radius: inherit;
+}
+
+.feedback-review-starting [data-feedback-start] {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+.feedback-review-starting .markdown-editor {
+  box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+  caret-color: transparent;
+}
+
+.feedback-review-active .drag-block-handle,
+.feedback-review-active .image-hover-overlay,
+.feedback-review-active .image-menu-button,
+.feedback-review-active .image-context-menu,
+.feedback-review-active .image-metadata-footer,
+.feedback-review-active .table-menu,
+.feedback-review-active .column-resize-handle,
+.feedback-review-active .code-block-copy-button,
+.feedback-review-active .mermaid-tooltip,
+.feedback-review-active .md4h-math-block-tooltip,
+.feedback-review-active .ProseMirror-gapcursor {
+  display: none !important;
+}
+
+.feedback-review-active .markdown-editor input[type='checkbox'] {
+  pointer-events: none;
+}
+
+.feedback-review-active .markdown-editor .feedback-pending-target {
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 18%,
+    transparent
+  );
+  box-shadow: inset 2px 0 0
+    color-mix(
+      in srgb,
+      var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 72%,
+      transparent
+    );
+}
+
+.feedback-review-active .markdown-editor .feedback-active-target {
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 26%,
+    transparent
+  );
+  box-shadow: inset 3px 0 0 var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+}
+
+.feedback-review-active .markdown-editor .code-block-wrapper,
+.feedback-review-active .markdown-editor .code-block-wrapper pre,
+.feedback-review-active .markdown-editor .code-block-wrapper code,
+.feedback-review-active .markdown-editor .code-block-wrapper code * {
+  cursor: text;
+  user-select: text !important;
+  -webkit-user-select: text !important;
+}
+
+.feedback-review-active .markdown-editor .validation-error-highlight,
+.feedback-review-active .markdown-editor .ProseMirror-selectednode,
+.feedback-review-active .markdown-editor .highlighted {
+  outline: none !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+
+.feedback-review-active .markdown-editor .validation-error-highlight {
+  background: transparent !important;
+  text-decoration: none !important;
+}
+
+.feedback-review-active .markdown-editor hr.ProseMirror-selectednode {
+  border-top-width: 1px;
+}
+
+.feedback-review-active .markdown-editor .mermaid-wrapper.ProseMirror-selectednode,
+.feedback-review-active .markdown-editor .mermaid-wrapper.highlighted {
+  background-color: var(--md-subtle-bg);
+  border: 1px solid var(--md-border);
+}
+
+.feedback-review-active .markdown-editor .md4h-math-block.highlighted {
+  background-color: transparent;
+}
+
+.feedback-frame-label {
+  position: fixed;
+  top: 45px;
+  right: 44px;
+  z-index: 185;
+  padding: 3px 8px;
+  color: var(--vscode-descriptionForeground);
+  background: color-mix(in srgb, var(--vscode-editor-background) 82%, transparent);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 999px;
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
+  line-height: 1.35;
+  backdrop-filter: blur(12px);
+  transition: right 160ms ease;
+}
+
+body[data-feedback-comments-state='expanded'] .feedback-frame-label {
+  right: calc(min(360px, 86vw) + 8px);
+}
+
+.feedback-comment-rail {
+  position: fixed;
+  top: 44px;
+  right: 0;
+  bottom: 0;
+  z-index: 180;
+  width: 36px;
+  overflow: visible;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWidget-background, var(--vscode-editor-background)) 72%,
+    transparent
+  );
+  border-left: 1px solid var(--vscode-editorWidget-border);
+  box-shadow: -5px 0 18px color-mix(in srgb, var(--vscode-widget-shadow) 35%, transparent);
+  backdrop-filter: blur(16px) saturate(125%);
+  transition:
+    width 160ms ease,
+    background-color 160ms ease;
+}
+
+.feedback-comment-rail.expanded {
+  width: min(360px, 86vw);
+}
+
+.feedback-marker-layer {
+  position: absolute;
+  inset: 0 0 0 auto;
+  z-index: 2;
+  width: 36px;
+  pointer-events: none;
+}
+
+.feedback-marker {
+  position: absolute;
+  right: 4px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  min-width: 27px;
+  height: 27px;
+  padding: 0 5px;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1.5px solid var(--vscode-focusBorder);
+  border-radius: 14px;
+  box-shadow: 0 2px 9px var(--vscode-widget-shadow);
+  font: 600 11px/1 var(--vscode-font-family);
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+
+.feedback-marker:empty::before {
+  width: 10px;
+  height: 7px;
+  content: '';
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+  box-shadow:
+    2px 2px 0 -1px var(--vscode-editorWidget-background),
+    3px 3px 0 -1.5px currentColor;
+}
+
+.feedback-marker:hover,
+.feedback-marker.active {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.feedback-marker:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.feedback-selection-action {
+  position: absolute;
+  z-index: 220;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: 1px solid var(--vscode-button-border, var(--vscode-focusBorder));
+  border-radius: 999px;
+  box-shadow: 0 5px 18px var(--vscode-widget-shadow);
+  cursor: pointer;
+}
+
+.feedback-selection-action:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.feedback-selection-action:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.feedback-selection-action .codicon {
+  font-size: 18px;
+}
+
+.feedback-comments-panel {
+  position: absolute;
+  inset: 0 36px 0 0;
+  display: none;
+  overflow: auto;
+  padding: 14px 12px 50px;
+}
+
+.feedback-comment-rail.expanded .feedback-comments-panel {
+  display: block;
+}
+
+.feedback-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.feedback-panel-title,
+.feedback-composer-title {
+  margin: 0;
+  font: 600 14px/1.35 var(--vscode-font-family);
+}
+
+.feedback-composer-title {
+  margin-bottom: 12px;
+}
+
+.feedback-panel-collapse {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font: 18px/1 var(--vscode-font-family);
+  cursor: pointer;
+}
+
+.feedback-panel-collapse:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.feedback-panel-collapse:focus-visible {
+  border-color: var(--vscode-focusBorder);
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.feedback-comment-card,
+.feedback-composer {
+  margin: 0 0 10px;
+  padding: 11px;
+  background: color-mix(in srgb, var(--vscode-editor-background) 85%, transparent);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 9px;
+}
+
+.feedback-comment-card:focus {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.feedback-card-title {
+  margin: 0;
+  font: 650 12px/1.4 var(--vscode-font-family);
+}
+
+.feedback-card-location,
+.feedback-composer-lines {
+  margin-top: 2px;
+  color: var(--vscode-descriptionForeground);
+  font: 11px/1.4 var(--vscode-editor-font-family, monospace);
+}
+
+.feedback-card-focus-label {
+  margin-top: 9px;
+  color: var(--vscode-descriptionForeground);
+  font: 11px/1.4 var(--vscode-font-family);
+}
+
+.feedback-card-focus {
+  max-height: 110px;
+  margin: 4px 0 7px;
+  overflow: auto;
+  padding: 7px 9px;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-textBlockQuote-background, transparent);
+  border-left: 2px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
+  font: 12px/1.45 var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+}
+
+.feedback-card-capture {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 72px;
+  max-height: min(240px, 32vh);
+  margin: 9px 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 6px;
+}
+
+.feedback-card-capture-image {
+  display: block;
+  width: 100%;
+  max-height: min(240px, 32vh);
+  object-fit: contain;
+}
+
+.feedback-card-capture-error {
+  margin: 0;
+  padding: 12px;
+  font: 11px/1.45 var(--vscode-font-family);
+  text-align: center;
+}
+
+.feedback-card-body {
+  margin: 9px 0;
+  font: 12px/1.5 var(--vscode-font-family);
+  white-space: pre-wrap;
+}
+
+.feedback-card-actions,
+.feedback-composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.feedback-card-action,
+.feedback-secondary-button,
+.feedback-primary-button,
+.feedback-undo-delete {
+  min-height: 26px;
+  padding: 4px 8px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--vscode-button-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.feedback-primary-button {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.feedback-card-action:disabled,
+.feedback-secondary-button:disabled,
+.feedback-primary-button:disabled,
+.feedback-undo-delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.feedback-composer-label {
+  display: block;
+  margin: 8px 0 4px;
+  color: var(--vscode-descriptionForeground);
+  font: 11px/1.4 var(--vscode-font-family);
+}
+
+.feedback-composer-focus {
+  max-height: 110px;
+  margin: 4px 0;
+  overflow: auto;
+  padding: 7px 9px;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-textBlockQuote-background, transparent);
+  border-left: 2px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
+  font: 12px/1.45 var(--vscode-editor-font-family, monospace);
+  white-space: pre-wrap;
+}
+
+.feedback-composer-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  padding: 7px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+  font: 12px/1.5 var(--vscode-font-family);
+}
+
+.feedback-composer-input:focus {
+  border-color: var(--vscode-focusBorder);
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.feedback-invalidated-alert {
+  position: sticky;
+  top: 43px;
+  z-index: 175;
+  margin: 0 42px 0 8px;
+  padding: 8px 10px;
+  color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+  background: var(--vscode-inputValidation-warningBackground);
+  border: 1px solid var(--vscode-inputValidation-warningBorder);
+  border-radius: 5px;
+  font: 12px/1.4 var(--vscode-font-family);
+}
+
+.feedback-sync-retry-alert {
+  position: fixed;
+  top: 52px;
+  left: 50%;
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: min(620px, calc(100vw - 32px));
+  gap: 12px;
+  padding: 9px 10px;
+  color: var(--vscode-inputValidation-errorForeground, var(--vscode-foreground));
+  background: color-mix(
+    in srgb,
+    var(--vscode-inputValidation-errorBackground, var(--vscode-editorWidget-background)) 94%,
+    transparent
+  );
+  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+  border-radius: 7px;
+  box-shadow: 0 8px 28px var(--vscode-widget-shadow);
+  transform: translateX(-50%);
+  font: 12px/1.4 var(--vscode-font-family);
+}
+
+.feedback-sync-retry-message {
+  flex: 1;
+  min-width: 0;
+}
+
+.feedback-live-region {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Document-synchronous Feedback annotations. Interactive review chrome stays
+   outside ProseMirror but shares the document's containing block and scroll. */
+#editor.feedback-review-surface {
+  position: relative;
+  isolation: isolate;
+}
+
+.feedback-annotation-layer {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 180;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  overflow: visible;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  pointer-events: none;
+}
+
+.feedback-annotation-layer.feedback-comment-rail,
+.feedback-annotation-layer.feedback-comment-rail.expanded {
+  top: 0;
+  right: 0;
+  bottom: auto;
+  left: 0;
+  width: 100%;
+  min-height: 100%;
+  overflow: visible;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  transition: none;
+}
+
+.feedback-annotation-layer .feedback-marker-layer {
+  position: absolute;
+  inset: 0 0 auto auto;
+  z-index: 3;
+  width: 36px;
+  min-height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.feedback-target-bracket-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.feedback-target-bracket {
+  position: absolute;
+  box-sizing: border-box;
+  width: 10px;
+  min-height: 1px;
+  color: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 74%,
+    transparent
+  );
+  border-left: 1px solid
+    color-mix(
+      in srgb,
+      var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 74%,
+      transparent
+    );
+  pointer-events: none;
+}
+
+.feedback-target-bracket::before,
+.feedback-target-bracket::after {
+  position: absolute;
+  left: -1px;
+  width: 9px;
+  height: 1px;
+  background: currentColor;
+  content: '';
+}
+
+.feedback-target-bracket::before {
+  top: 0;
+}
+
+.feedback-target-bracket::after {
+  bottom: 0;
+}
+
+.feedback-target-bracket.active {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+  border-left-color: var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+  border-left-width: 2px;
+}
+
+.feedback-annotation-layer .feedback-marker {
+  pointer-events: auto;
+}
+
+.feedback-card-layer {
+  position: absolute;
+  inset: 0;
+  display: none;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.feedback-annotation-layer.expanded .feedback-card-layer {
+  display: block;
+}
+
+.feedback-connectors {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  color: var(--vscode-editorWidget-border, var(--vscode-focusBorder));
+  pointer-events: none;
+}
+
+.feedback-connectors path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.feedback-card-layer .feedback-panel-header {
+  position: absolute;
+  top: 8px;
+  right: 42px;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.feedback-card-layer .feedback-panel-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.feedback-card-layer .feedback-undo-stack {
+  position: absolute;
+  top: 8px;
+  right: 44px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(320px, calc(100vw - 96px));
+  pointer-events: auto;
+}
+
+.feedback-card-layer .feedback-comment-card,
+.feedback-card-layer .feedback-composer {
+  position: absolute;
+  right: 44px;
+  z-index: 2;
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 96px));
+  margin: 0;
+  pointer-events: auto;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow) 45%, transparent);
+}
+
+.feedback-comment-card[data-feedback-card-state='compact'] {
+  min-height: 44px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.feedback-comment-card[data-feedback-card-state='compact'] .feedback-card-title {
+  margin: 0 0 3px;
+}
+
+.feedback-card-preview {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground);
+  font: 11px/1.35 var(--vscode-font-family);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.feedback-comment-card[data-feedback-card-state='active'] {
+  border-color: var(--vscode-focusBorder);
+  box-shadow:
+    0 0 0 1px var(--vscode-focusBorder),
+    0 10px 28px color-mix(in srgb, var(--vscode-widget-shadow) 55%, transparent);
+}
+
+.feedback-annotation-spacer {
+  display: block;
+  width: 1px;
+  height: 0;
+  pointer-events: none;
+}
+
+.feedback-review-active .markdown-editor .md4h-feedback-highlight,
+.feedback-review-active .markdown-editor .md4h-feedback-annotation-inline {
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, var(--vscode-editor-findMatchHighlightBackground)) 28%,
+    transparent
+  );
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.feedback-review-active .markdown-editor .md4h-feedback-highlight-active,
+.feedback-review-active .markdown-editor .md4h-feedback-annotation-inline.is-feedback-active {
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, var(--vscode-editor-findMatchBackground)) 42%,
+    transparent
+  );
+  box-shadow: inset 0 -2px 0 var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+}
+
+.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline[data-feedback-ids*='__pending__'] {
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 38%,
+    transparent
+  );
+  box-shadow: inset 0 -2px 0 var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+}
+
+.feedback-review-active .markdown-editor .md4h-feedback-block-target,
+.feedback-review-active .markdown-editor .md4h-feedback-annotation-node {
+  box-shadow: inset 3px 0 0
+    color-mix(
+      in srgb,
+      var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 70%,
+      transparent
+    );
+}
+
+.feedback-review-active .markdown-editor .md4h-feedback-block-target-active,
+.feedback-review-active .markdown-editor .md4h-feedback-annotation-node.is-feedback-active {
+  box-shadow: inset 3px 0 0 var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+}
+
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-highlight,
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-highlight-active,
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-annotation-inline {
+  background: transparent;
+  box-shadow: none;
+}
+
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-block-target,
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-block-target-active,
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-annotation-node {
+  box-shadow: none;
+}
+
+body[data-feedback-comments-state='hidden'] .feedback-target-bracket-layer {
+  display: none;
+}
+
+/* Visible viewport capture. All review and editing chrome disappears before
+   the DOM rasterizer is invoked, while the selected prose keeps its geometry. */
+.feedback-area-capture {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  cursor: crosshair;
+  background: color-mix(in srgb, var(--vscode-editor-background) 12%, transparent);
+  outline: none;
+}
+
+.feedback-capture-active .markdown-editor {
+  box-shadow: none !important;
+  border-radius: 0;
+}
+
+.feedback-capture-active .markdown-editor::after {
+  display: none;
+}
+
+.feedback-capture-active .feedback-comment-rail,
+.feedback-capture-active .feedback-annotation-layer,
+.feedback-capture-active .feedback-selection-action,
+.feedback-capture-active .feedback-frame-label,
+.feedback-capture-active .feedback-invalidated-alert,
+.feedback-capture-active .drag-block-handle,
+.feedback-capture-active .image-hover-overlay,
+.feedback-capture-active .image-menu-button,
+.feedback-capture-active .image-context-menu,
+.feedback-capture-active .image-metadata-footer,
+.feedback-capture-active .column-resize-handle,
+.feedback-capture-active .code-block-copy-button,
+.feedback-capture-active .mermaid-tooltip,
+.feedback-capture-active .md4h-math-block-tooltip,
+.feedback-capture-active .ProseMirror-gapcursor,
+.feedback-capture-active .search-overlay,
+.feedback-capture-active .find-widget {
+  visibility: hidden !important;
+}
+
+/* Keep the toolbar reachable while the first click has armed capture. Once
+   rasterization begins it disappears with all other review chrome. */
+body[data-feedback-capture-state='armed'] .formatting-toolbar.feedback-toolbar-active {
+  z-index: 5001;
+  visibility: visible !important;
+}
+
+body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
+  visibility: hidden !important;
+}
+
+.feedback-capture-active .feedback-target-bracket-layer {
+  visibility: hidden !important;
+}
+
+.feedback-capture-active .markdown-editor .search-match,
+.feedback-capture-active .markdown-editor .validation-error-highlight {
+  background: transparent !important;
+  text-decoration: none !important;
+}
+
+.feedback-capture-active .markdown-editor .feedback-pending-target {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.feedback-capture-active .markdown-editor .md4h-feedback-highlight,
+.feedback-capture-active .markdown-editor .md4h-feedback-highlight-active,
+.feedback-capture-active .markdown-editor .md4h-feedback-annotation-inline {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.feedback-capture-active .markdown-editor .md4h-feedback-block-target,
+.feedback-capture-active .markdown-editor .md4h-feedback-block-target-active,
+.feedback-capture-active .markdown-editor .md4h-feedback-annotation-node {
+  box-shadow: none !important;
+}
+
+.feedback-capture-active .markdown-editor .ProseMirror-selectednode,
+.feedback-capture-active .markdown-editor .highlighted {
+  outline: none !important;
+  box-shadow: none !important;
+  animation: none !important;
+}
+
+.feedback-capture-active .markdown-editor hr.ProseMirror-selectednode {
+  border-top-width: 1px;
+}
+
+.feedback-capture-active .markdown-editor .mermaid-wrapper.ProseMirror-selectednode,
+.feedback-capture-active .markdown-editor .mermaid-wrapper.highlighted {
+  background-color: var(--md-subtle-bg);
+  border: 1px solid var(--md-border);
+}
+
+.feedback-capture-active .markdown-editor .md4h-math-block.highlighted {
+  background-color: transparent;
+}
+
+.feedback-capture-selection {
+  position: fixed;
+  z-index: 1;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--vscode-focusBorder) 12%, transparent);
+  border: 2px solid var(--vscode-focusBorder);
+  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--vscode-editor-background) 34%, transparent);
+  pointer-events: none;
+}
+
+.feedback-capture-instruction,
+.feedback-capture-error {
+  position: fixed;
+  left: 50%;
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 7px 10px;
+  color: var(--vscode-notifications-foreground, var(--vscode-foreground));
+  background: var(--vscode-notifications-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-notifications-border, var(--vscode-editorWidget-border));
+  border-radius: 7px;
+  box-shadow: 0 4px 18px var(--vscode-widget-shadow);
+  font: 12px/1.4 var(--vscode-font-family);
+  cursor: default;
+}
+
+.feedback-capture-instruction {
+  top: 52px;
+}
+
+.feedback-capture-error {
+  bottom: 52px;
+  color: var(--vscode-errorForeground);
+}
+
+.feedback-capture-error:empty {
+  display: none;
+}
+
+.feedback-capture-cancel,
+.feedback-area-capture > button {
+  position: relative;
+  z-index: 4;
+  float: right;
+  margin: 12px 12px 0 0;
+  padding: 5px 9px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.feedback-area-capture.rasterizing {
+  cursor: progress;
+}
+
+/* Annotation dialog */
+.feedback-annotation-dialog,
+.feedback-block-selector {
+  position: fixed;
+  inset: 0;
+  z-index: 5100;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: 22px;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: color-mix(in srgb, var(--vscode-editor-background) 58%, transparent);
+  backdrop-filter: blur(9px);
+}
+
+.feedback-annotation-panel,
+.feedback-block-selector {
+  font-family: var(--vscode-font-family);
+}
+
+.feedback-annotation-panel {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(980px, 94vw);
+  max-height: 92vh;
+  padding: 16px;
+  overflow: auto;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 12px;
+  box-shadow: 0 18px 55px var(--vscode-widget-shadow);
+}
+
+.feedback-completion-dialog {
+  overflow: hidden;
+  background: color-mix(in srgb, var(--vscode-editor-background) 72%, transparent);
+  overscroll-behavior: contain;
+}
+
+.feedback-completion-panel {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(620px, calc(100vh - 32px));
+  padding: 24px;
+  overscroll-behavior: contain;
+}
+
+.feedback-completion-title {
+  font-size: 19px;
+  line-height: 1.3;
+}
+
+.feedback-completion-description {
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.5;
+}
+
+.feedback-completion-count {
+  margin: 10px 0 16px !important;
+  padding: 10px 12px;
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+  background: color-mix(
+    in srgb,
+    var(--vscode-editorWarning-foreground, var(--vscode-focusBorder)) 12%,
+    transparent
+  );
+  border: 1px dashed var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.feedback-completion-path-label {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.feedback-completion-path {
+  display: block;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+  color: var(--vscode-textPreformat-foreground, var(--vscode-editor-foreground));
+  background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 6px;
+  font: 12px/1.5 var(--vscode-editor-font-family, monospace);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.feedback-completion-status {
+  min-height: 20px;
+  margin-top: 12px !important;
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.feedback-completion-actions {
+  align-items: center;
+  justify-content: flex-end;
+  margin: 10px 0 0;
+}
+
+.feedback-completion-dialog[data-feedback-completion-state='finishing'] {
+  cursor: progress;
+}
+
+.feedback-completion-dialog[data-feedback-completion-state='finishing'] .feedback-completion-panel {
+  border-color: var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+}
+
+.feedback-annotation-panel h2,
+.feedback-annotation-panel p {
+  margin: 0 0 8px;
+}
+
+.feedback-annotation-toolbar,
+.feedback-annotation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 10px;
+}
+
+.feedback-annotation-toolbar button,
+.feedback-annotation-actions button,
+.feedback-block-selector button,
+.feedback-block-selector select {
+  min-height: 28px;
+  padding: 4px 9px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border: 1px solid var(--vscode-button-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+}
+
+.feedback-annotation-toolbar button[aria-pressed='true'],
+.feedback-annotation-actions [data-feedback-action='add'] {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.feedback-annotation-preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+  max-height: 54vh;
+  overflow: auto;
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 7px;
+}
+
+.feedback-annotation-surface {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  max-height: 52vh;
+}
+
+.feedback-annotation-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 52vh;
+  object-fit: contain;
+}
+
+.feedback-annotation-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.feedback-annotation-panel textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 74px;
+  margin-top: 4px;
+  padding: 7px 8px;
+  resize: vertical;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+  border-radius: 5px;
+}
+
+.feedback-annotation-validation {
+  min-height: 18px;
+  color: var(--vscode-errorForeground);
+  font-size: 12px;
+}
+
+.feedback-annotation-actions {
+  justify-content: flex-end;
+}
+
+.feedback-block-selector {
+  inset: 50% auto auto 50%;
+  display: grid;
+  width: min(430px, 90vw);
+  transform: translate(-50%, -50%);
+  gap: 9px;
+  padding: 16px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 10px;
+  box-shadow: 0 16px 45px var(--vscode-widget-shadow);
+}
+
+.feedback-block-selector::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  content: '';
+  background: color-mix(in srgb, var(--vscode-editor-background) 58%, transparent);
+  backdrop-filter: blur(9px);
+}
+
+.feedback-block-selector h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+@media (max-width: 840px) {
+  .feedback-draft-banner {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .feedback-draft-actions {
+    justify-content: flex-start;
+  }
+
+  .feedback-annotation-layer.feedback-comment-rail.expanded {
+    top: 0;
+    right: 0;
+    bottom: auto;
+    left: 0;
+    width: 100%;
+    height: auto;
+    min-height: 100%;
+    border-top: 0;
+    border-left: 0;
+    box-shadow: none;
+  }
+
+  .feedback-annotation-layer.expanded .feedback-marker-layer {
+    display: block;
+  }
+
+  .feedback-annotation-layer.expanded .feedback-card-layer {
+    inset: 0;
+    overflow: visible;
+  }
+
+  .feedback-card-layer .feedback-comment-card[data-feedback-card-state='compact'] {
+    display: none;
+  }
+
+  .feedback-card-layer .feedback-comment-card[data-feedback-card-state='active'],
+  .feedback-card-layer .feedback-composer,
+  .feedback-card-layer .feedback-undo-stack {
+    right: 44px;
+    left: 12px;
+    width: auto;
+  }
+
+  .feedback-card-capture,
+  .feedback-card-capture-image {
+    max-height: 24vh;
+  }
+
+  .feedback-frame-label {
+    display: none;
+  }
+
+  .feedback-toolbar-button {
+    padding-inline: 6px;
+  }
+
+  .feedback-toolbar-button .toolbar-button-label {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 520px) {
+  .formatting-toolbar.feedback-toolbar-active .feedback-toolbar-button {
+    width: 28px;
+    min-width: 28px;
+    padding-inline: 5px;
+  }
+
+  .formatting-toolbar.feedback-toolbar-active .feedback-toolbar-button .toolbar-button-label {
+    display: none;
+  }
+
+  .feedback-toolbar-group .feedback-more-menu {
+    right: auto;
+    left: 50%;
+    width: min(190px, calc(100vw - 16px));
+    min-width: 0;
+    transform: translateX(-50%);
+  }
+
+  .feedback-completion-panel {
+    padding: 18px;
+  }
+
+  .feedback-completion-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.vscode-high-contrast .feedback-comment-rail,
+.vscode-high-contrast-light .feedback-comment-rail,
+.vscode-high-contrast .feedback-selection-action,
+.vscode-high-contrast-light .feedback-selection-action,
+.vscode-high-contrast .feedback-draft-banner,
+.vscode-high-contrast-light .feedback-draft-banner,
+.vscode-high-contrast .feedback-sync-retry-alert,
+.vscode-high-contrast-light .feedback-sync-retry-alert,
+.vscode-high-contrast .feedback-peer-lock-banner,
+.vscode-high-contrast-light .feedback-peer-lock-banner,
+.vscode-high-contrast .feedback-frame-label,
+.vscode-high-contrast-light .feedback-frame-label,
+.vscode-high-contrast .feedback-comment-card,
+.vscode-high-contrast-light .feedback-comment-card,
+.vscode-high-contrast .feedback-card-capture,
+.vscode-high-contrast-light .feedback-card-capture {
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border-width: 2px;
+  backdrop-filter: none;
+}
+
+.vscode-high-contrast.feedback-peer-locked .markdown-editor,
+.vscode-high-contrast-light.feedback-peer-locked .markdown-editor,
+body.vscode-high-contrast.feedback-peer-locked .markdown-editor,
+body.vscode-high-contrast-light.feedback-peer-locked .markdown-editor {
+  box-shadow: inset 0 0 0 2px var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+}
+
+.vscode-high-contrast .feedback-annotation-layer.feedback-comment-rail,
+.vscode-high-contrast-light .feedback-annotation-layer.feedback-comment-rail {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.vscode-high-contrast .feedback-marker,
+.vscode-high-contrast-light .feedback-marker,
+.vscode-high-contrast .feedback-comment-card,
+.vscode-high-contrast-light .feedback-comment-card {
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border-width: 2px;
+}
+
+.vscode-high-contrast .feedback-target-bracket,
+.vscode-high-contrast-light .feedback-target-bracket {
+  color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  border-left-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  border-left-width: 2px;
+}
+
+.vscode-high-contrast .feedback-review-active .markdown-editor,
+.vscode-high-contrast-light .feedback-review-active .markdown-editor,
+body.vscode-high-contrast.feedback-review-active .markdown-editor,
+body.vscode-high-contrast-light.feedback-review-active .markdown-editor {
+  box-shadow: none;
+}
+
+.vscode-high-contrast .feedback-review-active .markdown-editor::after,
+.vscode-high-contrast-light .feedback-review-active .markdown-editor::after,
+body.vscode-high-contrast.feedback-review-active .markdown-editor::after,
+body.vscode-high-contrast-light.feedback-review-active .markdown-editor::after {
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  border-style: solid;
+}
+
+.vscode-high-contrast .feedback-review-active .markdown-editor .feedback-pending-target,
+.vscode-high-contrast .feedback-review-active .markdown-editor .feedback-active-target,
+.vscode-high-contrast-light .feedback-review-active .markdown-editor .feedback-pending-target,
+.vscode-high-contrast-light .feedback-review-active .markdown-editor .feedback-active-target {
+  background: transparent;
+  outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.vscode-high-contrast .feedback-review-active .markdown-editor .md4h-feedback-highlight,
+.vscode-high-contrast .feedback-review-active .markdown-editor .md4h-feedback-annotation-inline,
+.vscode-high-contrast-light .feedback-review-active .markdown-editor .md4h-feedback-highlight,
+.vscode-high-contrast-light
+  .feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline,
+body.vscode-high-contrast.feedback-review-active .markdown-editor .md4h-feedback-annotation-inline,
+body.vscode-high-contrast-light.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline {
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  border-radius: 0;
+}
+
+.vscode-high-contrast .feedback-review-active .markdown-editor .md4h-feedback-highlight-active,
+.vscode-high-contrast
+  .feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline.is-feedback-active,
+.vscode-high-contrast-light
+  .feedback-review-active
+  .markdown-editor
+  .md4h-feedback-highlight-active,
+.vscode-high-contrast-light
+  .feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline.is-feedback-active,
+body.vscode-high-contrast.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline.is-feedback-active,
+body.vscode-high-contrast-light.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline.is-feedback-active {
+  outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: 1px;
+}
+
+.vscode-high-contrast .feedback-review-active .markdown-editor .md4h-feedback-block-target,
+.vscode-high-contrast .feedback-review-active .markdown-editor .md4h-feedback-annotation-node,
+.vscode-high-contrast-light .feedback-review-active .markdown-editor .md4h-feedback-block-target,
+.vscode-high-contrast-light .feedback-review-active .markdown-editor .md4h-feedback-annotation-node,
+body.vscode-high-contrast.feedback-review-active .markdown-editor .md4h-feedback-annotation-node,
+body.vscode-high-contrast-light.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-node {
+  box-shadow: inset 3px 0 0 var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+}
+
+body[data-feedback-comments-state='hidden'].vscode-high-contrast.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline,
+body[data-feedback-comments-state='hidden'].vscode-high-contrast-light.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-inline {
+  background: transparent;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+body[data-feedback-comments-state='hidden'].vscode-high-contrast.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-node,
+body[data-feedback-comments-state='hidden'].vscode-high-contrast-light.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-node {
+  box-shadow: none;
+}
+
+.vscode-high-contrast .feedback-comments-button[aria-pressed='true'],
+.vscode-high-contrast-light .feedback-comments-button[aria-pressed='true'] {
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+}
+
+.vscode-high-contrast .feedback-capture-button[aria-pressed='true'],
+.vscode-high-contrast-light .feedback-capture-button[aria-pressed='true'] {
+  outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: 1px;
+}
+
+.vscode-high-contrast .feedback-comments-button,
+.vscode-high-contrast-light .feedback-comments-button {
+  box-shadow: none;
+  opacity: 1;
+}
+
+.vscode-high-contrast .feedback-comments-button[aria-expanded='true'],
+.vscode-high-contrast-light .feedback-comments-button[aria-expanded='true'] {
+  outline: 1px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  outline-offset: 1px;
+}
+
+.vscode-high-contrast .feedback-completion-dialog,
+.vscode-high-contrast-light .feedback-completion-dialog,
+body.vscode-high-contrast.feedback-completion-open .feedback-completion-dialog,
+body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-dialog {
+  background: var(--vscode-editor-background);
+  backdrop-filter: none;
+}
+
+.vscode-high-contrast .feedback-completion-panel,
+.vscode-high-contrast-light .feedback-completion-panel {
+  border-width: 2px;
+}
+
+.vscode-high-contrast .feedback-block-selector::before,
+.vscode-high-contrast-light .feedback-block-selector::before,
+.vscode-using-screen-reader .feedback-block-selector::before {
+  background: var(--vscode-editor-background);
+  backdrop-filter: none;
+}
+
+.vscode-using-screen-reader .feedback-comment-rail,
+.vscode-using-screen-reader .feedback-draft-banner,
+.vscode-using-screen-reader .feedback-sync-retry-alert,
+.vscode-using-screen-reader .feedback-frame-label,
+.vscode-using-screen-reader .feedback-comment-card {
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  backdrop-filter: none;
+}
+
+.vscode-using-screen-reader .feedback-annotation-layer.feedback-comment-rail {
+  background: transparent;
+}
+
+.vscode-using-screen-reader .feedback-completion-dialog {
+  background: var(--vscode-editor-background);
+  backdrop-filter: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .feedback-comment-rail,
+  .feedback-card-layer,
+  .feedback-comment-card,
+  .feedback-connectors,
+  .md4h-feedback-highlight,
+  .md4h-feedback-annotation-inline,
+  .md4h-feedback-annotation-node,
+  .md4h-feedback-block-target,
+  .feedback-target-bracket,
+  .feedback-marker,
+  .feedback-selection-action,
+  .feedback-start-button,
+  .feedback-toolbar-button,
+  .feedback-frame-label,
+  .feedback-completion-dialog,
+  .feedback-completion-panel {
+    transition: none !important;
+    animation: none !important;
+  }
+
+  .feedback-start-button:hover,
+  .feedback-toolbar-button:hover {
+    transform: none;
+  }
+}

@@ -70,6 +70,13 @@ This document lists the third-party open source software components used in Mark
 - **Repository:** https://github.com/mermaidjs/mermaid
 - **License URL:** https://github.com/mermaidjs/mermaid/blob/develop/LICENSE
 
+### modern-screenshot 4.7.0
+
+- **License:** MIT
+- **Copyright:** © 2021-present wxm
+- **Repository:** https://github.com/qq15725/modern-screenshot
+- **License URL:** https://github.com/qq15725/modern-screenshot/blob/main/LICENSE
+
 ### turndown
 - **License:** MIT
 - **Copyright:** © 2024 Dom Christie

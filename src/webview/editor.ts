@@ -33,7 +33,12 @@ import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
 import { DraggableBlocks } from './extensions/draggableBlocks';
 import { DocumentAuditExtension } from './features/auditDocument';
-import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
+import {
+  createFormattingToolbar,
+  createTableMenu,
+  getFeedbackToolbarMenuHost,
+  updateToolbarStates,
+} from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
 import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
@@ -42,7 +47,7 @@ import {
   hasPendingImageSaves,
   getPendingImageCount,
 } from './features/imageDragDrop';
-import { toggleTocOverlay } from './features/tocOverlay';
+import { hideTocOverlay, isTocVisible, toggleTocOverlay } from './features/tocOverlay';
 import { showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
@@ -52,6 +57,21 @@ import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
+import {
+  createFeedbackNodeViewInteractionGuards,
+  createFeedbackReviewController,
+  type FeedbackReviewController,
+} from './features/feedbackReview';
+import {
+  createFeedbackPeerLockController,
+  type FeedbackPeerLockController,
+} from './features/feedbackPeerLock';
+import { parseFeedbackHostMessage, type FeedbackHostMessage } from '../shared/feedbackProtocol';
+import {
+  captureSelectedFeedbackBlocks,
+  startFeedbackAreaCapture,
+} from './features/feedbackCaptureWorkflow';
+import { createModernScreenshotRasterizer } from './features/feedbackDomCapture';
 
 // Helper function for slug generation (same as in linkDialog)
 function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
@@ -157,6 +177,11 @@ const vscode = acquireVsCodeApi();
 window.vscode = vscode;
 
 let editor: Editor | null = null;
+let feedbackReviewController: FeedbackReviewController | null = null;
+let feedbackPeerLockController: FeedbackPeerLockController | null = null;
+let pendingFeedbackPeerLock: { lockId: string; message: string } | null = null;
+const feedbackRasterizer = createModernScreenshotRasterizer();
+let closeFeedbackMoreMenu: ((restoreFocus: boolean) => void) | null = null;
 let isUpdating = false; // Prevent feedback loops
 let formattingToolbar: HTMLElement;
 let tableMenu: HTMLElement;
@@ -255,6 +280,26 @@ let formattingShortcutsEnabled = true;
 // `documentDirtyResponse`; we look up the resolver here.
 const documentDirtyCallbacks = new Map<string, (isDirty: boolean) => void>();
 
+/** True when this rich view is frozen locally or by a sibling split owner. */
+function isFeedbackEditingLocked(): boolean {
+  return Boolean(
+    feedbackReviewController?.isEditingLocked?.() ||
+    feedbackReviewController?.getSession() ||
+    feedbackPeerLockController?.isLocked()
+  );
+}
+
+function announcePeerFeedbackLock(): void {
+  if (typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return;
+  window.dispatchEvent(
+    new CustomEvent('feedbackLocalError', {
+      detail: {
+        message: 'Feedback is active in another editor split. Finish it there before editing here.',
+      },
+    })
+  );
+}
+
 function queryDocumentDirty(): Promise<boolean> {
   return new Promise(resolve => {
     const requestId = `is-dirty-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -275,7 +320,7 @@ function queryDocumentDirty(): Promise<boolean> {
  * math editor modal. Shared by the keyboard shortcut and the toolbar button.
  */
 async function insertAndEditMath(editorInstance: Editor, mode: 'inline' | 'block'): Promise<void> {
-  if (!enableMath) return;
+  if (!enableMath || isFeedbackEditingLocked()) return;
 
   const typeName = mode === 'block' ? 'mathBlock' : 'inlineMath';
   const nodeType = editorInstance.schema.nodes[typeName];
@@ -316,6 +361,13 @@ async function insertAndEditMath(editorInstance: Editor, mode: 'inline' | 'block
       latex: result.latex,
     })
   );
+}
+
+/** Open link editing only while the rich document is writable. */
+function openLinkDialogWhenEditable(editorInstance: Editor): boolean {
+  if (isFeedbackEditingLocked()) return false;
+  showLinkDialog(editorInstance);
+  return true;
 }
 
 async function runCopyAiContextRef(): Promise<void> {
@@ -462,7 +514,7 @@ window.setupImageResize = function (
  * Immediately send update (used for save shortcuts)
  */
 function immediateUpdate() {
-  if (!editor) return;
+  if (!editor || isFeedbackEditingLocked()) return;
 
   try {
     // Clear any pending debounced update
@@ -505,6 +557,7 @@ function immediateUpdate() {
 function debouncedUpdate(markdown: string) {
   if (updateTimeout) window.clearTimeout(updateTimeout);
   updateTimeout = window.setTimeout(() => {
+    updateTimeout = null;
     try {
       // Check if any images are currently being saved
       if (hasPendingImageSaves()) {
@@ -775,9 +828,25 @@ function initializeEditor(initialContent: string) {
     if (editorContainer && editorContainer.parentElement) {
       editorContainer.parentElement.insertBefore(formattingToolbar, editorContainer);
     }
+    const editorDom = editorInstance.view.dom;
+    const feedbackNodeViewGuards = createFeedbackNodeViewInteractionGuards(editorDom);
+    feedbackReviewController = createFeedbackReviewController({
+      editor: editorInstance,
+      host: vscode,
+      onReadOnlyChange: feedbackNodeViewGuards.setActive,
+    });
+    feedbackPeerLockController = createFeedbackPeerLockController({
+      editor: editorInstance,
+      toolbar: formattingToolbar,
+    });
+    if (pendingFeedbackPeerLock) {
+      feedbackPeerLockController.lock(
+        pendingFeedbackPeerLock.lockId,
+        pendingFeedbackPeerLock.message
+      );
+    }
 
     // Track editor focus state for toolbar and keep toolbar enabled while interacting with it
-    const editorDom = editorInstance.view.dom;
     editorDom.addEventListener('focus', () => {
       window.dispatchEvent(new CustomEvent('editorFocusChange', { detail: { focused: true } }));
     });
@@ -822,6 +891,7 @@ function initializeEditor(initialContent: string) {
     const contextMenuHandler = (e: MouseEvent) => {
       // Don't override the native textarea context menu inside the math modal.
       if (isEventInsideModalOverlay(e)) return;
+      if (isFeedbackEditingLocked()) return;
       try {
         const target = e.target as HTMLElement;
         const tableCell = target.closest('td, th');
@@ -854,6 +924,16 @@ function initializeEditor(initialContent: string) {
       // undo/redo, copy/paste, save, search, etc. for its own input.
       if (isEventInsideModalOverlay(e)) return;
 
+      // The crop overlay owns its keyboard interaction. Prevent document and
+      // VS Code chords, including Find, until capture completes or is canceled.
+      if (document.body.classList.contains('feedback-capture-active')) {
+        if (e.key !== 'Escape' && e.key !== 'Tab') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+        return;
+      }
+
       const isMod = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows/Linux
 
       // Save shortcut - immediate save
@@ -861,6 +941,9 @@ function initializeEditor(initialContent: string) {
       if (isMod && e.key === 's') {
         e.preventDefault();
         e.stopPropagation();
+        if (isFeedbackEditingLocked()) {
+          return;
+        }
         immediateUpdate();
 
         document.body.classList.add('saving-feedback');
@@ -881,6 +964,10 @@ function initializeEditor(initialContent: string) {
 
       // Handle Ctrl+K chord for link insertion
       if (isMod && e.key === 'k') {
+        if (isFeedbackEditingLocked()) {
+          ctrlKPressed = false;
+          return;
+        }
         // Start chord detection - set flag and timer
         ctrlKPressed = true;
         if (ctrlKTimer) {
@@ -898,7 +985,7 @@ function initializeEditor(initialContent: string) {
         e.preventDefault();
         e.stopPropagation();
         if (editor) {
-          showLinkDialog(editor);
+          openLinkDialogWhenEditable(editor);
         }
         // Reset chord state
         ctrlKPressed = false;
@@ -1074,6 +1161,9 @@ function initializeEditor(initialContent: string) {
       document.removeEventListener('click', documentClickHandler);
       document.removeEventListener('keydown', keydownHandler);
       editorInstance.view.dom.removeEventListener('click', handleLinkClick);
+      feedbackNodeViewGuards.dispose();
+      feedbackPeerLockController?.destroy();
+      feedbackPeerLockController = null;
       console.log('[MD4H] Editor destroyed, global listeners cleaned up');
     });
 
@@ -1099,6 +1189,14 @@ function initializeEditor(initialContent: string) {
 window.addEventListener('message', (event: MessageEvent) => {
   try {
     const message = event.data as WebviewMessage;
+    let validatedFeedbackMessage: FeedbackHostMessage | null = null;
+    if (typeof message?.type === 'string' && message.type.startsWith('feedback.')) {
+      validatedFeedbackMessage = parseFeedbackHostMessage(event.data);
+      if (validatedFeedbackMessage === null) {
+        console.warn('[MD4H] Rejected malformed Feedback host message');
+        return;
+      }
+    }
 
     switch (message.type) {
       case 'update':
@@ -1140,7 +1238,7 @@ window.addEventListener('message', (event: MessageEvent) => {
           }
           return;
         }
-        updateEditorContent(message.content);
+        updateEditorContentFromHost(message.content, message.force === true);
         break;
       case 'settingsUpdate':
         // Update skipResizeWarning setting
@@ -1598,6 +1696,7 @@ window.addEventListener('message', (event: MessageEvent) => {
         // message arrives at the host before the ack we send immediately
         // after — guaranteeing the host can rely on the buffer being current.
         const requestId = message.requestId as string;
+        let ok = true;
         try {
           if (editor && updateTimeout !== null) {
             window.clearTimeout(updateTimeout);
@@ -1611,13 +1710,103 @@ window.addEventListener('message', (event: MessageEvent) => {
             });
           }
         } catch (error) {
+          ok = false;
           console.error('[MD4H] flushPendingEdit failed:', error);
         }
-        vscode.postMessage({ type: 'flushPendingEditAck', requestId });
+        vscode.postMessage({ type: 'flushPendingEditAck', requestId, ok });
         break;
       }
       case 'triggerCopyAiContextRef': {
         void runCopyAiContextRef();
+        break;
+      }
+      case 'feedback.drafts.available':
+      case 'feedback.draft.discarded':
+      case 'feedback.transition.locked':
+      case 'feedback.started':
+      case 'feedback.updated':
+      case 'feedback.finished':
+      case 'feedback.discarded':
+      case 'feedback.close.release':
+      case 'feedback.diagnosticsCopied':
+      case 'feedback.invalidated':
+      case 'feedback.error': {
+        if (validatedFeedbackMessage) {
+          feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
+        }
+        break;
+      }
+      case 'feedback.close.sync': {
+        if (validatedFeedbackMessage?.type === 'feedback.close.sync') {
+          feedbackReviewController?.applyCloseSync(validatedFeedbackMessage, content =>
+            updateEditorContentFromHost(content, true)
+          );
+        }
+        break;
+      }
+      case 'feedback.transition.sync': {
+        if (validatedFeedbackMessage?.type === 'feedback.transition.sync') {
+          feedbackReviewController?.applyTransitionSync(validatedFeedbackMessage, content =>
+            updateEditorContentFromHost(content, true)
+          );
+        }
+        break;
+      }
+      case 'feedback.peer.locked': {
+        if (
+          validatedFeedbackMessage?.type !== 'feedback.peer.locked' ||
+          feedbackReviewController?.getSession()
+        ) {
+          break;
+        }
+        pendingFeedbackPeerLock = {
+          lockId: validatedFeedbackMessage.lockId,
+          message: validatedFeedbackMessage.message,
+        };
+        feedbackPeerLockController?.lock(
+          validatedFeedbackMessage.lockId,
+          validatedFeedbackMessage.message
+        );
+        break;
+      }
+      case 'feedback.peer.unlocked': {
+        if (validatedFeedbackMessage?.type !== 'feedback.peer.unlocked') break;
+        if (pendingFeedbackPeerLock?.lockId === validatedFeedbackMessage.lockId) {
+          pendingFeedbackPeerLock = null;
+        }
+        feedbackReviewController?.completeClose?.(validatedFeedbackMessage.lockId);
+        feedbackReviewController?.completeTransition?.(validatedFeedbackMessage.lockId);
+        feedbackPeerLockController?.unlock(validatedFeedbackMessage.lockId);
+        break;
+      }
+      case 'feedback.command': {
+        if (!validatedFeedbackMessage || validatedFeedbackMessage.type !== 'feedback.command') {
+          break;
+        }
+        if (feedbackPeerLockController?.isLocked()) {
+          announcePeerFeedbackLock();
+          break;
+        }
+        if (validatedFeedbackMessage.command === 'start') closeIncompatibleFeedbackSurfaces();
+        if (validatedFeedbackMessage.command === 'captureArea') {
+          if (editor && feedbackReviewController) {
+            startFeedbackAreaCapture({
+              editor,
+              review: feedbackReviewController,
+              rasterize: feedbackRasterizer,
+            });
+          }
+        } else if (validatedFeedbackMessage.command === 'captureSelectedBlocks') {
+          if (editor && feedbackReviewController) {
+            captureSelectedFeedbackBlocks({
+              editor,
+              review: feedbackReviewController,
+              rasterize: feedbackRasterizer,
+            });
+          }
+        } else {
+          feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
+        }
         break;
       }
       case 'navigateToHeading': {
@@ -1645,10 +1834,10 @@ window.addEventListener('message', (event: MessageEvent) => {
 /**
  * Update editor content from document with cursor preservation
  */
-function updateEditorContent(markdown: string) {
+function updateEditorContent(markdown: string): boolean {
   if (!editor) {
     console.error('[MD4H] Editor not initialized');
-    return;
+    return false;
   }
 
   try {
@@ -1659,7 +1848,7 @@ function updateEditorContent(markdown: string) {
       const timeSinceLastSend = Date.now() - lastSentTimestamp;
       if (timeSinceLastSend < SYNC_ECHO_TIMEOUT_MS) {
         console.log('[MD4H] Ignoring update (matches content we just sent)');
-        return;
+        return false;
       }
     }
     allowNextHostSyncDespiteEchoHash = false;
@@ -1668,7 +1857,7 @@ function updateEditorContent(markdown: string) {
     const timeSinceLastEdit = Date.now() - lastUserEditTime;
     if (timeSinceLastEdit < RECENT_EDIT_THRESHOLD_MS && !allowNextHostSyncDespiteRecentEdit) {
       console.log(`[MD4H] Skipping update - user recently edited (${timeSinceLastEdit}ms ago)`);
-      return;
+      return false;
     }
     allowNextHostSyncDespiteRecentEdit = false;
 
@@ -1683,7 +1872,7 @@ function updateEditorContent(markdown: string) {
     const currentMarkdown = getEditorMarkdownForSync(editor, blankLineMode);
     if (currentMarkdown === markdown) {
       console.log('[MD4H] Update skipped (content unchanged)');
-      return;
+      return true;
     }
 
     // Save cursor position
@@ -1691,7 +1880,11 @@ function updateEditorContent(markdown: string) {
     console.log(`[MD4H] Saving cursor position: ${from}-${to}`);
 
     // Set content
-    editor.commands.setContent(markdown, { contentType: 'markdown' });
+    const setContentResult = editor.commands.setContent(markdown, { contentType: 'markdown' });
+    if (setContentResult === false) {
+      console.error('[MD4H] Editor rejected host content replacement');
+      return false;
+    }
 
     // Restore cursor position
     try {
@@ -1712,12 +1905,31 @@ function updateEditorContent(markdown: string) {
     if (duration > 1000) {
       console.warn(`[MD4H] Slow update: ${duration.toFixed(2)}ms for ${docSize} chars`);
     }
+    return true;
   } catch (error) {
     console.error('[MD4H] Error updating content:', error);
     console.error('[MD4H] Document size:', markdown.length, 'chars');
+    return false;
   } finally {
     isUpdating = false;
   }
+}
+
+/** Apply host-authoritative content, optionally bypassing ordinary echo guards. */
+function updateEditorContentFromHost(markdown: string, force = false): boolean {
+  const peerController = feedbackPeerLockController;
+  const peerLocked = peerController?.isLocked() === true;
+  if (force || peerLocked) {
+    // A sibling may flush the exact content that this split most recently
+    // attempted to send, or a just-closed owner may still show its frozen
+    // snapshot. The explicit host payload is authoritative in both cases.
+    allowNextHostSyncDespiteEchoHash = true;
+    allowNextHostSyncDespiteRecentEdit = true;
+  }
+  if (peerLocked && peerController) {
+    return peerController.runHostUpdate(() => updateEditorContent(markdown));
+  }
+  return updateEditorContent(markdown);
 }
 
 /**
@@ -1799,10 +2011,199 @@ window.addEventListener('toggleTocOutline', () => {
   }
 });
 
+function closeIncompatibleFeedbackSurfaces(): void {
+  if (editor && isTocVisible()) {
+    hideTocOverlay(editor, false);
+  }
+  const auditClose = document.querySelector<HTMLButtonElement>(
+    '.audit-overlay.visible .audit-overlay-close'
+  );
+  auditClose?.click();
+  if (editor && !editor.isDestroyed) {
+    void import('./features/auditDocument')
+      .then(({ auditPluginKey }) => {
+        if (editor && !editor.isDestroyed) {
+          editor.view.dispatch(editor.state.tr.setMeta(auditPluginKey, []));
+        }
+      })
+      .catch(error => console.error('[MD4H] Failed to clear audit decorations:', error));
+  }
+  document
+    .querySelectorAll<HTMLButtonElement>(
+      '.math-editor-overlay #cancel-btn, .mermaid-editor-overlay #cancel-btn'
+    )
+    .forEach(button => button.click());
+  document.querySelectorAll<HTMLElement>('.image-context-menu').forEach(menu => {
+    menu.style.display = 'none';
+  });
+  document.querySelectorAll<HTMLElement>('.image-menu-button').forEach(button => {
+    button.setAttribute('aria-expanded', 'false');
+  });
+  document
+    .querySelectorAll<HTMLElement>('.mermaid-wrapper.highlighted, .md4h-math-block.highlighted')
+    .forEach(node => node.classList.remove('highlighted'));
+  document
+    .querySelectorAll<HTMLElement>(
+      '.image-caret-before, .image-caret-after, .image-caret-selected, .image-pending-delete'
+    )
+    .forEach(node => {
+      node.classList.remove(
+        'image-caret-before',
+        'image-caret-after',
+        'image-caret-selected',
+        'image-pending-delete'
+      );
+    });
+  document
+    .querySelectorAll<HTMLElement>('.mermaid-tooltip, .md4h-math-block-tooltip')
+    .forEach(tooltip => {
+      tooltip.style.display = 'none';
+    });
+  document.querySelectorAll<HTMLElement>('.toolbar-dropdown-menu').forEach(menu => {
+    menu.style.display = 'none';
+  });
+  closeFeedbackMoreMenu?.(false);
+}
+
+function showFeedbackMoreMenu(): void {
+  closeFeedbackMoreMenu?.(false);
+  if (!feedbackReviewController?.getSession()) return;
+
+  const trigger = document.querySelector<HTMLButtonElement>('[data-feedback-more]');
+
+  const menu = document.createElement('div');
+  menu.className = 'feedback-more-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'More feedback actions');
+  trigger?.setAttribute('aria-expanded', 'true');
+  const actions: Array<{ label: string; action: () => void; danger?: boolean }> = [
+    {
+      label: 'Reveal feedback file',
+      action: () => feedbackReviewController?.reveal(),
+    },
+    {
+      label: 'Copy diagnostics',
+      action: () => feedbackReviewController?.copyDiagnostics(),
+    },
+    {
+      label: 'Discard draft',
+      action: () => feedbackReviewController?.discard(),
+      danger: true,
+    },
+  ];
+  for (const action of actions) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `feedback-more-item${action.danger ? ' danger' : ''}`;
+    button.setAttribute('role', 'menuitem');
+    button.textContent = action.label;
+    button.addEventListener('click', () => {
+      closeFeedbackMoreMenu?.(true);
+      action.action();
+    });
+    menu.append(button);
+  }
+  const menuHost = getFeedbackToolbarMenuHost(trigger, formattingToolbar);
+  menuHost.append(menu);
+  menu.querySelector<HTMLButtonElement>('button')?.focus();
+
+  const closeFromPointer = (event: Event): void => {
+    if (
+      event.target instanceof Node &&
+      (menu.contains(event.target) || trigger?.contains(event.target))
+    ) {
+      return;
+    }
+    closeFeedbackMoreMenu?.(false);
+  };
+  const close = (restoreFocus: boolean): void => {
+    menu.remove();
+    trigger?.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', closeFromPointer, true);
+    closeFeedbackMoreMenu = null;
+    if (restoreFocus && trigger?.isConnected) trigger.focus();
+  };
+  closeFeedbackMoreMenu = close;
+  menu.addEventListener('keydown', event => {
+    const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+      return;
+    }
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % items.length;
+    else if (event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + items.length) % items.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = items.length - 1;
+    else if (event.key === 'Tab') close(false);
+    if (nextIndex !== null) {
+      event.preventDefault();
+      items[nextIndex]?.focus();
+    }
+  });
+  window.setTimeout(() => document.addEventListener('pointerdown', closeFromPointer, true), 0);
+}
+
+window.addEventListener('feedbackStartRequested', () => {
+  if (feedbackPeerLockController?.isLocked()) {
+    announcePeerFeedbackLock();
+    return;
+  }
+  closeIncompatibleFeedbackSurfaces();
+  feedbackReviewController?.start();
+});
+
+window.addEventListener('feedbackResumeRequested', closeIncompatibleFeedbackSurfaces);
+
+window.addEventListener('feedbackFinishRequested', () => {
+  feedbackReviewController?.finish();
+});
+
+window.addEventListener('feedbackCommentsToggleRequested', () => {
+  feedbackReviewController?.toggleComments();
+});
+
+window.addEventListener('feedbackCaptureRequested', () => {
+  if (!editor || !feedbackReviewController) return;
+  startFeedbackAreaCapture({
+    editor,
+    review: feedbackReviewController,
+    rasterize: feedbackRasterizer,
+  });
+});
+
+window.addEventListener('feedbackReplaceScreenshotRequested', event => {
+  if (!editor || !feedbackReviewController) return;
+  const detail = (event as CustomEvent<{ id?: string; feedback?: string }>).detail;
+  if (!detail?.id) return;
+  startFeedbackAreaCapture({
+    editor,
+    review: feedbackReviewController,
+    rasterize: feedbackRasterizer,
+    replaceId: detail.id,
+    initialFeedback: detail.feedback,
+  });
+});
+
+window.addEventListener('feedbackLocalError', event => {
+  const detail = (event as CustomEvent<{ message?: string }>).detail;
+  if (!detail?.message) return;
+  void import('./features/auditOverlay').then(({ showToast }) => {
+    showToast(detail.message ?? 'Feedback action failed.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+  });
+});
+
+window.addEventListener('feedbackMoreRequested', showFeedbackMoreMenu);
+
 // Handle custom event for document audit from toolbar button
 window.addEventListener('auditDocument', async () => {
-  if (!editor) return;
+  if (!editor || isFeedbackEditingLocked()) return;
   console.log('[MD4H] Running document audit...');
+  let loadingToast: { id: string; dismiss: (toastId: string) => void } | undefined;
   try {
     const { runAudit, auditPluginKey } = await import('./features/auditDocument');
     const { showAuditOverlay, showToast, dismissToast } = await import('./features/auditOverlay');
@@ -1812,21 +2213,29 @@ window.addEventListener('auditDocument', async () => {
 
     // Show loading toast
     const loadingToastId = showToast('Auditing document...', 'loading');
+    loadingToast = { id: loadingToastId, dismiss: dismissToast };
 
-    const issues = await runAudit(editor);
+    const auditEditor = editor;
+    const issues = await runAudit(auditEditor);
     console.log('[MD4H] Audit complete, issues found:', issues.length);
 
-    // Dismiss loading toast
-    dismissToast(loadingToastId);
+    // Feedback may have frozen the document while the async audit was still
+    // running. Do not let a stale result reopen chrome or decorations inside
+    // the focused review surface.
+    if (editor !== auditEditor || auditEditor.isDestroyed || isFeedbackEditingLocked()) return;
 
-    showAuditOverlay(editor, issues);
+    showAuditOverlay(auditEditor, issues);
 
     // Apply decorations
     if (issues.length > 0) {
-      editor.view.dispatch(editor.state.tr.setMeta(auditPluginKey, issues));
+      auditEditor.view.dispatch(auditEditor.state.tr.setMeta(auditPluginKey, issues));
     }
   } catch (error) {
     console.error('[MD4H] Audit failed:', error);
+  } finally {
+    if (loadingToast) {
+      loadingToast.dismiss(loadingToast.id);
+    }
   }
 });
 
@@ -1860,6 +2269,7 @@ window.addEventListener('insertMath', (event: Event) => {
 
 // Handle open source view from toolbar button
 window.addEventListener('openSourceView', () => {
+  if (isFeedbackEditingLocked()) return;
   console.log('[MD4H] Opening source view...');
   vscode.postMessage({ type: 'openSourceView' });
 });
@@ -1986,7 +2396,7 @@ window.addEventListener('exportDocument', async (event: Event) => {
  * events so Ctrl+Z / Ctrl+V / etc. stay scoped to the modal.
  */
 function isEventInsideModalOverlay(event: Event): boolean {
-  const selector = '.math-editor-overlay';
+  const selector = '.math-editor-overlay, [data-md4h-modal], .feedback-annotation-dialog';
   const target = event.target;
   if (target instanceof Element && target.closest(selector)) return true;
   const active = document.activeElement;
@@ -2024,6 +2434,11 @@ document.addEventListener(
     // rerouting them here inserted clipboard HTML/markdown into the document
     // instead of the focused field.
     if (!isPasteTargetedAtEditor(event.target)) return;
+    if (isFeedbackEditingLocked()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
 
     const clipboardData = event.clipboardData;
     if (!clipboardData) return;
@@ -2078,8 +2493,14 @@ export const __testing = {
   setMockEditor(mockEditor: any) {
     editor = mockEditor;
   },
-  updateEditorContentForTests(markdown: string) {
-    return updateEditorContent(markdown);
+  setFeedbackReviewControllerForTests(controller: FeedbackReviewController | null) {
+    feedbackReviewController = controller;
+  },
+  setFeedbackPeerLockControllerForTests(controller: FeedbackPeerLockController | null) {
+    feedbackPeerLockController = controller;
+  },
+  updateEditorContentForTests(markdown: string, force = false) {
+    return updateEditorContentFromHost(markdown, force);
   },
   trackSentContentForTests(content: string) {
     trackSentContent(content);
@@ -2098,6 +2519,15 @@ export const __testing = {
   insertRawCodeTextForTests(text: string) {
     if (!editor) return;
     insertRawCodeText(editor, text);
+  },
+  queueDebouncedUpdateForTests(markdown: string) {
+    debouncedUpdate(markdown);
+  },
+  openLinkDialogForTests(editorInstance: Editor) {
+    return openLinkDialogWhenEditable(editorInstance);
+  },
+  insertAndEditMathForTests(editorInstance: Editor, mode: 'inline' | 'block') {
+    return insertAndEditMath(editorInstance, mode);
   },
   isPlainFindShortcutForTests(event: {
     key: string;

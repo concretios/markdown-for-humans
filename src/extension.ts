@@ -9,6 +9,9 @@ import { MarkdownEditorProvider } from './editor/MarkdownEditorProvider';
 import { WordCountFeature } from './features/wordCount';
 import { getActiveWebviewPanel } from './activeWebview';
 import { outlineViewProvider } from './features/outlineView';
+import type { FeedbackHostMessage } from './shared/feedbackProtocol';
+
+type FeedbackCommand = Extract<FeedbackHostMessage, { type: 'feedback.command' }>['command'];
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the custom editor provider
@@ -161,6 +164,33 @@ export function activate(context: vscode.ExtensionContext) {
       );
     })
   );
+
+  // Feedback commands are intentionally unbound. They remain discoverable in
+  // the Command Palette and can be assigned personal keybindings without the
+  // extension claiming chords owned by VS Code or other extensions.
+  const feedbackCommands = [
+    ['markdownForHumans.feedback.start', 'start'],
+    ['markdownForHumans.feedback.commentSelection', 'commentSelection'],
+    ['markdownForHumans.feedback.captureArea', 'captureArea'],
+    ['markdownForHumans.feedback.captureSelectedBlocks', 'captureSelectedBlocks'],
+    ['markdownForHumans.feedback.toggleComments', 'toggleComments'],
+    ['markdownForHumans.feedback.next', 'nextFeedback'],
+    ['markdownForHumans.feedback.previous', 'previousFeedback'],
+    ['markdownForHumans.feedback.finish', 'finish'],
+    ['markdownForHumans.feedback.reveal', 'reveal'],
+    ['markdownForHumans.feedback.discard', 'discard'],
+  ] as const satisfies ReadonlyArray<readonly [string, FeedbackCommand]>;
+  for (const [commandId, command] of feedbackCommands) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, () => {
+        const panel = getActiveWebviewPanel();
+        if (panel) {
+          const message: FeedbackHostMessage = { type: 'feedback.command', command };
+          void panel.webview.postMessage(message);
+        }
+      })
+    );
+  }
 }
 
 export function deactivate() {

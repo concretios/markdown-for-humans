@@ -116,6 +116,46 @@
       {
         "command": "markdownForHumans.toggleFormattingShortcuts",
         "title": "Markdown for Humans: Toggle Formatting Shortcuts (Cmd/Ctrl+B/I/U)"
+      },
+      {
+        "command": "markdownForHumans.feedback.start",
+        "title": "Markdown for Humans: Start Feedback"
+      },
+      {
+        "command": "markdownForHumans.feedback.commentSelection",
+        "title": "Markdown for Humans: Add Feedback to Selection"
+      },
+      {
+        "command": "markdownForHumans.feedback.captureArea",
+        "title": "Markdown for Humans: Capture Feedback Area"
+      },
+      {
+        "command": "markdownForHumans.feedback.captureSelectedBlocks",
+        "title": "Markdown for Humans: Capture Selected Blocks"
+      },
+      {
+        "command": "markdownForHumans.feedback.toggleComments",
+        "title": "Markdown for Humans: Toggle Feedback Comments"
+      },
+      {
+        "command": "markdownForHumans.feedback.next",
+        "title": "Markdown for Humans: Next Feedback"
+      },
+      {
+        "command": "markdownForHumans.feedback.previous",
+        "title": "Markdown for Humans: Previous Feedback"
+      },
+      {
+        "command": "markdownForHumans.feedback.finish",
+        "title": "Markdown for Humans: Finish Feedback and Copy Prompt"
+      },
+      {
+        "command": "markdownForHumans.feedback.reveal",
+        "title": "Markdown for Humans: Reveal Feedback File"
+      },
+      {
+        "command": "markdownForHumans.feedback.discard",
+        "title": "Markdown for Humans: Discard Feedback Draft"
       }
     ],
     "keybindings": [
@@ -322,6 +362,7 @@
     "lowlight": "^2.9.0",
     "markdown-it": "^14.0.0",
     "mermaid": "^11.16.0",
+    "modern-screenshot": "4.7.0",
     "turndown": "^7.1.2"
   }
 }

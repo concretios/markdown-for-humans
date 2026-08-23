@@ -7,6 +7,14 @@
 import { Node, mergeAttributes } from '@tiptap/core';
 import mermaid from 'mermaid';
 
+const MERMAID_RENDER_STATE_ATTRIBUTE = 'data-md4h-mermaid-state';
+type MermaidRenderState = 'pending' | 'ready' | 'error';
+
+function setMermaidRenderState(container: HTMLElement, state: MermaidRenderState): void {
+  container.setAttribute(MERMAID_RENDER_STATE_ATTRIBUTE, state);
+  container.setAttribute('aria-busy', state === 'pending' ? 'true' : 'false');
+}
+
 /**
  * Detect if VS Code is in dark mode by checking CSS variables
  */
@@ -143,6 +151,7 @@ export const Mermaid = Node.create({
     return ({ node, getPos, editor }) => {
       const container = document.createElement('div');
       container.classList.add('mermaid-wrapper');
+      setMermaidRenderState(container, 'pending');
 
       const codeElement = document.createElement('pre');
       codeElement.classList.add('mermaid-source');
@@ -154,12 +163,20 @@ export const Mermaid = Node.create({
       container.append(codeElement);
       container.appendChild(renderElement);
 
+      let renderGeneration = 0;
+      let destroyed = false;
+
       // Render mermaid diagram
       const renderDiagram = async () => {
+        const generation = ++renderGeneration;
+        setMermaidRenderState(container, 'pending');
         const content = codeElement.textContent?.trim() || '';
         if (!content) {
           renderElement.innerHTML =
             '<div class="mermaid-placeholder">Enter Mermaid diagram code</div>';
+          if (!destroyed && generation === renderGeneration) {
+            setMermaidRenderState(container, 'ready');
+          }
           return;
         }
 
@@ -177,10 +194,13 @@ export const Mermaid = Node.create({
           // Use timestamp to ensure truly unique IDs and prevent caching
           const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
           const { svg } = await mermaid.render(id, content);
+          if (destroyed || generation !== renderGeneration) return;
           renderElement.innerHTML = svg;
           renderElement.classList.add('rendered');
           codeElement.classList.add('hidden');
+          setMermaidRenderState(container, 'ready');
         } catch (error) {
+          if (destroyed || generation !== renderGeneration) return;
           console.error('Mermaid rendering error:', error);
           const errorMsg = error instanceof Error ? error.message : 'Invalid diagram syntax';
           renderElement.textContent = '';
@@ -190,6 +210,7 @@ export const Mermaid = Node.create({
           renderElement.appendChild(errorDiv);
           renderElement.classList.remove('rendered');
           codeElement.classList.remove('hidden');
+          setMermaidRenderState(container, 'error');
         }
       };
 
@@ -304,6 +325,8 @@ export const Mermaid = Node.create({
           return true;
         },
         destroy: () => {
+          destroyed = true;
+          renderGeneration += 1;
           // Clean up document listener to prevent memory leaks
           document.removeEventListener('click', handleDocumentClick);
         },

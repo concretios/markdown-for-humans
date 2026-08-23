@@ -106,10 +106,12 @@ export {};
 type TestingModule = {
   resetSyncState: () => void;
   setMockEditor: (editor: unknown) => void;
+  setFeedbackPeerLockControllerForTests: (controller: unknown) => void;
   trackSentContentForTests: (content: string) => void;
-  updateEditorContentForTests: (content: string) => void;
+  updateEditorContentForTests: (content: string, force?: boolean) => void;
   isCodeContextForPasteForTests: (event: ClipboardEvent) => boolean;
   insertRawCodeTextForTests: (text: string) => void;
+  queueDebouncedUpdateForTests: (markdown: string) => void;
   isPlainFindShortcutForTests: (event: {
     key: string;
     ctrlKey?: boolean;
@@ -121,6 +123,8 @@ type TestingModule = {
 
 describe('webview undo/redo guards', () => {
   let testing: TestingModule;
+  let postMessage: jest.Mock;
+  let handleWindowMessage: ((event: MessageEvent) => void) | undefined;
 
   const setupModule = async () => {
     jest.resetModules();
@@ -132,6 +136,13 @@ describe('webview undo/redo guards', () => {
       readyState: 'loading',
       addEventListener: jest.fn(),
     };
+    const addWindowEventListener = jest.fn(
+      (type: string, listener: EventListenerOrEventListenerObject) => {
+        if (type === 'message' && typeof listener === 'function') {
+          handleWindowMessage = listener as (event: MessageEvent) => void;
+        }
+      }
+    );
     (
       global as unknown as {
         window: {
@@ -143,8 +154,9 @@ describe('webview undo/redo guards', () => {
     ).window = {
       setTimeout,
       clearTimeout,
-      addEventListener: jest.fn(),
+      addEventListener: addWindowEventListener,
     };
+    postMessage = jest.fn();
     (
       global as unknown as {
         acquireVsCodeApi: () => {
@@ -154,7 +166,7 @@ describe('webview undo/redo guards', () => {
         };
       }
     ).acquireVsCodeApi = jest.fn(() => ({
-      postMessage: jest.fn(),
+      postMessage,
       getState: jest.fn(),
       setState: jest.fn(),
     }));
@@ -163,12 +175,51 @@ describe('webview undo/redo guards', () => {
     };
 
     const mod = await import('../../webview/editor');
-    testing = mod.__testing;
+    testing = mod.__testing as unknown as TestingModule;
   };
 
   beforeEach(async () => {
     await setupModule();
     testing.resetSyncState();
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('does not resend an already-delivered debounce when a later flush arrives', () => {
+    jest.useFakeTimers();
+    (
+      global as unknown as {
+        window: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
+      }
+    ).window.setTimeout = setTimeout;
+    (
+      global as unknown as {
+        window: { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout };
+      }
+    ).window.clearTimeout = clearTimeout;
+    testing.setMockEditor({ getMarkdown: jest.fn(() => 'latest') });
+
+    testing.queueDebouncedUpdateForTests('latest');
+    jest.advanceTimersByTime(500);
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'edit',
+      content: 'latest',
+      editReason: 'typing',
+    });
+    expect(handleWindowMessage).toBeDefined();
+    handleWindowMessage?.({
+      data: { type: 'flushPendingEdit', requestId: 'flush-after-fired-debounce' },
+    } as MessageEvent);
+
+    expect(postMessage.mock.calls.filter(call => call[0]?.type === 'edit')).toHaveLength(1);
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'flushPendingEditAck',
+      requestId: 'flush-after-fired-debounce',
+      ok: true,
+    });
   });
 
   it('skips update when content matches recently sent hash', () => {
@@ -217,6 +268,45 @@ describe('webview undo/redo guards', () => {
       contentType: 'markdown',
     });
     expect(mockEditor.commands.setTextSelection).toHaveBeenCalledWith({ from: 2, to: 4 });
+  });
+
+  it('applies authoritative host content to a locked peer despite echo suppression', () => {
+    const mockEditor = {
+      getMarkdown: jest.fn().mockReturnValue('old'),
+      state: { selection: { from: 1, to: 1 }, doc: { content: { size: 10 } } },
+      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
+    };
+    const runHostUpdate = jest.fn((update: () => unknown) => update());
+    testing.setMockEditor(mockEditor);
+    testing.setFeedbackPeerLockControllerForTests({
+      isLocked: () => true,
+      runHostUpdate,
+    });
+    testing.trackSentContentForTests('authoritative');
+
+    testing.updateEditorContentForTests('authoritative');
+
+    expect(runHostUpdate).toHaveBeenCalledTimes(1);
+    expect(mockEditor.commands.setContent).toHaveBeenCalledWith('authoritative', {
+      contentType: 'markdown',
+    });
+  });
+
+  it('forces post-review owner resynchronization despite echo suppression', () => {
+    const mockEditor = {
+      getMarkdown: jest.fn().mockReturnValue('frozen snapshot'),
+      state: { selection: { from: 1, to: 1 }, doc: { content: { size: 15 } } },
+      commands: { setContent: jest.fn(), setTextSelection: jest.fn() },
+    };
+    testing.setMockEditor(mockEditor);
+    testing.setFeedbackPeerLockControllerForTests(null);
+    testing.trackSentContentForTests('externally changed source');
+
+    testing.updateEditorContentForTests('externally changed source', true);
+
+    expect(mockEditor.commands.setContent).toHaveBeenCalledWith('externally changed source', {
+      contentType: 'markdown',
+    });
   });
 
   it('detects code context paste when selection is a codeBlock node', () => {
