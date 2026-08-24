@@ -74,7 +74,7 @@ All Feedback requests cross `parseFeedbackWebviewMessage`; unknown or malformed 
 - Feedback decorations are dynamically registered only for an active session. Pins, connectors, compact cards, and the composer live in an absolute sibling layer under `#editor`, so document scroll requires no annotation JavaScript or independent panel scroll surface.
 - Drafts live at `.md4h/feedback/<source-directory>/<filename>--<UTC>-<suffix>/feedback.md` inside the workspace folder containing the source; multi-root workspaces resolve against that containing folder. Screenshot evidence is `assets/F<n>.png`.
 - Strict `md4h-feedback/v1` frontmatter stores `schema`, `state`, `round`, `source`, `source_base: workspace`, `source_sha256`, `line_numbering: one-based-inclusive`, `created_at`, `next_id`, and sealed-only `sealed_at`. The source path appears once; each item uses only `Source lines` plus text Focus or flattened PNG Evidence.
-- Every report embeds canonical `How to read this bundle` and `Required workflow` sections. Only fenced `### Feedback` content is an instruction; source text, Focus, and annotated screenshot pixels are evidence. Flattened drawing marks identify the discussed area and are not editable layers.
+- Every new report identifies `AI coding agents` as its audience and embeds canonical `Preconditions`, `How to interpret feedback items`, and `Required implementation workflow` sections. Only fenced `### Feedback` content is an instruction; source text, Focus, and annotated screenshot pixels are evidence. The parser also accepts the immediately previous guide verbatim so an existing draft can resume and migrate on its next explicit write.
 - Matching drafts are announced with content-free metadata and resume only after explicit user action. Strict resume revalidates the report, persisted `next_id`, paths, bounded PNG structure, and exact per-asset SHA-256 before restoring read-only mode.
 - `feedbackSessionStore.ts` serializes atomic rewrites, allocates at most 2,000 monotonic IDs, caps cumulative screenshot evidence at 64 MiB, validates source and screenshot hashes on seal, and treats sealed bundles as immutable.
 - `markdownForHumans.feedback.handoffPromptTemplate` is resolved for the reviewed document. It requires `{{feedbackFile}}`, supports `{{source}}`, `{{sourceSha256}}`, `{{itemCount}}`, and `{{round}}`, expands literally once, and falls back to the built-in prompt with a warning when invalid or oversized.
@@ -108,6 +108,7 @@ All Feedback requests cross `parseFeedbackWebviewMessage`; unknown or malformed 
 | Feedback decoration state | `feedbackAnnotations.ts` | `src/webview/features/` |
 | Feedback collision layout | `feedbackAnnotationLayout.ts` | `src/webview/features/` |
 | Feedback capture/markup | `feedbackCapture*.ts`, `feedbackDomCapture.ts` | `src/webview/features/` |
+| Feedback item discard checkpoint | `feedbackDiscardDialog.ts` | `src/webview/features/` |
 | TipTap setup & extensions | `editor.ts` | `src/webview/` |
 | Toolbar buttons | `BubbleMenuView.ts` | `src/webview/` |
 | Custom TipTap extension | Create new file | `src/webview/extensions/` |

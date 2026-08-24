@@ -57,7 +57,7 @@
 
 **Entry points:**
 
-- `Start feedback` in the formatting toolbar and unbound Command Palette commands.
+- A round AI-comment toolbar action labelled `Start feedback` for assistive technology and tooltips, plus unbound Command Palette commands.
 
 **Primary flow:**
 
@@ -608,7 +608,7 @@ idle -> armed -> rasterizing -> annotation dialog
 
 ### 11.1 Outcome and compatibility boundary
 
-- Replace the unreleased development report shape in place. The first public contract remains `md4h-feedback/v1`; no v2 reader, development-draft migration, or dual-format writer is added.
+- Replace the unreleased development report shape in place. The first public contract remains `md4h-feedback/v1`; no v2 reader, repeated-path development grammar migration, or dual-format writer is added.
 - Keep one bundle scoped to one Markdown source. Store the workspace-relative source once in frontmatter and remove the repeated path from every item.
 - Make `feedback.md` self-describing for humans and agents while retaining a strict, deterministic parser. Shared prose is fixed by the schema; only fenced `Feedback` blocks contain reviewer instructions.
 - Preserve the current detailed clipboard prompt as the built-in default and expose it as a resource-scoped, validated template so each workspace folder can tune wording independently.
@@ -624,10 +624,10 @@ idle -> armed -> rasterizing -> annotation dialog
 ### 11.3 Final `md4h-feedback/v1` report
 
 - Frontmatter remains flat and canonical: `schema`, `state`, `round`, JSON-quoted `source`, `source_base: workspace`, `source_sha256`, `line_numbering: one-based-inclusive`, `created_at`, `next_id`, and sealed-only `sealed_at`.
-- The body begins with `# Feedback handoff`, followed by fixed `## How to read this bundle` and `## Required workflow` sections. They define workspace-relative source resolution, exact-byte hashing, one-based inclusive containing ranges, rendered Focus text, flattened screenshot annotations, relative evidence paths and hashes, the evidence-versus-instruction boundary, immutability, checks, and per-ID reporting.
+- The body begins with `# Instructions for AI coding agents`, followed by fixed `## Preconditions`, `## How to interpret feedback items`, and `## Required implementation workflow` sections. They name the audience, define workspace-relative source resolution, exact-byte hashing and stop conditions, one-based inclusive containing ranges, rendered Focus text, flattened screenshot annotations, relative evidence paths and hashes, the evidence-versus-instruction boundary, immutability, checks, and per-ID reporting.
 - Text items use `## F<n> · text`, `**Source lines:** N[-M]`, safely fenced `Focus`, and safely fenced `Feedback`.
 - Screenshot items use `## F<n> · screenshot`, the same `Source lines` grammar, a report-relative `assets/F<n>.png` link, exact asset SHA-256, and safely fenced `Feedback`.
-- The parser accepts only this final v1 layout. Existing development drafts that use the earlier repeated-path grammar are unsupported and may be revealed or discarded; sealed development bundles remain untouched files.
+- The parser accepts this final v1 item and frontmatter layout with either the current agent guide or the immediately previous guide verbatim. Existing drafts with only the previous guide remain discoverable and resumable, then render the current guide on their next explicit write or seal. Earlier repeated-path development drafts remain unsupported and may be revealed or discarded; sealed development bundles remain untouched files.
 
 ### 11.4 RED, GREEN, REFACTOR, VERIFY
 
@@ -640,7 +640,7 @@ idle -> armed -> rasterizing -> annotation dialog
 
 ### 11.5 Scope boundaries
 
-- Do not add provider-specific presets, executable template logic, absolute-path placeholders, multi-source bundles, automatic draft migration, or schema negotiation.
+- Do not add provider-specific presets, executable template logic, absolute-path placeholders, multi-source bundles, migration during discovery or resume, or schema negotiation.
 - Do not make the fixed bundle-reading contract configurable. The clipboard locator is customizable; the versioned report semantics remain stable.
 - Do not alter source anchoring, screenshot generation, annotation rendering, Finish correlation, sealed immutability, or bundle placement.
 - No commits or pushes are made without a new explicit user request.
@@ -649,10 +649,18 @@ idle -> armed -> rasterizing -> annotation dialog
 
 - **Prompt template:** Added the resource-scoped, multiline `markdownForHumans.feedback.handoffPromptTemplate` setting with the current wording as its exact default. The pure formatter performs one literal pass over the five supported placeholders, uses adaptive CommonMark inline-code delimiters for paths, normalizes line endings, and falls back without blocking a sealed session when configuration is malformed, unsafe, or oversized.
 - **Finish boundary:** `FeedbackSessionStore.seal()` now returns only authoritative paths, source/hash, item count, and round. The provider resolves the setting against the reviewed document URI at Finish time, copies one resolved prompt, and sends that exact string to the completion dialog for clipboard retry. Invalid configuration reports a non-blocking warning while preserving the sealed result.
-- **Final v1 grammar:** Replaced the unreleased development grammar in place. The source path occurs once in canonical frontmatter with explicit base and line-number conventions. Fixed `How to read this bundle` and `Required workflow` sections explain containing ranges, flattened annotated screenshot evidence, hashes, immutability, and the evidence-versus-instruction boundary. Both item kinds use typed headings and one canonical `Source lines` field.
-- **Strictness:** Resume rejects the prior development grammar, changed guide text, non-canonical ranges, invalid frontmatter conventions, quoted-path corruption, altered screenshot references, asset-hash mismatches, and malformed draft metadata. No compatibility reader or migration path was added.
+- **Final v1 grammar:** Replaced the unreleased development grammar in place. The source path occurs once in canonical frontmatter with explicit base and line-number conventions. Fixed AI-agent Preconditions, interpretation, and implementation-workflow sections explain containing ranges, flattened annotated screenshot evidence, hashes, immutability, and the evidence-versus-instruction boundary. Both item kinds use typed headings and one canonical `Source lines` field.
+- **Strictness:** Resume rejects the prior repeated-path development grammar, near-match or changed guide text, non-canonical ranges, invalid frontmatter conventions, quoted-path corruption, altered screenshot references, asset-hash mismatches, and malformed draft metadata. One exact compatibility reader accepts the immediately previous guide so an existing draft can resume without being rewritten; its next explicit mutation or seal uses the current renderer.
 - **Verification:** Focused prompt/store/provider/protocol/webview tests pass. The deterministic full Jest run passes 94 suites and 1,605 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Coverage is 85.79% statements, 80.11% branches, 89.49% functions, and 86.47% lines. Repository lint, strict TypeScript, the production release build and bundle verification, `git diff --check`, the 9-case capture matrix, and the 14-case annotation matrix pass. A generated sealed bundle containing both text and screenshot feedback was manually inspected together with a customized expanded prompt. A CPU-contended parallel Jest run briefly exceeded the existing 100 ms layout stress threshold; the isolated stress suite and clean in-band full run both pass, so no unrelated performance threshold or layout code was changed.
 - **Delivery:** User, architecture, and environment documentation now describe the exact contract and setting. The required 10-minute live Extension Host reading review remains a manual gate. No commit or push was made.
+
+### 11.7 AI coding agent instruction guide
+
+- **Audience and order:** New reports begin with `Instructions for AI coding agents`, followed by explicit preconditions, item-interpretation rules, and the required implementation workflow. The guide places draft state and source-hash stop conditions before item parsing, separates evidence from reviewer instructions, and requires a per-ID outcome.
+- **Screenshot safety:** Agents must inspect each screenshot and verify its asset hash. A missing asset or hash mismatch now explicitly requires stopping without edits and reporting the problem.
+- **Draft compatibility:** The writer emits only the current guide. The strict parser accepts either the current guide or the immediately previous guide in full so existing drafts remain discoverable and resumable. Discovery and resume do not mutate the file; the next explicit mutation or seal canonicalizes it. Near-matches remain invalid.
+- **RED/GREEN:** Golden rendering failed against the generic headings before the writer change. Coverage now proves current-guide tamper rejection, exact legacy discovery and resume, legacy near-match rejection, and migration on the next draft write.
+- **Verification:** All 73 store tests pass. The deterministic repository run passes 94 suites and 1,651 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build and bundle verification, and `git diff --check` pass.
 
 ---
 
@@ -708,7 +716,40 @@ idle -> armed -> rasterizing -> annotation dialog
 
 ---
 
-## 13. Follow-up & Future Work
+## 13. Phase 10: Capture Controls and Compact Feedback Entry
+
+### 13.1 Outcome
+
+- Keep the existing annotation history model and make Undo, Redo, and undoable Clear visibly available beside the drawing tools.
+- Add a compact, accessible preset color picker. Each drawing keeps the color selected when it was created, and flattened PNG output uses those per-command colors.
+- Keep Cancel available during crop and block selection. Unfinished text and screenshot feedback uses `Cancel` while empty, changes to `Discard` when dirty, and confirms before losing work. Saved comments and the active session remain intact; whole-session discard stays in the existing confirmed overflow action.
+- Replace the normal toolbar's labelled `Start feedback` control with a round, icon-only AI-comment action based on the `comment-discussion-sparkle` glyph. Preserve the full accessible name and tooltip.
+
+### 13.2 RED, GREEN, VERIFY
+
+1. Add failing controller tests for color selection, per-command SVG and PNG colors, history state, dirty item cancellation, and the icon-only entry point.
+2. Implement the smallest transient command-color, dirty-cancel, and entry-toolbar changes without changing bundle, source-map, or host-discard contracts.
+3. Add theme-aware visual contracts for the round entry action, color swatches, focus, disabled history actions, high contrast, and narrow layouts.
+4. Run focused Feedback capture, toolbar, review, and style suites, followed by strict TypeScript, lint, production build, full Jest, Electron capture/annotation fixtures, and `git diff --check`.
+
+### 13.3 Scope boundaries
+
+- Do not add editable persisted vector layers, arbitrary color strings, brush-width controls, default keyboard chords, or a second annotation history.
+- Do not bypass the existing host confirmation and Trash-backed session discard path.
+- Do not change source anchoring, screenshot mapping, PNG validation, bundle grammar, or sealed-session behavior.
+
+### 13.4 Implementation and verification
+
+- **Capture controls:** Kept the existing immutable Undo/Redo history and undoable Clear. Added a compact four-swatch Coral, Yellow, Blue, and Green picker. Each command retains its selected palette token through Undo, Redo, Clear, SVG preview resizing, and one-canvas PNG flattening. Yellow uses a dark halo; the other strokes retain a white halo for readable markup on mixed captures.
+- **Safe cancellation:** Empty text and screenshot drafts show `Cancel`. Once text or drawing is present, the action changes to `Discard` and opens a labelled, focus-trapped in-webview checkpoint explaining that only the unfinished item will be lost. The safe action receives initial focus; Escape keeps editing; the background and suspended draft surface remain inert without scrolling; and lifecycle teardown never restores stale focus. This deliberately avoids native browser dialogs, which VS Code webviews do not permit. In-flight writes lock the relevant controls and recover the full draft after a failure. Crop, block-selector, saved-item Delete/Undo, and whole-session Trash-backed discard behavior remain unchanged.
+- **Compact entry:** Replaced the normal toolbar's labelled action with a 36px round `comment-discussion-sparkle` control. Its tooltip and accessible name remain `Start a frozen feedback session`, it has a text fallback if the Codicon font is unavailable, and light, dark, high-contrast, keyboard-focus, and reduced-motion treatments are explicit.
+- **Light-theme legibility:** Comment cards and the text composer now use an opaque VS Code widget surface in light themes, preventing underlying document prose from competing with feedback. Dark-theme translucency is unchanged, and the document-synchronous rail remains transparent so it does not become a second drawer or veil the rich view.
+- **Automated verification:** The focused Feedback capture, review, toolbar, workflow, discard-dialog, and style runs pass 265 tests. The deterministic full Jest and coverage run passes 95 suites and 1,666 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Coverage is 85.84% statements, 80.41% branches, 89.49% functions, and 86.52% lines. Repository lint, strict TypeScript, production release build and bundle verification, and `git diff --check` pass.
+- **Electron verification:** All nine DOM capture combinations pass at 100%, 125%, and 200% zoom in light, dark, and high-contrast themes. All 14 annotation layout/theme scenarios, the real-controller lifecycle gate, and the 10,000-line/500-comment stress case pass. The required live Extension Host reading review remains a manual gate.
+
+---
+
+## 14. Follow-up & Future Work
 
 - Optional arrow, label, redaction, and editable vector-layer tools.
 - Multi-document review bundles and collaborative reply threads if real usage requires them.

@@ -133,11 +133,17 @@ describe('BubbleMenuView', () => {
       expect(editor.on).toHaveBeenCalledWith('selectionUpdate', expect.any(Function));
     });
 
-    it('shows Start feedback in normal mode and only review actions in feedback mode', () => {
+    it('shows an icon-only Start feedback action in normal mode and only review actions in feedback mode', () => {
       const editor = createMockEditor();
       const toolbar = createFormattingToolbar(editor);
 
-      expect(toolbar.querySelector('[data-feedback-start]')).toBeTruthy();
+      const start = toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]');
+      expect(start).toBeTruthy();
+      expect(start?.getAttribute('aria-label')).toBe('Start a frozen feedback session');
+      expect(start?.title).toBe('Start a frozen feedback session');
+      expect(start?.querySelector('.codicon-comment-discussion-sparkle')).not.toBeNull();
+      expect(start?.querySelector('.toolbar-button-label')).toBeNull();
+      expect(start?.textContent).not.toContain('Start feedback');
       expect(toolbar.querySelector('[data-feedback-finish]')).toBeNull();
 
       setFeedbackToolbarState({ active: true, count: 3, commentsVisible: true });
@@ -173,6 +179,20 @@ describe('BubbleMenuView', () => {
       expect(toolbar.querySelector('[data-feedback-toolbar-group]')).toBeNull();
       expect(toolbar.classList).not.toContain('feedback-toolbar-active');
       expect(toolbar.querySelector('[data-feedback-start]')).not.toBeNull();
+    });
+
+    it('dispatches Start feedback from the compact AI-comment action', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      const requested = jest.fn();
+      window.addEventListener('feedbackStartRequested', requested);
+
+      try {
+        toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]')?.click();
+        expect(requested).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('feedbackStartRequested', requested);
+      }
     });
 
     it('uses the centered action group as the More menu positioning host', () => {

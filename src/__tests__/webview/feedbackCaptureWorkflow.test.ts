@@ -74,7 +74,9 @@ describe('keyboard Feedback block selector', () => {
     const addScreenshotFeedback = jest.fn();
     const reportCaptureError = jest.fn();
     const setAnnotationsSuspended = jest.fn();
+    const draftSurfaceGate = createFeedbackDraftSurfaceGate();
     const review = {
+      draftSurfaceGate,
       getSession: () => ({
         sessionId: 'session-1',
         source: 'docs/guide.md',
@@ -401,7 +403,9 @@ describe('keyboard Feedback block selector', () => {
       view: { dom: editorDom },
     } as unknown as Editor;
     const setAnnotationsSuspended = jest.fn();
+    const draftSurfaceGate = createFeedbackDraftSurfaceGate();
     const review = {
+      draftSurfaceGate,
       getSession: () => ({
         sessionId: 'session-1',
         source: 'docs/guide.md',
@@ -812,7 +816,9 @@ describe('keyboard Feedback block selector', () => {
       view: { dom: editorDom },
     } as unknown as Editor;
     const setAnnotationsSuspended = jest.fn();
+    const draftSurfaceGate = createFeedbackDraftSurfaceGate();
     const review = {
+      draftSurfaceGate,
       getSession: () => ({
         sessionId: 'session-1',
         source: 'docs/guide.md',
@@ -853,8 +859,32 @@ describe('keyboard Feedback block selector', () => {
     expect(rasterize).toHaveBeenCalledTimes(1);
     expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
 
-    annotation?.querySelector<HTMLButtonElement>('[data-feedback-action="cancel"]')?.click();
+    const feedbackInput = annotation?.querySelector<HTMLTextAreaElement>('textarea');
+    const cancel = annotation?.querySelector<HTMLButtonElement>('[data-feedback-action="cancel"]');
+    if (!feedbackInput || !cancel) throw new Error('Missing annotation controls');
+    feedbackInput.value = 'Keep this unfinished capture';
+    feedbackInput.dispatchEvent(new Event('input', { bubbles: true }));
+    cancel.click();
+    const discardCheckpoint = document.querySelector<HTMLElement>('[data-feedback-discard-dialog]');
+    expect(discardCheckpoint).not.toBeNull();
+    expect(draftSurfaceGate.activeKind()).toBe('capture-annotation');
+
+    document.body.tabIndex = -1;
+    document.body.focus();
+    startFeedbackAreaCapture({ editor, review, rasterize, setAnnotationsSuspended });
+
+    expect(document.activeElement).toBe(
+      discardCheckpoint?.querySelector<HTMLElement>('[data-feedback-discard-keep]')
+    );
+    expect(draftSurfaceGate.activeKind()).toBe('capture-annotation');
+    expect(document.querySelector('.feedback-area-capture')).toBeNull();
+    discardCheckpoint?.querySelector<HTMLButtonElement>('[data-feedback-discard-keep]')?.click();
+    await Promise.resolve();
+    feedbackInput.value = '';
+    feedbackInput.dispatchEvent(new Event('input', { bubbles: true }));
+    cancel.click();
     expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+    expect(draftSurfaceGate.activeKind()).toBeNull();
   });
 
   it('contains Tab focus within the modal', () => {

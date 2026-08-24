@@ -284,7 +284,7 @@ function openAnnotation(
   const workflow: ActiveCaptureWorkflow = {
     kind: 'capture-annotation',
     focus: () => {
-      if (controller) focusCaptureSurface(controller.element);
+      controller?.focus();
     },
     dispose: () => {
       window.removeEventListener('feedbackInvalidated', handleFeedbackLifecycleEnd);

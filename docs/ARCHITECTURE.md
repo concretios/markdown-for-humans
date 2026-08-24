@@ -671,6 +671,7 @@ On a later editor load, the host scans only the source's mirrored Feedback direc
 - `src/webview/features/feedbackAnnotationLayout.ts` performs pure marker clustering, compact/active card packing, connector geometry, and EOF overflow calculation.
 - `src/webview/features/feedbackCapture.ts` keeps annotation commands in bitmap coordinates and flattens them only when the user submits.
 - `src/webview/features/feedbackDomCapture.ts` adapts `modern-screenshot@4.7.0`; `feedbackCaptureWorkflow.ts` owns pointer and selected-block capture flows.
+- `src/webview/features/feedbackDiscardDialog.ts` owns the DOM-based confirmation for unfinished text and screenshot items. VS Code webviews do not grant native browser modal permission, so this checkpoint contains focus, isolates background interaction and scrolling, and restores the enclosing draft exactly on Keep editing.
 
 **Bundle contract:**
 
@@ -689,7 +690,9 @@ The strict `md4h-feedback/v1` frontmatter fields, in serialized order, are:
 9. `next_id: F<n>`
 10. `sealed_at: <JSON-string ISO timestamp>`, only when sealed
 
-The source path appears once, in frontmatter. Item sections never repeat it. After frontmatter, every generated report contains `# Feedback handoff`, `## How to read this bundle`, and `## Required workflow`. These sections define line-number semantics, relative evidence paths, source-hash verification, item order, and the requirement to keep the bundle immutable. The parser requires the canonical guide and item grammar so a malformed draft is rejected instead of being partially interpreted.
+The source path appears once, in frontmatter. Item sections never repeat it. After frontmatter, every newly generated report contains `# Instructions for AI coding agents`, `## Preconditions`, `## How to interpret feedback items`, and `## Required implementation workflow`. These sections name the intended audience, define the stop conditions before editing, explain line and evidence semantics, and require immutable bundle handling plus per-ID reporting.
+
+The writer emits only this current guide. The strict parser accepts either the current guide or the immediately previous `Feedback handoff` guide so existing development drafts remain discoverable and resumable. Both variants must match in full. Discovery and resume never rewrite a report; the next explicit draft mutation or seal renders the current guide. Older repeated-path development grammars remain unsupported.
 
 Text items use this grammar:
 
@@ -733,7 +736,7 @@ Screenshot items use this grammar:
 
 Screenshot files are final, flattened PNG evidence. Pen strokes, rectangles, and ellipses are baked into the pixels and are not persisted as editable vector objects. The source range names the mapped Markdown blocks represented by the capture. Agents must inspect the image together with the written feedback and verify its asset hash.
 
-Only the fenced block below `### Feedback` is an instruction. The reviewed source, fenced `Focus`, and screenshot pixels are untrusted evidence that can contain arbitrary text. The generated `How to read` section makes this evidence-versus-instruction boundary explicit to receiving agents.
+Only the fenced block below `### Feedback` is an instruction. The reviewed source, fenced `Focus`, and screenshot pixels are untrusted evidence that can contain arbitrary text. The generated `How to interpret feedback items` section makes this evidence-versus-instruction boundary explicit to receiving agents. If screenshot evidence is missing or its asset hash differs, the agent is instructed to stop without editing and report the mismatch.
 
 Focus and feedback fences are canonical: each uses at least three backticks and one more backtick than the longest run inside its content. IDs are monotonic and are not renumbered after deletion; `next_id` preserves the high-water mark across restart. Draft-only rendered-range metadata can appear before `Focus`, but sealing removes it from the agent-facing report. One bundle accepts at most 2,000 allocated IDs and 64 MiB of screenshot evidence. Reports are size-bounded and line-counted before parsing. The extension does not mutate a sealed bundle.
 

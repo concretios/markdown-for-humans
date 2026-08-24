@@ -11,6 +11,11 @@
  * - Flatten the base capture and optional markup only when feedback is submitted
  */
 
+import {
+  createFeedbackDiscardDialog,
+  type FeedbackDiscardDialogController,
+} from './feedbackDiscardDialog';
+
 /** A point in client or bitmap coordinates, as documented by the accepting API. */
 export interface CapturePoint {
   x: number;
@@ -100,14 +105,22 @@ export interface VisibleAreaCapture {
   image: RasterizedCapture;
 }
 
+/** Curated colors remain stable when vector markup is flattened into a PNG. */
+export type AnnotationColor = 'coral' | 'yellow' | 'blue' | 'green';
+
+interface AnnotationCommandStyle {
+  /** Omitted by legacy callers to preserve the original coral default. */
+  color?: AnnotationColor;
+}
+
 /** A freehand annotation stored in captured-bitmap coordinates. */
-export interface PenAnnotationCommand {
+export interface PenAnnotationCommand extends AnnotationCommandStyle {
   type: 'pen';
   points: readonly CapturePoint[];
 }
 
 /** A rectangle annotation stored in captured-bitmap coordinates. */
-export interface RectangleAnnotationCommand {
+export interface RectangleAnnotationCommand extends AnnotationCommandStyle {
   type: 'rectangle';
   x: number;
   y: number;
@@ -116,7 +129,7 @@ export interface RectangleAnnotationCommand {
 }
 
 /** An ellipse annotation stored in captured-bitmap coordinates. */
-export interface EllipseAnnotationCommand {
+export interface EllipseAnnotationCommand extends AnnotationCommandStyle {
   type: 'ellipse';
   x: number;
   y: number;
@@ -159,8 +172,11 @@ export interface FeedbackAnnotationModalOptions {
 export interface FeedbackAnnotationModalController {
   readonly element: HTMLElement;
   readonly tool: AnnotationTool;
+  readonly color: AnnotationColor;
   readonly commands: readonly AnnotationCommand[];
+  focus(): void;
   setTool(tool: AnnotationTool): void;
+  setColor(color: AnnotationColor): void;
   addCommand(command: AnnotationCommand): void;
   undo(): boolean;
   redo(): boolean;
@@ -174,8 +190,18 @@ export interface FeedbackAnnotationModalController {
 const MAX_CAPTURE_SCALE = 2;
 const DEFAULT_MINIMUM_CAPTURE_SIZE = 1;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
-const ANNOTATION_COLOR = '#e75d4f';
-const ANNOTATION_HALO_COLOR = '#ffffff';
+const ANNOTATION_PALETTE: readonly {
+  color: AnnotationColor;
+  label: string;
+  stroke: string;
+  halo: string;
+}[] = [
+  { color: 'coral', label: 'Coral', stroke: '#e75d4f', halo: '#ffffff' },
+  { color: 'yellow', label: 'Yellow', stroke: '#f5c400', halo: '#1f2328' },
+  { color: 'blue', label: 'Blue', stroke: '#2f81f7', halo: '#ffffff' },
+  { color: 'green', label: 'Green', stroke: '#2da44e', halo: '#ffffff' },
+];
+const DEFAULT_ANNOTATION_COLOR: AnnotationColor = 'coral';
 const ANNOTATION_STROKE_WIDTH = 3;
 const ANNOTATION_HALO_WIDTH = 7;
 
@@ -216,9 +242,20 @@ function clonePoint(point: CapturePoint): CapturePoint {
 
 function cloneCommand(command: AnnotationCommand): AnnotationCommand {
   if (command.type === 'pen') {
-    return { type: 'pen', points: command.points.map(clonePoint) };
+    return {
+      type: 'pen',
+      points: command.points.map(clonePoint),
+      ...(command.color ? { color: command.color } : {}),
+    };
   }
   return { ...command };
+}
+
+function annotationPaletteEntry(color: AnnotationColor | undefined) {
+  return (
+    ANNOTATION_PALETTE.find(entry => entry.color === color) ??
+    ANNOTATION_PALETTE.find(entry => entry.color === DEFAULT_ANNOTATION_COLOR)!
+  );
 }
 
 /**
@@ -782,9 +819,10 @@ export function flattenAnnotationsToPng(
 
     context.drawImage(baseImage, 0, 0, bitmap.width, bitmap.height);
     for (const command of commands) {
-      configureStrokeContext(context, ANNOTATION_HALO_COLOR, ANNOTATION_HALO_WIDTH);
+      const palette = annotationPaletteEntry(command.color);
+      configureStrokeContext(context, palette.halo, ANNOTATION_HALO_WIDTH);
       traceShape(context, command);
-      configureStrokeContext(context, ANNOTATION_COLOR, ANNOTATION_STROKE_WIDTH);
+      configureStrokeContext(context, palette.stroke, ANNOTATION_STROKE_WIDTH);
       traceShape(context, command);
     }
 
@@ -836,12 +874,14 @@ function appendSvgCommand(overlay: SVGSVGElement, command: AnnotationCommand): v
   const group = createSvgElement('g');
   group.setAttribute('data-annotation-type', command.type);
   group.setAttribute('aria-hidden', 'true');
+  const palette = annotationPaletteEntry(command.color);
 
   const halo = createSvgGeometry(command);
-  halo.setAttribute('stroke', ANNOTATION_HALO_COLOR);
+  halo.setAttribute('stroke', palette.halo);
   halo.setAttribute('stroke-width', String(ANNOTATION_HALO_WIDTH));
   const stroke = createSvgGeometry(command);
-  stroke.setAttribute('stroke', ANNOTATION_COLOR);
+  stroke.setAttribute('data-annotation-stroke', '');
+  stroke.setAttribute('stroke', palette.stroke);
   stroke.setAttribute('stroke-width', String(ANNOTATION_STROKE_WIDTH));
   group.append(halo, stroke);
   overlay.appendChild(group);
@@ -906,10 +946,13 @@ export function createFeedbackAnnotationModal(
   const history = new AnnotationHistory();
   const bitmap = { width: options.image.width, height: options.image.height };
   let activeTool: AnnotationTool = 'rectangle';
+  let activeColor: AnnotationColor = DEFAULT_ANNOTATION_COLOR;
   let draftCommand: AnnotationCommand | null = null;
   let dragStart: CapturePoint | null = null;
+  let dragColor: AnnotationColor | null = null;
   let penPoints: CapturePoint[] = [];
   let activePointerId: number | null = null;
+  let discardDialog: FeedbackDiscardDialogController | null = null;
   let destroyed = false;
   let busy = false;
 
@@ -952,7 +995,27 @@ export function createFeedbackAnnotationModal(
   const undoButton = createButton('Undo annotation', 'Undo');
   const redoButton = createButton('Redo annotation', 'Redo');
   const clearButton = createButton('Clear annotations', 'Clear');
-  toolbar.append(undoButton, redoButton, clearButton);
+  const colorGroup = document.createElement('div');
+  colorGroup.className = 'feedback-annotation-colors';
+  colorGroup.setAttribute('role', 'group');
+  colorGroup.setAttribute('aria-label', 'Annotation color');
+  const colorLabel = document.createElement('span');
+  colorLabel.className = 'feedback-annotation-color-label';
+  colorLabel.textContent = 'Color';
+  colorLabel.setAttribute('aria-hidden', 'true');
+  colorGroup.append(colorLabel);
+  const colorButtons = new Map<AnnotationColor, HTMLButtonElement>();
+  for (const palette of ANNOTATION_PALETTE) {
+    const button = createButton(`${palette.label} annotation color`, '');
+    button.className = 'feedback-annotation-color';
+    button.dataset.feedbackColor = palette.color;
+    button.title = palette.label;
+    button.style.setProperty('--md4h-annotation-swatch', palette.stroke);
+    button.setAttribute('aria-pressed', String(palette.color === activeColor));
+    colorButtons.set(palette.color, button);
+    colorGroup.append(button);
+  }
+  toolbar.append(colorGroup, undoButton, redoButton, clearButton);
 
   const preview = document.createElement('div');
   preview.className = 'feedback-annotation-preview';
@@ -1011,13 +1074,29 @@ export function createFeedbackAnnotationModal(
   dialog.appendChild(panel);
 
   function updateHistoryButtons(): void {
-    undoButton.disabled = !history.canUndo;
-    redoButton.disabled = !history.canRedo;
-    clearButton.disabled = history.commands.length === 0;
+    undoButton.disabled = busy || !history.canUndo;
+    redoButton.disabled = busy || !history.canRedo;
+    clearButton.disabled = busy || history.commands.length === 0;
+  }
+
+  function updateCancelState(): void {
+    const dirty = feedbackInput.value.trim().length > 0 || history.commands.length > 0;
+    cancelButton.textContent = dirty ? 'Discard' : 'Cancel';
+    cancelButton.setAttribute(
+      'aria-label',
+      dirty ? 'Discard screenshot feedback' : 'Cancel screenshot feedback'
+    );
   }
 
   function updateSubmissionState(): void {
     addButton.disabled = busy || feedbackInput.value.trim().length === 0;
+    feedbackInput.readOnly = busy;
+    retakeButton.disabled = busy;
+    cancelButton.disabled = busy;
+    for (const button of toolButtons.values()) button.disabled = busy;
+    for (const button of colorButtons.values()) button.disabled = busy;
+    updateHistoryButtons();
+    updateCancelState();
     if (feedbackInput.value.trim().length > 0) {
       feedbackInput.removeAttribute('aria-invalid');
       validation.textContent = '';
@@ -1027,6 +1106,7 @@ export function createFeedbackAnnotationModal(
   function render(): void {
     renderSvgCommands(overlay, history.commands, draftCommand);
     updateHistoryButtons();
+    updateCancelState();
   }
 
   function reportError(error: unknown, userMessage: string): void {
@@ -1067,9 +1147,29 @@ export function createFeedbackAnnotationModal(
     }
   }
 
+  function focus(): void {
+    if (destroyed) return;
+    if (discardDialog?.element.isConnected) {
+      discardDialog.focus();
+      return;
+    }
+    const target =
+      toolButtons.get(activeTool) ??
+      dialog.querySelector<HTMLElement>('button:not([disabled]), textarea:not([disabled])');
+    if (!target) return;
+    try {
+      target.focus({ preventScroll: true });
+    } catch {
+      target.focus();
+    }
+  }
+
   function close(shouldRestoreFocus = true): void {
     if (destroyed) return;
     destroyed = true;
+    const activeDiscardDialog = discardDialog;
+    discardDialog = null;
+    activeDiscardDialog?.destroy();
     dialog.removeEventListener('keydown', handleDialogKeyDown);
     overlay.removeEventListener('pointerdown', handlePointerDown);
     overlay.removeEventListener('pointermove', handlePointerMove);
@@ -1087,6 +1187,7 @@ export function createFeedbackAnnotationModal(
   }
 
   function setTool(tool: AnnotationTool): void {
+    if (busy) return;
     activeTool = tool;
     draftCommand = null;
     dragStart = null;
@@ -1095,6 +1196,14 @@ export function createFeedbackAnnotationModal(
       button.setAttribute('aria-pressed', String(candidate === tool));
     }
     render();
+  }
+
+  function setColor(color: AnnotationColor): void {
+    if (busy || !colorButtons.has(color)) return;
+    activeColor = color;
+    for (const [candidate, button] of colorButtons) {
+      button.setAttribute('aria-pressed', String(candidate === color));
+    }
   }
 
   function addCommand(command: AnnotationCommand): void {
@@ -1118,11 +1227,15 @@ export function createFeedbackAnnotationModal(
       overlay.setPointerCapture(activePointerId);
     }
     dragStart = clientEventPoint(event);
+    dragColor = activeColor;
     penPoints = [dragStart];
     draftCommand =
       activeTool === 'pen'
-        ? { type: 'pen', points: penPoints.map(clonePoint) }
-        : createShapeAnnotation(activeTool, dragStart, dragStart, event.shiftKey, bitmap);
+        ? { type: 'pen', points: penPoints.map(clonePoint), color: dragColor }
+        : {
+            ...createShapeAnnotation(activeTool, dragStart, dragStart, event.shiftKey, bitmap),
+            color: dragColor,
+          };
     render();
   }
 
@@ -1132,9 +1245,16 @@ export function createFeedbackAnnotationModal(
     if (activeTool === 'pen') {
       const previous = penPoints[penPoints.length - 1];
       if (current.x !== previous.x || current.y !== previous.y) penPoints.push(current);
-      draftCommand = { type: 'pen', points: penPoints.map(clonePoint) };
+      draftCommand = {
+        type: 'pen',
+        points: penPoints.map(clonePoint),
+        color: dragColor ?? activeColor,
+      };
     } else {
-      draftCommand = createShapeAnnotation(activeTool, dragStart, current, event.shiftKey, bitmap);
+      draftCommand = {
+        ...createShapeAnnotation(activeTool, dragStart, current, event.shiftKey, bitmap),
+        color: dragColor ?? activeColor,
+      };
     }
     render();
   }
@@ -1149,6 +1269,7 @@ export function createFeedbackAnnotationModal(
     }
     draftCommand = null;
     dragStart = null;
+    dragColor = null;
     penPoints = [];
     if (
       activePointerId !== null &&
@@ -1168,6 +1289,7 @@ export function createFeedbackAnnotationModal(
   function handlePointerCancel(): void {
     draftCommand = null;
     dragStart = null;
+    dragColor = null;
     penPoints = [];
     activePointerId = null;
     render();
@@ -1237,10 +1359,8 @@ export function createFeedbackAnnotationModal(
     }
   }
 
-  function cancel(): void {
+  function finishCancel(): void {
     if (destroyed || busy) return;
-    const dirty = feedbackInput.value.trim().length > 0 || history.commands.length > 0;
-    if (dirty && !window.confirm('Discard this screenshot feedback draft?')) return;
     try {
       options.onCancel();
     } catch (error) {
@@ -1248,6 +1368,32 @@ export function createFeedbackAnnotationModal(
     } finally {
       close();
     }
+  }
+
+  function cancel(): void {
+    if (destroyed || busy) return;
+    if (discardDialog?.element.isConnected) {
+      discardDialog.focus();
+      return;
+    }
+    const dirty = feedbackInput.value.trim().length > 0 || history.commands.length > 0;
+    if (!dirty) {
+      finishCancel();
+      return;
+    }
+    const confirmation = createFeedbackDiscardDialog({
+      description:
+        'Your unfinished comment and annotations will be lost. Saved feedback and the Feedback session will remain.',
+      confirmLabel: 'Discard capture',
+      returnFocus: feedbackInput,
+      suspendedSurface: dialog,
+    });
+    discardDialog = confirmation;
+    void confirmation.result.then(discard => {
+      if (discardDialog !== confirmation) return;
+      discardDialog = null;
+      if (discard && !destroyed && !busy) finishCancel();
+    });
   }
 
   function handleDialogKeyDown(event: KeyboardEvent): void {
@@ -1274,6 +1420,9 @@ export function createFeedbackAnnotationModal(
   for (const [tool, button] of toolButtons) {
     button.addEventListener('click', () => setTool(tool));
   }
+  for (const [color, button] of colorButtons) {
+    button.addEventListener('click', () => setColor(color));
+  }
   undoButton.addEventListener('click', undo);
   redoButton.addEventListener('click', redo);
   clearButton.addEventListener('click', clear);
@@ -1292,17 +1441,22 @@ export function createFeedbackAnnotationModal(
   mount.appendChild(dialog);
   updateSubmissionState();
   render();
-  toolButtons.get('rectangle')?.focus();
+  focus();
 
   return {
     element: dialog,
     get tool(): AnnotationTool {
       return activeTool;
     },
+    get color(): AnnotationColor {
+      return activeColor;
+    },
     get commands(): readonly AnnotationCommand[] {
       return history.commands;
     },
+    focus,
     setTool,
+    setColor,
     addCommand,
     undo,
     redo,

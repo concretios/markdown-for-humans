@@ -43,6 +43,10 @@ import {
 } from './feedbackAnnotations';
 import { FEEDBACK_SESSION_ENDED_EVENT } from './feedbackCapture';
 import {
+  createFeedbackDiscardDialog,
+  type FeedbackDiscardDialogController,
+} from './feedbackDiscardDialog';
+import {
   feedbackFocusForBlockRange,
   getFeedbackTargetFromDomRange,
   getFeedbackTargetFromProseMirrorSelection,
@@ -629,6 +633,7 @@ export function createFeedbackReviewController(options: {
   let composer: HTMLElement | null = null;
   let composerTarget: FeedbackTextTarget | null = null;
   let composerDraftSurface: FeedbackDraftSurfaceLease | null = null;
+  let composerDiscardDialog: FeedbackDiscardDialogController | null = null;
   let editDraft: FeedbackEditDraft | null = null;
   let requestedEditFocusId: string | null = null;
   let blockSelector: HTMLFormElement | null = null;
@@ -1663,6 +1668,9 @@ export function createFeedbackReviewController(options: {
   };
 
   const closeComposer = (restoreFocus = true): void => {
+    const activeDiscardDialog = composerDiscardDialog;
+    composerDiscardDialog = null;
+    activeDiscardDialog?.destroy();
     if (composer) annotationResizeObserver?.unobserve(composer);
     composerDraftSurface?.release();
     composerDraftSurface = null;
@@ -3376,14 +3384,67 @@ export function createFeedbackReviewController(options: {
       const actions = createElement('div', 'feedback-composer-actions');
       const cancel = createElement('button', 'feedback-secondary-button', 'Cancel');
       cancel.type = 'button';
-      cancel.addEventListener('click', () => closeComposer());
       const submit = createElement('button', 'feedback-primary-button', 'Add feedback');
       submit.type = 'submit';
       submit.disabled = true;
       submit.setAttribute('data-feedback-submit', '');
-      field.addEventListener('input', () => {
-        submit.disabled =
-          field.value.trim().length === 0 || pendingRequestId !== null || !hasWritableSession();
+      const refreshComposerActions = (): void => {
+        const dirty = field.value.trim().length > 0;
+        cancel.textContent = dirty ? 'Discard' : 'Cancel';
+        cancel.setAttribute(
+          'aria-label',
+          dirty ? 'Discard unfinished feedback' : 'Cancel feedback'
+        );
+        submit.disabled = !dirty || pendingRequestId !== null || !hasWritableSession();
+      };
+      const requestComposerCancel = (): void => {
+        if (pendingRequestId !== null || composer !== composerElement) return;
+        if (composerDiscardDialog?.element.isConnected) {
+          composerDiscardDialog.focus();
+          return;
+        }
+        if (field.value.trim().length === 0) {
+          closeComposer();
+          return;
+        }
+        const confirmation = createFeedbackDiscardDialog({
+          description:
+            'Your unfinished comment will be lost. Saved comments and the Feedback session will remain.',
+          returnFocus: field,
+          suspendedSurface: composerElement,
+        });
+        composerDiscardDialog = confirmation;
+        composerDraftSurface?.update({
+          kind: 'text-composer',
+          element: confirmation.element,
+          focus: () => confirmation.focus(),
+        });
+        void confirmation.result.then(discard => {
+          if (composerDiscardDialog !== confirmation) return;
+          composerDiscardDialog = null;
+          if (discard) {
+            if (pendingRequestId === null && composer === composerElement) closeComposer();
+            return;
+          }
+          if (composer === composerElement) {
+            composerDraftSurface?.update({
+              kind: 'text-composer',
+              element: composerElement,
+              focus: () => {
+                setCommentsState('expanded');
+                field.focus({ preventScroll: true });
+              },
+            });
+          }
+        });
+      };
+      cancel.addEventListener('click', requestComposerCancel);
+      field.addEventListener('input', refreshComposerActions);
+      composerElement.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || pendingRequestId !== null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        requestComposerCancel();
       });
       composerElement.addEventListener('submit', event => {
         event.preventDefault();
@@ -3400,6 +3461,9 @@ export function createFeedbackReviewController(options: {
         }
         const requestId = nextRequestId();
         pendingRequestId = requestId;
+        field.readOnly = true;
+        cancel.disabled = true;
+        submit.textContent = 'Saving…';
         submit.disabled = true;
         pendingMutations.set(requestId, {
           kind: 'text-add',
@@ -3408,6 +3472,10 @@ export function createFeedbackReviewController(options: {
           submit,
           settle: () => {
             pendingRequestId = null;
+            field.readOnly = false;
+            cancel.disabled = false;
+            submit.textContent = 'Add feedback';
+            refreshComposerActions();
           },
         });
         post({
@@ -3423,6 +3491,7 @@ export function createFeedbackReviewController(options: {
       });
       actions.append(cancel, submit);
       composerElement.append(heading, focusLabel, focus, lines, label, actions);
+      refreshComposerActions();
       panel.replaceChildren(composerElement);
       annotationResizeObserver?.observe(composerElement);
       scheduleAnnotationLayout();

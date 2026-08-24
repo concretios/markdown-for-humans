@@ -773,8 +773,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       type: 'button',
       label: 'Start feedback',
       title: 'Start a frozen feedback session',
-      icon: { name: 'comment-discussion', fallback: '◌' },
-      visibleText: 'Start feedback',
+      icon: { name: 'comment-discussion-sparkle', fallback: '✦' },
       feedbackData: 'start',
       className: 'feedback-start-button',
       action: () => {

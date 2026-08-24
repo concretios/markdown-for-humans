@@ -19,11 +19,25 @@ describe('Feedback annotation styles', () => {
   it('uses a document-positioned overlay without creating a second scroll surface', () => {
     const layer = css.match(/\.feedback-annotation-layer\s*\{[^}]*\}/)?.[0] ?? '';
     const cardLayer = css.match(/\.feedback-card-layer\s*\{[^}]*\}/)?.[0] ?? '';
+    const synchronizedRail = ruleFor('.feedback-annotation-layer.feedback-comment-rail');
 
     expect(layer).toMatch(/position:\s*absolute/);
     expect(layer).not.toMatch(/position:\s*fixed/);
     expect(layer).toMatch(/pointer-events:\s*none/);
     expect(cardLayer).not.toMatch(/overflow(?:-y)?:\s*(?:auto|scroll)/);
+    expect(synchronizedRail).toMatch(/background:\s*transparent/);
+  });
+
+  it('keeps light-theme feedback cards and composers opaque over document text', () => {
+    const lightCard = ruleFor('.vscode-light .feedback-comment-card');
+    const lightComposer = ruleFor('.vscode-light .feedback-composer');
+
+    for (const surface of [lightCard, lightComposer]) {
+      expect(surface).toContain(
+        'background: var(--vscode-editorWidget-background, var(--vscode-editor-background))'
+      );
+      expect(surface).not.toMatch(/transparent|color-mix|backdrop-filter/);
+    }
   });
 
   it('gates semantic highlights and brackets behind active Feedback mode', () => {
@@ -170,11 +184,58 @@ describe('Feedback annotation styles', () => {
     const captureIcon = ruleFor(".feedback-capture-button[aria-pressed='true'] .toolbar-icon");
 
     expect(feedbackIcon).toContain('var(--md4h-feedback-accent)');
-    expect(startIcon).toContain('var(--md4h-feedback-accent)');
+    expect(startIcon).toContain('var(--md4h-feedback-start-foreground)');
     expect(expandedIcon).toContain('var(--md4h-feedback-on-accent)');
     expect(captureIcon).toContain('var(--md4h-feedback-on-accent)');
     expect(feedbackIcon).not.toContain('--vscode-button-background');
     expect(startIcon).not.toContain('--vscode-button-background');
+  });
+
+  it('renders Start feedback as a compact round AI-comment action', () => {
+    const start = ruleFor('.feedback-start-button');
+    const darkStart = ruleFor('.vscode-dark .feedback-start-button');
+    const highContrastStart = ruleFor('.vscode-high-contrast .feedback-start-button');
+    const highContrastHover = ruleFor(
+      '.vscode-high-contrast .feedback-start-button:not(:disabled):hover'
+    );
+
+    expect(start).toMatch(/box-sizing:\s*border-box/);
+    expect(start).toMatch(/width:\s*36px/);
+    expect(start).toMatch(/min-width:\s*36px/);
+    expect(start).toMatch(/height:\s*36px/);
+    expect(start).toMatch(/padding:\s*0/);
+    expect(start).toMatch(/border-radius:\s*50%/);
+    expect(start).toContain('--md4h-feedback-start-surface');
+    expect(darkStart).toContain('--md4h-feedback-start-surface');
+    expect(darkStart).toMatch(/var\(--vscode-editor-foreground/);
+    expect(highContrastStart).toContain('--vscode-contrastActiveBorder');
+    expect(highContrastStart).toMatch(/border:\s*2px\s+solid/);
+    expect(highContrastHover).toContain('background: var(--md4h-feedback-start-surface)');
+    expect(highContrastHover).toContain('box-shadow: none');
+    expect(highContrastHover).not.toContain('color-mix');
+  });
+
+  it('styles annotation colors as compact swatches with non-color selection and focus cues', () => {
+    const group = ruleFor('.feedback-annotation-colors');
+    const swatch = ruleFor('.feedback-annotation-color');
+    const selected = ruleFor(".feedback-annotation-color[aria-pressed='true']");
+    const focus = ruleFor('.feedback-annotation-color:focus-visible');
+    const highContrastSelected = ruleFor(
+      ".vscode-high-contrast .feedback-annotation-color[aria-pressed='true']"
+    );
+
+    expect(group).toMatch(/display:\s*inline-flex/);
+    expect(swatch).toMatch(/width:\s*24px/);
+    expect(swatch).toMatch(/height:\s*24px/);
+    expect(swatch).toContain('var(--md4h-annotation-swatch)');
+    expect(selected).toMatch(/box-shadow:/);
+    expect(selected).toMatch(/::after|outline:/);
+    expect(focus).toContain('--vscode-focusBorder');
+    expect(highContrastSelected).toContain('background: var(--md4h-annotation-swatch)');
+    expect(highContrastSelected).toContain('--vscode-contrastActiveBorder');
+    expect(css).toMatch(
+      /\.vscode-high-contrast\s+\.feedback-annotation-color\[aria-pressed=['"]true['"]\][\s\S]*?--vscode-contrastActiveBorder/
+    );
   });
 
   it('uses yellow for native review selection and the area-capture boundary only', () => {
@@ -225,6 +286,7 @@ describe('Feedback annotation styles', () => {
       '.feedback-selection-action:focus-visible',
       '.feedback-primary-button:focus-visible',
       '.feedback-toolbar-button:focus-visible',
+      '.feedback-start-button:focus-visible',
     ]) {
       const rule = ruleFor(selector);
       expect(rule).toMatch(/outline:\s*(?:1px|2px)\s+solid\s+var\(--vscode-focusBorder/);
@@ -342,6 +404,36 @@ describe('Feedback annotation styles', () => {
     );
     expect(css).toMatch(
       /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.feedback-start-button:hover[\s\S]*?transform:\s*none/
+    );
+  });
+
+  it('styles the discard checkpoint as a compact, topmost, theme-aware modal', () => {
+    const annotationDialog = ruleFor('.feedback-annotation-dialog');
+    const dialog = ruleFor('.feedback-discard-dialog');
+    const panel = ruleFor('.feedback-discard-panel');
+    const description = ruleFor('.feedback-discard-description');
+    const actions = ruleFor('.feedback-discard-actions');
+    const confirm = ruleFor('.feedback-discard-confirm');
+    const confirmFocus = ruleFor('.feedback-discard-confirm:focus-visible');
+    const highContrastDialog = ruleFor('.vscode-high-contrast .feedback-discard-dialog');
+    const highContrastConfirm = ruleFor('.vscode-high-contrast .feedback-discard-confirm');
+    const screenReaderDialog = ruleFor('.vscode-using-screen-reader .feedback-discard-dialog');
+    const baseZIndex = Number(annotationDialog.match(/z-index:\s*(\d+)/)?.[1]);
+    const discardZIndex = Number(dialog.match(/z-index:\s*(\d+)/)?.[1]);
+
+    expect(discardZIndex).toBeGreaterThan(baseZIndex);
+    expect(panel).toMatch(/width:\s*min\(440px,\s*calc\(100vw\s*-\s*32px\)\)/);
+    expect(description).toContain('--vscode-descriptionForeground');
+    expect(actions).toMatch(/justify-content:\s*flex-end/);
+    expect(confirm).toContain('--vscode-errorForeground');
+    expect(confirmFocus).toContain('--vscode-focusBorder');
+    expect(highContrastDialog).toContain('background: var(--vscode-editor-background)');
+    expect(highContrastDialog).toContain('backdrop-filter: none');
+    expect(highContrastConfirm).toContain('--vscode-contrastActiveBorder');
+    expect(screenReaderDialog).toContain('background: var(--vscode-editor-background)');
+    expect(screenReaderDialog).toContain('backdrop-filter: none');
+    expect(css).toMatch(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.feedback-discard-dialog/
     );
   });
 

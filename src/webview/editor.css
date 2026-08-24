@@ -3615,7 +3615,6 @@ body.vscode-high-contrast-light.feedback-completion-open {
   white-space: nowrap;
 }
 
-.toolbar-button.feedback-start-button,
 .feedback-toolbar-button {
   width: auto;
   height: 28px;
@@ -3631,16 +3630,79 @@ body.vscode-high-contrast-light.feedback-completion-open {
       var(--vscode-statusBarItem-warningBackground, var(--vscode-foreground))
     )
   );
+  --md4h-feedback-start-surface: color-mix(
+    in srgb,
+    var(--md4h-feedback-accent) 72%,
+    var(--vscode-editorWidget-background, var(--vscode-editor-background))
+  );
+  --md4h-feedback-start-foreground: var(--vscode-editor-foreground, var(--vscode-foreground));
+  box-sizing: border-box;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--md4h-feedback-start-foreground);
+  background: var(--md4h-feedback-start-surface);
+  border: 1px solid var(--md4h-feedback-accent);
+  border-radius: 50%;
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--vscode-widget-shadow) 38%, transparent);
 }
 
-.feedback-start-button .toolbar-icon,
+.vscode-dark .feedback-start-button {
+  --md4h-feedback-start-surface: color-mix(
+    in srgb,
+    var(--md4h-feedback-accent) 88%,
+    var(--vscode-editor-foreground, var(--vscode-foreground))
+  );
+  --md4h-feedback-start-foreground: var(--vscode-editor-background);
+}
+
+.vscode-high-contrast .feedback-start-button,
+.vscode-high-contrast-light .feedback-start-button {
+  --md4h-feedback-start-surface: var(
+    --vscode-editorWidget-background,
+    var(--vscode-editor-background)
+  );
+  --md4h-feedback-start-foreground: var(
+    --vscode-editorWidget-foreground,
+    var(--vscode-foreground)
+  );
+  background: var(--md4h-feedback-start-surface);
+  border: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  box-shadow: none;
+}
+
+.feedback-start-button .toolbar-icon {
+  color: var(--md4h-feedback-start-foreground);
+  font-size: 18px;
+}
+
 .feedback-toolbar-button .toolbar-icon {
   color: var(--md4h-feedback-accent);
 }
 
 .feedback-start-button:not(:disabled):hover {
-  background: color-mix(in srgb, var(--md4h-feedback-accent) 16%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--md4h-feedback-accent) 82%,
+    var(--vscode-editorWidget-background, var(--vscode-editor-background))
+  );
   border-color: var(--md4h-feedback-accent);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--vscode-widget-shadow) 52%, transparent);
+}
+
+.vscode-high-contrast .feedback-start-button:not(:disabled):hover,
+.vscode-high-contrast-light .feedback-start-button:not(:disabled):hover {
+  background: var(--md4h-feedback-start-surface);
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  box-shadow: none;
+}
+
+.codicon-fallback .toolbar-icon.uses-codicon::before {
+  content: attr(data-fallback);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .formatting-toolbar.feedback-toolbar-active {
@@ -4134,7 +4196,8 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
 }
 
 .feedback-primary-button:focus-visible,
-.feedback-toolbar-button:focus-visible {
+.feedback-toolbar-button:focus-visible,
+.feedback-start-button:focus-visible {
   outline: 2px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
@@ -4203,6 +4266,14 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   background: color-mix(in srgb, var(--vscode-editor-background) 85%, transparent);
   border: 1px solid var(--vscode-editorWidget-border);
   border-radius: 9px;
+}
+
+/* Light documents make even subtle transparency visible when cards overlap
+   prose. Keep the document-synchronous layout, but give its working surfaces
+   an opaque theme-owned fill so source text never competes with feedback. */
+.vscode-light .feedback-comment-card,
+.vscode-light .feedback-composer {
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
 }
 
 .feedback-comment-card:focus {
@@ -4947,7 +5018,7 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
   margin: 6px 0 10px;
 }
 
-.feedback-annotation-toolbar button,
+.feedback-annotation-toolbar button:not(.feedback-annotation-color),
 .feedback-annotation-actions button,
 .feedback-block-selector button,
 .feedback-block-selector select {
@@ -4959,7 +5030,7 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
   border-radius: 5px;
 }
 
-.feedback-annotation-toolbar button[aria-pressed='true'],
+.feedback-annotation-toolbar button[aria-pressed='true']:not(.feedback-annotation-color),
 .feedback-annotation-actions [data-feedback-action='add'] {
   color: var(--md4h-feedback-on-accent);
   background: var(--md4h-feedback-action-surface);
@@ -4974,7 +5045,8 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
   border-color: var(--md4h-feedback-accent);
 }
 
-.feedback-annotation-toolbar button[aria-pressed='true']:not(:disabled):hover,
+.feedback-annotation-toolbar
+  button[aria-pressed='true']:not(.feedback-annotation-color):not(:disabled):hover,
 .feedback-annotation-actions [data-feedback-action='add']:not(:disabled):hover,
 .feedback-annotation-actions .feedback-primary-button:not(:disabled):hover,
 .feedback-block-selector .feedback-primary-button:not(:disabled):hover,
@@ -4998,6 +5070,101 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
 .feedback-block-selector select:focus-visible {
   outline: 2px solid var(--vscode-focusBorder);
   outline-offset: 2px;
+}
+
+.feedback-discard-dialog {
+  z-index: 5200;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--vscode-editor-background) 76%, transparent);
+  overscroll-behavior: contain;
+}
+
+.feedback-discard-panel {
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(360px, calc(100vh - 32px));
+  padding: 22px;
+  overscroll-behavior: contain;
+}
+
+.feedback-discard-title {
+  font-size: 19px;
+  line-height: 1.3;
+}
+
+.feedback-discard-description {
+  color: var(--vscode-descriptionForeground);
+  line-height: 1.5;
+}
+
+.feedback-discard-actions {
+  align-items: center;
+  justify-content: flex-end;
+  margin: 12px 0 0;
+}
+
+.feedback-discard-confirm {
+  color: var(--vscode-errorForeground);
+  background: transparent;
+  border-color: color-mix(
+    in srgb,
+    var(--vscode-errorForeground) 68%,
+    var(--vscode-editorWidget-border)
+  );
+  cursor: pointer;
+}
+
+.feedback-discard-confirm:not(:disabled):hover {
+  background: color-mix(in srgb, var(--vscode-errorForeground) 14%, transparent);
+}
+
+.feedback-discard-confirm:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.feedback-annotation-colors {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-left: 1px solid var(--vscode-editorWidget-border);
+  border-right: 1px solid var(--vscode-editorWidget-border);
+}
+
+.feedback-annotation-color-label {
+  margin-right: 2px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.feedback-annotation-color {
+  position: relative;
+  box-sizing: border-box;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  background: var(--md4h-annotation-swatch);
+  border: 2px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.feedback-annotation-color[aria-pressed='true'] {
+  outline: 2px solid var(--vscode-editor-foreground);
+  outline-offset: 1px;
+  box-shadow: inset 0 0 0 2px var(--vscode-editorWidget-background);
+}
+
+.feedback-annotation-color:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.feedback-annotation-color:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .feedback-annotation-preview {
@@ -5238,14 +5405,26 @@ body.vscode-high-contrast-light.feedback-peer-locked .markdown-editor {
 .vscode-high-contrast-light .feedback-comments-button[data-feedback-comments-state='expanded'],
 .vscode-high-contrast .feedback-capture-button[aria-pressed='true'],
 .vscode-high-contrast-light .feedback-capture-button[aria-pressed='true'],
-.vscode-high-contrast .feedback-annotation-toolbar button[aria-pressed='true'],
-.vscode-high-contrast-light .feedback-annotation-toolbar button[aria-pressed='true'],
+.vscode-high-contrast
+  .feedback-annotation-toolbar
+  button[aria-pressed='true']:not(.feedback-annotation-color),
+.vscode-high-contrast-light
+  .feedback-annotation-toolbar
+  button[aria-pressed='true']:not(.feedback-annotation-color),
 .vscode-high-contrast .feedback-annotation-actions [data-feedback-action='add'],
 .vscode-high-contrast-light .feedback-annotation-actions [data-feedback-action='add'] {
   color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
   border-width: 2px;
+}
+
+.vscode-high-contrast .feedback-annotation-color[aria-pressed='true'],
+.vscode-high-contrast-light .feedback-annotation-color[aria-pressed='true'] {
+  background: var(--md4h-annotation-swatch);
+  outline-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  box-shadow: none;
 }
 
 .vscode-high-contrast .feedback-target-bracket,
@@ -5393,6 +5572,24 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
   border-width: 2px;
 }
 
+.vscode-high-contrast .feedback-discard-dialog,
+.vscode-high-contrast-light .feedback-discard-dialog {
+  background: var(--vscode-editor-background);
+  backdrop-filter: none;
+}
+
+.vscode-high-contrast .feedback-discard-panel,
+.vscode-high-contrast-light .feedback-discard-panel {
+  border-width: 2px;
+}
+
+.vscode-high-contrast .feedback-discard-confirm,
+.vscode-high-contrast-light .feedback-discard-confirm {
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+}
+
 .vscode-high-contrast .feedback-block-selector::before,
 .vscode-high-contrast-light .feedback-block-selector::before,
 .vscode-using-screen-reader .feedback-block-selector::before {
@@ -5418,6 +5615,11 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
   backdrop-filter: none;
 }
 
+.vscode-using-screen-reader .feedback-discard-dialog {
+  background: var(--vscode-editor-background);
+  backdrop-filter: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .feedback-comment-rail,
   .feedback-card-layer,
@@ -5434,7 +5636,9 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
   .feedback-toolbar-button,
   .feedback-frame-label,
   .feedback-completion-dialog,
-  .feedback-completion-panel {
+  .feedback-completion-panel,
+  .feedback-discard-dialog,
+  .feedback-discard-panel {
     transition: none !important;
     animation: none !important;
   }

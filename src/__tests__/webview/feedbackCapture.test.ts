@@ -66,9 +66,11 @@ interface FakeCanvasResult {
   canvasFactory: jest.MockedFunction<CanvasFactory>;
   context: Record<string, jest.Mock>;
   canvas: HTMLCanvasElement;
+  strokeStyles: string[];
 }
 
 function fakeCanvas(): FakeCanvasResult {
+  const strokeStyles: string[] = [];
   const context = {
     drawImage: jest.fn(),
     beginPath: jest.fn(),
@@ -79,6 +81,10 @@ function fakeCanvas(): FakeCanvasResult {
     ellipse: jest.fn(),
     arc: jest.fn(),
   };
+  Object.defineProperty(context, 'strokeStyle', {
+    configurable: true,
+    set: value => strokeStyles.push(String(value)),
+  });
   const canvas = {
     width: 0,
     height: 0,
@@ -86,7 +92,7 @@ function fakeCanvas(): FakeCanvasResult {
     toDataURL: jest.fn(() => 'data:image/png;base64,flattened'),
   } as unknown as HTMLCanvasElement;
   const canvasFactory = jest.fn(() => canvas);
-  return { canvasFactory, context, canvas };
+  return { canvasFactory, context, canvas, strokeStyles };
 }
 
 describe('feedback capture geometry', () => {
@@ -431,6 +437,22 @@ describe('PNG flattening', () => {
     expect(context.ellipse).toHaveBeenCalled();
     expect(png).toBe('data:image/png;base64,flattened');
   });
+
+  it('flattens each annotation with the color chosen when it was drawn', () => {
+    const { canvasFactory, strokeStyles } = fakeCanvas();
+
+    flattenAnnotationsToPng(
+      document.createElement('img'),
+      { width: 320, height: 180 },
+      [
+        { type: 'rectangle', x: 10, y: 10, width: 40, height: 30, color: 'yellow' },
+        { type: 'ellipse', x: 70, y: 20, width: 50, height: 40, color: 'blue' },
+      ],
+      canvasFactory
+    );
+
+    expect(strokeStyles).toEqual(['#1f2328', '#f5c400', '#ffffff', '#2f81f7']);
+  });
 });
 
 describe('feedback annotation modal', () => {
@@ -508,7 +530,7 @@ describe('feedback annotation modal', () => {
     );
 
     expect(controller.commands).toEqual([
-      { type: 'rectangle', x: 100, y: 100, width: 400, height: 400 },
+      { type: 'rectangle', x: 100, y: 100, width: 400, height: 400, color: 'coral' },
     ]);
   });
 
@@ -529,6 +551,112 @@ describe('feedback annotation modal', () => {
     expect(controller.commands).toHaveLength(1);
     controller.element.querySelector<HTMLButtonElement>('[aria-label="Redo annotation"]')?.click();
     expect(controller.commands).toEqual([]);
+  });
+
+  it('offers a compact labelled color palette and keeps colors on individual drawings', () => {
+    const controller = createFeedbackAnnotationModal({
+      image: { dataUrl: 'data:image/png;base64,base', width: 800, height: 600 },
+      onAdd: jest.fn(),
+      onRetake: jest.fn(),
+      onCancel: jest.fn(),
+    });
+    const colorGroup = controller.element.querySelector<HTMLElement>(
+      '[role="group"][aria-label="Annotation color"]'
+    );
+    const swatches = Array.from(
+      colorGroup?.querySelectorAll<HTMLButtonElement>('[data-feedback-color]') ?? []
+    );
+
+    expect(swatches).toHaveLength(4);
+    expect(colorGroup?.querySelector('.feedback-annotation-color-label')?.textContent).toBe(
+      'Color'
+    );
+    expect(swatches.map(button => button.getAttribute('aria-label'))).toEqual([
+      'Coral annotation color',
+      'Yellow annotation color',
+      'Blue annotation color',
+      'Green annotation color',
+    ]);
+    expect(swatches[0]?.getAttribute('aria-pressed')).toBe('true');
+
+    const overlay = controller.element.querySelector<SVGSVGElement>('svg')!;
+    overlay.getBoundingClientRect = () => domRect(0, 0, 800, 600);
+    swatches[1]?.click();
+    overlay.dispatchEvent(
+      new MouseEvent('pointerdown', { clientX: 10, clientY: 20, bubbles: true })
+    );
+    overlay.dispatchEvent(new MouseEvent('pointerup', { clientX: 40, clientY: 60, bubbles: true }));
+    controller.setTool('ellipse');
+    swatches[2]?.click();
+    overlay.dispatchEvent(
+      new MouseEvent('pointerdown', { clientX: 50, clientY: 60, bubbles: true })
+    );
+    overlay.dispatchEvent(
+      new MouseEvent('pointerup', { clientX: 120, clientY: 140, bubbles: true })
+    );
+
+    expect(controller.color).toBe('blue');
+    expect(swatches[1]?.getAttribute('aria-pressed')).toBe('false');
+    expect(swatches[2]?.getAttribute('aria-pressed')).toBe('true');
+    expect(controller.commands.map(command => command.color)).toEqual(['yellow', 'blue']);
+    expect(
+      Array.from(controller.element.querySelectorAll('[data-annotation-type]')).map(group =>
+        group.querySelector('[data-annotation-stroke]')?.getAttribute('stroke')
+      )
+    ).toEqual(['#f5c400', '#2f81f7']);
+
+    controller.undo();
+    controller.redo();
+    expect(controller.commands.map(command => command.color)).toEqual(['yellow', 'blue']);
+  });
+
+  it('changes an empty Cancel action to an in-webview Discard checkpoint after drawing', async () => {
+    const onCancel = jest.fn();
+    const controller = createFeedbackAnnotationModal({
+      image: { dataUrl: 'data:image/png;base64,base', width: 800, height: 600 },
+      onAdd: jest.fn(),
+      onRetake: jest.fn(),
+      onCancel,
+    });
+    const cancel = controller.element.querySelector<HTMLButtonElement>(
+      '[data-feedback-action="cancel"]'
+    );
+
+    expect(cancel?.textContent).toBe('Cancel');
+    controller.addCommand({ type: 'rectangle', x: 1, y: 2, width: 30, height: 40 });
+    expect(cancel?.textContent).toBe('Discard');
+
+    cancel?.click();
+    const checkpoint = document.querySelector<HTMLElement>('[data-feedback-discard-dialog]');
+    expect(checkpoint?.getAttribute('role')).toBe('dialog');
+    expect(checkpoint?.textContent).toContain(
+      'Your unfinished comment and annotations will be lost.'
+    );
+    document.body.tabIndex = -1;
+    document.body.focus();
+    controller.focus();
+    expect(document.activeElement).toBe(
+      checkpoint?.querySelector<HTMLElement>('[data-feedback-discard-keep]')
+    );
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(controller.element.isConnected).toBe(true);
+
+    checkpoint?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await Promise.resolve();
+    expect(controller.element.isConnected).toBe(true);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(
+      controller.element.querySelector<HTMLTextAreaElement>('textarea')
+    );
+
+    cancel?.click();
+    document
+      .querySelector<HTMLElement>('[data-feedback-discard-dialog]')
+      ?.querySelector<HTMLButtonElement>('[data-feedback-discard-confirm]')
+      ?.click();
+    await Promise.resolve();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(controller.element.isConnected).toBe(false);
   });
 
   it('requires nonblank feedback and allocates no canvas before Add', async () => {
@@ -566,6 +694,55 @@ describe('feedback annotation modal', () => {
         pngDataUrl: 'data:image/png;base64,flattened',
       })
     );
+  });
+
+  it('locks annotation controls during Add and restores the draft after a failed write', async () => {
+    let rejectWrite: ((error: Error) => void) | undefined;
+    const onAdd = jest.fn(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectWrite = reject;
+        })
+    );
+    const { canvasFactory } = fakeCanvas();
+    const controller = createFeedbackAnnotationModal({
+      image: { dataUrl: 'data:image/png;base64,base', width: 800, height: 600 },
+      canvasFactory,
+      onAdd,
+      onRetake: jest.fn(),
+      onCancel: jest.fn(),
+    });
+    const input = controller.element.querySelector<HTMLTextAreaElement>('textarea')!;
+    const cancel = controller.element.querySelector<HTMLButtonElement>(
+      '[data-feedback-action="cancel"]'
+    )!;
+    const retake = controller.element.querySelector<HTMLButtonElement>(
+      '[data-feedback-action="retake"]'
+    )!;
+    const tool = controller.element.querySelector<HTMLButtonElement>(
+      '[aria-label="Rectangle tool"]'
+    )!;
+    const color = controller.element.querySelector<HTMLButtonElement>('[data-feedback-color]')!;
+    input.value = 'Keep this draft after failure';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    const submission = controller.submit();
+    await Promise.resolve();
+
+    expect(input.readOnly).toBe(true);
+    expect(cancel.disabled).toBe(true);
+    expect(retake.disabled).toBe(true);
+    expect(tool.disabled).toBe(true);
+    expect(color.disabled).toBe(true);
+
+    rejectWrite?.(new Error('Write failed'));
+    await expect(submission).resolves.toBe(false);
+    expect(input.value).toBe('Keep this draft after failure');
+    expect(input.readOnly).toBe(false);
+    expect(cancel.disabled).toBe(false);
+    expect(retake.disabled).toBe(false);
+    expect(tool.disabled).toBe(false);
+    expect(color.disabled).toBe(false);
   });
 
   it('restores focus to the logical toolbar control after Add rerenders it', async () => {
@@ -727,8 +904,7 @@ describe('feedback annotation modal', () => {
     expect(document.activeElement).toBe(previousFocus);
   });
 
-  it('confirms before cancelling typed or drawn screenshot feedback', () => {
-    const confirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+  it('confirms inside the webview before cancelling typed screenshot feedback', async () => {
     const onCancel = jest.fn();
     const controller = createFeedbackAnnotationModal({
       image: { dataUrl: 'data:image/png;base64,base', width: 800, height: 600 },
@@ -741,22 +917,21 @@ describe('feedback annotation modal', () => {
     input.value = 'Keep this draft';
 
     controller.cancel();
-    expect(confirm).toHaveBeenCalled();
+    const checkpoint = document.querySelector<HTMLElement>('[data-feedback-discard-dialog]');
+    expect(checkpoint?.getAttribute('aria-modal')).toBe('true');
     expect(onCancel).not.toHaveBeenCalled();
     expect(controller.element.isConnected).toBe(true);
 
-    confirm.mockReturnValue(true);
-    controller.cancel();
+    checkpoint?.querySelector<HTMLButtonElement>('[data-feedback-discard-confirm]')?.click();
+    await Promise.resolve();
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(controller.element.isConnected).toBe(false);
-    confirm.mockRestore();
   });
 
-  it('closes immediately on snapshot invalidation without confirming or submitting', () => {
+  it('closes annotation and discard dialogs immediately on snapshot invalidation', () => {
     const previousFocus = document.createElement('button');
     document.body.append(previousFocus);
     previousFocus.focus();
-    const confirm = jest.spyOn(window, 'confirm');
     const onAdd = jest.fn();
     const onCancel = jest.fn();
     const controller = createFeedbackAnnotationModal({
@@ -767,24 +942,25 @@ describe('feedback annotation modal', () => {
     });
     const input = controller.element.querySelector<HTMLTextAreaElement>('textarea')!;
     input.value = 'Unsaved screenshot feedback';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    controller.cancel();
+    expect(document.querySelector('[data-feedback-discard-dialog]')).not.toBeNull();
     document.body.classList.add('feedback-capture-active');
 
     window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
 
     expect(controller.element.isConnected).toBe(false);
+    expect(document.querySelector('[data-feedback-discard-dialog]')).toBeNull();
     expect(document.body.classList.contains('feedback-capture-active')).toBe(false);
     expect(document.activeElement).toBe(previousFocus);
-    expect(confirm).not.toHaveBeenCalled();
     expect(onAdd).not.toHaveBeenCalled();
     expect(onCancel).not.toHaveBeenCalled();
-    confirm.mockRestore();
   });
 
   it('closes once on Feedback session end and rejects later submissions', async () => {
     const previousFocus = document.createElement('button');
     document.body.append(previousFocus);
     previousFocus.focus();
-    const confirm = jest.spyOn(window, 'confirm');
     const onAdd = jest.fn();
     const onCancel = jest.fn();
     const controller = createFeedbackAnnotationModal({
@@ -805,9 +981,7 @@ describe('feedback annotation modal', () => {
     expect(document.body.classList.contains('feedback-capture-active')).toBe(false);
     expect(document.activeElement).toBe(previousFocus);
     expect(await controller.submit()).toBe(false);
-    expect(confirm).not.toHaveBeenCalled();
     expect(onAdd).not.toHaveBeenCalled();
     expect(onCancel).not.toHaveBeenCalled();
-    confirm.mockRestore();
   });
 });

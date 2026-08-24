@@ -2215,6 +2215,105 @@ describe('Feedback review controller', () => {
     expect(document.querySelector('.feedback-composer')).toBeNull();
   });
 
+  it('keeps a dirty composer until its in-webview Discard is confirmed', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    controller.openTextComposer({
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus: 'Alpha beta',
+      startLine: 3,
+      endLine: 3,
+    });
+    const composer = document.querySelector<HTMLFormElement>('.feedback-composer')!;
+    const field = composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+    const cancel = composer.querySelector<HTMLButtonElement>('.feedback-secondary-button')!;
+    field.value = 'Keep this unfinished note';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+
+    expect(cancel.textContent).toBe('Discard');
+    cancel.click();
+
+    const checkpoint = document.querySelector<HTMLElement>('[data-feedback-discard-dialog]');
+    expect(checkpoint?.textContent).toContain(
+      'Your unfinished comment will be lost. Saved comments and the Feedback session will remain.'
+    );
+    expect(document.querySelector('.feedback-composer')).toBe(composer);
+    expect(field.value).toBe('Keep this unfinished note');
+    expect(composer.inert).toBe(true);
+    expect(controller.draftSurfaceGate.activeKind()).toBe('text-composer');
+    document.body.tabIndex = -1;
+    document.body.focus();
+    expect(controller.draftSurfaceGate.focusActive()).toBe(true);
+    expect(document.activeElement).toBe(
+      checkpoint?.querySelector<HTMLElement>('[data-feedback-discard-keep]')
+    );
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.some(call => call[0].type === 'feedback.text.add')
+    ).toBe(false);
+
+    checkpoint?.querySelector<HTMLButtonElement>('[data-feedback-discard-keep]')?.click();
+    await Promise.resolve();
+    expect(document.querySelector('.feedback-composer')).toBe(composer);
+    expect(composer.inert).toBe(false);
+    expect(controller.draftSurfaceGate.activeKind()).toBe('text-composer');
+    expect(document.activeElement).toBe(field);
+
+    cancel.click();
+    document
+      .querySelector<HTMLElement>('[data-feedback-discard-dialog]')
+      ?.querySelector<HTMLButtonElement>('[data-feedback-discard-confirm]')
+      ?.click();
+    await Promise.resolve();
+    expect(document.querySelector('.feedback-composer')).toBeNull();
+    expect(controller.draftSurfaceGate.activeKind()).toBeNull();
+    expect(editor.view.dom.querySelector('.feedback-pending-target')).toBeNull();
+  });
+
+  it('uses the same dirty-discard checkpoint when Escape closes a composer', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    controller.openTextComposer({
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus: 'Alpha beta',
+      startLine: 3,
+      endLine: 3,
+    });
+    const composer = document.querySelector<HTMLFormElement>('.feedback-composer')!;
+    const field = composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+    field.value = 'Do not lose this draft';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+
+    composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.querySelector('.feedback-composer')).toBe(composer);
+    let checkpoint = document.querySelector<HTMLElement>('[data-feedback-discard-dialog]')!;
+    checkpoint.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await Promise.resolve();
+    expect(document.querySelector('.feedback-composer')).toBe(composer);
+    expect(document.activeElement).toBe(field);
+
+    composer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    checkpoint = document.querySelector<HTMLElement>('[data-feedback-discard-dialog]')!;
+    checkpoint.querySelector<HTMLButtonElement>('[data-feedback-discard-confirm]')?.click();
+    await Promise.resolve();
+    expect(document.querySelector('.feedback-composer')).toBeNull();
+  });
+
   it('activates with a collapsed, labelled comments rail and stable relationships', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
