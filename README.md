@@ -148,13 +148,15 @@ Built on TipTap with a **human-first design philosophy**:
 
 Feedback mode freezes one saved Markdown file so you can comment on the rich view without moving the underlying source. The resulting bundle is plain Markdown plus optional PNG evidence, ready to share through Git with Codex, Claude Code, Grok, or another workspace-aware agent.
 
-1. Open a saved Markdown file inside a workspace and click the round AI-comment action whose tooltip reads **Start a frozen feedback session**.
+1. Open a saved Markdown file inside a workspace and click the AI-comment toolbar action whose tooltip reads **Log feedback for an LLM**. It sits beside the `@` action that copies an `@file#lines` reference for AI tools.
 2. Select rendered text or code and use the floating comment button beside the selection. The focused composer records the exact visible quote and its containing source lines without opening older comment cards.
 3. For visual feedback, click **Capture area**, drag over the visible editor, then optionally mark it with Pen, Rectangle, or Ellipse. Pick a markup color and use Undo, Redo, or undoable Clear as needed before adding the written instruction.
 4. Use **Comments** to hide or show document-aligned pins and cards. Exact text, including resolved cross-block text, is highlighted only in Feedback mode. Multi-block block-level fallbacks and opaque targets use one continuous edge bracket. Compact cards follow their targets as the document scrolls, and only the active card expands with the exact quote or capture preview plus source lines.
 5. Click **Finish & copy** to verify the frozen source hash, seal the bundle, and copy an agent handoff prompt.
 
 The formatting toolbar is replaced by Feedback actions while a session is active, and document editing is locked while text selection and search remain available. If the source changes outside the frozen rich view, the session is invalidated: its draft stays on disk, but new feedback and finishing are disabled.
+
+Use the visible **Discard draft…** action to abandon the whole session. Its confirmation reports how many saved feedback items will be moved to Trash before Feedback mode ends. Discard remains available as a recovery action when an external source change invalidates the snapshot.
 
 An empty unfinished comment or capture can be cancelled immediately. Once it contains text or drawing, its action changes to **Discard** and asks for confirmation. This removes only that unfinished item; saved comments and the Feedback session remain available.
 

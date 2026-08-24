@@ -175,7 +175,7 @@ describe('Feedback annotation styles', () => {
     }
   });
 
-  it('keeps Feedback toolbar glyphs yellow while leaving their labels theme-neutral', () => {
+  it('keeps active Feedback glyphs yellow while the idle Start action remains neutral', () => {
     const feedbackIcon = ruleFor('.feedback-toolbar-button .toolbar-icon');
     const startIcon = ruleFor('.feedback-start-button .toolbar-icon');
     const expandedIcon = ruleFor(
@@ -184,35 +184,48 @@ describe('Feedback annotation styles', () => {
     const captureIcon = ruleFor(".feedback-capture-button[aria-pressed='true'] .toolbar-icon");
 
     expect(feedbackIcon).toContain('var(--md4h-feedback-accent)');
-    expect(startIcon).toContain('var(--md4h-feedback-start-foreground)');
+    expect(startIcon).toMatch(/color:\s*inherit/);
+    expect(startIcon).not.toContain('--md4h-feedback-accent');
     expect(expandedIcon).toContain('var(--md4h-feedback-on-accent)');
     expect(captureIcon).toContain('var(--md4h-feedback-on-accent)');
     expect(feedbackIcon).not.toContain('--vscode-button-background');
     expect(startIcon).not.toContain('--vscode-button-background');
   });
 
-  it('renders Start feedback as a compact round AI-comment action', () => {
+  it('renders Start feedback as a compact neutral toolbar action', () => {
+    const toolbarButton = ruleFor('.toolbar-button');
     const start = ruleFor('.feedback-start-button');
-    const darkStart = ruleFor('.vscode-dark .feedback-start-button');
-    const highContrastStart = ruleFor('.vscode-high-contrast .feedback-start-button');
-    const highContrastHover = ruleFor(
-      '.vscode-high-contrast .feedback-start-button:not(:disabled):hover'
-    );
+    const hover = ruleFor('.feedback-start-button:not(:disabled):hover');
 
-    expect(start).toMatch(/box-sizing:\s*border-box/);
-    expect(start).toMatch(/width:\s*36px/);
-    expect(start).toMatch(/min-width:\s*36px/);
-    expect(start).toMatch(/height:\s*36px/);
-    expect(start).toMatch(/padding:\s*0/);
-    expect(start).toMatch(/border-radius:\s*50%/);
-    expect(start).toContain('--md4h-feedback-start-surface');
-    expect(darkStart).toContain('--md4h-feedback-start-surface');
-    expect(darkStart).toMatch(/var\(--vscode-editor-foreground/);
-    expect(highContrastStart).toContain('--vscode-contrastActiveBorder');
-    expect(highContrastStart).toMatch(/border:\s*2px\s+solid/);
-    expect(highContrastHover).toContain('background: var(--md4h-feedback-start-surface)');
-    expect(highContrastHover).toContain('box-shadow: none');
-    expect(highContrastHover).not.toContain('color-mix');
+    expect(toolbarButton).toMatch(/border-radius:\s*6px/);
+    expect(start).toMatch(/color:\s*var\(--md-foreground\)/);
+    expect(start).toMatch(/background:\s*transparent/);
+    expect(start).toMatch(/border-color:\s*transparent/);
+    expect(start).toMatch(/box-shadow:\s*none/);
+    expect(start).not.toMatch(/--md4h-feedback-(?:accent|start-surface)/);
+    expect(start).not.toMatch(/width:|height:|border-radius:\s*50%|color-mix/);
+    expect(hover).toContain('var(--md-hover-bg)');
+    expect(hover).toMatch(/box-shadow:\s*none/);
+    expect(hover).not.toContain('--md4h-feedback-accent');
+  });
+
+  it('separates the visible session discard action from yellow Feedback controls', () => {
+    const divider = ruleFor('.feedback-toolbar-divider');
+    const menuHost = ruleFor('.feedback-more-menu-host');
+    const discard = ruleFor('.feedback-discard-button');
+    const discardIcon = ruleFor('.feedback-discard-button .toolbar-icon');
+    const discardHover = ruleFor('.feedback-discard-button:not(:disabled):hover');
+    const highContrast = ruleFor('.vscode-high-contrast .feedback-discard-button');
+
+    expect(divider).toContain('var(--vscode-editorWidget-border');
+    expect(menuHost).toMatch(/position:\s*relative/);
+    expect(discard).toContain('var(--vscode-errorForeground)');
+    expect(discard).toMatch(/background:\s*transparent/);
+    expect(discard).not.toContain('--md4h-feedback-accent');
+    expect(discardIcon).toContain('var(--vscode-errorForeground)');
+    expect(discardHover).toContain('var(--vscode-errorForeground)');
+    expect(discardHover).not.toContain('--md4h-feedback-highlight-saved');
+    expect(highContrast).toContain('var(--vscode-contrastBorder');
   });
 
   it('styles annotation colors as compact swatches with non-color selection and focus cues', () => {
@@ -261,17 +274,17 @@ describe('Feedback annotation styles', () => {
     }
   });
 
-  it('keeps yellow available on pre-session Start and draft-recovery actions', () => {
+  it('reserves yellow for active and recovery actions rather than idle Start', () => {
     const start = ruleFor('.feedback-start-button');
     const draftPrimary = ruleFor('.feedback-draft-banner .feedback-primary-button');
     const warningThemeToken =
       /--vscode-(?:editorWarning-foreground|statusBarItem-warning(?:Background|Foreground)|notificationsWarningIcon-foreground)/;
 
-    for (const rule of [start, draftPrimary]) {
-      expect(rule).toContain('--md4h-feedback-accent');
-      expect(rule).toMatch(warningThemeToken);
-      expect(rule).not.toContain('--vscode-button-background');
-    }
+    expect(start).not.toContain('--md4h-feedback-accent');
+    expect(start).not.toMatch(warningThemeToken);
+    expect(draftPrimary).toContain('--md4h-feedback-accent');
+    expect(draftPrimary).toMatch(warningThemeToken);
+    expect(draftPrimary).not.toContain('--vscode-button-background');
   });
 
   it('does not reintroduce purple or magenta accents into Feedback styling', () => {

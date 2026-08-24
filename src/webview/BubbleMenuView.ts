@@ -39,13 +39,17 @@ export const FEEDBACK_COMMENTS_RAIL_ID = 'feedback-comments-rail';
  *
  * @param trigger - Current More feedback actions control, when mounted.
  * @param fallback - Toolbar used before or outside the grouped Feedback layout.
- * @returns The centered Feedback action group, or the toolbar fallback.
+ * @returns The dedicated menu host, centered Feedback group, or toolbar fallback.
  */
 export function getFeedbackToolbarMenuHost(
   trigger: HTMLElement | null,
   fallback: HTMLElement
 ): HTMLElement {
-  return trigger?.closest<HTMLElement>('[data-feedback-toolbar-group]') ?? fallback;
+  return (
+    trigger?.closest<HTMLElement>('[data-feedback-menu-host]') ??
+    trigger?.closest<HTMLElement>('[data-feedback-toolbar-group]') ??
+    fallback
+  );
 }
 
 export interface FeedbackToolbarState {
@@ -708,21 +712,6 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       className: 'copy-button',
     },
     {
-      type: 'button',
-      label: 'Copy AI Ref',
-      title: 'Copy as AI Context',
-      icon: { name: 'sparkle', fallback: '✨' },
-      action: () => {
-        window.dispatchEvent(new CustomEvent('copyAiContextRef'));
-      },
-      isActive: () => false,
-      className: 'copy-ai-ref-button',
-      // The handler reads `editor.isFocused` synchronously to decide whether to
-      // include a line range. Without this, clicking the button blurs the
-      // editor first and we'd always emit a filename-only ref.
-      preserveEditorFocus: true,
-    },
-    {
       type: 'dropdown',
       label: 'Export',
       title: 'Export document',
@@ -771,8 +760,23 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     { type: 'separator' },
     {
       type: 'button',
+      label: 'Copy AI reference',
+      title: 'Copy @file#lines reference for AI',
+      icon: { name: 'mention', fallback: '@' },
+      action: () => {
+        window.dispatchEvent(new CustomEvent('copyAiContextRef'));
+      },
+      isActive: () => false,
+      className: 'copy-ai-ref-button',
+      // The handler reads `editor.isFocused` synchronously to decide whether to
+      // include a line range. Without this, clicking the button blurs the
+      // editor first and we'd always emit a filename-only ref.
+      preserveEditorFocus: true,
+    },
+    {
+      type: 'button',
       label: 'Start feedback',
-      title: 'Start a frozen feedback session',
+      title: 'Log feedback for an LLM',
       icon: { name: 'comment-discussion-sparkle', fallback: '✦' },
       feedbackData: 'start',
       className: 'feedback-start-button',
@@ -979,7 +983,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     visibleLabel?: string;
     eventName: string;
     icon: ToolbarIcon;
-    dataName: 'finish' | 'capture' | 'comments' | 'more';
+    dataName: 'finish' | 'capture' | 'comments' | 'more' | 'discard';
     disabled?: boolean;
     pressed?: boolean;
     expanded?: boolean;
@@ -1135,6 +1139,14 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
         dataName: 'more',
         disabled: closing || captureState !== 'idle',
       }),
+      createFeedbackAction({
+        label: 'Discard Feedback draft (moves it to Trash)',
+        visibleLabel: 'Discard draft…',
+        eventName: 'feedbackDiscardRequested',
+        icon: { name: 'trash', fallback: '×' },
+        dataName: 'discard',
+        disabled: closing || captureState !== 'idle',
+      }),
     ];
 
     const feedbackGroup = document.createElement('div');
@@ -1143,7 +1155,18 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     feedbackGroup.setAttribute('role', 'group');
     feedbackGroup.setAttribute('aria-label', 'Feedback session actions');
     feedbackGroup.setAttribute('aria-busy', String(toolbarBusy));
-    feedbackGroup.append(...controls);
+    const moreMenuHost = document.createElement('div');
+    moreMenuHost.className = 'feedback-more-menu-host';
+    moreMenuHost.setAttribute('data-feedback-menu-host', '');
+    moreMenuHost.append(controls[3]);
+
+    const discardDivider = document.createElement('div');
+    discardDivider.className = 'feedback-toolbar-divider';
+    discardDivider.setAttribute('data-feedback-toolbar-divider', '');
+    discardDivider.setAttribute('role', 'separator');
+    discardDivider.setAttribute('aria-orientation', 'vertical');
+
+    feedbackGroup.append(...controls.slice(0, 3), moreMenuHost, discardDivider, controls[4]);
     toolbar.replaceChildren(feedbackGroup);
     toolbar.classList.add('feedback-toolbar-active');
     feedbackControlsMounted = true;

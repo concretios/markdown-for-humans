@@ -3623,58 +3623,14 @@ body.vscode-high-contrast-light.feedback-completion-open {
 }
 
 .feedback-start-button {
-  --md4h-feedback-accent: var(
-    --vscode-editorWarning-foreground,
-    var(
-      --vscode-notificationsWarningIcon-foreground,
-      var(--vscode-statusBarItem-warningBackground, var(--vscode-foreground))
-    )
-  );
-  --md4h-feedback-start-surface: color-mix(
-    in srgb,
-    var(--md4h-feedback-accent) 72%,
-    var(--vscode-editorWidget-background, var(--vscode-editor-background))
-  );
-  --md4h-feedback-start-foreground: var(--vscode-editor-foreground, var(--vscode-foreground));
-  box-sizing: border-box;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0;
-  color: var(--md4h-feedback-start-foreground);
-  background: var(--md4h-feedback-start-surface);
-  border: 1px solid var(--md4h-feedback-accent);
-  border-radius: 50%;
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--vscode-widget-shadow) 38%, transparent);
-}
-
-.vscode-dark .feedback-start-button {
-  --md4h-feedback-start-surface: color-mix(
-    in srgb,
-    var(--md4h-feedback-accent) 88%,
-    var(--vscode-editor-foreground, var(--vscode-foreground))
-  );
-  --md4h-feedback-start-foreground: var(--vscode-editor-background);
-}
-
-.vscode-high-contrast .feedback-start-button,
-.vscode-high-contrast-light .feedback-start-button {
-  --md4h-feedback-start-surface: var(
-    --vscode-editorWidget-background,
-    var(--vscode-editor-background)
-  );
-  --md4h-feedback-start-foreground: var(
-    --vscode-editorWidget-foreground,
-    var(--vscode-foreground)
-  );
-  background: var(--md4h-feedback-start-surface);
-  border: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  color: var(--md-foreground);
+  background: transparent;
+  border-color: transparent;
   box-shadow: none;
 }
 
 .feedback-start-button .toolbar-icon {
-  color: var(--md4h-feedback-start-foreground);
-  font-size: 18px;
+  color: inherit;
 }
 
 .feedback-toolbar-button .toolbar-icon {
@@ -3682,19 +3638,8 @@ body.vscode-high-contrast-light.feedback-completion-open {
 }
 
 .feedback-start-button:not(:disabled):hover {
-  background: color-mix(
-    in srgb,
-    var(--md4h-feedback-accent) 82%,
-    var(--vscode-editorWidget-background, var(--vscode-editor-background))
-  );
-  border-color: var(--md4h-feedback-accent);
-  box-shadow: 0 4px 14px color-mix(in srgb, var(--vscode-widget-shadow) 52%, transparent);
-}
-
-.vscode-high-contrast .feedback-start-button:not(:disabled):hover,
-.vscode-high-contrast-light .feedback-start-button:not(:disabled):hover {
-  background: var(--md4h-feedback-start-surface);
-  border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  background: var(--md-hover-bg);
+  border-color: transparent;
   box-shadow: none;
 }
 
@@ -3717,6 +3662,20 @@ body.vscode-high-contrast-light.feedback-completion-open {
   justify-content: center;
   max-width: 100%;
   gap: 6px;
+}
+
+.feedback-more-menu-host {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.feedback-toolbar-divider {
+  width: 1px;
+  height: 18px;
+  flex: 0 0 1px;
+  margin-inline: 2px;
+  background: var(--vscode-editorWidget-border, var(--vscode-panel-border));
 }
 
 .feedback-comments-button[data-feedback-comments-state='hidden'] {
@@ -3774,6 +3733,26 @@ body.vscode-high-contrast-light.feedback-completion-open {
   background: var(--md4h-feedback-action-hover);
 }
 
+.feedback-discard-button {
+  color: var(--vscode-errorForeground);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--vscode-errorForeground) 62%, transparent);
+}
+
+.feedback-discard-button .toolbar-icon {
+  color: var(--vscode-errorForeground);
+}
+
+.feedback-discard-button:not(:disabled):hover {
+  color: var(--vscode-errorForeground);
+  background: color-mix(in srgb, var(--vscode-errorForeground) 12%, transparent);
+  border-color: var(--vscode-errorForeground);
+}
+
+.feedback-discard-button:disabled .toolbar-icon {
+  color: inherit;
+}
+
 .feedback-more-menu {
   position: absolute;
   top: calc(100% + 9px);
@@ -3815,10 +3794,6 @@ body.vscode-high-contrast-light.feedback-completion-open {
 
 .feedback-more-item:hover:not(:focus-visible) {
   outline: none;
-}
-
-.feedback-more-item.danger {
-  color: var(--vscode-errorForeground);
 }
 
 .feedback-draft-banner {
@@ -5557,6 +5532,11 @@ body[data-feedback-comments-state='hidden'].vscode-high-contrast-light.feedback-
 .vscode-high-contrast-light .feedback-comments-button[aria-expanded='true'] {
   outline: 1px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
   outline-offset: 1px;
+}
+
+.vscode-high-contrast .feedback-discard-button,
+.vscode-high-contrast-light .feedback-discard-button {
+  border: 2px solid var(--vscode-contrastBorder, var(--vscode-contrastActiveBorder));
 }
 
 .vscode-high-contrast .feedback-completion-dialog,

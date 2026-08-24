@@ -647,6 +647,13 @@ describe('Feedback review controller', () => {
     });
     expect(controller.isInvalidated()).toBe(true);
     expect(controller.getSession()?.sessionId).toBe('current-session');
+
+    controller.discard();
+    expect(host.postMessage).toHaveBeenCalledWith({
+      type: 'feedback.discard',
+      requestId: expect.any(String),
+      sessionId: 'current-session',
+    });
   });
 
   it.each([

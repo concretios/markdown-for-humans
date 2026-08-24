@@ -17,12 +17,15 @@ describe('Feedback toolbar layout CSS', () => {
     expect(baseRule).not.toMatch(/justify-content:\s*center/);
   });
 
-  it('keeps the centered group as the overflow menu positioning context', () => {
+  it('keeps the centered group stable and positions overflow from its dedicated host', () => {
     const groupRule = css.match(/\.feedback-toolbar-group\s*\{[^}]*\}/)?.[0];
+    const menuHostRule = css.match(/\.feedback-more-menu-host\s*\{[^}]*\}/)?.[0];
     const menuRule = css.match(/\.feedback-more-menu\s*\{[^}]*\}/)?.[0];
 
     expect(groupRule).toMatch(/position:\s*relative/);
     expect(groupRule).toMatch(/display:\s*flex/);
+    expect(menuHostRule).toMatch(/position:\s*relative/);
+    expect(menuHostRule).toMatch(/display:\s*flex/);
     expect(menuRule).toMatch(/right:\s*0/);
     expect(menuRule).toMatch(/top:\s*calc\(100%\s*\+\s*9px\)/);
     expect(menuRule).toMatch(/max-width:\s*calc\(100vw\s*-\s*16px\)/);

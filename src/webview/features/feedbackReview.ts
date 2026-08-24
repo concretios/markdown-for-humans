@@ -3621,7 +3621,7 @@ export function createFeedbackReviewController(options: {
     },
 
     discard() {
-      if (!hasWritableSession() || !session) return;
+      if (!session || pendingFinishRequestId !== null || pendingClose !== null) return;
       if (draftSurfaceGate.focusActive()) {
         announce('Add or cancel the current feedback before discarding this draft.');
         return;

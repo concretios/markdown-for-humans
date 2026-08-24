@@ -57,12 +57,12 @@
 
 **Entry points:**
 
-- A round AI-comment toolbar action labelled `Start feedback` for assistive technology and tooltips, plus unbound Command Palette commands.
+- A compact AI-comment toolbar action labelled `Log feedback for an LLM` for assistive technology and tooltips, placed beside the `@` action that copies an `@file#lines` reference, plus unbound Command Palette commands.
 
 **Primary flow:**
 
 1. Save and fingerprint the active Markdown source.
-2. Replace formatting controls with `Finish & copy`, `Capture area`, `Comments`, and overflow.
+2. Replace formatting controls with `Finish & copy`, `Capture area`, `Comments`, overflow, and a separated visible `Discard draft…` recovery action.
 3. Add text feedback from the floating comment action beside a valid selection, or capture and annotate one visible rectangle. Saved highlights, pins, and cards share the document's scroll coordinates.
 4. Persist every submitted item to a draft bundle.
 5. Validate, seal, copy the provider-neutral prompt, and restore editing.
@@ -722,8 +722,8 @@ idle -> armed -> rasterizing -> annotation dialog
 
 - Keep the existing annotation history model and make Undo, Redo, and undoable Clear visibly available beside the drawing tools.
 - Add a compact, accessible preset color picker. Each drawing keeps the color selected when it was created, and flattened PNG output uses those per-command colors.
-- Keep Cancel available during crop and block selection. Unfinished text and screenshot feedback uses `Cancel` while empty, changes to `Discard` when dirty, and confirms before losing work. Saved comments and the active session remain intact; whole-session discard stays in the existing confirmed overflow action.
-- Replace the normal toolbar's labelled `Start feedback` control with a round, icon-only AI-comment action based on the `comment-discussion-sparkle` glyph. Preserve the full accessible name and tooltip.
+- Keep Cancel available during crop and block selection. Unfinished text and screenshot feedback uses `Cancel` while empty, changes to `Discard` when dirty, and confirms before losing work. Saved comments and the active session remain intact; whole-session discard uses a distinct, visible, Trash-backed toolbar action with host confirmation.
+- Replace the normal toolbar's labelled `Start feedback` control with a compact, icon-only AI-comment action based on the `comment-discussion-sparkle` glyph. Keep its idle appearance neutral like the other formatting controls, reserving yellow for active Feedback mode. Preserve the full accessible name and tooltip.
 
 ### 13.2 RED, GREEN, VERIFY
 
@@ -742,10 +742,18 @@ idle -> armed -> rasterizing -> annotation dialog
 
 - **Capture controls:** Kept the existing immutable Undo/Redo history and undoable Clear. Added a compact four-swatch Coral, Yellow, Blue, and Green picker. Each command retains its selected palette token through Undo, Redo, Clear, SVG preview resizing, and one-canvas PNG flattening. Yellow uses a dark halo; the other strokes retain a white halo for readable markup on mixed captures.
 - **Safe cancellation:** Empty text and screenshot drafts show `Cancel`. Once text or drawing is present, the action changes to `Discard` and opens a labelled, focus-trapped in-webview checkpoint explaining that only the unfinished item will be lost. The safe action receives initial focus; Escape keeps editing; the background and suspended draft surface remain inert without scrolling; and lifecycle teardown never restores stale focus. This deliberately avoids native browser dialogs, which VS Code webviews do not permit. In-flight writes lock the relevant controls and recover the full draft after a failure. Crop, block-selector, saved-item Delete/Undo, and whole-session Trash-backed discard behavior remain unchanged.
-- **Compact entry:** Replaced the normal toolbar's labelled action with a 36px round `comment-discussion-sparkle` control. Its tooltip and accessible name remain `Start a frozen feedback session`, it has a text fallback if the Codicon font is unavailable, and light, dark, high-contrast, keyboard-focus, and reduced-motion treatments are explicit.
+- **Compact entry:** Replaced the normal toolbar's labelled action with an icon-only `comment-discussion-sparkle` control that inherits the ordinary formatting-button size, neutral foreground, transparent idle surface, and standard hover treatment. Yellow is reserved for active Feedback-mode controls and annotations. Its tooltip and accessible name are `Log feedback for an LLM`, it has a text fallback if the Codicon font is unavailable, and keyboard-focus plus reduced-motion treatments remain explicit.
 - **Light-theme legibility:** Comment cards and the text composer now use an opaque VS Code widget surface in light themes, preventing underlying document prose from competing with feedback. Dark-theme translucency is unchanged, and the document-synchronous rail remains transparent so it does not become a second drawer or veil the rich view.
 - **Automated verification:** The focused Feedback capture, review, toolbar, workflow, discard-dialog, and style runs pass 265 tests. The deterministic full Jest and coverage run passes 95 suites and 1,666 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Coverage is 85.84% statements, 80.41% branches, 89.49% functions, and 86.52% lines. Repository lint, strict TypeScript, production release build and bundle verification, and `git diff --check` pass.
 - **Electron verification:** All nine DOM capture combinations pass at 100%, 125%, and 200% zoom in light, dark, and high-contrast themes. All 14 annotation layout/theme scenarios, the real-controller lifecycle gate, and the 10,000-line/500-comment stress case pass. The required live Extension Host reading review remains a manual gate.
+
+### 13.5 AI handoff grouping and visible session discard
+
+- **Normal toolbar:** Moved the simple AI context-reference action beside Feedback entry and changed its glyph to the bundled `mention` Codicon. Its tooltip and accessible name now state the exact result, `Copy @file#lines reference for AI`. The adjacent AI-comment action uses `Log feedback for an LLM`; both controls remain neutral until Feedback mode starts.
+- **Feedback toolbar:** Promoted whole-session `Discard draft…` from the overflow to a separated visible Trash action. The overflow now contains only Reveal and diagnostics, with a dedicated positioning host so its menu remains aligned to the ellipsis control.
+- **Safe recovery:** The existing strict `feedback.discard` protocol and Trash-backed correlated close remain unchanged. The host computes the saved-item count after pending writes settle and includes it in the modal detail. Discard now remains functional after source invalidation, while capture, unfinished-item, finish, and close guards continue to block unsafe races.
+- **RED/GREEN:** Toolbar tests cover adjacency, exact tooltips, Codicons, five-action Feedback layout, the separator, event dispatch, focus, invalidation, and busy states. Controller and provider tests cover invalidated discard plus the authoritative saved-item count. CSS contracts keep the action in the error family rather than the yellow Feedback state family, including high contrast.
+- **Verification:** The focused toolbar, layout, style, controller, and provider run passes 282 tests. The deterministic repository run passes 95 suites and 1,668 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build and bundle verification, and `git diff --check` pass. All 14 annotation theme/zoom/layout cases, the 10,000-line stress gate, the real-controller lifecycle gate, and all nine screenshot-capture theme/zoom combinations pass. Live Extension Host visual review remains manual.
 
 ---
 

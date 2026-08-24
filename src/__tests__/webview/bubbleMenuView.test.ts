@@ -133,17 +133,24 @@ describe('BubbleMenuView', () => {
       expect(editor.on).toHaveBeenCalledWith('selectionUpdate', expect.any(Function));
     });
 
-    it('shows an icon-only Start feedback action in normal mode and only review actions in feedback mode', () => {
+    it('groups neutral AI handoff actions and only shows review actions in feedback mode', () => {
       const editor = createMockEditor();
       const toolbar = createFormattingToolbar(editor);
 
+      const copyReference = toolbar.querySelector<HTMLButtonElement>('.copy-ai-ref-button');
       const start = toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]');
+      expect(copyReference).toBeTruthy();
+      expect(copyReference?.getAttribute('aria-label')).toBe('Copy @file#lines reference for AI');
+      expect(copyReference?.title).toBe('Copy @file#lines reference for AI');
+      expect(copyReference?.querySelector('.codicon-mention')).not.toBeNull();
+      expect(copyReference?.querySelector('.codicon-sparkle')).toBeNull();
       expect(start).toBeTruthy();
-      expect(start?.getAttribute('aria-label')).toBe('Start a frozen feedback session');
-      expect(start?.title).toBe('Start a frozen feedback session');
+      expect(start?.getAttribute('aria-label')).toBe('Log feedback for an LLM');
+      expect(start?.title).toBe('Log feedback for an LLM');
       expect(start?.querySelector('.codicon-comment-discussion-sparkle')).not.toBeNull();
       expect(start?.querySelector('.toolbar-button-label')).toBeNull();
       expect(start?.textContent).not.toContain('Start feedback');
+      expect(copyReference?.nextElementSibling).toBe(start);
       expect(toolbar.querySelector('[data-feedback-finish]')).toBeNull();
 
       setFeedbackToolbarState({ active: true, count: 3, commentsVisible: true });
@@ -169,8 +176,9 @@ describe('BubbleMenuView', () => {
       expect(group).not.toBeNull();
       expect(group?.getAttribute('role')).toBe('group');
       expect(group?.getAttribute('aria-label')).toBe('Feedback session actions');
-      expect(group?.querySelectorAll('[data-feedback-action]')).toHaveLength(4);
-      expect(group?.lastElementChild?.hasAttribute('data-feedback-more')).toBe(true);
+      expect(group?.querySelectorAll('[data-feedback-action]')).toHaveLength(5);
+      expect(group?.querySelector('[data-feedback-toolbar-divider]')).not.toBeNull();
+      expect(group?.lastElementChild?.hasAttribute('data-feedback-discard')).toBe(true);
       expect(toolbar.children).toHaveLength(1);
       expect(toolbar.classList).toContain('feedback-toolbar-active');
 
@@ -195,6 +203,38 @@ describe('BubbleMenuView', () => {
       }
     });
 
+    it('shows Discard draft as a visible separated Trash action and dispatches it', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      const requested = jest.fn();
+      window.addEventListener('feedbackDiscardRequested', requested);
+
+      try {
+        setFeedbackToolbarState({ active: true, count: 4, commentsState: 'collapsed' });
+
+        const discard = toolbar.querySelector<HTMLButtonElement>('[data-feedback-discard]');
+        const divider = toolbar.querySelector<HTMLElement>('[data-feedback-toolbar-divider]');
+        const moreHost = toolbar.querySelector<HTMLElement>('[data-feedback-menu-host]');
+        expect(discard).toBeTruthy();
+        expect(discard?.classList).toContain('feedback-discard-button');
+        expect(discard?.querySelector('.codicon-trash')).not.toBeNull();
+        expect(discard?.querySelector('.toolbar-button-label')?.textContent).toBe('Discard draft…');
+        expect(discard?.getAttribute('aria-label')).toBe(
+          'Discard Feedback draft (moves it to Trash)'
+        );
+        expect(discard?.title).toBe('Discard Feedback draft (moves it to Trash)');
+        expect(divider?.getAttribute('role')).toBe('separator');
+        expect(moreHost?.querySelector('[data-feedback-more]')).not.toBeNull();
+        expect(moreHost?.nextElementSibling).toBe(divider);
+        expect(divider?.nextElementSibling).toBe(discard);
+
+        discard?.click();
+        expect(requested).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('feedbackDiscardRequested', requested);
+      }
+    });
+
     it('uses the centered action group as the More menu positioning host', () => {
       const fallback = document.createElement('div');
       const group = document.createElement('div');
@@ -206,6 +246,12 @@ describe('BubbleMenuView', () => {
       expect(getFeedbackToolbarMenuHost).toBeDefined();
       expect(getFeedbackToolbarMenuHost?.(trigger, fallback)).toBe(group);
       expect(getFeedbackToolbarMenuHost?.(null, fallback)).toBe(fallback);
+
+      const dedicatedHost = document.createElement('div');
+      dedicatedHost.setAttribute('data-feedback-menu-host', '');
+      dedicatedHost.append(trigger);
+      group.append(dedicatedHost);
+      expect(getFeedbackToolbarMenuHost?.(trigger, fallback)).toBe(dedicatedHost);
     });
 
     it('moves focus from Start feedback to Finish & copy when feedback mode activates', () => {
@@ -333,6 +379,9 @@ describe('BubbleMenuView', () => {
       expect((toolbar.querySelector('[data-feedback-capture]') as HTMLButtonElement).disabled).toBe(
         true
       );
+      expect((toolbar.querySelector('[data-feedback-discard]') as HTMLButtonElement).disabled).toBe(
+        false
+      );
     });
 
     it('marks Start feedback disabled and busy while a session is starting', () => {
@@ -383,7 +432,7 @@ describe('BubbleMenuView', () => {
         group?.querySelectorAll<HTMLButtonElement>('[data-feedback-action]') ?? []
       );
       expect(group?.getAttribute('aria-busy')).toBe('true');
-      expect(controls).toHaveLength(4);
+      expect(controls).toHaveLength(5);
       expect(controls.every(control => control.disabled)).toBe(true);
       expect(controls.every(control => control.getAttribute('aria-disabled') === 'true')).toBe(
         true

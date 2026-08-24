@@ -2189,9 +2189,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             session.pendingClose = undefined;
             await this.waitForFeedbackMutations(session);
             await session.store.validateContainedPaths();
+            const itemCount = session.store.items.length;
+            const itemLabel = `${itemCount} saved feedback ${itemCount === 1 ? 'item' : 'items'}`;
             const choice = await vscode.window.showWarningMessage(
-              'Move this feedback draft to Trash?',
-              { modal: true },
+              'Discard this Feedback draft?',
+              {
+                modal: true,
+                detail: `This draft contains ${itemLabel}. Its bundle will be moved to Trash, and Feedback mode will end.`,
+              },
               'Discard draft'
             );
             if (choice !== 'Discard draft') {

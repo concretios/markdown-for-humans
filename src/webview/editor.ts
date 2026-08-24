@@ -2094,7 +2094,7 @@ function showFeedbackMoreMenu(): void {
   menu.setAttribute('role', 'menu');
   menu.setAttribute('aria-label', 'More feedback actions');
   trigger?.setAttribute('aria-expanded', 'true');
-  const actions: Array<{ label: string; action: () => void; danger?: boolean }> = [
+  const actions: Array<{ label: string; action: () => void }> = [
     {
       label: 'Reveal feedback file',
       action: () => feedbackReviewController?.reveal(),
@@ -2103,16 +2103,11 @@ function showFeedbackMoreMenu(): void {
       label: 'Copy diagnostics',
       action: () => feedbackReviewController?.copyDiagnostics(),
     },
-    {
-      label: 'Discard draft',
-      action: () => feedbackReviewController?.discard(),
-      danger: true,
-    },
   ];
   for (const action of actions) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `feedback-more-item${action.danger ? ' danger' : ''}`;
+    button.className = 'feedback-more-item';
     button.setAttribute('role', 'menuitem');
     button.textContent = action.label;
     button.addEventListener('click', () => {
@@ -2181,6 +2176,10 @@ window.addEventListener('feedbackFinishRequested', () => {
 
 window.addEventListener('feedbackCommentsToggleRequested', () => {
   feedbackReviewController?.toggleComments();
+});
+
+window.addEventListener('feedbackDiscardRequested', () => {
+  feedbackReviewController?.discard();
 });
 
 window.addEventListener('feedbackCaptureRequested', () => {

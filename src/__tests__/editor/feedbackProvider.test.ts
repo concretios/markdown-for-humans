@@ -936,6 +936,15 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       ownerWebview as unknown as vscode.Webview
     );
     await waitForMessage(ownerWebview, 'feedback.discarded', 'discard-after-peer-sync');
+    expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+      'Discard this Feedback draft?',
+      {
+        modal: true,
+        detail:
+          'This draft contains 1 saved feedback item. Its bundle will be moved to Trash, and Feedback mode will end.',
+      },
+      'Discard draft'
+    );
     internals(provider).handleWebviewMessage(
       {
         type: 'feedback.close.ready',
