@@ -13,6 +13,9 @@
 - Set `ignoreNextUpdate` flag when applying edits
 - Check `lastEditTimestamp` before updating from external changes
 - Skip updates if content unchanged (string comparison)
+- Always bypass content deduplication for the webview `ready` handshake. The
+  optimistic startup post can run before the webview installs its listener,
+  and even an empty document needs an `update` payload to initialize TipTap.
 
 **See:** `[Project Root]/docs/ARCHITECTURE.md#document-synchronization`
 

@@ -55,7 +55,7 @@
 | Extension → Webview | `update` | Send markdown content (initial load or external change) |
 | Webview → Extension | `edit` | User changed content, apply to TextDocument |
 | Webview → Extension | `save` | User pressed Cmd/Ctrl+S, trigger VS Code save |
-| Webview → Extension | `ready` | Webview initialized, request initial content |
+| Webview → Extension | `ready` | Confirm listener readiness and force initial content delivery |
 
 ---
 

@@ -270,17 +270,14 @@ class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // 2. Generate HTML with CSP headers, nonce injection
     webviewPanel.webview.html = this.getWebviewContent(webviewPanel.webview, document);
 
-    // 3. Send initial document content to webview
-    this.updateWebview(document, webviewPanel.webview);
-
-    // 4. Listen for external document changes
+    // 3. Listen for external document changes
     const changeSubscription = vscode.workspace.onDidChangeTextDocument(e => {
       if (e.document.uri.toString() === document.uri.toString()) {
         this.updateWebview(document, webviewPanel.webview);
       }
     });
 
-    // 5. Listen for webview messages (user edits)
+    // 4. Listen for webview messages (user edits and startup handshake)
     webviewPanel.webview.onDidReceiveMessage(message => {
       switch (message.type) {
         case 'edit':
@@ -290,10 +287,16 @@ class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           document.save();
           break;
         case 'ready':
-          this.updateWebview(document, webviewPanel.webview);
+          // Retry after the webview listener exists, even if the optimistic
+          // startup post already populated the content-deduplication cache.
+          this.updateWebview(document, webviewPanel.webview, true);
           break;
       }
     });
+
+    // 5. Optimistically send initial content. The ready handshake retries it
+    // after the webview installs its listener.
+    this.updateWebview(document, webviewPanel.webview);
 
     // Cleanup
     webviewPanel.onDidDispose(() => changeSubscription.dispose());
@@ -304,7 +307,7 @@ class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 **Message Types:**
 - `edit` - User changed content, update TextDocument
 - `save` - User pressed Cmd/Ctrl+S, trigger VS Code save
-- `ready` - WebView initialized, send initial content
+- `ready` - WebView listener initialized, force delivery of initial content
 
 ---
 

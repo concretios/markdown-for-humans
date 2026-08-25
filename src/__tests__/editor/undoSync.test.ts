@@ -180,6 +180,79 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(webview.postMessage).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['populated', '# Ready after listener registration'],
+    ['empty', ''],
+  ])(
+    'should resend %s document content when the webview signals ready',
+    (_description, content) => {
+      const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+      const document = createDocument(content);
+      const webview = { postMessage: jest.fn() };
+      const providerInternals = provider as unknown as {
+        updateWebview: (doc: vscode.TextDocument, wv: { postMessage: jest.Mock }) => void;
+        handleWebviewMessage: (
+          message: { type: string },
+          doc: vscode.TextDocument,
+          wv: { postMessage: jest.Mock }
+        ) => void;
+      };
+
+      // The optimistic post can run before the webview installs its message
+      // listener. Its cached payload must not suppress the ready-handshake retry.
+      providerInternals.updateWebview(document as unknown as vscode.TextDocument, webview);
+      webview.postMessage.mockClear();
+
+      providerInternals.handleWebviewMessage(
+        { type: 'ready' },
+        document as unknown as vscode.TextDocument,
+        webview
+      );
+
+      expect(webview.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'update',
+          content,
+        })
+      );
+    }
+  );
+
+  it('should complete the ready handshake independently for multiple document tabs', () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    const firstDocument = createDocument('# First', 'file://first.md');
+    const secondDocument = createDocument('# Second', 'file://second.md');
+    const firstWebview = { postMessage: jest.fn() };
+    const secondWebview = { postMessage: jest.fn() };
+    const providerInternals = provider as unknown as {
+      updateWebview: (doc: vscode.TextDocument, wv: { postMessage: jest.Mock }) => void;
+      handleWebviewMessage: (
+        message: { type: string },
+        doc: vscode.TextDocument,
+        wv: { postMessage: jest.Mock }
+      ) => void;
+    };
+
+    providerInternals.updateWebview(firstDocument as unknown as vscode.TextDocument, firstWebview);
+    providerInternals.updateWebview(
+      secondDocument as unknown as vscode.TextDocument,
+      secondWebview
+    );
+    firstWebview.postMessage.mockClear();
+    secondWebview.postMessage.mockClear();
+
+    providerInternals.handleWebviewMessage(
+      { type: 'ready' },
+      secondDocument as unknown as vscode.TextDocument,
+      secondWebview
+    );
+
+    expect(secondWebview.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'update', content: '# Second' })
+    );
+    expect(firstWebview.postMessage).not.toHaveBeenCalled();
+  });
+
   it('should send webview update when content differs from last sent payload', () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('fresh content');

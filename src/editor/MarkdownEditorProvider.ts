@@ -630,8 +630,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   /**
    * Send document content to webview
    * Skips update if it's from a recent webview edit (avoid feedback loop)
+   *
+   * @param document - Canonical VS Code text document.
+   * @param webview - Webview that renders the document.
+   * @param force - Bypass sync deduplication for a webview ready handshake.
    */
-  private updateWebview(document: vscode.TextDocument, webview: vscode.Webview) {
+  private updateWebview(
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    force = false
+  ): void {
     const docUri = document.uri.toString();
     const lastEditTime = this.pendingEdits.get(docUri);
     const mode = this.getBlankLineMode();
@@ -640,13 +648,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Skip update if content matches what we already sent from the webview
     const lastSentContent = this.lastWebviewContent.get(docUri);
-    if (lastSentContent !== undefined && lastSentContent === currentContent) {
+    if (!force && lastSentContent !== undefined && lastSentContent === currentContent) {
       return;
     }
 
     // Skip update if this change came from webview within last 100ms
     // This prevents feedback loops while allowing external Git changes to sync
-    if (lastEditTime && Date.now() - lastEditTime < 100) {
+    if (!force && lastEditTime && Date.now() - lastEditTime < 100) {
       return;
     }
 
@@ -757,8 +765,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         break;
       }
       case 'ready': {
-        // Webview is ready, send initial content and settings
-        this.updateWebview(document, webview);
+        // The optimistic post in resolveCustomTextEditor may happen before the
+        // webview installs its message listener. A ready handshake must bypass
+        // content deduplication so every panel receives its initial document.
+        this.updateWebview(document, webview, true);
         // Also send settings separately
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
