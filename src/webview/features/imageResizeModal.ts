@@ -233,8 +233,7 @@ export async function showImageResizeModal(
     const callbacks: Map<string, (result: WorkspaceCheckResult) => void> =
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ((window as any)._workspaceCheckCallbacks as
-        | Map<string, (result: WorkspaceCheckResult) => void>
-        | undefined) ?? new Map();
+        Map<string, (result: WorkspaceCheckResult) => void> | undefined) ?? new Map();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any)._workspaceCheckCallbacks = callbacks;
 
@@ -808,8 +807,7 @@ function showResizeModalForLocalImage(
     absolutePath || img.getAttribute('data-markdown-src') || img.getAttribute('src') || '';
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const getImageReferences = (window as any).getImageReferences as
-    | ((path: string) => Promise<unknown>)
-    | undefined;
+    ((path: string) => Promise<unknown>) | undefined;
 
   if (typeof getImageReferences === 'function' && imagePathForReferences) {
     getImageReferences(imagePathForReferences)
