@@ -1292,11 +1292,50 @@
     box-shadow: 0 0 0 3px var(--vscode-focusBorder, rgba(0, 122, 204, 0.15));
   }
   
+  /* Zoom button — revealed on hover, sits in the corner ahead of the tooltip */
+  .mermaid-zoom-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background-color: var(--vscode-editorHoverWidget-background);
+    color: var(--vscode-editorHoverWidget-foreground);
+    border: 1px solid var(--vscode-editorHoverWidget-border);
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    z-index: 11;
+  }
+
+  .mermaid-wrapper:hover .mermaid-zoom-btn,
+  .mermaid-zoom-btn:focus-visible {
+    opacity: 1;
+  }
+
+  .mermaid-zoom-btn:focus-visible {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
+  }
+
+  .mermaid-zoom-btn:hover {
+    background-color: var(--vscode-toolbar-hoverBackground);
+  }
+
+  .mermaid-zoom-btn .codicon {
+    font-size: 14px;
+  }
+
   /* Tooltip */
   .mermaid-tooltip {
     position: absolute;
     top: 8px;
-    right: 8px;
+    right: 40px;
     background-color: var(--vscode-editorHoverWidget-background);
     color: var(--vscode-editorHoverWidget-foreground);
     border: 1px solid var(--vscode-editorHoverWidget-border);
@@ -3526,4 +3565,92 @@ body.saving-feedback {
 .math-template-chip:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: 1px;
+}
+
+/* ============================================
+   Mermaid Lightbox
+   Mounted on document.body, so it lives outside the .markdown-editor scope
+   ============================================ */
+
+.mermaid-lightbox-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  background: var(--vscode-editor-background);
+}
+
+.mermaid-lightbox-viewport {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.mermaid-lightbox-viewport.grabbing {
+  cursor: grabbing;
+}
+
+/* No will-change/compositor hint here: it pins the layer to one raster size,
+   so zooming would upscale a bitmap instead of re-rendering the SVG. */
+.mermaid-lightbox-canvas {
+  transform-origin: center center;
+  cursor: default;
+}
+
+.mermaid-lightbox-canvas svg {
+  display: block;
+  max-width: none;
+  height: auto;
+}
+
+.mermaid-lightbox-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+  margin-bottom: 24px;
+  padding: 6px 8px;
+  background-color: var(--vscode-editorHoverWidget-background);
+  border: 1px solid var(--vscode-editorHoverWidget-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
+
+.mermaid-lightbox-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: none;
+  color: var(--vscode-editorHoverWidget-foreground);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mermaid-lightbox-btn:hover {
+  background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.mermaid-lightbox-btn:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.mermaid-lightbox-zoom-level {
+  min-width: 48px;
+  text-align: center;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-editorHoverWidget-foreground);
+  user-select: none;
 }
