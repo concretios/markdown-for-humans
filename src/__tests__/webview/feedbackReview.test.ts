@@ -22,6 +22,12 @@ import type {
 } from '../../shared/feedbackProtocol';
 import { FEEDBACK_ERROR_CODES } from '../../shared/feedbackProtocol';
 
+function omitTransferSession<T extends { session: unknown }>(message: T): Omit<T, 'session'> {
+  const { session, ...identity } = message;
+  void session;
+  return identity;
+}
+
 function createEditorFixture(): Editor {
   document.body.innerHTML = `
     <div class="formatting-toolbar"></div>
@@ -422,6 +428,8 @@ describe('Feedback review controller', () => {
         apply: (content: string) => boolean
       ): boolean;
       completeTransition(lockId: string): boolean;
+      hasPeerReleaseLock(lockId: string): boolean;
+      applyPeerRelease(lockId: string, apply: (content: string) => boolean): boolean;
     };
     const applyContent = jest.fn((content: string) => {
       expect(content).toBe('# Changed during start\n');
@@ -510,6 +518,14 @@ describe('Feedback review controller', () => {
       revision: 1,
     });
 
+    expect(transitionController.applyTransitionSync(sync, applyContent)).toBe(true);
+    expect(applyContent).toHaveBeenCalledTimes(1);
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.filter(
+        call => call[0].type === 'feedback.transition.applied' && call[0].revision === 1
+      )
+    ).toHaveLength(2);
+
     controller.handleHostMessage({
       type: 'feedback.error',
       requestId: request.requestId,
@@ -521,10 +537,91 @@ describe('Feedback review controller', () => {
     expect(transitionController.completeTransition('stale-lock')).toBe(false);
     expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
 
+    expect(transitionController.hasPeerReleaseLock('stale-lock')).toBe(false);
+    expect(transitionController.hasPeerReleaseLock('transition-lock-1')).toBe(true);
+    const releaseApply = jest.fn(() => true);
+    expect(transitionController.applyPeerRelease('stale-lock', releaseApply)).toBe(false);
+    expect(releaseApply).not.toHaveBeenCalled();
+    expect(transitionController.applyPeerRelease('transition-lock-1', () => false)).toBe(false);
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+    expect(transitionController.applyPeerRelease('transition-lock-1', releaseApply)).toBe(true);
+    expect(releaseApply).toHaveBeenCalledTimes(1);
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+    expect(document.body.classList).toContain('feedback-review-starting');
+    expect(onReadOnlyChange).toHaveBeenLastCalledWith(true);
     expect(transitionController.completeTransition('transition-lock-1')).toBe(true);
     expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
     expect(document.body.classList).not.toContain('feedback-review-starting');
     expect(onReadOnlyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('accepts an authoritative peer release for a transition that needed no recovery sync', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    const transitionController = controller as typeof controller & {
+      hasPeerReleaseLock(lockId: string): boolean;
+      applyPeerRelease(lockId: string, apply: () => boolean): boolean;
+      completeTransition(lockId: string): boolean;
+    };
+
+    controller.start();
+    const request = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.start');
+    controller.handleHostMessage({
+      type: 'feedback.transition.locked',
+      requestId: request.requestId,
+      lockId: 'transition-without-recovery',
+    });
+
+    expect(transitionController.hasPeerReleaseLock('transition-without-recovery')).toBe(true);
+    expect(transitionController.applyPeerRelease('stale-lock', () => true)).toBe(false);
+    expect(transitionController.applyPeerRelease('transition-without-recovery', () => false)).toBe(
+      false
+    );
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+
+    const apply = jest.fn(() => true);
+    expect(transitionController.applyPeerRelease('transition-without-recovery', apply)).toBe(true);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+    expect(transitionController.completeTransition('transition-without-recovery')).toBe(true);
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
+    expect(document.body.classList).not.toContain('feedback-review-starting');
+  });
+
+  it('applies and commits an authoritative retirement for an active review session', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    const releaseController = controller as typeof controller & {
+      hasPeerReleaseLock(lockId: string): boolean;
+      applyPeerRelease(lockId: string, apply: () => boolean): boolean;
+      completeSessionRelease(lockId: string): boolean;
+    };
+    controller.activate({
+      sessionId: 'active-retirement-session',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-ar01',
+      items: [],
+    });
+
+    expect(releaseController.hasPeerReleaseLock('stale-session')).toBe(false);
+    expect(releaseController.hasPeerReleaseLock('active-retirement-session')).toBe(true);
+    expect(releaseController.applyPeerRelease('active-retirement-session', () => false)).toBe(
+      false
+    );
+    expect(controller.getSession()?.sessionId).toBe('active-retirement-session');
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+
+    const apply = jest.fn(() => true);
+    expect(releaseController.applyPeerRelease('active-retirement-session', apply)).toBe(true);
+    expect(apply).toHaveBeenCalledTimes(1);
+    expect(releaseController.completeSessionRelease('stale-session')).toBe(false);
+    expect(controller.getSession()?.sessionId).toBe('active-retirement-session');
+    expect(releaseController.completeSessionRelease('active-retirement-session')).toBe(true);
+    expect(controller.getSession()).toBeNull();
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
   });
 
   it('ignores an uncorrelated started response from a stale host transition', () => {
@@ -740,6 +837,8 @@ describe('Feedback review controller', () => {
 
     const closeController = controller as typeof controller & {
       completeClose(lockId: string): boolean;
+      hasPeerReleaseLock(lockId: string): boolean;
+      applyPeerRelease(lockId: string, apply: (content: string) => boolean): boolean;
     };
     expect(closeController.completeClose('current-session')).toBe(false);
     expect(controller.getSession()?.sessionId).toBe('current-session');
@@ -763,6 +862,18 @@ describe('Feedback review controller', () => {
     expect(closeController.completeClose('stale-session')).toBe(false);
     expect(controller.getSession()?.sessionId).toBe('current-session');
 
+    expect(closeController.hasPeerReleaseLock('stale-session')).toBe(false);
+    expect(closeController.hasPeerReleaseLock('current-session')).toBe(true);
+    const releaseApply = jest.fn(() => true);
+    expect(closeController.applyPeerRelease('stale-session', releaseApply)).toBe(false);
+    expect(releaseApply).not.toHaveBeenCalled();
+    expect(closeController.applyPeerRelease('current-session', () => false)).toBe(false);
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+    expect(closeController.applyPeerRelease('current-session', releaseApply)).toBe(true);
+    expect(releaseApply).toHaveBeenCalledTimes(1);
+    expect(controller.getSession()?.sessionId).toBe('current-session');
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
+    expect(onReadOnlyChange).toHaveBeenLastCalledWith(true);
     expect(closeController.completeClose('current-session')).toBe(true);
     expect(controller.getSession()).toBeNull();
     expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
@@ -5568,7 +5679,7 @@ describe('Feedback review controller', () => {
     }
   });
 
-  it('places a selection-local Add feedback action outside the comments rail', () => {
+  it('places a selection-local Add feedback action outside the comments rail', async () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
     controller.activate({
@@ -5610,6 +5721,7 @@ describe('Feedback review controller', () => {
     } as unknown as Selection);
 
     document.dispatchEvent(new Event('selectionchange'));
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
     const action = document.querySelector('[data-feedback-selection-action]') as HTMLButtonElement;
     expect(action).not.toBeNull();
@@ -5625,7 +5737,7 @@ describe('Feedback review controller', () => {
     selectionSpy.mockRestore();
   });
 
-  it('removes the selection action when the live browser range is cleared', () => {
+  it('removes the selection action when the live browser range is cleared', async () => {
     const editor = createEditorFixture();
     (
       editor.state as unknown as { selection: { from: number; to: number; empty: boolean } }
@@ -5670,6 +5782,7 @@ describe('Feedback review controller', () => {
 
     try {
       document.dispatchEvent(new Event('selectionchange'));
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       expect(document.querySelector('[data-feedback-selection-action]')).not.toBeNull();
 
       currentSelection = {
@@ -5680,6 +5793,7 @@ describe('Feedback review controller', () => {
         toString: () => '',
       } as unknown as Selection;
       document.dispatchEvent(new Event('selectionchange'));
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
       expect(document.querySelector('[data-feedback-selection-action]')).toBeNull();
     } finally {
@@ -5861,11 +5975,6 @@ describe('Feedback review controller', () => {
       type: 'feedback.draft.resume',
       requestId: expect.any(String),
       round: '20260821T093000Z-k4p9',
-      blocks: [
-        { ordinal: 0, kind: 'heading', markdown: '# Title', contentSize: 5 },
-        { ordinal: 1, kind: 'paragraph', markdown: 'Alpha beta', contentSize: 10 },
-        { ordinal: 3, kind: 'blockquote', markdown: '> Quote', contentSize: 7 },
-      ],
     });
     expect(resumeListener).toHaveBeenCalledTimes(1);
     window.removeEventListener('feedbackResumeRequested', resumeListener);
@@ -5896,12 +6005,11 @@ describe('Feedback review controller', () => {
     expect(host.postMessage).toHaveBeenCalledWith({
       type: 'feedback.start',
       requestId: expect.any(String),
-      blocks: [
-        { ordinal: 0, kind: 'heading', markdown: '# Title', contentSize: 5 },
-        { ordinal: 1, kind: 'paragraph', markdown: 'Alpha beta', contentSize: 10 },
-        { ordinal: 3, kind: 'blockquote', markdown: '> Quote', contentSize: 7 },
-      ],
     });
+    const serialize = (
+      editor as unknown as { storage: { markdown: { serializer: { serialize: jest.Mock } } } }
+    ).storage.markdown.serializer.serialize;
+    expect(serialize).not.toHaveBeenCalled();
   });
 
   it('makes starting a new round explicit from a saved-draft prompt', () => {
@@ -5924,11 +6032,6 @@ describe('Feedback review controller', () => {
     expect(host.postMessage).toHaveBeenCalledWith({
       type: 'feedback.start.new',
       requestId: expect.any(String),
-      blocks: [
-        { ordinal: 0, kind: 'heading', markdown: '# Title', contentSize: 5 },
-        { ordinal: 1, kind: 'paragraph', markdown: 'Alpha beta', contentSize: 10 },
-        { ordinal: 3, kind: 'blockquote', markdown: '> Quote', contentSize: 7 },
-      ],
     });
   });
 
@@ -5985,7 +6088,6 @@ describe('Feedback review controller', () => {
       type: 'feedback.draft.resume',
       requestId: expect.any(String),
       round: '20260821T093000Z-k4p9',
-      blocks: expect.any(Array),
     });
     window.removeEventListener('feedbackLocalError', onLocalError);
   });
@@ -6088,6 +6190,140 @@ describe('Feedback review controller', () => {
     });
     expect(controller.getSession()).toBeNull();
     expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
+  });
+
+  it('stages an incoming ownership transfer as non-writable until exact commit', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    const apply = {
+      type: 'feedback.session.transfer' as const,
+      phase: 'apply' as const,
+      role: 'new-owner' as const,
+      transferId: 'transfer-incoming',
+      requestId: 'resume-incoming',
+      oldSessionId: 'session-old',
+      newSessionId: 'session-new',
+      viewGeneration: 'view-new',
+      revision: 1,
+      documentVersion: 7,
+      sourceSha256: 'a'.repeat(64),
+      peerLockMessage: 'Feedback is active in another editor split.',
+      session: {
+        sessionId: 'session-new',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [],
+        items: [],
+      },
+    };
+
+    expect(controller.prepareSessionTransfer(apply)).toBe(true);
+    expect(controller.getSession()?.sessionId).toBe('session-new');
+    expect(controller.isWritable()).toBe(false);
+    expect(controller.prepareSessionTransfer(apply)).toBe(true);
+
+    const identity = omitTransferSession(apply);
+    expect(controller.commitSessionTransfer({ ...identity, phase: 'commit' })).toBe(true);
+    expect(controller.getSession()?.sessionId).toBe('session-new');
+    expect(controller.isWritable()).toBe(true);
+  });
+
+  it('freezes the old owner and retires only on an exact transfer commit', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-old',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-k4p9',
+      items: [],
+    });
+    const apply = {
+      type: 'feedback.session.transfer' as const,
+      phase: 'apply' as const,
+      role: 'old-owner' as const,
+      transferId: 'transfer-outgoing',
+      requestId: 'resume-outgoing',
+      oldSessionId: 'session-old',
+      newSessionId: 'session-new',
+      viewGeneration: 'view-old',
+      revision: 1,
+      documentVersion: 7,
+      sourceSha256: 'a'.repeat(64),
+      peerLockMessage: 'Feedback is active in another editor split.',
+      session: {
+        sessionId: 'session-new',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [],
+        items: [],
+      },
+    };
+
+    expect(controller.prepareSessionTransfer(apply)).toBe(true);
+    expect(controller.getSession()?.sessionId).toBe('session-old');
+    expect(controller.isWritable()).toBe(false);
+    const identity = omitTransferSession(apply);
+    expect(
+      controller.commitSessionTransfer({ ...identity, phase: 'commit', role: 'new-owner' })
+    ).toBe(false);
+    expect(controller.getSession()?.sessionId).toBe('session-old');
+
+    expect(controller.commitSessionTransfer({ ...identity, phase: 'commit' })).toBe(true);
+    expect(controller.getSession()).toBeNull();
+  });
+
+  it('rolls back staged incoming and outgoing transfers to their prior review state', () => {
+    const incomingEditor = createEditorFixture();
+    const incoming = createFeedbackReviewController({ editor: incomingEditor, host });
+    const apply = {
+      type: 'feedback.session.transfer' as const,
+      phase: 'apply' as const,
+      role: 'new-owner' as const,
+      transferId: 'transfer-rollback',
+      requestId: 'resume-rollback',
+      oldSessionId: 'session-old',
+      newSessionId: 'session-new',
+      viewGeneration: 'view-new',
+      revision: 1,
+      documentVersion: 7,
+      sourceSha256: 'a'.repeat(64),
+      peerLockMessage: 'Feedback is active in another editor split.',
+      session: {
+        sessionId: 'session-new',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [],
+        items: [],
+      },
+    };
+    const identity = omitTransferSession(apply);
+    const abort = { ...identity, phase: 'abort' as const };
+
+    expect(incoming.prepareSessionTransfer(apply)).toBe(true);
+    expect(incoming.abortSessionTransfer(abort)).toBe(true);
+    expect(incoming.getSession()).toBeNull();
+
+    const outgoingEditor = createEditorFixture();
+    const outgoing = createFeedbackReviewController({ editor: outgoingEditor, host });
+    outgoing.activate({
+      sessionId: 'session-old',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-k4p9',
+      items: [],
+    });
+    expect(outgoing.prepareSessionTransfer({ ...apply, role: 'old-owner' })).toBe(true);
+    expect(outgoing.isWritable()).toBe(false);
+    expect(outgoing.abortSessionTransfer({ ...abort, role: 'old-owner' })).toBe(true);
+    expect(outgoing.getSession()?.sessionId).toBe('session-old');
+    expect(outgoing.isWritable()).toBe(true);
   });
 
   it('moves focus from a resumed draft action to Finish when activation succeeds', () => {

@@ -4,8 +4,8 @@ This document describes the stable, verified build process for the Markdown for 
 
 ## Prerequisites
 
-- Node.js 18+ and npm
-- VS Code 1.85.0+
+- Node.js 22+ and npm for development tooling
+- VS Code 1.98.0+
 
 ## Build Process
 
@@ -46,6 +46,7 @@ npm run build:release
 The build system automatically handles console logging based on build type:
 
 ### Debug Builds (`npm run build:debug`)
+
 - ✅ `console.log()` - Kept (development debugging)
 - ✅ `console.debug()` - Kept (verbose debugging)
 - ✅ `console.info()` - Kept (informational)
@@ -53,13 +54,14 @@ The build system automatically handles console logging based on build type:
 - ✅ `console.error()` - Kept (errors)
 
 ### Release Builds (`npm run build:release`)
+
 - ❌ `console.log()` - **Removed** (noisy debug info)
 - ❌ `console.debug()` - **Removed** (verbose debug)
 - ❌ `console.info()` - **Removed** (informational)
 - ✅ `console.warn()` - **Kept** (important warnings for users)
 - ✅ `console.error()` - **Kept** (critical errors for debugging issues)
 
-This is implemented using esbuild's `pure` option to mark debug console calls as side-effect-free, allowing them to be safely removed during minification.
+This is implemented by `scripts/console-strip.js`, which removes debug console calls without dropping side effects from their arguments. Esbuild's `pure` option alone is not sufficient for value-position calls or arguments that must still execute.
 
 ## Build Verification
 
@@ -82,6 +84,7 @@ npm run verify-build
 ```
 
 Output:
+
 ```
 Verifying build outputs...
 
@@ -119,20 +122,23 @@ const CRITICAL_FEATURES = {
 ### Development Workflow
 
 **During development:**
+
 - Use **F5 debugging** in VS Code (no packaging needed)
 - VS Code automatically builds and runs the extension
 - Full debugging capabilities with breakpoints and console logs
 
 **For final testing before release:**
+
 ```bash
 # Create release package (automatically runs build:release via vscode:prepublish hook)
 npm run package:release
 
 # Install and test locally
-code --install-extension markdown-for-humans-0.1.0.vsix
+code --install-extension markdown-for-humans-0.3.0.vsix
 ```
 
 **Note:** `npm run package:release` always creates a **release build** via the `vscode:prepublish` hook. This ensures:
+
 - ✅ You test the exact same build that will be published
 - ✅ No debug logs or sourcemaps in the package
 - ✅ Minified and optimized for production
@@ -141,6 +147,7 @@ code --install-extension markdown-for-humans-0.1.0.vsix
 ### Publish to VS Code Marketplace
 
 **Recommended approach (auto-bumps version):**
+
 ```bash
 # Login to marketplace (one-time per session)
 vsce login concretio
@@ -152,12 +159,14 @@ vsce publish major  # Breaking changes: 0.2.0 → 1.0.0
 ```
 
 **Manual version control:**
+
 ```bash
 # Update version in package.json manually, then
 vsce publish
 ```
 
 **Using npm script:**
+
 ```bash
 npm run publish:release  # Runs: vsce publish (current version)
 ```
@@ -167,6 +176,7 @@ npm run publish:release  # Runs: vsce publish (current version)
 Open VSX is an open-source marketplace used by multiple VS Code-compatible editors.
 
 **Setup (one-time):**
+
 ```bash
 # Install ovsx CLI globally
 npm install -g ovsx
@@ -178,6 +188,7 @@ ovsx create-namespace concretio -p <your-token>
 ```
 
 **Publish:**
+
 ```bash
 # Publish current version (must already be built)
 ovsx publish -p <your-token>
@@ -187,6 +198,7 @@ ovsx publish -p <your-token>
 ```
 
 **Result:** Extension becomes available in:
+
 - ✅ **VS Code** (from VS Code Marketplace)
 - ✅ **Cursor** (from Open VSX)
 - ✅ **Windsurf** (from Open VSX)
@@ -202,6 +214,7 @@ ovsx publish -p <your-token>
 - **Entry**: `src/extension.ts`
 - **Format**: CommonJS (required by VS Code)
 - **Platform**: Node.js
+- **Target**: Node.js 20, matching VS Code 1.98
 - **Tree-shaking**: Enabled
 - **Minification**: Enabled
 
@@ -210,9 +223,10 @@ ovsx publish -p <your-token>
 - **Entry**: `src/webview/editor.ts`
 - **Format**: IIFE (Immediately Invoked Function Expression)
 - **Platform**: Browser
+- **Target**: Chromium 132, matching VS Code 1.98
 - **Tree-shaking**: Enabled
 - **Minification**: Enabled
-- **CSS Bundling**: Inline via esbuild CSS loader
+- **CSS Bundling**: Emitted as the companion `dist/webview.css` bundle
 
 ### Build Commands
 
@@ -245,6 +259,7 @@ ovsx publish -p <your-token>
 When you add a new feature, follow this pattern:
 
 ### 1. Write the code
+
 ```typescript
 // src/webview/features/myFeature.ts
 export function setupMyFeature() {
@@ -256,6 +271,7 @@ window.myFeature = setupMyFeature;
 ```
 
 ### 2. Import in entry point
+
 ```typescript
 // src/webview/editor.ts
 import { setupMyFeature } from './features/myFeature';
@@ -265,12 +281,13 @@ setupMyFeature();
 ```
 
 ### 3. Add to verification
+
 ```javascript
 // scripts/verify-build.js
 const CRITICAL_FEATURES = {
   webviewJs: {
     required: [
-      'setupMyFeature',  // Add your feature here
+      'setupMyFeature', // Add your feature here
       // ... other features
     ],
   },
@@ -278,6 +295,7 @@ const CRITICAL_FEATURES = {
 ```
 
 ### 4. Add CSS (if needed)
+
 ```css
 /* src/webview/editor.css */
 .my-feature-class {
@@ -295,6 +313,7 @@ webviewCss: {
 ```
 
 ### 5. Test the verification
+
 ```bash
 npm run build:debug
 npm run verify-build  # Should pass with your new feature
@@ -303,40 +322,50 @@ npm run verify-build  # Should pass with your new feature
 ## Common Mistakes to Avoid
 
 ### ❌ Dynamic class names
+
 ```typescript
 // BAD - tree-shaking can't track this
 const className = `my-${type}-class`;
 ```
 
 ### ✅ Static class names
+
 ```typescript
 // GOOD - tree-shaker understands this
 const className = type === 'foo' ? 'my-foo-class' : 'my-bar-class';
 ```
 
 ### ❌ Unused exports
+
 ```typescript
 // BAD - might get tree-shaken
-export function myFeature() { /* ... */ }
+export function myFeature() {
+  /* ... */
+}
 ```
 
 ### ✅ Actually use it
+
 ```typescript
 // GOOD - explicitly called
-export function myFeature() { /* ... */ }
+export function myFeature() {
+  /* ... */
+}
 setupMyFeature(); // Call it somewhere
 ```
 
 ### ❌ Forgetting to import CSS
+
 ```typescript
 // BAD - CSS won't be bundled
 // Missing: import './myFeature.css';
 ```
 
 ### ✅ Import CSS explicitly
+
 ```typescript
 // GOOD
-import './myFeature.css';  // esbuild will bundle this
+import './myFeature.css'; // esbuild will bundle this
 ```
 
 ## Troubleshooting
@@ -344,6 +373,7 @@ import './myFeature.css';  // esbuild will bundle this
 ### Quick Diagnosis
 
 Is my build broken?
+
 ```bash
 npm run verify-build
 ```
@@ -357,6 +387,7 @@ If this passes, your build is good. If it fails, see below.
 **What it means**: Important code or CSS was removed during bundling.
 
 **Quick fix**:
+
 ```bash
 # Clean and rebuild
 rm -rf dist/
@@ -388,6 +419,7 @@ npm run verify-build
 **Solution**:
 
 1. Add the feature to verification script:
+
    ```javascript
    // scripts/verify-build.js
    webviewJs: {
@@ -410,6 +442,7 @@ npm run verify-build
 #### 3. CSS classes not applying
 
 **Diagnosis**:
+
 ```bash
 # Check if CSS made it to bundle
 grep "my-class-name" dist/webview.css
@@ -418,11 +451,13 @@ grep "my-class-name" dist/webview.css
 **Common causes**:
 
 1. **Not imported**: Ensure CSS is imported in `src/webview/editor.ts`:
+
    ```typescript
    import './editor.css';
    ```
 
 2. **Dynamic class names**: esbuild can't tree-shake properly with template strings:
+
    ```typescript
    // BAD - might get optimized away
    const className = `my-${type}-class`;
@@ -440,6 +475,7 @@ grep "my-class-name" dist/webview.css
 #### 4. "TypeError: X is not a function" at runtime
 
 **Diagnosis**:
+
 ```bash
 # Check if function exists in bundle
 grep -o "myFunctionName" dist/webview.js
@@ -448,6 +484,7 @@ grep -o "myFunctionName" dist/webview.js
 **Solutions**:
 
 1. **Minified name**: Function got renamed. Search for unique strings instead:
+
    ```bash
    grep "unique string from function body" dist/webview.js
    ```
@@ -468,6 +505,7 @@ grep -o "myFunctionName" dist/webview.js
 #### 5. Bundle size exploded
 
 **Diagnosis**:
+
 ```bash
 # Check current sizes
 ls -lh dist/
@@ -481,6 +519,7 @@ ls -lh dist/
 **Common causes**:
 
 1. **Accidentally bundled development dependencies**:
+
    ```bash
    # Check package.json - these should be in devDependencies:
    # - @types/*
@@ -490,6 +529,7 @@ ls -lh dist/
    ```
 
 2. **Duplicate dependencies**: Check for multiple versions:
+
    ```bash
    npm ls
    ```
@@ -510,6 +550,7 @@ ls -lh dist/
 **Solution**:
 
 1. Always test the actual .vsix file before publishing:
+
    ```bash
    npm run package:release
    code --install-extension markdown-for-humans-0.1.0.vsix
@@ -522,6 +563,7 @@ ls -lh dist/
 ### Emergency: Released broken version
 
 #### Step 1: Verify the issue
+
 ```bash
 # Download your published .vsix
 # Extract and check bundle
@@ -530,6 +572,7 @@ grep "myBrokenFeature" extension/dist/webview.js
 ```
 
 #### Step 2: Quick hotfix
+
 ```bash
 # Fix the issue in code
 # Rebuild with verification
@@ -548,6 +591,7 @@ npm run publish:release
 ```
 
 #### Step 3: Post-mortem
+
 1. Add missing feature to `scripts/verify-build.js`
 2. Add test case to prevent regression
 3. Update this document if needed
@@ -618,11 +662,13 @@ node -e "console.log(require('./meta.json'))"
 ## Pre-Release Checklist
 
 ### 1. Pre-build Checks
+
 - [ ] All changes committed to git
 - [ ] Version bumped in package.json
 - [ ] CHANGELOG.md updated
 
 ### 2. Build & Verify
+
 ```bash
 npm run build:release  # Build with release settings
 npm test              # Run all tests
@@ -632,17 +678,20 @@ npm test              # Run all tests
 ### 3. Local Testing
 
 **Option A: F5 Debugging (Recommended for development)**
+
 - Press F5 in VS Code to launch extension in debug mode
 - Full breakpoints, console logs, and live reload
 - No packaging needed
 
 **Option B: Package Testing (Final verification before release)**
+
 ```bash
 npm run package:release  # Creates release .vsix (via vscode:prepublish hook)
 code --install-extension markdown-for-humans-X.Y.Z.vsix
 ```
 
 Test these features manually:
+
 - [ ] Image paste/drop
 - [ ] Image resize
 - [ ] Syntax highlighting in code blocks
@@ -652,6 +701,7 @@ Test these features manually:
 - [ ] Check browser console for errors (no console.log in release build)
 
 ### 4. Publish
+
 ```bash
 # Login to marketplace
 vsce login concretio
@@ -678,11 +728,12 @@ steps:
   - run: npm ci
   - run: npm run lint
   - run: npm test
-  - run: npm run build:release  # Build and verify
+  - run: npm run build:release # Build and verify
   - run: npm run package:release # vscode:prepublish runs build:release again, then packages
 ```
 
 **Note:**
+
 - `npm run package:release` automatically runs `vscode:prepublish` which executes `build:release`
 - This ensures CI always tests the exact build that will be published
 - The build happens twice (once explicitly, once via hook) but ensures consistency
@@ -690,6 +741,7 @@ steps:
 ## Quick Reference
 
 ### Quick Commands
+
 ```bash
 # Development
 npm run build:debug        # Debug build (sourcemaps, all logs)
@@ -711,6 +763,7 @@ npm run publish:ovsx:release  # Publish to Open VSX (for Cursor & Windsurf)
 ```
 
 ### Expected Bundle Sizes
+
 ```
 dist/extension.js:  1-3 MB    (Node.js backend)
 dist/webview.js:    3-6 MB    (TipTap + deps)
@@ -721,6 +774,7 @@ If significantly larger: investigate duplicate dependencies or inlined assets.
 If significantly smaller: features might be missing (run verify-build).
 
 ### Key Files
+
 ```
 scripts/verify-build.js    # Build verification script
 docs/BUILD.md             # This file - complete build guide
@@ -731,17 +785,20 @@ package.json              # Scripts configuration
 ### Quick Diagnosis
 
 **Build passes but feature missing at runtime?**
+
 1. Check console errors (Help > Toggle Developer Tools)
 2. Verify feature in bundle: `grep "myFeature" dist/webview.js`
 3. Check if CSS loaded: `grep ".my-class" dist/webview.css`
 
 **Verification fails?**
+
 1. Check which features are missing (script output shows this)
 2. Verify source code has the feature
 3. Ensure it's imported in entry file
 4. Rebuild and verify again
 
 **Different behavior in dev vs production?**
+
 - Dev uses unminified code
 - Production uses minified + tree-shaken code
 - Always test .vsix file before publishing

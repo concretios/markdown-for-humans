@@ -15,7 +15,8 @@ import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 export type FeedbackAnnotationTarget =
   | { id: string; kind: 'inline'; from: number; to: number }
-  | { id: string; kind: 'node'; from: number; to: number };
+  | { id: string; kind: 'node'; from: number; to: number }
+  | { id: string; kind: 'cell'; from: number; to: number };
 
 export interface FeedbackAnnotationSegment {
   from: number;
@@ -82,7 +83,7 @@ function normalizeBasicItems(
         validBoundary(item.from) &&
         validBoundary(item.to) &&
         item.from < item.to &&
-        (item.kind === 'inline' || item.kind === 'node')
+        (item.kind === 'inline' || item.kind === 'node' || item.kind === 'cell')
     )
     .map(item => ({ ...item }))
     .sort(
@@ -155,6 +156,14 @@ function normalizeItemsForDoc(
   return normalizeBasicItems(items).filter(item => {
     if (item.to > doc.content.size) return false;
     if (item.kind === 'inline') return isCanonicalInlineRange(doc, item.from, item.to);
+    if (item.kind === 'cell') {
+      const cell = doc.nodeAt(item.from);
+      return Boolean(
+        cell &&
+        item.to === item.from + cell.nodeSize &&
+        (cell.type.spec.tableRole === 'cell' || cell.type.spec.tableRole === 'header_cell')
+      );
+    }
     return topLevelNodeBoundaries.get(item.from) === item.to;
   });
 }
@@ -218,6 +227,7 @@ function buildSegmentsFromNormalized(
 }
 
 interface FeedbackNodeDecorationGroup {
+  readonly kind: 'node' | 'cell';
   readonly from: number;
   readonly to: number;
   readonly ids: readonly string[];
@@ -246,16 +256,25 @@ function prepareAnnotations(
   const segments = buildSegmentsFromNormalized(inlineItems).map(segment =>
     Object.freeze({ ...segment, ids: Object.freeze(segment.ids) })
   );
-  const groupedNodes = new Map<string, { from: number; to: number; ids: string[] }>();
+  const groupedNodes = new Map<
+    string,
+    { kind: 'node' | 'cell'; from: number; to: number; ids: string[] }
+  >();
   for (const item of immutableItems) {
-    if (item.kind !== 'node') continue;
-    const key = `${item.from}:${item.to}`;
-    const group = groupedNodes.get(key) ?? { from: item.from, to: item.to, ids: [] };
+    if (item.kind !== 'node' && item.kind !== 'cell') continue;
+    const key = `${item.kind}:${item.from}:${item.to}`;
+    const group = groupedNodes.get(key) ?? {
+      kind: item.kind,
+      from: item.from,
+      to: item.to,
+      ids: [],
+    };
     group.ids.push(item.id);
     groupedNodes.set(key, group);
   }
   const nodeGroups = [...groupedNodes.values()].map(group =>
     Object.freeze({
+      kind: group.kind,
       from: group.from,
       to: group.to,
       ids: Object.freeze(group.ids.sort(compareFeedbackIds)),
@@ -308,7 +327,7 @@ function buildDecorations(
 
   for (const group of prepared.nodeGroups) {
     decorations.push(
-      Decoration.node(group.from, group.to, decorationAttributes(group.ids, active, 'node'), {
+      Decoration.node(group.from, group.to, decorationAttributes(group.ids, active, group.kind), {
         feedbackIds: group.ids,
       })
     );

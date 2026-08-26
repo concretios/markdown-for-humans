@@ -2,6 +2,8 @@
 
 import { Editor } from '@tiptap/core';
 import { Markdown } from '@tiptap/markdown';
+import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
+import { CellSelection } from '@tiptap/pm/tables';
 import StarterKit from '@tiptap/starter-kit';
 import {
   createFeedbackNodeViewInteractionGuards,
@@ -10,6 +12,7 @@ import {
   type FeedbackReviewController,
 } from '../../webview/features/feedbackReview';
 import type { FeedbackHostMessage } from '../../shared/feedbackProtocol';
+import { fingerprintFeedbackTable } from '../../webview/features/feedbackSelectionMapping';
 
 function createLifecycleEditor(content = '<p>Alpha beta</p>'): Editor {
   document.body.innerHTML = `
@@ -43,9 +46,10 @@ describe('Feedback review-only lifecycle with a real editor', () => {
   it('installs its transaction filter only for Feedback and preserves selection transactions', () => {
     const editor = createLifecycleEditor();
     const onReadOnlyChange = jest.fn();
+    const postMessage = jest.fn();
     const controller = createFeedbackReviewController({
       editor,
-      host: { postMessage: jest.fn() },
+      host: { postMessage },
       onReadOnlyChange,
     });
 
@@ -165,6 +169,68 @@ describe('Feedback review-only lifecycle with a real editor', () => {
         })
       )
     ).toBe(true);
+    editor.destroy();
+  });
+
+  it('rolls back every renderer effect when activation fails after read-only setup', () => {
+    const editor = createLifecycleEditor();
+    const originalRegisterPlugin = editor.registerPlugin.bind(editor);
+    let registrationCount = 0;
+    jest.spyOn(editor, 'registerPlugin').mockImplementation(plugin => {
+      registrationCount += 1;
+      if (registrationCount === 2) throw new Error('annotation plugin setup failed');
+      return originalRegisterPlugin(plugin);
+    });
+    const controller = createFeedbackReviewController({
+      editor,
+      host: { postMessage: jest.fn() },
+    });
+
+    expect(() => activateEmptySession(controller)).toThrow('annotation plugin setup failed');
+
+    expect(controller.getSession()).toBeNull();
+    expect(controller.isEditingLocked()).toBe(false);
+    expect(feedbackReadOnlyPluginKey.get(editor.state)).toBeUndefined();
+    expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
+    expect(document.body.classList.contains('feedback-review-active')).toBe(false);
+    expect(document.querySelector('[data-feedback-annotation-layer]')).toBeNull();
+    editor.commands.insertContentAt(1, 'Editable ');
+    expect(editor.getText()).toBe('Editable Alpha beta');
+    editor.destroy();
+  });
+
+  it('restores one host-owned active session idempotently into a recreated controller', () => {
+    const editor = createLifecycleEditor();
+    const onReadOnlyChange = jest.fn();
+    const controller = createFeedbackReviewController({
+      editor,
+      host: { postMessage: jest.fn() },
+      onReadOnlyChange,
+    }) as FeedbackReviewController & {
+      restoreActiveSession(session: Parameters<FeedbackReviewController['activate']>[0]): boolean;
+    };
+    const restoredSession = {
+      sessionId: 'restored-session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260822T093000Z-k4p9',
+      feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+      anchors: [{ ordinal: 0, startLine: 1, endLine: 1 }],
+      items: [],
+    };
+
+    expect(controller.restoreActiveSession(restoredSession)).toBe(true);
+    expect(controller.getSession()).toEqual(restoredSession);
+    expect(document.querySelectorAll('[data-feedback-annotation-layer]')).toHaveLength(1);
+
+    expect(controller.restoreActiveSession(restoredSession)).toBe(true);
+    expect(document.querySelectorAll('[data-feedback-annotation-layer]')).toHaveLength(1);
+    expect(onReadOnlyChange).toHaveBeenCalledTimes(1);
+
+    expect(
+      controller.restoreActiveSession({ ...restoredSession, sessionId: 'stale-session' })
+    ).toBe(false);
+    expect(controller.getSession()?.sessionId).toBe(restoredSession.sessionId);
     editor.destroy();
   });
 
@@ -394,4 +460,233 @@ describe('Feedback review-only lifecycle with a real editor', () => {
     controller.deactivate();
     editor.destroy();
   });
+
+  it.each([
+    { nativeState: 'a collapsed native caret', outsideEditor: false },
+    { nativeState: 'transient native endpoints outside the editor', outsideEditor: true },
+  ])(
+    'opens the comment composer for a 4x4 CellSelection despite $nativeState',
+    ({ outsideEditor }) => {
+      document.body.innerHTML = `
+      <div class="formatting-toolbar"></div>
+      <main><div id="editor"></div></main>
+    `;
+      const editor = new Editor({
+        element: document.querySelector('#editor') as HTMLElement,
+        extensions: [StarterKit, Markdown, Table, TableRow, TableHeader, TableCell],
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'table',
+              content: Array.from({ length: 4 }, (_, row) => ({
+                type: 'tableRow',
+                content: Array.from({ length: 4 }, (_, column) => ({
+                  type: row === 0 ? 'tableHeader' : 'tableCell',
+                  content: [
+                    {
+                      type: 'paragraph',
+                      content: [{ type: 'text', text: `R${row + 1}C${column + 1}` }],
+                    },
+                  ],
+                })),
+              })),
+            },
+          ],
+        },
+      });
+      const cellPositions: number[] = [];
+      editor.state.doc.descendants((node, position) => {
+        if (node.type.spec.tableRole === 'cell' || node.type.spec.tableRole === 'header_cell') {
+          cellPositions.push(position);
+        }
+      });
+      editor.view.dispatch(
+        editor.state.tr.setSelection(
+          CellSelection.create(editor.state.doc, cellPositions[0], cellPositions[15])
+        )
+      );
+      const nativeEndpoint = outsideEditor
+        ? document.querySelector('.formatting-toolbar')
+        : editor.view.dom.firstChild;
+      const nativeSelection = jest.spyOn(window, 'getSelection').mockReturnValue({
+        anchorNode: nativeEndpoint,
+        focusNode: nativeEndpoint,
+        isCollapsed: true,
+        rangeCount: 0,
+        toString: () => '',
+      } as unknown as Selection);
+      const postMessage = jest.fn();
+      const controller = createFeedbackReviewController({
+        editor,
+        host: { postMessage },
+      });
+      controller.activate({
+        sessionId: 'session-table',
+        source: 'docs/table.md',
+        sourceSha256: 'b'.repeat(64),
+        round: '20260826T120000Z-ab12',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 6 }],
+        items: [],
+      });
+
+      const selectionFrames: FrameRequestCallback[] = [];
+      const requestAnimationFrame = jest
+        .spyOn(window, 'requestAnimationFrame')
+        .mockImplementation(callback => {
+          selectionFrames.push(callback);
+          return selectionFrames.length;
+        });
+      editor.view.dispatch(
+        editor.state.tr.setSelection(
+          CellSelection.create(editor.state.doc, cellPositions[15], cellPositions[0])
+        )
+      );
+      document.dispatchEvent(new Event('selectionchange'));
+      expect(requestAnimationFrame).toHaveBeenCalledTimes(1);
+      expect(document.querySelector('[data-feedback-selection-action]')).toBeNull();
+      selectionFrames[0](0);
+      expect(document.querySelector('[data-feedback-selection-action]')).not.toBeNull();
+      expect(
+        document.querySelector('[data-feedback-selection-action]')?.getAttribute('aria-label')
+      ).toBe('Add feedback to selected table cells');
+
+      expect(controller.commentOnSelection()).toBe(true);
+      expect(document.querySelector('[data-feedback-text-block-selector]')).toBeNull();
+      expect(document.querySelector('.feedback-composer')).not.toBeNull();
+      expect(document.querySelector('[data-feedback-focus]')?.textContent).toContain('R1C1');
+      expect(document.querySelector('[data-feedback-focus]')?.textContent).toContain('R4C4');
+
+      const feedbackInput = document.querySelector('[data-feedback-input]') as HTMLTextAreaElement;
+      feedbackInput.value = 'Review this table rectangle.';
+      feedbackInput.dispatchEvent(new Event('input', { bubbles: true }));
+      (document.querySelector('[data-feedback-submit]') as HTMLButtonElement).click();
+      expect(postMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          type: 'feedback.text.add',
+          startOrdinal: 0,
+          endOrdinal: 0,
+          cellTarget: {
+            version: 1,
+            tableOrdinal: 0,
+            rectangle: { top: 0, left: 0, bottom: 4, right: 4 },
+            tableFingerprint: expect.stringMatching(/^md4h-table\/v1:[a-f0-9]{16}$/),
+          },
+        })
+      );
+
+      nativeSelection.mockRestore();
+      requestAnimationFrame.mockRestore();
+      controller.deactivate();
+      editor.destroy();
+    }
+  );
+
+  it('restores an exact persisted cell rectangle only after its table fingerprint validates', () => {
+    document.body.innerHTML = `
+      <div class="formatting-toolbar"></div>
+      <main><div id="editor"></div></main>
+    `;
+    const editor = createTableEditor();
+    const fingerprint = fingerprintFeedbackTable({
+      version: 1,
+      tableOrdinal: 0,
+      table: editor.state.doc.child(0),
+    }).fingerprint;
+    const controller = createFeedbackReviewController({
+      editor,
+      host: { postMessage: jest.fn() },
+    });
+
+    controller.activate(tableSession(fingerprint));
+
+    const exactCells = Array.from(
+      editor.view.dom.querySelectorAll<HTMLElement>('.md4h-feedback-annotation-cell')
+    );
+    expect(exactCells).toHaveLength(4);
+    expect(exactCells.map(cell => cell.textContent)).toEqual(['R2C2', 'R2C3', 'R3C2', 'R3C3']);
+    expect(document.querySelector('[data-feedback-anchor-alert]')).toBeNull();
+
+    controller.deactivate();
+    editor.destroy();
+  });
+
+  it('shows a block fallback and warning when a restored cell fingerprint is stale', () => {
+    document.body.innerHTML = `
+      <div class="formatting-toolbar"></div>
+      <main><div id="editor"></div></main>
+    `;
+    const editor = createTableEditor();
+    const controller = createFeedbackReviewController({
+      editor,
+      host: { postMessage: jest.fn() },
+    });
+
+    controller.activate(tableSession('md4h-table/v1:0123456789abcdef'));
+
+    expect(editor.view.dom.querySelectorAll('.md4h-feedback-annotation-cell')).toHaveLength(0);
+    expect(editor.view.dom.querySelector('.md4h-feedback-annotation-node')).not.toBeNull();
+    expect(document.querySelector('[data-feedback-anchor-alert]')?.textContent).toContain(
+      'Safe block-level fallback is shown'
+    );
+
+    controller.deactivate();
+    editor.destroy();
+  });
 });
+
+function createTableEditor(): Editor {
+  return new Editor({
+    element: document.querySelector('#editor') as HTMLElement,
+    extensions: [StarterKit, Markdown, Table, TableRow, TableHeader, TableCell],
+    content: {
+      type: 'doc',
+      content: [
+        {
+          type: 'table',
+          content: Array.from({ length: 4 }, (_, row) => ({
+            type: 'tableRow',
+            content: Array.from({ length: 4 }, (_, column) => ({
+              type: row === 0 ? 'tableHeader' : 'tableCell',
+              content: [
+                {
+                  type: 'paragraph',
+                  content: [{ type: 'text', text: `R${row + 1}C${column + 1}` }],
+                },
+              ],
+            })),
+          })),
+        },
+      ],
+    },
+  });
+}
+
+function tableSession(tableFingerprint: string) {
+  return {
+    sessionId: 'session-restored-cells',
+    source: 'docs/table.md',
+    sourceSha256: 'b'.repeat(64),
+    round: '20260826T120000Z-ab12',
+    anchors: [{ ordinal: 0, startLine: 1, endLine: 6 }],
+    items: [
+      {
+        id: 'F1',
+        kind: 'text' as const,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 6,
+        focus: 'R2C2\tR2C3\nR3C2\tR3C3',
+        feedback: 'Review the middle cells.',
+        cellTarget: {
+          version: 1 as const,
+          tableOrdinal: 0,
+          rectangle: { top: 1, left: 1, bottom: 3, right: 3 },
+          tableFingerprint,
+          tableBlockSha256: 'c'.repeat(64),
+        },
+      },
+    ],
+  };
+}

@@ -101,6 +101,9 @@ Built on TipTap with a **human-first design philosophy**:
 
 ### Installation
 
+Requires VS Code 1.98.0 or newer in a trusted, disk-backed workspace. Compatible
+VS Code derivatives must provide the same desktop extension-host and webview APIs.
+
 **VS Code**
 
 **Option 1: Via Marketplace (Recommended)**

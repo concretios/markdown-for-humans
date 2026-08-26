@@ -296,6 +296,65 @@ describe('visible-area rasterization boundary', () => {
       });
     }
   });
+
+  it('stops after block mapping when capture is aborted during geometry reads', async () => {
+    const controller = new AbortController();
+    const block = captureBlock(0, domRect(0, 0, 200, 100));
+    const originalBounds = block.element.getBoundingClientRect.bind(block.element);
+    block.element.getBoundingClientRect = () => {
+      const bounds = originalBounds();
+      controller.abort('snapshot invalidated');
+      return bounds;
+    };
+    const rasterize = jest.fn();
+
+    await expect(
+      captureVisibleArea({
+        root: document.createElement('main'),
+        start: { x: 0, y: 0 },
+        end: { x: 100, y: 80 },
+        viewport: captureRect(0, 0, 200, 100),
+        blocks: [block],
+        rasterize,
+        signal: controller.signal,
+      })
+    ).rejects.toMatchObject<Partial<FeedbackCaptureError>>({
+      code: 'MD4H-FB-CAPTURE-002',
+      message: expect.stringMatching(/cancelled/i),
+    });
+    expect(rasterize).not.toHaveBeenCalled();
+  });
+
+  it('forwards cancellation and refuses a raster result produced after abort', async () => {
+    const controller = new AbortController();
+    const root = document.createElement('main');
+    const rasterize = jest.fn(async () => {
+      controller.abort('session ended');
+      return {
+        dataUrl: 'data:image/png;base64,capture',
+        width: 100,
+        height: 80,
+      };
+    });
+
+    await expect(
+      captureVisibleArea({
+        root,
+        start: { x: 0, y: 0 },
+        end: { x: 100, y: 80 },
+        viewport: captureRect(0, 0, 200, 100),
+        blocks: [captureBlock(0, domRect(0, 0, 200, 100))],
+        rasterize,
+        signal: controller.signal,
+      })
+    ).rejects.toMatchObject<Partial<FeedbackCaptureError>>({
+      code: 'MD4H-FB-CAPTURE-002',
+      message: expect.stringMatching(/cancelled/i),
+    });
+    expect(rasterize).toHaveBeenCalledWith(
+      expect.objectContaining({ root, signal: controller.signal })
+    );
+  });
 });
 
 describe('bitmap-space annotation commands', () => {

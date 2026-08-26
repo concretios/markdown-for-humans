@@ -19,7 +19,7 @@ import type { Dirent, Stats } from 'fs';
 import { link, lstat, mkdir, open, readdir, rename, rmdir, unlink, writeFile } from 'fs/promises';
 import * as path from 'path';
 import { inflateSync } from 'zlib';
-import type { FeedbackRenderedRangeV1 } from '../shared/feedbackProtocol';
+import type { FeedbackCellTargetV1, FeedbackRenderedRangeV1 } from '../shared/feedbackProtocol';
 
 const FEEDBACK_SCHEMA = 'md4h-feedback/v1' as const;
 const FEEDBACK_SOURCE_BASE = 'workspace' as const;
@@ -108,6 +108,8 @@ const REPORT_LOCK_STALE_AFTER_MS = 5 * 60 * 1_000;
 const REPORT_LOCK_TOKEN_BYTES = 12;
 const MAX_FEEDBACK_TEXT_LENGTH = 100_000;
 const MAX_FOCUS_TEXT_LENGTH = 1_000_000;
+const MAX_TABLE_ORDINAL = 99_999;
+const MAX_TABLE_COORDINATE = 100_000;
 
 /** Stable errors surfaced by the feedback storage boundary. */
 export type FeedbackSessionErrorCode =
@@ -155,6 +157,8 @@ export interface TextFeedbackItem extends FeedbackItemBase {
   focus: string;
   /** Strict draft-only machine anchor; omitted from sealed reports and state. */
   renderedRange?: FeedbackRenderedRangeV1;
+  /** Strict draft-only table anchor; omitted from sealed reports and state. */
+  cellTarget?: FeedbackCellTargetV1;
 }
 
 /** Feedback attached to a flattened, annotated screenshot. */
@@ -175,6 +179,7 @@ export interface AddTextFeedbackInput {
   focus: string;
   feedback: string;
   renderedRange?: FeedbackRenderedRangeV1;
+  cellTarget?: FeedbackCellTargetV1;
 }
 
 /** Input for creating a screenshot feedback item. */
@@ -950,7 +955,8 @@ export class FeedbackSessionStore {
             location,
             scanLocation.sourceRelativePath,
             expectedHash,
-            round
+            round,
+            'metadata'
           );
           drafts.push({
             round,
@@ -1052,6 +1058,14 @@ export class FeedbackSessionStore {
           input.renderedRange === undefined
             ? undefined
             : validateAndCloneRenderedRange(input.renderedRange);
+        const cellTarget =
+          input.cellTarget === undefined ? undefined : validateAndCloneCellTarget(input.cellTarget);
+        if (renderedRange !== undefined && cellTarget !== undefined) {
+          throw new FeedbackSessionError(
+            'MD4H-FB-STORE-001',
+            'Text feedback cannot contain both rendered range and table-cell metadata.'
+          );
+        }
 
         assertFeedbackSequenceCanAllocate(this._nextSequence);
         const sequence = this._nextSequence;
@@ -1065,6 +1079,7 @@ export class FeedbackSessionStore {
           focus: input.focus,
           feedback: input.feedback,
           ...(renderedRange === undefined ? {} : { renderedRange }),
+          ...(cellTarget === undefined ? {} : { cellTarget }),
         };
         const nextItems = [...this._items, item];
         await this.persistReport(this._snapshot, nextItems, sequence + 1, beforeCommit);
@@ -1549,7 +1564,7 @@ export class FeedbackSessionStore {
           () => this.validateScreenshotAssets()
         );
         this._snapshot = sealedSnapshot;
-        this._items = this._items.map(stripDraftRenderedRange);
+        this._items = this._items.map(stripDraftTargetMetadata);
         this._tombstones.clear();
 
         const feedbackFileRelativePath = toPosixPath(
@@ -1829,7 +1844,8 @@ async function readAndValidateDraft(
   location: FeedbackBundleLocation,
   expectedSource: string,
   expectedSourceSha256: string,
-  expectedRound: string
+  expectedRound: string,
+  screenshotValidation: 'metadata' | 'full' = 'full'
 ): Promise<ValidatedFeedbackReport> {
   try {
     try {
@@ -1895,7 +1911,10 @@ async function readAndValidateDraft(
       );
     }
 
-    await validateResumedScreenshotAssets(location, parsed.items);
+    await validateResumedScreenshotAssetMetadata(location, parsed.items);
+    if (screenshotValidation === 'full') {
+      await validateResumedScreenshotAssetBytes(location, parsed.items);
+    }
     return { ...parsed, reportSha256: computeFeedbackSourceSha256(reportBytes) };
   } catch (error) {
     if (error instanceof FeedbackDraftValidationError) {
@@ -1908,7 +1927,8 @@ async function readAndValidateDraft(
   }
 }
 
-async function validateResumedScreenshotAssets(
+/** Validate contained file identity and quotas without reading image bodies. */
+async function validateResumedScreenshotAssetMetadata(
   location: FeedbackBundleLocation,
   items: readonly FeedbackItem[]
 ): Promise<void> {
@@ -1935,7 +1955,13 @@ async function validateResumedScreenshotAssets(
       );
     }
   }
+}
 
+/** Read, parse, and hash screenshot bytes only when a draft is explicitly resumed. */
+async function validateResumedScreenshotAssetBytes(
+  location: FeedbackBundleLocation,
+  items: readonly FeedbackItem[]
+): Promise<void> {
   for (const item of items) {
     if (item.kind !== 'screenshot') {
       continue;
@@ -2130,6 +2156,7 @@ function parseTextFeedbackItem(
   const range = parseSourceLines(sourceLines);
   index = expectReportLine(lines, index, '');
   let renderedRange: FeedbackRenderedRangeV1 | undefined;
+  let cellTarget: FeedbackCellTargetV1 | undefined;
   const possibleMetadata = getReportLine(lines, index);
   if (possibleMetadata.startsWith('<!-- md4h-rendered-range:')) {
     if (state !== 'draft') {
@@ -2139,6 +2166,16 @@ function parseTextFeedbackItem(
       );
     }
     renderedRange = parseRenderedRangeMetadata(possibleMetadata);
+    index += 1;
+    index = expectReportLine(lines, index, '');
+  } else if (possibleMetadata.startsWith('<!-- md4h-cell-target:')) {
+    if (state !== 'draft') {
+      throw new FeedbackDraftValidationError(
+        'invalid-items',
+        'Sealed feedback cannot contain table-cell metadata.'
+      );
+    }
+    cellTarget = parseCellTargetMetadata(possibleMetadata);
     index += 1;
     index = expectReportLine(lines, index, '');
   }
@@ -2163,6 +2200,7 @@ function parseTextFeedbackItem(
       focus: focusBlock.value,
       feedback: feedbackBlock.value,
       ...(renderedRange === undefined ? {} : { renderedRange }),
+      ...(cellTarget === undefined ? {} : { cellTarget }),
     },
     nextIndex: feedbackBlock.nextIndex,
   };
@@ -2399,20 +2437,32 @@ function isStrictBase64(value: string): boolean {
 }
 
 function renderFeedbackItem(item: FeedbackItem, includeDraftMetadata: boolean): string {
-  if (item.kind === 'screenshot' && 'renderedRange' in item) {
+  if (item.kind === 'screenshot' && ('renderedRange' in item || 'cellTarget' in item)) {
     throw new FeedbackSessionError(
       'MD4H-FB-STORE-001',
-      'Screenshot feedback cannot contain rendered range metadata.'
+      'Screenshot feedback cannot contain rendered range or table-cell metadata.'
     );
   }
   const lineRange =
     item.startLine === item.endLine ? `${item.startLine}` : `${item.startLine}-${item.endLine}`;
   if (item.kind === 'text') {
+    if (item.renderedRange !== undefined && item.cellTarget !== undefined) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-001',
+        'Text feedback cannot contain both rendered range and table-cell metadata.'
+      );
+    }
+    const cellTarget =
+      item.cellTarget === undefined ? undefined : validateAndCloneCellTarget(item.cellTarget);
     const focus = normalizeReportText(item.focus);
     const fence = '`'.repeat(Math.max(3, longestBacktickRun(focus) + 1));
     const renderedRangeMetadata =
       includeDraftMetadata && item.renderedRange !== undefined
         ? [`<!-- md4h-rendered-range:${serializeRenderedRange(item.renderedRange)} -->`, '']
+        : [];
+    const cellTargetMetadata =
+      includeDraftMetadata && cellTarget !== undefined
+        ? [`<!-- md4h-cell-target:${serializeCellTarget(cellTarget)} -->`, '']
         : [];
     return [
       `## ${item.id} · text`,
@@ -2420,6 +2470,7 @@ function renderFeedbackItem(item: FeedbackItem, includeDraftMetadata: boolean): 
       `**Source lines:** ${lineRange}`,
       '',
       ...renderedRangeMetadata,
+      ...cellTargetMetadata,
       '**Focus:**',
       '',
       `${fence}text`,
@@ -2649,6 +2700,71 @@ function validateAndCloneRenderedRange(value: unknown): FeedbackRenderedRangeV1 
   };
 }
 
+function validateAndCloneCellTarget(value: unknown): FeedbackCellTargetV1 {
+  if (!isRecord(value)) {
+    throw new FeedbackSessionError(
+      'MD4H-FB-STORE-001',
+      'The table-cell feedback target metadata is invalid.'
+    );
+  }
+  const expectedKeys = [
+    'version',
+    'tableOrdinal',
+    'rectangle',
+    'tableFingerprint',
+    'tableBlockSha256',
+  ];
+  const actualKeys = Object.keys(value);
+  const hasExactKeys =
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every(key => expectedKeys.includes(key));
+  if (
+    !hasExactKeys ||
+    value.version !== 1 ||
+    !isNonNegativeSafeInteger(value.tableOrdinal) ||
+    value.tableOrdinal > MAX_TABLE_ORDINAL ||
+    typeof value.tableFingerprint !== 'string' ||
+    !/^md4h-table\/v1:[a-f0-9]{16}$/.test(value.tableFingerprint) ||
+    typeof value.tableBlockSha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(value.tableBlockSha256) ||
+    !isRecord(value.rectangle)
+  ) {
+    throw new FeedbackSessionError(
+      'MD4H-FB-STORE-001',
+      'The table-cell feedback target metadata is invalid.'
+    );
+  }
+  const rectangleKeys = ['top', 'left', 'bottom', 'right'];
+  const actualRectangleKeys = Object.keys(value.rectangle);
+  const hasExactRectangleKeys =
+    actualRectangleKeys.length === rectangleKeys.length &&
+    actualRectangleKeys.every(key => rectangleKeys.includes(key));
+  const { top, left, bottom, right } = value.rectangle;
+  if (
+    !hasExactRectangleKeys ||
+    !isNonNegativeSafeInteger(top) ||
+    !isNonNegativeSafeInteger(left) ||
+    !isNonNegativeSafeInteger(bottom) ||
+    !isNonNegativeSafeInteger(right) ||
+    top >= bottom ||
+    left >= right ||
+    bottom > MAX_TABLE_COORDINATE ||
+    right > MAX_TABLE_COORDINATE
+  ) {
+    throw new FeedbackSessionError(
+      'MD4H-FB-STORE-001',
+      'The table-cell feedback target metadata is invalid.'
+    );
+  }
+  return {
+    version: 1,
+    tableOrdinal: value.tableOrdinal,
+    rectangle: { top, left, bottom, right },
+    tableFingerprint: value.tableFingerprint,
+    tableBlockSha256: value.tableBlockSha256,
+  };
+}
+
 function parseRenderedRangeMetadata(line: string): FeedbackRenderedRangeV1 {
   const prefix = '<!-- md4h-rendered-range:';
   const suffix = ' -->';
@@ -2676,6 +2792,35 @@ function parseRenderedRangeMetadata(line: string): FeedbackRenderedRangeV1 {
 
 function serializeRenderedRange(value: FeedbackRenderedRangeV1): string {
   return JSON.stringify(validateAndCloneRenderedRange(value));
+}
+
+function parseCellTargetMetadata(line: string): FeedbackCellTargetV1 {
+  const prefix = '<!-- md4h-cell-target:';
+  const suffix = ' -->';
+  if (!line.endsWith(suffix)) {
+    throw new FeedbackDraftValidationError(
+      'invalid-items',
+      'The table-cell target metadata is invalid.'
+    );
+  }
+  const encoded = line.slice(prefix.length, -suffix.length);
+  try {
+    const parsed: unknown = JSON.parse(encoded);
+    const cellTarget = validateAndCloneCellTarget(parsed);
+    if (serializeCellTarget(cellTarget) !== encoded) {
+      throw new Error('metadata is not canonically encoded');
+    }
+    return cellTarget;
+  } catch (error) {
+    throw new FeedbackDraftValidationError(
+      'invalid-items',
+      `The table-cell target metadata is invalid: ${getErrorMessage(error)}.`
+    );
+  }
+}
+
+function serializeCellTarget(value: FeedbackCellTargetV1): string {
+  return JSON.stringify(validateAndCloneCellTarget(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -2713,17 +2858,28 @@ function assertValidDate(date: Date, operation: string): void {
 }
 
 function cloneFeedbackItem(item: FeedbackItem): FeedbackItem {
-  return item.kind === 'text' && item.renderedRange !== undefined
-    ? { ...item, renderedRange: { ...item.renderedRange } }
-    : { ...item };
+  if (item.kind !== 'text') return { ...item };
+  return {
+    ...item,
+    ...(item.renderedRange === undefined ? {} : { renderedRange: { ...item.renderedRange } }),
+    ...(item.cellTarget === undefined
+      ? {}
+      : {
+          cellTarget: {
+            ...item.cellTarget,
+            rectangle: { ...item.cellTarget.rectangle },
+          },
+        }),
+  };
 }
 
-function stripDraftRenderedRange(item: FeedbackItem): FeedbackItem {
-  if (item.kind !== 'text' || item.renderedRange === undefined) {
+function stripDraftTargetMetadata(item: FeedbackItem): FeedbackItem {
+  if (item.kind !== 'text' || (item.renderedRange === undefined && item.cellTarget === undefined)) {
     return cloneFeedbackItem(item);
   }
   const sealedItem: TextFeedbackItem = { ...item };
   delete sealedItem.renderedRange;
+  delete sealedItem.cellTarget;
   return sealedItem;
 }
 

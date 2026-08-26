@@ -22,8 +22,9 @@
  *
  * Equivalence is "renders to the same HTML" — the strictest check that still
  * tolerates the cosmetic-only round-trip differences listed above. Whitespace
- * inside `<pre>` and inline `<code>` is preserved during normalization so that
- * legitimate edits to verbatim content are still detected as changes.
+ * inside `<pre>` and inline `<code>` is preserved during normalization. Raw
+ * HTML-bearing token contexts are compared source-exactly before normalization
+ * because HTML and CSS can make otherwise collapsible whitespace significant.
  */
 
 import MarkdownIt from 'markdown-it';
@@ -39,8 +40,8 @@ const md = new MarkdownIt({
 
 /**
  * Collapse runs of whitespace to a single space, but leave content inside
- * `<pre>...</pre>` and inline `<code>...</code>` untouched. Code regions are
- * the only place whitespace is structurally meaningful in rendered markdown.
+ * `<pre>...</pre>` and inline `<code>...</code>` untouched. Raw HTML contexts
+ * have already passed an exact comparison before this normalization runs.
  */
 function normalizeRenderedHtml(html: string): string {
   const verbatimRegex = /<(pre|code)\b[\s\S]*?<\/\1>/gi;
@@ -57,6 +58,39 @@ function normalizeRenderedHtml(html: string): string {
 }
 
 /**
+ * Return source-exact contexts containing raw HTML tokens.
+ *
+ * Markdown-it keeps an HTML block in one token, but splits inline HTML tags
+ * from the text they affect. Preserve the whole parent inline token so CSS such
+ * as `white-space: pre` cannot make a collapsed text edit disappear.
+ */
+function rawHtmlContexts(markdown: string): string[] {
+  if (!markdown.includes('<')) return [];
+
+  const contexts: string[] = [];
+  for (const token of md.parse(markdown, {})) {
+    if (token.type === 'html_block') {
+      contexts.push(token.content);
+      continue;
+    }
+    if (token.type === 'inline' && token.children?.some(child => child.type === 'html_inline')) {
+      contexts.push(token.content);
+    }
+  }
+  return contexts;
+}
+
+/** Raw HTML must match exactly even when normalized rendered HTML would not. */
+function hasSameRawHtmlContexts(a: string, b: string): boolean {
+  const aContexts = rawHtmlContexts(a);
+  const bContexts = rawHtmlContexts(b);
+  return (
+    aContexts.length === bContexts.length &&
+    aContexts.every((context, index) => context === bContexts[index])
+  );
+}
+
+/**
  * Returns true when `a` and `b` are different source strings that represent
  * the same document. Returns false when they differ in any way a reader would
  * notice (added/removed text, changed link target, edited code, etc.).
@@ -64,6 +98,7 @@ function normalizeRenderedHtml(html: string): string {
 export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean {
   if (a === b) return true;
   try {
+    if (!hasSameRawHtmlContexts(a, b)) return false;
     return normalizeRenderedHtml(md.render(a)) === normalizeRenderedHtml(md.render(b));
   } catch {
     // If either side fails to render, fall back to "not equivalent" so the

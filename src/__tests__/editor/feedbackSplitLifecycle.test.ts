@@ -12,7 +12,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { DocumentEditCoordinator } from '../../editor/documentEditCoordinator';
 import { MarkdownEditorProvider } from '../../editor/MarkdownEditorProvider';
+import { DOCUMENT_SYNC_PROTOCOL_VERSION } from '../../shared/documentSyncProtocol';
 
 interface FeedbackMessage {
   type: string;
@@ -43,7 +45,8 @@ interface ProviderLifecycleInternals {
   >;
   feedbackWebviews: Map<string, Set<vscode.Webview>>;
   pendingEdits: Map<string, number>;
-  inFlightApplyEdits: Map<string, Promise<boolean>>;
+  documentEditCoordinator: DocumentEditCoordinator<string>;
+  hasPendingDocumentEdits: (documentKey: string) => boolean;
   autoSaveTimers: Map<string, ReturnType<typeof setTimeout>>;
 }
 
@@ -75,6 +78,71 @@ const LATEST_BLOCKS = [
     contentSize: 'Latest owner edit.'.length,
   },
 ];
+
+function createFlushAcknowledgement(message: unknown, ok: boolean): FeedbackMessage {
+  const barrier = message as {
+    requestId: string;
+    viewGeneration: string;
+    documentVersion: number;
+  };
+  return {
+    type: 'flushPendingEditAck',
+    protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+    requestId: barrier.requestId,
+    viewGeneration: barrier.viewGeneration,
+    documentVersion: barrier.documentVersion,
+    ok,
+  };
+}
+
+function acknowledgeFeedbackPeerCoordination(view: MockRichView, message: FeedbackMessage): void {
+  if (message.type === 'feedback.peer.lock.acquire') {
+    queueMicrotask(() => {
+      view.receive({
+        type: 'feedback.peer.lock.acquired',
+        acquisitionId: message.acquisitionId,
+        requestId: message.requestId,
+        lockId: message.lockId,
+        replacesLockId: message.replacesLockId,
+        viewGeneration: message.viewGeneration,
+        revision: message.revision,
+      });
+    });
+  }
+  if (message.type === 'feedback.peer.release') {
+    queueMicrotask(() => {
+      view.receive({
+        type: 'feedback.peer.released',
+        phase: message.phase,
+        releaseId: message.releaseId,
+        requestId: message.requestId,
+        lockId: message.lockId,
+        viewGeneration: message.viewGeneration,
+        revision: message.revision,
+        documentVersion: message.documentVersion,
+        contentSha256: message.contentSha256,
+      });
+    });
+  }
+  if (message.type === 'feedback.session.transfer') {
+    queueMicrotask(() => {
+      view.receive({
+        type: 'feedback.session.transfer.ack',
+        phase: message.phase,
+        role: message.role,
+        transferId: message.transferId,
+        requestId: message.requestId,
+        oldSessionId: message.oldSessionId,
+        newSessionId: message.newSessionId,
+        viewGeneration: message.viewGeneration,
+        revision: message.revision,
+        documentVersion: message.documentVersion,
+        sourceSha256: message.sourceSha256,
+        applied: true,
+      });
+    });
+  }
+}
 
 describe('MarkdownEditorProvider split lifecycle ownership', () => {
   let workspaceRoot: string;
@@ -176,7 +244,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     peer.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          peer.receive({ type: 'flushPendingEditAck', requestId: message.requestId, ok: true });
+          peer.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -187,7 +255,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
           owner.receive({ type: 'edit', content: LATEST_SOURCE, editReason: 'typing' });
           peer.dispose();
           peerDisposedDuringFlush = true;
-          owner.receive({ type: 'flushPendingEditAck', requestId: message.requestId, ok: true });
+          owner.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -202,7 +270,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     await waitUntil(() => peerDisposedDuringFlush && releaseOwnerEdit !== undefined);
     const stateImmediatelyAfterPeerDispose = {
       pendingOwnerEdit: providerInternals.pendingEdits.has(documentKey),
-      inFlightOwnerEdit: providerInternals.inFlightApplyEdits.has(documentKey),
+      inFlightOwnerEdit: providerInternals.hasPendingDocumentEdits(documentKey),
       sameAutoSaveTimer: providerInternals.autoSaveTimers.get(documentKey) === existingAutoSave,
     };
 
@@ -241,11 +309,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     firstView.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          firstView.receive({
-            type: 'flushPendingEditAck',
-            requestId: message.requestId,
-            ok: true,
-          });
+          firstView.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -269,13 +333,10 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
 
     const reopenedView = createRichView();
     reopenedView.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      acknowledgeFeedbackPeerCoordination(reopenedView, message);
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          reopenedView.receive({
-            type: 'flushPendingEditAck',
-            requestId: message.requestId,
-            ok: true,
-          });
+          reopenedView.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -338,11 +399,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     orphanedOwner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          orphanedOwner.receive({
-            type: 'flushPendingEditAck',
-            requestId: message.requestId,
-            ok: true,
-          });
+          orphanedOwner.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -365,13 +422,10 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
 
     const replacement = createRichView();
     replacement.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      acknowledgeFeedbackPeerCoordination(replacement, message);
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          replacement.receive({
-            type: 'flushPendingEditAck',
-            requestId: message.requestId,
-            ok: true,
-          });
+          replacement.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -425,11 +479,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     orphanedOwner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          orphanedOwner.receive({
-            type: 'flushPendingEditAck',
-            requestId: message.requestId,
-            ok: true,
-          });
+          orphanedOwner.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -449,20 +499,20 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     const documentKey = document.uri.toString();
     providerInternals.feedbackWebviews.get(documentKey)?.delete(orphanedOwner.webview);
     let settleOwnerEdit: (() => void) | undefined;
-    const pendingOwnerEdit = new Promise<boolean>(resolve => {
+    const pendingOwnerWork = new Promise<boolean>(resolve => {
       settleOwnerEdit = () => resolve(true);
     });
-    providerInternals.inFlightApplyEdits.set(documentKey, pendingOwnerEdit);
+    const pendingOwnerEdit = providerInternals.documentEditCoordinator.enqueue(documentKey, {
+      kind: 'operation',
+      execute: () => pendingOwnerWork,
+    });
 
     const replacement = createRichView();
     replacement.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      acknowledgeFeedbackPeerCoordination(replacement, message);
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          replacement.receive({
-            type: 'flushPendingEditAck',
-            requestId: message.requestId,
-            ok: true,
-          });
+          replacement.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -482,7 +532,6 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
 
     settleOwnerEdit?.();
     await pendingOwnerEdit;
-    providerInternals.inFlightApplyEdits.delete(documentKey);
     replacement.receive({
       type: 'feedback.start',
       requestId: 'start-after-pending-orphan-settles',
@@ -493,7 +542,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
       ['feedback.resume.available', 'feedback.error'],
       'start-after-pending-orphan-settles'
     );
-    expect(offer).toEqual(expect.objectContaining({ kind: 'active-peer' }));
+    expect(offer).toEqual(expect.objectContaining({ kind: 'saved-draft' }));
     replacement.receive({
       type: 'feedback.draft.resume',
       requestId: 'resume-after-pending-orphan-settles',
@@ -554,7 +603,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     owner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          owner.receive({ type: 'flushPendingEditAck', requestId: message.requestId, ok: true });
+          owner.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -648,7 +697,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     owner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          owner.receive({ type: 'flushPendingEditAck', requestId: message.requestId, ok: true });
+          owner.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -718,9 +767,10 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
         })
     );
     peer.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      acknowledgeFeedbackPeerCoordination(peer, message);
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
-          peer.receive({ type: 'flushPendingEditAck', requestId: message.requestId, ok: true });
+          peer.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -729,7 +779,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
       if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
         queueMicrotask(() => {
           owner.receive({ type: 'edit', content: LATEST_SOURCE, editReason: 'typing' });
-          owner.receive({ type: 'flushPendingEditAck', requestId: message.requestId, ok: true });
+          owner.receive(createFlushAcknowledgement(message, true));
         });
       }
       return Promise.resolve(true);
@@ -741,38 +791,255 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
       blocks: LATEST_BLOCKS,
     });
     await waitUntil(() => releaseOwnerEdit !== undefined);
-    const lock = peer.webview.postMessage.mock.calls
-      .map(call => call[0] as FeedbackMessage)
-      .find(message => message.type === 'feedback.peer.locked');
-    expect(lock?.lockId).toEqual(expect.any(String));
-
     owner.dispose();
 
     expect(
-      peer.webview.postMessage.mock.calls.some(
-        call => call[0].type === 'feedback.peer.unlocked' && call[0].lockId === lock?.lockId
-      )
+      peer.webview.postMessage.mock.calls.some(call => call[0].type === 'feedback.peer.release')
     ).toBe(false);
 
     releaseOwnerEdit?.();
     await waitUntil(() =>
       peer.webview.postMessage.mock.calls.some(
-        call => call[0].type === 'feedback.peer.unlocked' && call[0].lockId === lock?.lockId
+        call => call[0].type === 'feedback.peer.release' && call[0].phase === 'commit'
       )
     );
 
-    const updateIndex = peer.webview.postMessage.mock.calls.findIndex(
-      call => call[0].type === 'update' && call[0].content === LATEST_SOURCE
+    const acquireIndex = peer.webview.postMessage.mock.calls.findIndex(
+      call => call[0].type === 'feedback.peer.lock.acquire'
     );
-    const unlockIndex = peer.webview.postMessage.mock.calls.findIndex(
-      call => call[0].type === 'feedback.peer.unlocked' && call[0].lockId === lock?.lockId
+    const applyIndex = peer.webview.postMessage.mock.calls.findIndex(
+      call =>
+        call[0].type === 'feedback.peer.release' &&
+        call[0].phase === 'apply' &&
+        call[0].content === LATEST_SOURCE
     );
-    expect(updateIndex).toBeGreaterThanOrEqual(0);
-    expect(updateIndex).toBeLessThan(unlockIndex);
+    const commitIndex = peer.webview.postMessage.mock.calls.findIndex(
+      call => call[0].type === 'feedback.peer.release' && call[0].phase === 'commit'
+    );
+    expect(acquireIndex).toBeGreaterThanOrEqual(0);
+    expect(applyIndex).toBeGreaterThan(acquireIndex);
+    expect(commitIndex).toBeGreaterThan(applyIndex);
 
     peer.dispose();
     providerInternals.autoSaveTimers.forEach(timer => clearTimeout(timer));
     providerInternals.autoSaveTimers.clear();
+  });
+
+  it('retires an active disposed owner only after every surviving peer applies and commits', async () => {
+    const provider = createProvider(workspaceRoot);
+    const providerInternals = internals(provider);
+    const document = createDocument(sourcePath, () => ORIGINAL_SOURCE);
+    const owner = createRichView();
+    const peer = createRichView();
+
+    owner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => owner.receive(createFlushAcknowledgement(message, true)));
+      }
+      return Promise.resolve(true);
+    });
+    peer.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      acknowledgeFeedbackPeerCoordination(peer, message);
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => peer.receive(createFlushAcknowledgement(message, true)));
+      }
+      return Promise.resolve(true);
+    });
+
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      owner.panel,
+      {} as vscode.CancellationToken
+    );
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      peer.panel,
+      {} as vscode.CancellationToken
+    );
+    owner.receive({
+      type: 'feedback.start',
+      requestId: 'start-before-active-owner-disposes',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    const started = await waitForOneOf(
+      owner,
+      ['feedback.started'],
+      'start-before-active-owner-disposes'
+    );
+
+    owner.dispose();
+    await waitUntil(() =>
+      peer.webview.postMessage.mock.calls.some(
+        call => call[0].type === 'feedback.peer.release' && call[0].phase === 'commit'
+      )
+    );
+    await waitUntil(() => providerInternals.feedbackSessions.size === 0);
+
+    const applyIndex = peer.webview.postMessage.mock.calls.findIndex(
+      call =>
+        call[0].type === 'feedback.peer.release' &&
+        call[0].phase === 'apply' &&
+        call[0].lockId === started.sessionId &&
+        call[0].content === ORIGINAL_SOURCE
+    );
+    const commitIndex = peer.webview.postMessage.mock.calls.findIndex(
+      call =>
+        call[0].type === 'feedback.peer.release' &&
+        call[0].phase === 'commit' &&
+        call[0].lockId === started.sessionId
+    );
+    expect(applyIndex).toBeGreaterThanOrEqual(0);
+    expect(commitIndex).toBeGreaterThan(applyIndex);
+
+    peer.dispose();
+  });
+
+  it('does not let a definitively unavailable peer generation block Feedback activation', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, () => ORIGINAL_SOURCE);
+    const owner = createRichView();
+    const peer = createRichView();
+    let peerGenerationUnavailable = true;
+
+    owner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => owner.receive(createFlushAcknowledgement(message, true)));
+      }
+      return Promise.resolve(true);
+    });
+    peer.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => peer.receive(createFlushAcknowledgement(message, true)));
+      }
+      if (message.type === 'feedback.peer.lock.acquire' && peerGenerationUnavailable) {
+        return Promise.resolve(false);
+      }
+      acknowledgeFeedbackPeerCoordination(peer, message);
+      return Promise.resolve(true);
+    });
+
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      owner.panel,
+      {} as vscode.CancellationToken
+    );
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      peer.panel,
+      {} as vscode.CancellationToken
+    );
+    owner.receive({
+      type: 'feedback.start',
+      requestId: 'start-with-hidden-peer-generation',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    const started = await waitForOneOf(
+      owner,
+      ['feedback.started'],
+      'start-with-hidden-peer-generation'
+    );
+    const unavailableAcquire = peer.webview.postMessage.mock.calls
+      .map(call => call[0] as FeedbackMessage)
+      .find(message => message.type === 'feedback.peer.lock.acquire');
+    expect(unavailableAcquire?.viewGeneration).toEqual(expect.any(String));
+
+    peerGenerationUnavailable = false;
+    peer.receive({ type: 'ready' });
+    await waitUntil(
+      () =>
+        peer.webview.postMessage.mock.calls.filter(
+          call => call[0].type === 'feedback.peer.lock.acquire'
+        ).length === 2
+    );
+    const replacementAcquire = peer.webview.postMessage.mock.calls
+      .map(call => call[0] as FeedbackMessage)
+      .filter(message => message.type === 'feedback.peer.lock.acquire')[1];
+    expect(replacementAcquire).toEqual(expect.objectContaining({ lockId: started.sessionId }));
+    expect(replacementAcquire?.viewGeneration).not.toBe(unavailableAcquire?.viewGeneration);
+    expect(
+      peer.webview.postMessage.mock.calls.some(
+        call => call[0].type === 'update' && call[0].content === ORIGINAL_SOURCE
+      )
+    ).toBe(true);
+
+    owner.dispose();
+    await waitUntil(() =>
+      peer.webview.postMessage.mock.calls.some(
+        call => call[0].type === 'feedback.peer.release' && call[0].phase === 'commit'
+      )
+    );
+    peer.dispose();
+  });
+
+  it('retires a definitively unavailable release target and rehydrates its next generation', async () => {
+    const provider = createProvider(workspaceRoot);
+    const providerInternals = internals(provider);
+    const document = createDocument(sourcePath, () => ORIGINAL_SOURCE);
+    const owner = createRichView();
+    const peer = createRichView();
+    let releaseGenerationUnavailable = false;
+
+    owner.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => owner.receive(createFlushAcknowledgement(message, true)));
+      }
+      return Promise.resolve(true);
+    });
+    peer.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
+        queueMicrotask(() => peer.receive(createFlushAcknowledgement(message, true)));
+      }
+      if (message.type === 'feedback.peer.release' && releaseGenerationUnavailable) {
+        return Promise.resolve(false);
+      }
+      acknowledgeFeedbackPeerCoordination(peer, message);
+      return Promise.resolve(true);
+    });
+
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      owner.panel,
+      {} as vscode.CancellationToken
+    );
+    await provider.resolveCustomTextEditor(
+      document as unknown as vscode.TextDocument,
+      peer.panel,
+      {} as vscode.CancellationToken
+    );
+    owner.receive({
+      type: 'feedback.start',
+      requestId: 'start-before-release-target-hides',
+      blocks: ORIGINAL_BLOCKS,
+    });
+    await waitForOneOf(owner, ['feedback.started'], 'start-before-release-target-hides');
+
+    releaseGenerationUnavailable = true;
+    owner.dispose();
+    await waitUntil(() => providerInternals.feedbackSessions.size === 0);
+    const unavailableReleases = peer.webview.postMessage.mock.calls
+      .map(call => call[0] as FeedbackMessage)
+      .filter(message => message.type === 'feedback.peer.release');
+    expect(unavailableReleases).toEqual([
+      expect.objectContaining({ phase: 'apply', content: ORIGINAL_SOURCE }),
+    ]);
+
+    releaseGenerationUnavailable = false;
+    const updatesBeforeReady = peer.webview.postMessage.mock.calls.filter(
+      call => call[0].type === 'update'
+    ).length;
+    peer.receive({ type: 'ready' });
+    await waitUntil(
+      () =>
+        peer.webview.postMessage.mock.calls.filter(call => call[0].type === 'update').length >
+        updatesBeforeReady
+    );
+    const latestUpdate = peer.webview.postMessage.mock.calls
+      .map(call => call[0] as FeedbackMessage)
+      .filter(message => message.type === 'update')
+      .at(-1);
+    expect(latestUpdate).toEqual(expect.objectContaining({ content: ORIGINAL_SOURCE }));
+
+    peer.dispose();
   });
 
   it('keeps the surviving split registered for window-change autosave when the newest peer closes', async () => {
@@ -811,11 +1078,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
       survivingView.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
         if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
           queueMicrotask(() => {
-            survivingView.receive({
-              type: 'flushPendingEditAck',
-              requestId: message.requestId,
-              ok: true,
-            });
+            survivingView.receive(createFlushAcknowledgement(message, true));
           });
         }
         return Promise.resolve(true);
@@ -887,7 +1150,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
       view.webview.postMessage.mockImplementation((message: FeedbackMessage) => {
         if (message.type === 'flushPendingEdit' && typeof message.requestId === 'string') {
           queueMicrotask(() => {
-            view.receive({ type: 'flushPendingEditAck', requestId: message.requestId, ok: true });
+            view.receive(createFlushAcknowledgement(message, true));
           });
         }
         return Promise.resolve(true);

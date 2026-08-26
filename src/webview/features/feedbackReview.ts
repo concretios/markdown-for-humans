@@ -10,6 +10,7 @@
 
 import type { Editor, JSONContent } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { CellSelection } from '@tiptap/pm/tables';
 import type {
   CanonicalFeedbackBlock,
   FeedbackDraftSummary,
@@ -20,10 +21,7 @@ import type {
   FeedbackWebviewMessage,
 } from '../../shared/feedbackProtocol';
 import { FEEDBACK_ERROR_CODES } from '../../shared/feedbackProtocol';
-import {
-  reorderMarksForSerialization,
-  serializeBlockMarkdown,
-} from '../utils/markdownSerialization';
+import { serializeBlockMarkdown } from '../utils/markdownSerialization';
 import {
   FEEDBACK_COMMENTS_PANEL_ID,
   FEEDBACK_COMMENTS_RAIL_ID,
@@ -35,6 +33,7 @@ import {
   layoutFeedbackAnnotations,
   type FeedbackAnnotationLayoutResult,
 } from './feedbackAnnotationLayout';
+import { FeedbackActivationTransaction } from './feedbackActivationController';
 import {
   createFeedbackAnnotationController,
   PENDING_FEEDBACK_ANNOTATION_ID,
@@ -52,6 +51,7 @@ import {
   getFeedbackTargetFromProseMirrorSelection,
   resolveFeedbackRenderedRange,
 } from './feedbackRenderedRange';
+import { mapFeedbackSelection, resolveFeedbackCellTarget } from './feedbackSelectionMapping';
 
 type FeedbackMarkdownSerializer = {
   serialize?: (json: JSONContent) => string;
@@ -107,6 +107,13 @@ export interface FeedbackTextTarget {
   startLine: number;
   endLine: number;
   renderedRange?: FeedbackRenderedRangeInputV1;
+  /** Draft-only structural metadata for a rectangular table-cell selection. */
+  cellTarget?: {
+    version: 1;
+    tableOrdinal: number;
+    rectangle: { top: number; left: number; bottom: number; right: number };
+    tableFingerprint: string;
+  };
 }
 
 export type FeedbackDraftSurfaceKind =
@@ -186,6 +193,20 @@ export interface FeedbackReviewController {
   readonly draftSurfaceGate: FeedbackDraftSurfaceGate;
   start(): void;
   activate(session: FeedbackSessionView): void;
+  /** Restore one host-authoritative active session into a clean renderer lifetime. */
+  restoreActiveSession(session: FeedbackSessionView): boolean;
+  /** Stage an exact ownership handoff while review mutations remain frozen. */
+  prepareSessionTransfer(
+    message: Extract<FeedbackHostMessage, { type: 'feedback.session.transfer'; phase: 'apply' }>
+  ): boolean;
+  /** Commit only the exact staged ownership handoff. */
+  commitSessionTransfer(
+    message: Extract<FeedbackHostMessage, { type: 'feedback.session.transfer'; phase: 'commit' }>
+  ): boolean;
+  /** Roll back only the exact staged ownership handoff. */
+  abortSessionTransfer(
+    message: Extract<FeedbackHostMessage, { type: 'feedback.session.transfer'; phase: 'abort' }>
+  ): boolean;
   deactivate(): void;
   invalidate(code: FeedbackErrorCode): void;
   updateItems(items: FeedbackItemSummary[]): void;
@@ -218,10 +239,16 @@ export interface FeedbackReviewController {
     message: Extract<FeedbackHostMessage, { type: 'feedback.transition.sync' }>,
     applyContent: (content: string) => boolean
   ): boolean;
+  /** True only when a combined peer release may retire this exact owner lock. */
+  hasPeerReleaseLock(lockId: string): boolean;
+  /** Apply the final authoritative peer source while retaining the matching owner lock. */
+  applyPeerRelease(lockId: string, applyContent: () => boolean): boolean;
   /** Release the owner only after the host broadcasts its correlated peer unlock. */
   completeClose(lockId: string): boolean;
   /** Release a failed transition only after its correlated host unlock. */
   completeTransition(lockId: string): boolean;
+  /** Demote an active review through a host-authoritative peer release. */
+  completeSessionRelease(lockId: string): boolean;
   handleHostMessage(message: FeedbackHostMessage): void;
   /** True whenever local Feedback lifecycle guards have frozen editor mutations. */
   isEditingLocked(): boolean;
@@ -390,8 +417,7 @@ export function enumerateCanonicalFeedbackBlocks(editor: Editor): CanonicalFeedb
     throw new Error('Markdown serializer is unavailable');
   }
 
-  const serialize = (json: JSONContent): string =>
-    rawSerialize.call(serializerOwner, reorderMarksForSerialization(json));
+  const serialize = (json: JSONContent): string => rawSerialize.call(serializerOwner, json);
   const blocks: CanonicalFeedbackBlock[] = [];
   const doc = editor.state.doc;
 
@@ -507,6 +533,42 @@ export function getFeedbackSelectionTarget(
   const hasNativeSelection = nativeSelectionInside && nativeSelectionHasText(nativeSelection);
   let renderedRange: FeedbackRenderedRangeInputV1 | undefined;
   let renderedFocus: string | undefined;
+
+  if (editor.state.selection instanceof CellSelection) {
+    const structuralTarget = mapFeedbackSelection({
+      doc: editor.state.doc,
+      selection: editor.state.selection,
+      mappedOrdinals: anchors.map(anchor => anchor.ordinal),
+      nativeSelection:
+        hasConnectedNativeEndpoints && !nativeSelectionInside
+          ? { kind: 'outside-editor' }
+          : nativeSelectionInside && nativeSelection?.isCollapsed === true
+            ? { kind: 'collapsed-inside' }
+            : { kind: 'unavailable' },
+    });
+    if (structuralTarget.kind !== 'cells' && structuralTarget.kind !== 'blocks') return null;
+    const startOrdinal = structuralTarget.blockRange.fromOrdinal;
+    const endOrdinal = structuralTarget.blockRange.toOrdinal;
+    const startAnchor = anchors.find(anchor => anchor.ordinal === startOrdinal);
+    const endAnchor = anchors.find(anchor => anchor.ordinal === endOrdinal);
+    return {
+      startOrdinal,
+      endOrdinal,
+      focus: structuralTarget.focusText,
+      startLine: startAnchor?.startLine ?? 0,
+      endLine: endAnchor?.endLine ?? 0,
+      ...(structuralTarget.kind === 'cells'
+        ? {
+            cellTarget: {
+              version: 1,
+              tableOrdinal: structuralTarget.tableOrdinal,
+              rectangle: { ...structuralTarget.rectangle },
+              tableFingerprint: structuralTarget.tableFingerprint,
+            },
+          }
+        : {}),
+    };
+  }
 
   if (hasNativeSelection && nativeSelection) {
     if (nativeSelection.rangeCount > 0 && typeof nativeSelection.getRangeAt === 'function') {
@@ -655,6 +717,17 @@ export function createFeedbackReviewController(options: {
     latestRevision: number;
     releaseRevision?: number;
   } | null = null;
+  let pendingSessionTransfer: {
+    transferId: string;
+    role: Extract<FeedbackHostMessage, { type: 'feedback.session.transfer' }>['role'];
+    oldSessionId: string;
+    newSessionId: string;
+    viewGeneration: string;
+    revision: number;
+    documentVersion: number;
+    sourceSha256: string;
+    previousSession: FeedbackSessionView | null;
+  } | null = null;
   let completionDialog: HTMLElement | null = null;
   let completionReturnFocus: HTMLElement | null = null;
   let completionReturnSelector: string | null = null;
@@ -675,12 +748,16 @@ export function createFeedbackReviewController(options: {
   let focusDraftResumeAfterTransition = false;
   let restoreFocusTo: HTMLElement | null = null;
   let annotationLayoutFrame: number | null = null;
+  let selectionSampleFrame: number | null = null;
   let annotationResizeObserver: ResizeObserver | null = null;
+  let activationTransaction: FeedbackActivationTransaction | null = null;
+  let activationRollbackInProgress = false;
   let annotationController: FeedbackAnnotationController | null = null;
   let currentAnnotationLayout: FeedbackAnnotationLayoutResult | null = null;
   let annotationsSuspended = false;
   let captureState: FeedbackCaptureUiState = 'idle';
   let unresolvedRenderedRangeIds = new Set<string>();
+  let unresolvedCellTargetIds = new Set<string>();
   let blockFallbackBracketIds = new Set<string>();
   let feedbackBlockPositions: Array<{ from: number; to: number }> = [];
   let requestedUndoFocusId: string | null = null;
@@ -698,7 +775,11 @@ export function createFeedbackReviewController(options: {
 
   const post = (message: FeedbackWebviewMessage): void => host.postMessage(message);
   const hasWritableSession = (): boolean =>
-    session !== null && !invalidated && pendingFinishRequestId === null && pendingClose === null;
+    session !== null &&
+    !invalidated &&
+    pendingFinishRequestId === null &&
+    pendingClose === null &&
+    pendingSessionTransfer === null;
 
   const refreshFeedbackBlockPositions = (): void => {
     feedbackBlockPositions = [];
@@ -710,13 +791,25 @@ export function createFeedbackReviewController(options: {
   const buildAnnotationTargets = (): FeedbackAnnotationTarget[] => {
     if (!session) {
       unresolvedRenderedRangeIds = new Set();
+      unresolvedCellTargetIds = new Set();
       blockFallbackBracketIds = new Set();
       return [];
     }
     const targets: FeedbackAnnotationTarget[] = [];
     const nextUnresolvedRenderedRangeIds = new Set<string>();
+    const nextUnresolvedCellTargetIds = new Set<string>();
     const nextBlockFallbackBracketIds = new Set<string>();
     for (const item of session.items) {
+      if (item.kind === 'text' && item.cellTarget) {
+        const resolved = resolveFeedbackCellTarget(editor.state.doc, item.cellTarget);
+        if (resolved.kind === 'cells') {
+          for (const cell of resolved.cells) {
+            targets.push({ id: item.id, kind: 'cell', from: cell.from, to: cell.to });
+          }
+          continue;
+        }
+        nextUnresolvedCellTargetIds.add(item.id);
+      }
       if (item.kind === 'text' && item.renderedRange) {
         let resolved = null;
         try {
@@ -762,13 +855,16 @@ export function createFeedbackReviewController(options: {
       }
     }
     unresolvedRenderedRangeIds = nextUnresolvedRenderedRangeIds;
+    unresolvedCellTargetIds = nextUnresolvedCellTargetIds;
     blockFallbackBracketIds = nextBlockFallbackBracketIds;
     return targets;
   };
 
   const syncAnnotationDecorations = (): void => {
     const targets = buildAnnotationTargets();
-    renderAnnotationAnchorAlert(unresolvedRenderedRangeIds);
+    renderAnnotationAnchorAlert(
+      new Set([...unresolvedRenderedRangeIds, ...unresolvedCellTargetIds])
+    );
     if (!annotationController?.isRegistered()) return;
     annotationController.setItems(targets);
     annotationController.setActiveIds(activeItemId ? [activeItemId] : []);
@@ -1012,16 +1108,6 @@ export function createFeedbackReviewController(options: {
       rememberTransitionFocus();
       setDraftBannerBusy(true);
       window.dispatchEvent(new CustomEvent('feedbackResumeRequested'));
-      let blocks: CanonicalFeedbackBlock[];
-      try {
-        blocks = enumerateCanonicalFeedbackBlocks(editor);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Cannot enumerate rendered blocks';
-        window.dispatchEvent(new CustomEvent('feedbackLocalError', { detail: { message } }));
-        setDraftBannerBusy(false);
-        restoreTransitionFocus();
-        return;
-      }
       startRequestId = nextRequestId();
       setReadOnly(true);
       document.body.classList.add('feedback-review-starting');
@@ -1030,7 +1116,6 @@ export function createFeedbackReviewController(options: {
         type: 'feedback.draft.resume',
         requestId: startRequestId,
         round: selectedDraft.round,
-        blocks,
       });
     });
     const startNew = createElement('button', 'feedback-secondary-button', 'Start new');
@@ -1038,21 +1123,13 @@ export function createFeedbackReviewController(options: {
     startNew.setAttribute('data-feedback-start-new', '');
     startNew.addEventListener('click', () => {
       if (session || startRequestId || draftBannerMode !== 'saved') return;
-      let blocks: CanonicalFeedbackBlock[];
-      try {
-        blocks = enumerateCanonicalFeedbackBlocks(editor);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Cannot enumerate rendered blocks';
-        window.dispatchEvent(new CustomEvent('feedbackLocalError', { detail: { message } }));
-        return;
-      }
       rememberTransitionFocus();
       setDraftBannerBusy(true);
       startRequestId = nextRequestId();
       setReadOnly(true);
       document.body.classList.add('feedback-review-starting');
       setFeedbackToolbarState({ active: false, starting: true });
-      post({ type: 'feedback.start.new', requestId: startRequestId, blocks });
+      post({ type: 'feedback.start.new', requestId: startRequestId });
     });
     const reveal = createElement('button', 'feedback-secondary-button', 'Reveal');
     reveal.type = 'button';
@@ -1116,6 +1193,9 @@ export function createFeedbackReviewController(options: {
     if (!session) return;
     const items = session.items.filter(item => ids.includes(item.id));
     for (const item of items) {
+      if (item.kind === 'text' && item.cellTarget && !unresolvedCellTargetIds.has(item.id)) {
+        continue;
+      }
       let hasExactRenderedTarget = false;
       if (item.kind === 'text' && item.renderedRange) {
         try {
@@ -2808,16 +2888,18 @@ export function createFeedbackReviewController(options: {
     removePendingButton();
     if (!hasWritableSession() || !session || composer) return;
     const nativeSelection = window.getSelection();
+    const hasStructuralCellSelection = editor.state.selection instanceof CellSelection;
     if (
-      !nativeSelectionIsInsideEditor(nativeSelection, editorDom) ||
-      !nativeSelectionHasText(nativeSelection)
+      !hasStructuralCellSelection &&
+      (!nativeSelectionIsInsideEditor(nativeSelection, editorDom) ||
+        !nativeSelectionHasText(nativeSelection))
     ) {
       return;
     }
     const target = getFeedbackSelectionTarget(editor, session.anchors ?? []);
     if (!target) return;
 
-    if (nativeSelection.rangeCount > 0) {
+    if (!hasStructuralCellSelection && nativeSelection && nativeSelection.rangeCount > 0) {
       try {
         const range = nativeSelection.getRangeAt(0);
         pendingSelectionRange = typeof range.cloneRange === 'function' ? range.cloneRange() : range;
@@ -2829,7 +2911,10 @@ export function createFeedbackReviewController(options: {
     pendingButton = createElement('button', 'feedback-selection-action') as HTMLButtonElement;
     pendingButton.type = 'button';
     pendingButton.title = 'Add feedback';
-    pendingButton.setAttribute('aria-label', 'Add feedback to selected text');
+    pendingButton.setAttribute(
+      'aria-label',
+      target.cellTarget ? 'Add feedback to selected table cells' : 'Add feedback to selected text'
+    );
     pendingButton.setAttribute('data-feedback-selection-action', '');
     const icon = createElement('span', 'codicon codicon-comment-discussion-sparkle');
     icon.setAttribute('aria-hidden', 'true');
@@ -3036,84 +3121,230 @@ export function createFeedbackReviewController(options: {
         return;
       }
       if (session || startRequestId) return;
-      let blocks: CanonicalFeedbackBlock[];
-      try {
-        blocks = enumerateCanonicalFeedbackBlocks(editor);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Cannot enumerate rendered blocks';
-        window.dispatchEvent(new CustomEvent('feedbackLocalError', { detail: { message } }));
-        return;
-      }
       rememberTransitionFocus();
       setDraftBannerBusy(true);
       startRequestId = nextRequestId();
       setReadOnly(true);
       document.body.classList.add('feedback-review-starting');
       setFeedbackToolbarState({ active: false, starting: true });
-      post({ type: 'feedback.start', requestId: startRequestId, blocks });
+      post({ type: 'feedback.start', requestId: startRequestId });
     },
 
     activate(nextSession) {
       if (session) controller.deactivate();
-      removeCompletionDialog(false);
-      pendingFinishRequestId = null;
-      sealedCompletionSummary = null;
-      draftSurfaceGate.clear();
-      const resumeHadFocus = Boolean(
-        draftBanner?.contains(document.activeElement) &&
-        document.activeElement instanceof HTMLElement &&
-        document.activeElement.matches('[data-feedback-draft-resume]')
-      );
-      availableDrafts = [];
-      removeDraftBanner();
-      deletedItems.clear();
-      requestedUndoFocusId = null;
-      lastValidTargetGeometry.clear();
-      lastValidCardHeights.clear();
-      clearAnnotationLayoutAlert();
-      session = { ...nextSession, items: [...nextSession.items] };
-      startRequestId = null;
-      pendingClose = null;
-      restoreEditorFocusAfterClose = false;
-      pendingTransitionRecovery = null;
-      transitionReturnFocus = null;
-      focusDraftResumeAfterTransition = false;
-      document.body.classList.remove('feedback-review-starting');
-      invalidated = false;
-      commentsState = 'collapsed';
-      activeItemIds = null;
-      activeItemId = null;
-      annotationsSuspended = false;
-      captureState = 'idle';
-      refreshFeedbackBlockPositions();
-      setReadOnly(true);
-      document.body.classList.add('feedback-review-active');
-      const dynamicEditor = editor as Editor & {
-        registerPlugin?: Editor['registerPlugin'];
-        unregisterPlugin?: Editor['unregisterPlugin'];
-      };
-      if (
-        typeof dynamicEditor.registerPlugin === 'function' &&
-        typeof dynamicEditor.unregisterPlugin === 'function'
-      ) {
-        annotationController = createFeedbackAnnotationController(editor);
-        annotationController.register();
-      }
-      createReviewChrome();
-      editorDom.addEventListener('click', handleSavedAnnotationClick);
-      renderMarkers();
-      scheduleLayoutAfterFontsReady();
-      annotationResizeObserver?.observe(editorDom);
-      if (panel) annotationResizeObserver?.observe(panel);
-      if (resumeHadFocus) {
-        document.querySelector<HTMLButtonElement>('[data-feedback-finish]')?.focus({
-          preventScroll: true,
+      const transaction = new FeedbackActivationTransaction();
+      activationTransaction = transaction;
+      const prepared = transaction.prepare(preparation => {
+        // Register the complete rollback before the first renderer mutation.
+        // A synchronous activation cannot paint between these effects, so a
+        // failed preparation is removed before control returns to the host.
+        preparation.registerCleanup(() => {
+          if (activationTransaction === transaction) activationTransaction = null;
+          activationRollbackInProgress = true;
+          try {
+            controller.deactivate();
+          } finally {
+            activationRollbackInProgress = false;
+          }
         });
+
+        removeCompletionDialog(false);
+        pendingFinishRequestId = null;
+        sealedCompletionSummary = null;
+        draftSurfaceGate.clear();
+        const resumeHadFocus = Boolean(
+          draftBanner?.contains(document.activeElement) &&
+          document.activeElement instanceof HTMLElement &&
+          document.activeElement.matches('[data-feedback-draft-resume]')
+        );
+        availableDrafts = [];
+        removeDraftBanner();
+        deletedItems.clear();
+        requestedUndoFocusId = null;
+        lastValidTargetGeometry.clear();
+        lastValidCardHeights.clear();
+        clearAnnotationLayoutAlert();
+        session = { ...nextSession, items: [...nextSession.items] };
+        startRequestId = null;
+        pendingClose = null;
+        restoreEditorFocusAfterClose = false;
+        pendingTransitionRecovery = null;
+        transitionReturnFocus = null;
+        focusDraftResumeAfterTransition = false;
+        document.body.classList.remove('feedback-review-starting');
+        invalidated = false;
+        commentsState = 'collapsed';
+        activeItemIds = null;
+        activeItemId = null;
+        annotationsSuspended = false;
+        captureState = 'idle';
+        refreshFeedbackBlockPositions();
+        setReadOnly(true);
+        document.body.classList.add('feedback-review-active');
+        const dynamicEditor = editor as Editor & {
+          registerPlugin?: Editor['registerPlugin'];
+          unregisterPlugin?: Editor['unregisterPlugin'];
+        };
+        if (
+          typeof dynamicEditor.registerPlugin === 'function' &&
+          typeof dynamicEditor.unregisterPlugin === 'function'
+        ) {
+          annotationController = createFeedbackAnnotationController(editor);
+          annotationController.register();
+        }
+        createReviewChrome();
+        editorDom.addEventListener('click', handleSavedAnnotationClick);
+        renderMarkers();
+        scheduleLayoutAfterFontsReady();
+        annotationResizeObserver?.observe(editorDom);
+        if (panel) annotationResizeObserver?.observe(panel);
+        if (resumeHadFocus) {
+          document.querySelector<HTMLButtonElement>('[data-feedback-finish]')?.focus({
+            preventScroll: true,
+          });
+        }
+        announce('Feedback review started. Snapshot saved.');
+      });
+      if (prepared.disposition === 'failed') throw prepared.error;
+      if (prepared.disposition !== 'applied') {
+        throw new Error(`Feedback renderer activation could not prepare (${prepared.state}).`);
       }
-      announce('Feedback review started. Snapshot saved.');
+      const committed = transaction.commit(() => () => undefined);
+      if (committed.disposition === 'failed') throw committed.error;
+      if (committed.disposition !== 'applied') {
+        transaction.rollback();
+        throw new Error(`Feedback renderer activation could not commit (${committed.state}).`);
+      }
+    },
+
+    restoreActiveSession(nextSession) {
+      if (session) return session.sessionId === nextSession.sessionId;
+      if (startRequestId || pendingClose || pendingTransitionRecovery || completionDialog) {
+        return false;
+      }
+      controller.activate(nextSession);
+      return true;
+    },
+
+    prepareSessionTransfer(message) {
+      const samePending =
+        pendingSessionTransfer?.transferId === message.transferId &&
+        pendingSessionTransfer.role === message.role &&
+        pendingSessionTransfer.oldSessionId === message.oldSessionId &&
+        pendingSessionTransfer.newSessionId === message.newSessionId &&
+        pendingSessionTransfer.viewGeneration === message.viewGeneration &&
+        pendingSessionTransfer.revision === message.revision &&
+        pendingSessionTransfer.documentVersion === message.documentVersion &&
+        pendingSessionTransfer.sourceSha256 === message.sourceSha256;
+      if (samePending) return true;
+      if (pendingSessionTransfer || pendingClose || pendingTransitionRecovery || completionDialog) {
+        return false;
+      }
+
+      const previousSession = session ? { ...session, items: [...session.items] } : null;
+      if (message.role === 'new-owner') {
+        if (session) return false;
+        controller.activate(message.session);
+      } else if (message.role === 'old-owner') {
+        if (session?.sessionId !== message.oldSessionId) return false;
+      } else {
+        if (session?.sessionId === message.oldSessionId) {
+          controller.activate(message.session);
+        } else if (!session) {
+          controller.activate(message.session);
+        } else {
+          return false;
+        }
+      }
+      if (
+        session?.sessionId !==
+        (message.role === 'old-owner' ? message.oldSessionId : message.newSessionId)
+      ) {
+        return false;
+      }
+
+      pendingSessionTransfer = {
+        transferId: message.transferId,
+        role: message.role,
+        oldSessionId: message.oldSessionId,
+        newSessionId: message.newSessionId,
+        viewGeneration: message.viewGeneration,
+        revision: message.revision,
+        documentVersion: message.documentVersion,
+        sourceSha256: message.sourceSha256,
+        previousSession:
+          message.role === 'same-owner' && previousSession === null
+            ? { ...message.session, sessionId: message.oldSessionId }
+            : previousSession,
+      };
+      syncCommentsUi();
+      return true;
+    },
+
+    abortSessionTransfer(message) {
+      if (
+        !pendingSessionTransfer ||
+        pendingSessionTransfer.transferId !== message.transferId ||
+        pendingSessionTransfer.role !== message.role ||
+        pendingSessionTransfer.oldSessionId !== message.oldSessionId ||
+        pendingSessionTransfer.newSessionId !== message.newSessionId ||
+        pendingSessionTransfer.viewGeneration !== message.viewGeneration ||
+        pendingSessionTransfer.revision !== message.revision ||
+        pendingSessionTransfer.documentVersion !== message.documentVersion ||
+        pendingSessionTransfer.sourceSha256 !== message.sourceSha256
+      ) {
+        return false;
+      }
+      if (message.role === 'old-owner') {
+        if (session?.sessionId !== message.oldSessionId) return false;
+        pendingSessionTransfer = null;
+        syncCommentsUi();
+        return true;
+      }
+      if (session?.sessionId !== message.newSessionId) return false;
+      const previousSession = pendingSessionTransfer.previousSession;
+      if (message.role === 'new-owner') {
+        controller.deactivate();
+        return session === null;
+      }
+      if (!previousSession || previousSession.sessionId !== message.oldSessionId) return false;
+      controller.activate(previousSession);
+      return session?.sessionId === message.oldSessionId;
+    },
+
+    commitSessionTransfer(message) {
+      if (
+        !pendingSessionTransfer ||
+        pendingSessionTransfer.transferId !== message.transferId ||
+        pendingSessionTransfer.role !== message.role ||
+        pendingSessionTransfer.oldSessionId !== message.oldSessionId ||
+        pendingSessionTransfer.newSessionId !== message.newSessionId ||
+        pendingSessionTransfer.viewGeneration !== message.viewGeneration ||
+        pendingSessionTransfer.revision !== message.revision ||
+        pendingSessionTransfer.documentVersion !== message.documentVersion ||
+        pendingSessionTransfer.sourceSha256 !== message.sourceSha256
+      ) {
+        return false;
+      }
+      if (message.role === 'old-owner') {
+        if (session?.sessionId !== message.oldSessionId) return false;
+        controller.deactivate();
+        return session === null;
+      }
+      if (session?.sessionId !== message.newSessionId) return false;
+      pendingSessionTransfer = null;
+      syncCommentsUi();
+      return true;
     },
 
     deactivate() {
+      pendingSessionTransfer = null;
+      if (!activationRollbackInProgress && activationTransaction) {
+        const transaction = activationTransaction;
+        activationTransaction = null;
+        transaction.dispose();
+        return;
+      }
       if (!session && !readOnlyApplied) {
         removeCompletionDialog(false);
         pendingFinishRequestId = null;
@@ -3487,6 +3718,7 @@ export function createFeedbackReviewController(options: {
           focus: target.focus,
           feedback,
           ...(target.renderedRange ? { renderedRange: target.renderedRange } : {}),
+          ...(target.cellTarget ? { cellTarget: target.cellTarget } : {}),
         });
       });
       actions.append(cancel, submit);
@@ -3727,10 +3959,22 @@ export function createFeedbackReviewController(options: {
       }
       if (
         pendingTransitionRecovery.requestId !== message.requestId ||
-        pendingTransitionRecovery.lockId !== message.lockId ||
-        message.revision <= pendingTransitionRecovery.appliedRevision ||
-        (message.revision !== pendingTransitionRecovery.latestRevision &&
-          message.revision !== pendingTransitionRecovery.latestRevision + 1)
+        pendingTransitionRecovery.lockId !== message.lockId
+      ) {
+        return false;
+      }
+      if (message.revision === pendingTransitionRecovery.appliedRevision) {
+        post({
+          type: 'feedback.transition.applied',
+          requestId: message.requestId,
+          lockId: message.lockId,
+          revision: message.revision,
+        });
+        return true;
+      }
+      if (
+        message.revision !== pendingTransitionRecovery.latestRevision &&
+        message.revision !== pendingTransitionRecovery.latestRevision + 1
       ) {
         return false;
       }
@@ -3777,8 +4021,21 @@ export function createFeedbackReviewController(options: {
         !pendingClose ||
         pendingClose.requestId !== message.requestId ||
         pendingClose.sessionId !== message.sessionId ||
-        session.sessionId !== message.sessionId ||
-        message.revision <= pendingClose.appliedRevision ||
+        session.sessionId !== message.sessionId
+      ) {
+        return false;
+      }
+      if (message.revision === pendingClose.appliedRevision) {
+        post({
+          type: 'feedback.close.applied',
+          requestId: pendingClose.requestId,
+          sessionId: pendingClose.sessionId,
+          revision: message.revision,
+        });
+        return true;
+      }
+      if (
+        message.revision !== pendingClose.latestRevision &&
         message.revision !== pendingClose.latestRevision + 1
       ) {
         return false;
@@ -3835,6 +4092,40 @@ export function createFeedbackReviewController(options: {
       return true;
     },
 
+    hasPeerReleaseLock(lockId) {
+      const closeReady =
+        session !== null &&
+        pendingClose !== null &&
+        pendingClose.sessionId === lockId &&
+        pendingClose.releaseRevision !== undefined &&
+        pendingClose.releaseRevision === pendingClose.appliedRevision;
+      const transitionReady =
+        session === null &&
+        pendingTransitionRecovery !== null &&
+        pendingTransitionRecovery.lockId === lockId &&
+        pendingTransitionRecovery.appliedRevision === pendingTransitionRecovery.latestRevision;
+      const activeSessionReady = session?.sessionId === lockId && pendingClose === null;
+      return closeReady || transitionReady || activeSessionReady;
+    },
+
+    applyPeerRelease(lockId, applyContent) {
+      if (!controller.hasPeerReleaseLock(lockId)) return false;
+
+      // The DOM and accessibility guards remain active. Only the transaction
+      // filter stands down for this one host-authoritative replacement.
+      unregisterReadOnlyPlugin();
+      let applied = false;
+      try {
+        applied = applyContent() === true;
+      } catch (error) {
+        console.error('[MD4H] Feedback peer release synchronization failed:', error);
+      }
+      // Every renderer applies first while remaining frozen. The host sends a
+      // separate commit only after all live splits acknowledge this revision.
+      registerReadOnlyPlugin();
+      return applied;
+    },
+
     completeClose(lockId) {
       if (
         !session ||
@@ -3879,6 +4170,12 @@ export function createFeedbackReviewController(options: {
       } else {
         restoreTransitionFocus();
       }
+      return true;
+    },
+
+    completeSessionRelease(lockId) {
+      if (!session || session.sessionId !== lockId || pendingClose) return false;
+      controller.deactivate();
       return true;
     },
 
@@ -4005,7 +4302,19 @@ export function createFeedbackReviewController(options: {
           controller.invalidate(message.code);
           break;
         case 'feedback.finished': {
-          if (pendingClose) break;
+          if (pendingClose) {
+            if (
+              pendingClose.requestId === message.requestId &&
+              pendingClose.sessionId === message.sessionId
+            ) {
+              post({
+                type: 'feedback.close.ready',
+                requestId: message.requestId,
+                sessionId: message.sessionId,
+              });
+            }
+            break;
+          }
           if (pendingFinishRequestId === null || message.requestId !== pendingFinishRequestId) {
             break;
           }
@@ -4047,7 +4356,19 @@ export function createFeedbackReviewController(options: {
         }
         case 'feedback.discarded':
           removeDraftBanner();
-          if (pendingClose) break;
+          if (pendingClose) {
+            if (
+              pendingClose.requestId === message.requestId &&
+              pendingClose.sessionId === message.sessionId
+            ) {
+              post({
+                type: 'feedback.close.ready',
+                requestId: message.requestId,
+                sessionId: message.sessionId,
+              });
+            }
+            break;
+          }
           restoreEditorFocusAfterClose = Boolean(
             document.activeElement instanceof HTMLElement &&
             (rail?.contains(document.activeElement) ||
@@ -4073,11 +4394,20 @@ export function createFeedbackReviewController(options: {
             !pendingClose ||
             pendingClose.requestId !== message.requestId ||
             pendingClose.sessionId !== message.sessionId ||
-            pendingClose.appliedRevision !== message.revision ||
-            pendingClose.releaseRevision !== undefined
+            pendingClose.appliedRevision !== message.revision
           ) {
             break;
           }
+          if (pendingClose.releaseRevision === message.revision) {
+            post({
+              type: 'feedback.close.released',
+              requestId: message.requestId,
+              sessionId: message.sessionId,
+              revision: message.revision,
+            });
+            break;
+          }
+          if (pendingClose.releaseRevision !== undefined) break;
           pendingClose.releaseRevision = message.revision;
           post({
             type: 'feedback.close.released',
@@ -4227,15 +4557,25 @@ export function createFeedbackReviewController(options: {
     },
   };
 
-  const handleNativeSelectionChange = (): void => {
-    if (hasWritableSession()) handleSelectionChange();
+  const scheduleSelectionSample = (): void => {
+    if (!hasWritableSession() || selectionSampleFrame !== null) return;
+    // Both ProseMirror and Chromium can report one logical selection change.
+    // Sample once before paint so a transient native caret cannot erase a
+    // structural ProseMirror selection such as CellSelection.
+    selectionSampleFrame = -1;
+    const frame = requestAnimationFrame(() => {
+      selectionSampleFrame = null;
+      handleSelectionChange();
+    });
+    // Several deterministic DOM harnesses execute animation frames inline.
+    if (selectionSampleFrame === -1) selectionSampleFrame = frame;
   };
 
   function bindReviewListeners(): void {
     if (reviewListenersBound) return;
     reviewListenersBound = true;
-    editor.on('selectionUpdate', handleSelectionChange);
-    document.addEventListener('selectionchange', handleNativeSelectionChange);
+    editor.on('selectionUpdate', scheduleSelectionSample);
+    document.addEventListener('selectionchange', scheduleSelectionSample);
     window.addEventListener('resize', scheduleAnnotationLayout);
     editorDom.addEventListener('beforeinput', guardMutation, true);
     editorDom.addEventListener('cut', guardMutation, true);
@@ -4249,8 +4589,12 @@ export function createFeedbackReviewController(options: {
   function unbindReviewListeners(): void {
     if (!reviewListenersBound) return;
     reviewListenersBound = false;
-    editor.off('selectionUpdate', handleSelectionChange);
-    document.removeEventListener('selectionchange', handleNativeSelectionChange);
+    editor.off('selectionUpdate', scheduleSelectionSample);
+    document.removeEventListener('selectionchange', scheduleSelectionSample);
+    if (selectionSampleFrame !== null) {
+      if (selectionSampleFrame >= 0) cancelAnimationFrame(selectionSampleFrame);
+      selectionSampleFrame = null;
+    }
     window.removeEventListener('resize', scheduleAnnotationLayout);
     editorDom.removeEventListener('beforeinput', guardMutation, true);
     editorDom.removeEventListener('cut', guardMutation, true);

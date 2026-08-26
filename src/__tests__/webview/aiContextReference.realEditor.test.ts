@@ -14,6 +14,7 @@ import { ListKit } from '@tiptap/extension-list';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
 import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMarkdownFix';
 import { CustomImage } from '../../webview/extensions/customImage';
+import { PreservedMarkdownLiteral } from '../../webview/extensions/preservedMarkdownLiteral';
 import { computeSelectionBlockRange } from '../../webview/utils/aiContextReference';
 import { getEditorMarkdownForSync } from '../../webview/utils/markdownSerialization';
 import { installBlankLineLexerNormalizer } from '../../webview/utils/markedLexerNormalizer';
@@ -39,6 +40,7 @@ function createRealEditor(initialMarkdown: string): Editor {
         undoRedo: { depth: 100 },
       }),
       MarkdownParagraph,
+      PreservedMarkdownLiteral,
       // CustomImage is part of the production extension set; without it,
       // image tokens emitted by marked have no schema to land in and get
       // silently dropped, which would fail the `![](url)` round-trip cases

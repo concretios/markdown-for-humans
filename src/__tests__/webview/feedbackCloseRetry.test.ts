@@ -128,6 +128,108 @@ describe('Feedback close synchronization retry', () => {
     }
   );
 
+  it('replays every correlated close acknowledgement without reapplying content', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'current-session',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-k4p9',
+      items: [],
+    });
+    const discarded = {
+      type: 'feedback.discarded' as const,
+      requestId: 'discard-current',
+      sessionId: 'current-session',
+    };
+
+    controller.handleHostMessage(discarded);
+    controller.handleHostMessage(discarded);
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.filter(
+        ([message]) => message.type === 'feedback.close.ready'
+      )
+    ).toHaveLength(2);
+
+    const sync: CloseSyncMessage = {
+      type: 'feedback.close.sync',
+      requestId: 'discard-current',
+      sessionId: 'current-session',
+      revision: 1,
+      content: '# Authoritative source\n',
+    };
+    const applyContent = jest.fn(() => true);
+    expect(controller.applyCloseSync(sync, applyContent)).toBe(true);
+    expect(controller.applyCloseSync(sync, applyContent)).toBe(true);
+    expect(applyContent).toHaveBeenCalledTimes(1);
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.filter(
+        ([message]) => message.type === 'feedback.close.applied' && message.revision === 1
+      )
+    ).toHaveLength(2);
+
+    const release = {
+      type: 'feedback.close.release' as const,
+      requestId: 'discard-current',
+      sessionId: 'current-session',
+      revision: 1,
+    };
+    controller.handleHostMessage(release);
+    controller.handleHostMessage(release);
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.filter(
+        ([message]) => message.type === 'feedback.close.released' && message.revision === 1
+      )
+    ).toHaveLength(2);
+  });
+
+  it('replays close.ready when a correlated feedback.finished delivery is repeated', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'current-session',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-k4p9',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 0,
+          endOrdinal: 0,
+          startLine: 1,
+          endLine: 1,
+          focus: 'Guide',
+          feedback: 'Clarify this heading.',
+        },
+      ],
+    });
+    controller.finish();
+    document.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')?.click();
+    const finishRequest = (host.postMessage as jest.Mock).mock.calls
+      .map(([message]) => message)
+      .find(message => message.type === 'feedback.finish');
+    const finished = {
+      type: 'feedback.finished' as const,
+      requestId: finishRequest.requestId,
+      sessionId: 'current-session',
+      feedbackFile: '.md4h/feedback/feedback.md',
+      itemCount: 1,
+      prompt: 'Implement the sealed feedback bundle.',
+      promptCopied: true,
+    };
+
+    controller.handleHostMessage(finished);
+    controller.handleHostMessage(finished);
+
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.filter(
+        ([message]) => message.type === 'feedback.close.ready'
+      )
+    ).toHaveLength(2);
+  });
+
   it('keeps keyboard focus in the editor when a successful retry removes its alert', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });

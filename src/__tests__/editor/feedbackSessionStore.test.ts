@@ -44,6 +44,13 @@ const FIRST_PARAGRAPH_RENDERED_RANGE = {
   startBlockSha256: createHash('sha256').update('First paragraph.').digest('hex'),
   endBlockSha256: createHash('sha256').update('First paragraph.').digest('hex'),
 };
+const FIRST_TABLE_CELL_TARGET = {
+  version: 1 as const,
+  tableOrdinal: 2,
+  rectangle: { top: 0, left: 0, bottom: 4, right: 4 },
+  tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+  tableBlockSha256: createHash('sha256').update('| A | B |\n| - | - |\n| 1 | 2 |').digest('hex'),
+};
 const AI_AGENT_INSTRUCTION_LINES = [
   '# Instructions for AI coding agents',
   '',
@@ -329,6 +336,45 @@ describe('feedbackSessionStore helpers', () => {
     );
   });
 
+  it('renders canonical table-cell metadata only in draft reports', () => {
+    const item = {
+      id: 'F1',
+      sequence: 1,
+      kind: 'text' as const,
+      startLine: 7,
+      endLine: 12,
+      focus: 'A\tB\n1\t2',
+      feedback: 'Clarify these cells.',
+      cellTarget: FIRST_TABLE_CELL_TARGET,
+    };
+    const draft = renderFeedbackReport(
+      {
+        schema: 'md4h-feedback/v1',
+        state: 'draft',
+        round: '20260821T093000Z-k4p9',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        createdAt: '2026-08-21T09:30:00.000Z',
+      },
+      [item]
+    );
+    const sealed = renderFeedbackReport(
+      {
+        schema: 'md4h-feedback/v1',
+        state: 'sealed',
+        round: '20260821T093000Z-k4p9',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        createdAt: '2026-08-21T09:30:00.000Z',
+        sealedAt: '2026-08-21T09:35:00.000Z',
+      },
+      [item]
+    );
+
+    expect(draft).toContain(`<!-- md4h-cell-target:${JSON.stringify(FIRST_TABLE_CELL_TARGET)} -->`);
+    expect(sealed).not.toContain('md4h-cell-target');
+  });
+
   it('rejects rendered text metadata attached to a screenshot item', () => {
     const screenshotWithRenderedRange = {
       id: 'F1',
@@ -575,6 +621,35 @@ describe('FeedbackSessionStore', () => {
     });
 
     expect(result).toEqual({ drafts: [], invalidCandidates: [] });
+  });
+
+  it('keeps draft discovery metadata-only and validates screenshot bytes on resume', async () => {
+    const original = await createStore('d005');
+    const firstPng = makeRgbaPng(210, 80, 70);
+    const replacementPng = makeRgbaPng(70, 110, 210);
+    await original.addScreenshotFeedback({
+      startLine: 3,
+      endLine: 5,
+      feedback: 'Keep this evidence exact.',
+      pngData: firstPng,
+    });
+    await writeFile(path.join(original.bundleDirectory, 'assets', 'F1.png'), replacementPng);
+
+    const discovery = await FeedbackSessionStore.findMatchingDrafts({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+    });
+
+    expect(discovery.drafts.map(draft => draft.round)).toContain(original.snapshot.round);
+    await expect(
+      FeedbackSessionStore.resume({
+        workspaceRoot,
+        sourcePath,
+        sourceBytes: SOURCE_BYTES,
+        round: original.snapshot.round,
+      })
+    ).rejects.toMatchObject({ code: 'MD4H-FB-CAPTURE-002' });
   });
 
   it('resumes a strict draft, preserves its high-water ID, and supports later mutations', async () => {
@@ -880,6 +955,108 @@ describe('FeedbackSessionStore', () => {
         renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
       }),
     ]);
+  });
+
+  it('round-trips and defensively clones draft-only table-cell metadata', async () => {
+    const original = await createStore('c001');
+    const added = await original.addTextFeedback({
+      startLine: 7,
+      endLine: 12,
+      focus: 'A\tB\n1\t2',
+      feedback: 'Clarify these cells.',
+      cellTarget: FIRST_TABLE_CELL_TARGET,
+    });
+
+    expect(added.cellTarget).toEqual(FIRST_TABLE_CELL_TARGET);
+    added.cellTarget!.rectangle.bottom = 1;
+    expect(original.items[0]).toMatchObject({ cellTarget: FIRST_TABLE_CELL_TARGET });
+
+    await original.updateFeedback('F1', 'Clarify these cells precisely.');
+    const deleted = await original.deleteFeedback('F1');
+    expect(deleted).toMatchObject({ cellTarget: FIRST_TABLE_CELL_TARGET });
+    const restored = await original.restoreFeedback('F1');
+    expect(restored).toMatchObject({ cellTarget: FIRST_TABLE_CELL_TARGET });
+
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: original.snapshot.round,
+    });
+    expect(resumed.items).toEqual([
+      expect.objectContaining({
+        id: 'F1',
+        feedback: 'Clarify these cells precisely.',
+        cellTarget: FIRST_TABLE_CELL_TARGET,
+      }),
+    ]);
+  });
+
+  it.each([
+    ['an unbounded table ordinal', { ...FIRST_TABLE_CELL_TARGET, tableOrdinal: 100_000 }],
+    [
+      'a collapsed rectangle',
+      {
+        ...FIRST_TABLE_CELL_TARGET,
+        rectangle: { top: 2, left: 0, bottom: 2, right: 4 },
+      },
+    ],
+    [
+      'an invalid fingerprint',
+      { ...FIRST_TABLE_CELL_TARGET, tableFingerprint: 'md4h-table/v1:not-a-hash' },
+    ],
+    [
+      'an invalid containing-block hash',
+      { ...FIRST_TABLE_CELL_TARGET, tableBlockSha256: 'not-a-sha256' },
+    ],
+  ])('rejects table-cell metadata with %s at the storage boundary', async (_label, cellTarget) => {
+    const store = await createStore('c004');
+    await expect(
+      store.addTextFeedback({
+        startLine: 7,
+        endLine: 12,
+        focus: 'A\tB\n1\t2',
+        feedback: 'Clarify these cells.',
+        cellTarget,
+      })
+    ).rejects.toThrow(/table-cell.*invalid|metadata.*invalid/i);
+    expect(store.items).toEqual([]);
+  });
+
+  it.each([
+    [
+      'partial fields',
+      (encoded: string) => encoded.replace(/,"tableBlockSha256":"[a-f0-9]{64}"/, ''),
+    ],
+    ['unknown fields', (encoded: string) => encoded.replace(/} -->$/, ',"unknown":true} -->')],
+    [
+      'non-canonical field order',
+      (encoded: string) =>
+        encoded.replace(/\{"version":1,"tableOrdinal":2/, '{"tableOrdinal":2,"version":1'),
+    ],
+  ])('rejects draft table-cell metadata with %s', async (_label, tamper) => {
+    const original = await createStore('c002');
+    await original.addTextFeedback({
+      startLine: 7,
+      endLine: 12,
+      focus: 'A\tB\n1\t2',
+      feedback: 'Clarify these cells.',
+      cellTarget: FIRST_TABLE_CELL_TARGET,
+    });
+    const report = await readFile(original.feedbackFilePath, 'utf8');
+    const metadataLine = report
+      .split('\n')
+      .find(line => line.startsWith('<!-- md4h-cell-target:'))!;
+    await writeFile(original.feedbackFilePath, report.replace(metadataLine, tamper(metadataLine)));
+
+    await expect(
+      FeedbackSessionStore.resume({
+        workspaceRoot,
+        sourcePath,
+        sourceBytes: SOURCE_BYTES,
+        round: original.snapshot.round,
+      })
+    ).rejects.toThrow(/cell target|metadata|invalid/i);
   });
 
   it.each([
@@ -1627,6 +1804,22 @@ describe('FeedbackSessionStore', () => {
     ).rejects.toThrow('sealed');
     expect(() => store.getDiscardPath()).toThrow('sealed');
     expect(() => store.finalizeDiscard()).toThrow('sealed');
+  });
+
+  it('strips table-cell metadata from the sealed report and in-memory item', async () => {
+    const store = await createStore('c003');
+    await store.addTextFeedback({
+      startLine: 7,
+      endLine: 12,
+      focus: 'A\tB\n1\t2',
+      feedback: 'Clarify these cells.',
+      cellTarget: FIRST_TABLE_CELL_TARGET,
+    });
+
+    await store.seal(SOURCE_BYTES, NOW);
+
+    expect(await readFile(store.feedbackFilePath, 'utf8')).not.toContain('md4h-cell-target');
+    expect(store.items[0]).not.toHaveProperty('cellTarget');
   });
 
   it('rolls a seal back to the exact draft when its host guard invalidates after write', async () => {

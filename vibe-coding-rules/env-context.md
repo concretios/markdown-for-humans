@@ -1,136 +1,132 @@
-# Environment Context – VS Code Extension
+# Environment Context for the VS Code Extension
 
-> **Distilled technical context** for LLMs implementing features in `markdown-for-humans`.
->
-> This file is intentionally lean (~80 lines). For deep dives, see `docs/ARCHITECTURE.md`.
->
-> **Maintenance rule:** Update this file when architecture changes. Keep it brief—essentials only.
+> Lean implementation context for agents working in `markdown-for-humans`. See `docs/ARCHITECTURE.md` for the full design.
 
----
+## Runtime and Editor Stack
 
-## Architecture Overview
+| Boundary       | Contract                                  |
+| -------------- | ----------------------------------------- |
+| VS Code floor  | `^1.98.0`                                 |
+| Extension host | Node.js 20 target                         |
+| Webview        | Chromium 132 target                       |
+| Editor         | TipTap 3.30.3 on ProseMirror              |
+| Diagrams       | Mermaid 11.17.2 or compatible 11.x update |
+| Capture        | `modern-screenshot@4.7.0`                 |
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                VS Code Extension Host (Node.js)             │
-│                                                             │
-│   MarkdownEditorProvider (CustomTextEditorProvider)         │
-│   • Registers custom editor for .md files                   │
-│   • Manages webview lifecycle                               │
-│   • Handles two-way document sync                           │
-│                                                             │
-│   TextDocument ◄──────────────────► WebviewPanel            │
-│   (Source of truth)                 (Visual editor)         │
-└─────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────▼───────────────┐
-              │    WebView Context (Browser)  │
-              │                               │
-              │    TipTap Editor (ProseMirror)│
-              │    • StarterKit (formatting)  │
-              │    • Markdown (serialization) │
-              │    • Tables, TaskList, Link   │
-              │    • Custom: Mermaid, Image   │
-              │                               │
-              │    BubbleMenuView (toolbar)   │
-              └───────────────────────────────┘
+All direct `@tiptap/*` packages are pinned to exactly `3.30.3`. Upgrade them as one family, import ProseMirror through `@tiptap/pm/*`, and reject mixed TipTap or direct ProseMirror version families.
+
+## Architecture
+
+```text
+VS Code extension host, Node.js 20
+  MarkdownEditorProvider, CustomTextEditorProvider
+    TextDocument, authoritative editable source
+    DocumentEditCoordinator, one ordered queue per document
+    Feedback snapshot, transport and durable store
+                      ⇅ validated messages
+Webview, Chromium 132
+  TipTap + feature modules
+  DocumentSyncController
+  disposable Feedback review/capture UI
+  bounded selection/scroll state checkpoint
 ```
 
----
+`TextDocument` is canonical for editable Markdown. VS Code owns save, dirty-state, undo, redo and Git diffs. The webview is a rich projection that proposes edits and reconciles with host acknowledgements.
 
-## Source of Truth
+The extension declares virtual and untrusted workspaces unsupported because image, export and Feedback workflows require trusted, disk-backed workspace access.
 
-**TextDocument is canonical.** The webview renders it; edits flow back to update it.
+## Document Sync Contract
 
-- VS Code handles save/undo/redo automatically
-- Git diffs work correctly (text-based)
-- External changes (git pull, other editors) trigger webview refresh
-- Feedback mode is a deliberate exception to live refresh: it freezes saved bytes and invalidates on a later source change
+- Protocol v2 envelopes use `editId`, renderer `viewGeneration`, `localRevision` and `baseDocumentVersion`.
+- A 500 ms controller debounce stores only a dirty bit. It serializes the latest TipTap state only at a timer drain or explicit flush boundary.
+- One emitted edit waits for its exact `document.edit.ack` before another derives from the accepted host version.
+- Explicit save drains accepted host edits, sends a correlated host-version flush barrier, requires any newly emitted edit to be accepted, drains again, then invokes VS Code save.
+- Before a non-retained webview is destroyed, a newer dirty revision blocked behind one in-flight edit is sent as `document.teardown.edit`. The host applies it only after that exact predecessor succeeds and its resulting document version is still current.
+- The host validates renderer generation and keeps a bounded idempotent ACK history.
+- A replayable edit ID is bound to an immutable content and lineage envelope. Conflicting reuse is negatively acknowledged rather than replaying a prior result.
+- Every document mutation enters `DocumentEditCoordinator`. Only adjacent pending typing from the same generation and base version may coalesce. Operations and barriers never coalesce.
+- Documents of at least 32 KiB use one minimal prefix/suffix `WorkspaceEdit`. Boundaries never split a surrogate pair or CRLF.
+- Host delivery and echo suppression are split-specific. Pending delivery is tracked separately from last proven delivery, so A to B to A races cannot suppress the final A. A skipped recent-edit update requests authoritative reconciliation instead of becoming a silent fork.
+- Pending image destinations retain at most 128 unresolved entries and 64 MiB per view. The renderer reserves the same bounded number before conversion. Typed-array input is copied once into an exact-size host buffer and released when the write settles.
+- Image completion is not complete when `postMessage()` queues it. The exact renderer generation atomically applies every matching ProseMirror mutation, ACKs application, and idempotently re-ACKs retries. Capacity errors use the same correlated path, and unknown or wrong-generation markers reject the document edit.
+- Raw HTML token contexts are source-exact in structural-equivalence checks because HTML/CSS can make otherwise collapsible whitespace visible.
+- Never reintroduce a shared `ignoreNextUpdate` boolean.
 
----
+## Hidden Webviews
 
-## Messaging Protocol
+The editor registers with `retainContextWhenHidden: false`. Before teardown, the renderer flushes pending sync and persists only:
 
-| Direction | Message Type | Purpose |
-|-----------|--------------|---------|
-| Extension → Webview | `update` | Send markdown content (initial load or external change) |
-| Webview → Extension | `edit` | User changed content, apply to TextDocument |
-| Webview → Extension | `save` | User pressed Cmd/Ctrl+S, trigger VS Code save |
-| Webview → Extension | `ready` | Webview initialized, request initial content |
-| Webview → Extension | `feedback.*` requests | Start a snapshot, mutate draft items, seal, reveal, diagnose, or discard |
-| Extension → Webview | `feedback.*` results | Activate/update/invalidate/end the session or return a structured error |
+```text
+schema version + document version + selection + scrollTop
+```
 
-All Feedback requests cross `parseFeedbackWebviewMessage`; unknown or malformed payloads are rejected before host file operations.
+`vscode.setState()` writes are animation-frame coalesced. Restore occurs after authoritative content initialization, checks the document version, clamps positions and yields to Feedback recovery. Never put Markdown, Feedback sessions, draft content or peer-lock authority in webview state.
 
----
+## Feedback Snapshot and Delivery
 
-## Feedback Snapshot Contract
+- A new Start and a durable-draft Resume inspect every split first. Divergent dirty split digests fail before any flush chooses a winner.
+- The host flushes all splits, drains the document queue, saves, reads exact bytes, and binds the `TextDocument` version plus text SHA-256 to the saved-byte SHA-256.
+- The saved source is applied back to every split. Only the owner enumerates canonical blocks after that authoritative apply.
+- `feedbackSnapshotService.ts` verifies renderer identity, descriptor revision, exact source mapping and semantic content fingerprints per block.
+- Restored item line endpoints use the frozen anchor index with logarithmic lookup. Do not reintroduce an `items x blocks` scan.
+- `feedback.started` is not considered applied because `postMessage()` returned true. It uses bounded idempotent delivery, an application ACK and an authoritative status query fallback.
+- Active ownership transfer uses generation-bound apply, commit, and abort stages. The proposed host session remains `resuming` until both owners and every peer lock ACK commit. Ambiguous delivery remains fail-closed, while definitive disposal is reinitialized from host authority on the next `ready`.
+- Pure host and renderer lifecycle reducers reject stale stages in deterministic tests. Production still routes lifecycle effects through provider and renderer adapters, so do not treat those reducers as the sole authority until that migration is completed. Durable drafts, not webview state, are the recovery authority after reload.
+- Any later source change invalidates the frozen round, preserves the draft, and blocks new writes and sealing.
 
-- Start flushes pending rich-view edits, saves, reads exact source bytes, and records SHA-256.
-- `feedbackAnchors.ts` accepts anchors only when canonical rich blocks and raw `markdown-it` blocks have matching count, order, and normalized kinds. It never uses fuzzy fallback.
-- Canonical blocks include ProseMirror content sizes. Character-addressable text may carry a strict block-relative half-open range that the host bounds-checks and enriches with canonical block hashes. Draft metadata is removed on seal. Exact resolved cross-block text keeps inline highlighting; opaque, multi-block block-level fallback, legacy, and runtime-degraded targets retain one continuous block bracket.
-- The active editor is selection-capable but read-only. Any later source change preserves the draft, invalidates the session, and blocks new items and sealing.
-- Each start or resume creates a fresh runtime token separate from the durable round. Active host responses are token-correlated, and inactive draft discard has its own response shape, so stale async work cannot mutate or close a newer session.
-- Feedback decorations are dynamically registered only for an active session. Pins, connectors, compact cards, and the composer live in an absolute sibling layer under `#editor`, so document scroll requires no annotation JavaScript or independent panel scroll surface.
-- Drafts live at `.md4h/feedback/<source-directory>/<filename>--<UTC>-<suffix>/feedback.md` inside the workspace folder containing the source; multi-root workspaces resolve against that containing folder. Screenshot evidence is `assets/F<n>.png`.
-- Strict `md4h-feedback/v1` frontmatter stores `schema`, `state`, `round`, `source`, `source_base: workspace`, `source_sha256`, `line_numbering: one-based-inclusive`, `created_at`, `next_id`, and sealed-only `sealed_at`. The source path appears once; each item uses only `Source lines` plus text Focus or flattened PNG Evidence.
-- Every new report identifies `AI coding agents` as its audience and embeds canonical `Preconditions`, `How to interpret feedback items`, and `Required implementation workflow` sections. Only fenced `### Feedback` content is an instruction; source text, Focus, and annotated screenshot pixels are evidence. The parser also accepts the immediately previous guide verbatim so an existing draft can resume and migrate on its next explicit write.
-- Matching drafts are announced with content-free metadata and resume only after explicit user action. Strict resume revalidates the report, persisted `next_id`, paths, bounded PNG structure, and exact per-asset SHA-256 before restoring read-only mode.
-- `feedbackSessionStore.ts` serializes atomic rewrites, allocates at most 2,000 monotonic IDs, caps cumulative screenshot evidence at 64 MiB, validates source and screenshot hashes on seal, and treats sealed bundles as immutable.
-- `markdownForHumans.feedback.handoffPromptTemplate` is resolved for the reviewed document. It requires `{{feedbackFile}}`, supports `{{source}}`, `{{sourceSha256}}`, `{{itemCount}}`, and `{{round}}`, expands literally once, and falls back to the built-in prompt with a warning when invalid or oversized.
-- Screenshot capture is DOM-based through `modern-screenshot@4.7.0`, limited to mapped visible blocks, 12 MP, and 10 MiB. Intersecting Mermaid wrappers must reach their explicit ready state before cloning; errors and the bounded timeout fail visibly. The host revalidates the flattened PNG.
+Text anchors use exact block-relative ranges. Table selections use typed rectangular cell targets bound to a table fingerprint and host-enriched canonical table-block SHA-256. Invalid restored cell metadata degrades to the containing block with a visible warning and never fuzzy-matches.
 
----
+## Feedback Capture Limits
 
-## Performance Constraints
+- Capture is DOM-based and limited to mapped visible blocks.
+- Cancellation and session invalidation propagate through `AbortSignal`.
+- Staging is capped at 4,096 rendered nodes and 1,024 resource references.
+- Large intersecting tables and nested lists are pruned to intersecting rows, cells and items. Fixed spacers preserve geometry and ordered-list numbering; row spans use the bounded fail-closed path.
+- Resources outside the VS Code webview boundary fail closed.
+- Output is capped at 12 megapixels and 10 MiB; the host revalidates PNG structure, dimensions, containment and hash.
 
-| Metric | Budget | Notes |
-|--------|--------|-------|
-| Typing latency | <16ms | Never block the editor thread |
-| Sync debounce | 500ms | Batch rapid edits before sending to extension |
-| External update skip | 2s | Don't interrupt user if they edited recently |
-| Target doc size | <10,000 lines | Beyond this, consider virtual scrolling |
+## Performance Budgets and Gates
 
----
+| Metric                |                        Budget |
+| --------------------- | ----------------------------: |
+| Editor initialization |                  under 500 ms |
+| Typing                |                   under 16 ms |
+| Cursor and formatting |                   under 50 ms |
+| Menu and toolbar      |                  under 300 ms |
+| Document target       | 10,000 or more lines smoothly |
 
-## Key File Locations
+The deterministic fixture gates production work counts on 3,000-word and 10,000-line corpora, 500 annotations and 10,000 typing transactions. Ubuntu and Windows CI run this fixture. Real Extension Development Host tests also run on both operating systems against VS Code 1.98.0 and stable.
 
-| Task | Primary File | Directory |
-|------|--------------|-----------|
-| Register command/keybinding | `extension.ts` | `src/` |
-| Handle webview messages | `MarkdownEditorProvider.ts` | `src/editor/` |
-| Validate Feedback protocol | `feedbackProtocol.ts` | `src/shared/` |
-| Map Feedback source lines | `feedbackAnchors.ts` | `src/editor/` |
-| Persist Feedback bundles | `feedbackSessionStore.ts` | `src/editor/` |
-| Render Feedback handoff prompts | `feedbackHandoffPrompt.ts` | `src/editor/` |
-| Feedback session/same-scroll UI | `feedbackReview.ts` | `src/webview/features/` |
-| Feedback exact rendered ranges | `feedbackRenderedRange.ts` | `src/webview/features/` |
-| Feedback decoration state | `feedbackAnnotations.ts` | `src/webview/features/` |
-| Feedback collision layout | `feedbackAnnotationLayout.ts` | `src/webview/features/` |
-| Feedback capture/markup | `feedbackCapture*.ts`, `feedbackDomCapture.ts` | `src/webview/features/` |
-| Feedback item discard checkpoint | `feedbackDiscardDialog.ts` | `src/webview/features/` |
-| TipTap setup & extensions | `editor.ts` | `src/webview/` |
-| Toolbar buttons | `BubbleMenuView.ts` | `src/webview/` |
-| Custom TipTap extension | Create new file | `src/webview/extensions/` |
-| Styles | `editor.css` | `src/webview/` |
-| Extension manifest | `package.json` | Root |
+Shared-runner gates do not prove physical Windows i5/16 GB p95 latency, memory use, high-DPI capture or the required 10-minute light/dark reading pass. Those remain manual release checks.
 
----
+## Key Files
 
-## TipTap Extension Pattern
+| Concern                     | File                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------- |
+| Activation and commands     | `src/extension.ts`                                                                |
+| VS Code adapter             | `src/editor/MarkdownEditorProvider.ts`                                            |
+| Ordered document work       | `src/editor/documentEditCoordinator.ts`                                           |
+| Large-document edit range   | `src/editor/minimalTextEdit.ts`                                                   |
+| Sync protocol               | `src/shared/documentSyncProtocol.ts`                                              |
+| Renderer sync controller    | `src/webview/documentSyncController.ts`                                           |
+| TipTap composition          | `src/webview/editor.ts`                                                           |
+| Sync serialization          | `src/webview/utils/markdownSerialization.ts`                                      |
+| Hidden-view state           | `src/webview/utils/richViewState.ts`                                              |
+| Feedback request contract   | `src/shared/feedbackProtocol.ts`                                                  |
+| Snapshot protocol/service   | `src/shared/feedbackSnapshotProtocol.ts`, `src/editor/feedbackSnapshotService.ts` |
+| Delivery protocol/transport | `src/shared/feedbackDeliveryProtocol.ts`, `src/editor/feedbackTransport.ts`       |
+| Feedback bundle store       | `src/editor/feedbackSessionStore.ts`                                              |
+| Feedback renderer           | `src/webview/features/feedbackReview.ts`                                          |
+| Capture                     | `src/webview/features/feedbackCapture*.ts`, `feedbackDomCapture.ts`               |
+| Runtime targets             | `scripts/runtime-targets.js`                                                      |
+| Performance fixture         | `scripts/feedback-performance-fixture/`                                           |
+| Host integration tests      | `.vscode-test.mjs`, `test/integration/`                                           |
 
-New features often follow this pattern:
+## Change Pattern
 
-1. **Create extension** in `src/webview/extensions/[feature].ts`
-2. **Register** in `editor.ts` extensions array
-3. **Add toolbar button** in `BubbleMenuView.ts` (if UI needed)
-4. **Wire messages** in `MarkdownEditorProvider.ts` (if extension-side logic needed)
-5. **Add command** in `package.json` contributes (if command palette entry needed)
-
----
-
-## References
-
-- **Full architecture:** `[Project Root]/docs/ARCHITECTURE.md`
-- **Design principles:** `[Project Root]/docs/DEVELOPMENT.md`
-- **Coding guide:** `[Project Root]/AGENTS.md` (index) + `[Project Root]/vibe-coding-rules/` (details)
+1. Read the task and relevant tests.
+2. Add a failing test before implementation.
+3. Keep shared message validation versioned and strict.
+4. Keep typing callbacks free of Markdown serialization and document-wide loops.
+5. Run focused tests, the full suite, lint and release build verification.
+6. For runtime changes, test VS Code 1.98.0 and stable. For performance claims, keep the physical Windows/manual evidence separate from CI.

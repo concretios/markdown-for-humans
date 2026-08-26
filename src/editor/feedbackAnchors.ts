@@ -91,6 +91,12 @@ export interface FeedbackSelectionLineRange {
 export type FeedbackSelectionMapResult =
   { ok: true; range: FeedbackSelectionLineRange } | { ok: false; error: FeedbackAnchorError };
 
+/** Ordinal endpoints resolved from exact inclusive source-line endpoints. */
+export interface FeedbackOrdinalRange {
+  readonly startOrdinal: number;
+  readonly endOrdinal: number;
+}
+
 type MarkdownToken = ReturnType<MarkdownIt['parse']>[number];
 
 interface ParsedSourceBlock {
@@ -118,6 +124,77 @@ interface OrderedListSpan {
 
 const ORDERED_LIST_ITEM_PATTERN = /^(\s*)(\d+)\.\s+(.*)$/;
 const INDENTED_LINE_PATTERN = /^\s/;
+const THREE_SPACE_ORDERED_LIST_ROOT_PATTERN = /^ {3}\d+\.\s+/;
+
+function findAnchorLineIndex(
+  blocks: readonly FeedbackAnchorSpan[],
+  line: number,
+  key: 'startLine' | 'endLine',
+  minimumIndex = 0
+): number {
+  let lower = minimumIndex;
+  let upper = blocks.length;
+  while (lower < upper) {
+    const middle = lower + Math.floor((upper - lower) / 2);
+    if (blocks[middle][key] < line) lower = middle + 1;
+    else upper = middle;
+  }
+  return lower < blocks.length && blocks[lower][key] === line ? lower : -1;
+}
+
+/**
+ * Resolve exact source-line endpoints without scanning every canonical block.
+ *
+ * Anchor spans are emitted in document order and never overlap, so their start
+ * and end lines are monotonic. Two lower-bound searches keep restored Feedback
+ * lookup logarithmic even for a 10,000-line document with many saved items.
+ *
+ * @param anchorMap - Frozen source map produced by {@link buildFeedbackAnchorMap}
+ * @param startLine - Exact inclusive first source line
+ * @param endLine - Exact inclusive last source line
+ * @returns Matching ordinal range, or `null` when either endpoint is absent or reversed
+ */
+export function findFeedbackOrdinalsForLines(
+  anchorMap: FeedbackAnchorMap,
+  startLine: number,
+  endLine: number
+): FeedbackOrdinalRange | null {
+  if (
+    !Number.isSafeInteger(startLine) ||
+    !Number.isSafeInteger(endLine) ||
+    startLine < 1 ||
+    endLine < startLine
+  ) {
+    return null;
+  }
+  const firstIndex = findAnchorLineIndex(anchorMap.blocks, startLine, 'startLine');
+  if (firstIndex < 0) return null;
+  const lastIndex = findAnchorLineIndex(anchorMap.blocks, endLine, 'endLine', firstIndex);
+  if (lastIndex < firstIndex) return null;
+  return {
+    startOrdinal: anchorMap.blocks[firstIndex].ordinal,
+    endOrdinal: anchorMap.blocks[lastIndex].ordinal,
+  };
+}
+
+/** Detect only level-zero three-space roots, not nested ordered-list children. */
+function hasThreeSpaceOrderedListRoot(markdown: string): boolean {
+  let tokens: MarkdownToken[];
+  try {
+    tokens = markdownParser.parse(markdown, {});
+  } catch {
+    return false;
+  }
+
+  const sourceLines = markdown.split(/\r?\n/);
+  return tokens.some(
+    token =>
+      token.level === 0 &&
+      token.type === 'ordered_list_open' &&
+      token.map !== null &&
+      THREE_SPACE_ORDERED_LIST_ROOT_PATTERN.test(sourceLines[token.map[0]] ?? '')
+  );
+}
 
 function failure(
   reason: FeedbackAnchorFailureReason,
@@ -265,7 +342,7 @@ function parseMarkdownItTopLevelBlocks(
 
 /**
  * Return the line immediately after one ordered-list token according to the
- * tokenizer shipped by `@tiptap/extension-list` 3.12.x. That tokenizer accepts
+ * tokenizer shipped by `@tiptap/extension-list` 3.30.x. That tokenizer accepts
  * two-space mixed-list children beneath an ordered item, while markdown-it
  * requires indentation based on the ordered marker width. Keeping this small
  * boundary rule aligned with the rich parser prevents one TipTap list from
@@ -658,6 +735,18 @@ export function buildFeedbackAnchorMap(
   rawMarkdown: string,
   canonicalBlocks: readonly CanonicalFeedbackBlock[]
 ): FeedbackAnchorMapResult {
+  // A three-space ordered-list root sits on a parser-dialect boundary: TipTap
+  // releases have alternated between representing it as one list and splitting
+  // its mixed child into another block. Kind/count agreement alone therefore
+  // cannot prove a stable byte-to-rich-view mapping. Keep Feedback fail-closed
+  // for this ambiguous source shape across editor upgrades.
+  if (hasThreeSpaceOrderedListRoot(rawMarkdown)) {
+    return failure(
+      'invalid-canonical-block',
+      'Three-space ordered-list roots cannot be anchored safely across parser dialects.'
+    );
+  }
+
   for (let index = 0; index < canonicalBlocks.length; index += 1) {
     const current = canonicalBlocks[index];
     const previous = canonicalBlocks[index - 1];

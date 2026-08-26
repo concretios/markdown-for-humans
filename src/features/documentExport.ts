@@ -7,7 +7,8 @@
 /**
  * @file documentExport.ts - PDF and Word document export
  * @description Handles exporting markdown documents to PDF (via local Chrome) and Word (via docx).
- * Applies export theme settings and embeds Mermaid diagrams as high-quality images.
+ * Applies export theme settings, embeds Mermaid diagrams as high-quality images,
+ * and reads dimensions from a small, bounded set of explicitly supported formats.
  */
 
 import * as vscode from 'vscode';
@@ -16,7 +17,418 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
 import * as cheerio from 'cheerio';
-import { imageSize } from 'image-size';
+
+type SafeDimensionImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
+
+const SAFE_DIMENSION_IMAGE_EXTENSIONS: Readonly<Record<string, SafeDimensionImageFormat>> = {
+  '.png': 'png',
+  '.jpg': 'jpeg',
+  '.jpeg': 'jpeg',
+  '.gif': 'gif',
+  '.webp': 'webp',
+};
+
+const SAFE_DIMENSION_IMAGE_MEDIA_TYPES: Readonly<Record<string, SafeDimensionImageFormat>> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpeg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+};
+
+/**
+ * Resolve an allowlisted image format from a local path, URI, or data URL.
+ *
+ * Query strings and fragments are ignored for extension checks, and both
+ * extensions and media types are matched case-insensitively.
+ *
+ * @param source - Original image source used by the Word export pipeline
+ * @returns The allowlisted format, or undefined for an unsupported source
+ */
+function getSafeDimensionImageFormat(source: string): SafeDimensionImageFormat | undefined {
+  const normalizedSource = source.trim();
+  const dataUrlMatch = /^data:([^;,]+)/i.exec(normalizedSource);
+  if (dataUrlMatch) {
+    return SAFE_DIMENSION_IMAGE_MEDIA_TYPES[dataUrlMatch[1].toLowerCase()];
+  }
+
+  const pathWithoutQueryOrFragment = normalizedSource.split(/[?#]/, 1)[0];
+  const extension = path.extname(pathWithoutQueryOrFragment).toLowerCase();
+  return SAFE_DIMENSION_IMAGE_EXTENSIONS[extension];
+}
+
+/**
+ * Identify one of the four image signatures approved for synchronous sizing.
+ *
+ * @param data - Image bytes to inspect without parsing
+ * @returns The detected allowlisted format, or undefined for any other signature
+ */
+function getSafeDimensionImageSignature(data: Uint8Array): SafeDimensionImageFormat | undefined {
+  if (
+    data.length >= 8 &&
+    data[0] === 0x89 &&
+    data[1] === 0x50 &&
+    data[2] === 0x4e &&
+    data[3] === 0x47 &&
+    data[4] === 0x0d &&
+    data[5] === 0x0a &&
+    data[6] === 0x1a &&
+    data[7] === 0x0a
+  ) {
+    return 'png';
+  }
+
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return 'jpeg';
+  }
+
+  if (
+    data.length >= 6 &&
+    data[0] === 0x47 &&
+    data[1] === 0x49 &&
+    data[2] === 0x46 &&
+    data[3] === 0x38 &&
+    (data[4] === 0x37 || data[4] === 0x39) &&
+    data[5] === 0x61
+  ) {
+    return 'gif';
+  }
+
+  if (
+    data.length >= 12 &&
+    data[0] === 0x52 &&
+    data[1] === 0x49 &&
+    data[2] === 0x46 &&
+    data[3] === 0x46 &&
+    data[8] === 0x57 &&
+    data[9] === 0x45 &&
+    data[10] === 0x42 &&
+    data[11] === 0x50
+  ) {
+    return 'webp';
+  }
+
+  return undefined;
+}
+
+/**
+ * Check whether image bytes may be passed to the bounded dimension reader.
+ *
+ * The source must name an explicitly supported format and the bytes must carry
+ * that format's signature. Checking both prevents a vulnerable ICNS, JXL, or
+ * HEIF payload from reaching the parser after being renamed with a safe suffix.
+ *
+ * @param source - Original image source used by the Word export pipeline
+ * @param data - Image bytes to inspect
+ * @returns True only for matching PNG, JPEG, GIF, or WebP inputs
+ */
+export function isSafeForImageDimensionParsing(source: string, data: Uint8Array): boolean {
+  const sourceFormat = getSafeDimensionImageFormat(source);
+  return sourceFormat !== undefined && sourceFormat === getSafeDimensionImageSignature(data);
+}
+
+const MAX_JPEG_HEADER_SCAN_BYTES = 1024 * 1024;
+const MAX_JPEG_MARKERS = 4096;
+const MAX_EXPORT_IMAGE_DIMENSION = 0xffff;
+
+interface ExportImageDimensions {
+  width: number;
+  height: number;
+}
+
+/**
+ * Read an unsigned 16-bit big-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readBigEndian16(data: Uint8Array, offset: number): number {
+  return data[offset] * 0x100 + data[offset + 1];
+}
+
+/**
+ * Read an unsigned 32-bit big-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readBigEndian32(data: Uint8Array, offset: number): number {
+  return (
+    data[offset] * 0x1000000 +
+    data[offset + 1] * 0x10000 +
+    data[offset + 2] * 0x100 +
+    data[offset + 3]
+  );
+}
+
+/**
+ * Read an unsigned 16-bit little-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readLittleEndian16(data: Uint8Array, offset: number): number {
+  return data[offset] + data[offset + 1] * 0x100;
+}
+
+/**
+ * Read an unsigned 24-bit little-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readLittleEndian24(data: Uint8Array, offset: number): number {
+  return data[offset] + data[offset + 1] * 0x100 + data[offset + 2] * 0x10000;
+}
+
+/**
+ * Read an unsigned 32-bit little-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readLittleEndian32(data: Uint8Array, offset: number): number {
+  return (
+    data[offset] +
+    data[offset + 1] * 0x100 +
+    data[offset + 2] * 0x10000 +
+    data[offset + 3] * 0x1000000
+  );
+}
+
+/**
+ * Return dimensions only when both values are non-zero and practical for DOCX.
+ *
+ * @param width - Parsed image width
+ * @param height - Parsed image height
+ * @returns Valid dimensions, or undefined for a malformed zero dimension
+ */
+function validDimensions(width: number, height: number): ExportImageDimensions | undefined {
+  return width > 0 &&
+    height > 0 &&
+    width <= MAX_EXPORT_IMAGE_DIMENSION &&
+    height <= MAX_EXPORT_IMAGE_DIMENSION
+    ? { width, height }
+    : undefined;
+}
+
+/**
+ * Read PNG dimensions from the fixed IHDR location.
+ *
+ * @param data - Signature-validated PNG bytes
+ * @returns Dimensions, or undefined for a truncated or malformed IHDR
+ */
+function readPngDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const minimumPngHeaderLength = 33;
+  if (
+    data.length < minimumPngHeaderLength ||
+    readBigEndian32(data, 8) !== 13 ||
+    data[12] !== 0x49 ||
+    data[13] !== 0x48 ||
+    data[14] !== 0x44 ||
+    data[15] !== 0x52
+  ) {
+    return undefined;
+  }
+
+  return validDimensions(readBigEndian32(data, 16), readBigEndian32(data, 20));
+}
+
+/**
+ * Read GIF logical-screen dimensions from the fixed header.
+ *
+ * @param data - Signature-validated GIF bytes
+ * @returns Dimensions, or undefined for a truncated header
+ */
+function readGifDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  if (data.length < 13) {
+    return undefined;
+  }
+
+  return validDimensions(readLittleEndian16(data, 6), readLittleEndian16(data, 8));
+}
+
+/**
+ * Check whether a JPEG marker carries a start-of-frame segment.
+ *
+ * @param marker - JPEG marker byte
+ * @returns True for baseline, progressive, differential, or lossless frame markers
+ */
+function isJpegStartOfFrame(marker: number): boolean {
+  return marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+}
+
+/**
+ * Read JPEG dimensions with explicit byte and marker limits.
+ *
+ * Every loop either advances the cursor or consumes one of the fixed marker
+ * budget entries. Segment lengths below two and out-of-bounds jumps terminate
+ * immediately, preventing zero-length segment loops.
+ *
+ * @param data - Signature-validated JPEG bytes
+ * @returns Dimensions, or undefined for a malformed or over-budget header
+ */
+function readJpegDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  if (data.length < 4) {
+    return undefined;
+  }
+
+  const scanLimit = Math.min(data.length, MAX_JPEG_HEADER_SCAN_BYTES);
+  let offset = 2;
+
+  for (let markerCount = 0; markerCount < MAX_JPEG_MARKERS && offset < scanLimit; markerCount++) {
+    if (data[offset] !== 0xff) {
+      return undefined;
+    }
+
+    while (offset < scanLimit && data[offset] === 0xff) {
+      offset++;
+    }
+    if (offset >= scanLimit) {
+      return undefined;
+    }
+
+    const marker = data[offset++];
+    if (marker === 0x00 || marker === 0xd8 || marker === 0xd9 || marker === 0xda) {
+      return undefined;
+    }
+
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+
+    if (offset + 2 > scanLimit) {
+      return undefined;
+    }
+
+    const segmentLength = readBigEndian16(data, offset);
+    if (segmentLength < 2) {
+      return undefined;
+    }
+
+    const segmentEnd = offset + segmentLength;
+    if (segmentEnd > scanLimit || segmentEnd > data.length) {
+      return undefined;
+    }
+
+    if (isJpegStartOfFrame(marker)) {
+      if (segmentLength < 11) {
+        return undefined;
+      }
+      return validDimensions(readBigEndian16(data, offset + 5), readBigEndian16(data, offset + 3));
+    }
+
+    offset = segmentEnd;
+  }
+
+  return undefined;
+}
+
+/**
+ * Check four bytes against an ASCII chunk identifier.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @param value - Four-character ASCII identifier
+ * @returns True when the bytes match
+ */
+function hasAsciiFourCc(data: Uint8Array, offset: number, value: string): boolean {
+  return (
+    data[offset] === value.charCodeAt(0) &&
+    data[offset + 1] === value.charCodeAt(1) &&
+    data[offset + 2] === value.charCodeAt(2) &&
+    data[offset + 3] === value.charCodeAt(3)
+  );
+}
+
+/**
+ * Read dimensions from the first VP8, VP8L, or VP8X WebP header.
+ *
+ * @param data - Signature-validated WebP bytes
+ * @returns Dimensions, or undefined for invalid RIFF/chunk bounds or payloads
+ */
+function readWebpDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  if (data.length < 20) {
+    return undefined;
+  }
+
+  const declaredFileEnd = readLittleEndian32(data, 4) + 8;
+  const chunkLength = readLittleEndian32(data, 16);
+  const chunkEnd = 20 + chunkLength;
+  if (declaredFileEnd < 20 || declaredFileEnd > data.length || chunkEnd > declaredFileEnd) {
+    return undefined;
+  }
+
+  if (hasAsciiFourCc(data, 12, 'VP8 ')) {
+    if (
+      chunkLength < 10 ||
+      (data[20] & 0x01) !== 0 ||
+      data[23] !== 0x9d ||
+      data[24] !== 0x01 ||
+      data[25] !== 0x2a
+    ) {
+      return undefined;
+    }
+    return validDimensions(
+      readLittleEndian16(data, 26) & 0x3fff,
+      readLittleEndian16(data, 28) & 0x3fff
+    );
+  }
+
+  if (hasAsciiFourCc(data, 12, 'VP8L')) {
+    if (chunkLength < 5 || data[20] !== 0x2f || (data[24] & 0xe0) !== 0) {
+      return undefined;
+    }
+    const width = 1 + data[21] + ((data[22] & 0x3f) << 8);
+    const height = 1 + ((data[22] & 0xc0) >> 6) + (data[23] << 2) + ((data[24] & 0x0f) << 10);
+    return validDimensions(width, height);
+  }
+
+  if (hasAsciiFourCc(data, 12, 'VP8X')) {
+    if (chunkLength < 10) {
+      return undefined;
+    }
+    return validDimensions(readLittleEndian24(data, 24) + 1, readLittleEndian24(data, 27) + 1);
+  }
+
+  return undefined;
+}
+
+/**
+ * Read export image dimensions without invoking a general-purpose parser.
+ *
+ * The strict source/signature gate prevents format confusion. PNG, GIF, and
+ * WebP use fixed-offset reads. JPEG traversal is capped at 1 MiB and 4,096
+ * markers, and rejects non-advancing or truncated segments.
+ *
+ * @param source - Original image source used by the Word export pipeline
+ * @param data - Image bytes to inspect
+ * @returns Dimensions for a supported well-formed header, otherwise undefined
+ */
+export function readExportImageDimensions(
+  source: string,
+  data: Uint8Array
+): ExportImageDimensions | undefined {
+  const sourceFormat = getSafeDimensionImageFormat(source);
+  if (!sourceFormat || sourceFormat !== getSafeDimensionImageSignature(data)) {
+    return undefined;
+  }
+
+  switch (sourceFormat) {
+    case 'png':
+      return readPngDimensions(data);
+    case 'jpeg':
+      return readJpegDimensions(data);
+    case 'gif':
+      return readGifDimensions(data);
+    case 'webp':
+      return readWebpDimensions(data);
+  }
+}
 
 /**
  * Strip active content from HTML before passing it to Chrome for PDF rendering.
@@ -1120,8 +1532,8 @@ async function parseParagraphChildren(
               let height = 300;
 
               try {
-                const dimensions = imageSize(buffer);
-                if (dimensions.width && dimensions.height) {
+                const dimensions = readExportImageDimensions(resolvableSrc, buffer);
+                if (dimensions?.width && dimensions.height) {
                   // Scale down if too large (e.g. max width 600px)
                   const maxWidth = 600;
                   if (dimensions.width > maxWidth) {

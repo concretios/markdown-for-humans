@@ -6,6 +6,7 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { CustomImage } from '../../webview/extensions/customImage';
+import { PreservedMarkdownLiteral } from '../../webview/extensions/preservedMarkdownLiteral';
 import { runAudit, handleAuditPickFileResult } from '../../webview/features/auditDocument';
 import { installBlankLineLexerNormalizer } from '../../webview/utils/markedLexerNormalizer';
 
@@ -27,6 +28,7 @@ describe('Audit Document Feature', () => {
       extensions: [
         StarterKit,
         CustomImage,
+        PreservedMarkdownLiteral,
         Markdown.configure({
           markedOptions: {
             gfm: true,

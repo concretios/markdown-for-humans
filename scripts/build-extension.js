@@ -16,6 +16,7 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const { consoleStripOptions } = require('./console-strip');
+const runtimeTargets = require('./runtime-targets');
 
 const args = process.argv.slice(2);
 const isProduction = args.includes('--prod') || process.env.NODE_ENV === 'production';
@@ -29,6 +30,7 @@ const buildOptions = {
   external: ['vscode'],
   format: 'cjs',
   platform: 'node',
+  target: runtimeTargets.extension,
   sourcemap: !noSourcemap && !isProduction,
   minify: isProduction,
   treeShaking: true,

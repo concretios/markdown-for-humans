@@ -11,7 +11,6 @@
  */
 
 import { Editor } from '@tiptap/core';
-import { reorderMarksForSerialization } from './markdownSerialization';
 
 /**
  * Result of a copy operation
@@ -49,7 +48,7 @@ export function getSelectionAsMarkdown(editor: Editor): string | null {
     if (markdownManager?.serialize) {
       // Convert temp doc to JSON and serialize
       const json = tempDoc.toJSON();
-      return markdownManager.serialize(reorderMarksForSerialization(json));
+      return markdownManager.serialize(json);
     }
 
     // Fallback: Convert to basic markdown by analyzing node types

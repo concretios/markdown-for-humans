@@ -6,6 +6,7 @@
  *
  * Key responsibilities:
  * - Normalize visible crop rectangles and map them to rendered top-level blocks
+ * - Carry lifecycle cancellation through the injected rasterization boundary
  * - Keep all drawing commands in source bitmap coordinates
  * - Manage undoable annotation state without touching Markdown editor history
  * - Flatten the base capture and optional markup only when feedback is submitted
@@ -61,6 +62,8 @@ export interface DomRasterizeRequest {
   root: HTMLElement;
   rectangle: CaptureRectangle;
   scale: number;
+  /** Cancels asynchronous capture work when the snapshot/session is invalidated. */
+  signal?: AbortSignal;
 }
 
 /** A dependency-injected DOM rasterizer, keeping this module library-neutral. */
@@ -86,6 +89,16 @@ export class FeedbackCaptureError extends Error {
   }
 }
 
+/** Fail a capture checkpoint with the same typed, recoverable cancellation error. */
+export function throwIfFeedbackCaptureAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw new FeedbackCaptureError(
+    'MD4H-FB-CAPTURE-002',
+    'Feedback capture was cancelled before it could finish.',
+    signal.reason
+  );
+}
+
 /** Options for validating, mapping, and rasterizing a pointer-defined visible crop. */
 export interface CaptureVisibleAreaOptions {
   root: HTMLElement;
@@ -96,6 +109,8 @@ export interface CaptureVisibleAreaOptions {
   rasterize: DomRasterizer;
   scale?: number;
   minimumSize?: number;
+  /** Cancels mapping/rasterization when the owning capture lifecycle ends. */
+  signal?: AbortSignal;
 }
 
 /** Validated visible-area output ready for the annotation modal. */
@@ -586,6 +601,7 @@ function validateRasterizedCapture(image: RasterizedCapture): void {
 export async function captureVisibleArea(
   options: CaptureVisibleAreaOptions
 ): Promise<VisibleAreaCapture> {
+  throwIfFeedbackCaptureAborted(options.signal);
   const rectangle = normalizeAndClampRectangle(
     options.start,
     options.end,
@@ -599,7 +615,9 @@ export async function captureVisibleArea(
     );
   }
 
+  throwIfFeedbackCaptureAborted(options.signal);
   const blockRange = mapRectangleToTopLevelBlockRange(rectangle, options.blocks);
+  throwIfFeedbackCaptureAborted(options.signal);
   if (!blockRange) {
     throw new FeedbackCaptureError(
       'MD4H-FB-ANCHOR-001',
@@ -608,14 +626,20 @@ export async function captureVisibleArea(
   }
 
   try {
-    const image = await options.rasterize({
+    throwIfFeedbackCaptureAborted(options.signal);
+    const rasterizeRequest: DomRasterizeRequest = {
       root: options.root,
       rectangle,
       scale: normalizeCaptureScale(options.scale),
-    });
+      ...(options.signal ? { signal: options.signal } : {}),
+    };
+    const image = await options.rasterize(rasterizeRequest);
+    throwIfFeedbackCaptureAborted(options.signal);
     validateRasterizedCapture(image);
+    throwIfFeedbackCaptureAborted(options.signal);
     return { rectangle, blockRange, image };
   } catch (error) {
+    throwIfFeedbackCaptureAborted(options.signal);
     if (error instanceof FeedbackCaptureError) throw error;
     throw new FeedbackCaptureError(
       'MD4H-FB-CAPTURE-002',

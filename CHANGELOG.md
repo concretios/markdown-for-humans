@@ -8,6 +8,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Made Feedback split-view locks application-acknowledged and fail closed across delayed, duplicated, dropped, reloaded, and disposed renderer transitions.
+- Replaced active Feedback ownership handoff with generation-bound apply, commit, and rollback stages. The host exposes the new owner only after every exact application ACK and peer lock completes.
+- Prevented save, autosave, hidden-webview teardown, and pending image writes from losing the newest rich-editor revision.
+- Added exact document edit identities, host-version barriers, reconciliation after rejected edits, and serialized `WorkspaceEdit` ordering.
+- Hardened Feedback snapshot parity, table-cell selection mapping, capture cancellation, close recovery, and active-session restoration.
+- Fixed A to B to A split-delivery races, conflicting document-edit ID reuse, CSS-sensitive raw-HTML whitespace suppression, and final-panel custom autosave loss.
+- Made pending-image completion application acknowledged and retryable, with exact renderer-generation identities, atomic ProseMirror updates, dense typed-array retention, and fail-closed marker resolution.
+- Bounded pending image memory without evicting unresolved markers, released image byte buffers after writes settle, and prevented oversized multi-image drops from exhausting the host queue.
+- Pruned off-crop table rows, cells, and nested-list items during screenshot capture while preserving crop geometry and ordered-list numbering.
+- Removed quadratic full-source line splitting from Feedback snapshot finalization.
+- Replaced repeated linear Feedback item-to-anchor scans with logarithmic indexed lookup.
+- Deferred screenshot body reads and hashing from automatic draft discovery to explicit Resume while retaining path, file-type, and quota checks.
+
+### Changed
+
+- Upgraded the complete TipTap family to exact `3.30.3` on one deduplicated ProseMirror dependency graph.
+- Upgraded Mermaid to `11.17.2` and esbuild to `0.28.2`.
+- Raised the supported runtime floor to VS Code `1.98.0`, with explicit Node 20 and Chromium 132 build targets.
+- Disabled retained hidden webview contexts and restored bounded selection and scroll state after renderer recreation.
+- Moved Markdown serialization behind the 500 ms debounce and added minimal edits for documents of at least 32 KiB.
+
+### Security
+
+- Replaced the vulnerable `image-size` dependency with bounded PNG, JPEG, GIF, and WebP header readers.
+- Refreshed vulnerable compatible transitive dependencies. Production and development audits now report zero known vulnerabilities.
+- Restricted webview local-file access to the exact extension/workspace or document roots, rejected out-of-root image requests, and honored cancelled editor resolution.
+
+### Testing
+
+- Added deterministic 3,000-word and 10,000-line performance fixtures, renderer fault injection, Windows and Ubuntu Extension Host CI, and minimum/current VS Code coverage.
+
 ---
 
 ## [0.3.0] - 2026-08-07
@@ -15,21 +48,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### What's New
 
 #### Auto-Save
+
 New opt-in `markdownForHumans.autoSave.enabled` setting saves the document a short delay after you stop typing, independent of VS Code's built-in `files.autoSave`. Off by default, so nothing changes unless you turn it on.
 
 #### Formatting-Shortcut Control
+
 Cmd/Ctrl+B/I/U were previously hardcoded to stay inside the editor, which could permanently shadow a VS Code keybinding bound to the same chord. New `markdownForHumans.formattingShortcuts.enabled` setting (default on) lets you opt out, with a matching command and keybinding (Cmd/Ctrl+Alt+B) to toggle it without opening settings.
 
 #### Editor Theme Override
+
 New `markdownForHumans.display.editorTheme` setting (Follow VS Code theme / Always light / Always dark) plus a toolbar toggle next to the gear icon, so the editor's color mode no longer has to follow your OS/VS Code theme.
 
 #### Toolbar & Paste Improvements
+
 - Copy button added to code blocks
 - Toolbar active states now stay in sync with code blocks and document changes
 - Pasted HTML tables are preserved more reliably
 - Search box and other overlay inputs no longer have their pastes hijacked by the document paste handler
 
 #### Production Build Hardening
+
 Console output is now stripped from production builds, and the build verifier checks bundles for disallowed console calls.
 
 ### Fixed
@@ -59,29 +97,37 @@ Console output is now stripped from production builds, and the build verifier ch
 ### What's New
 
 #### Drag-and-Drop Block Reordering
+
 A six-dot handle now appears on any block, letting you drag it to a new position:
+
 - Smooth pointer-event-based drag with a ghost element preview
 - Visual drop indicator shows exactly where the block will land
 - Works with all block types including Mermaid diagrams
 - Regression tests added for drop position handling
 
 #### Paragraph Spacing and Zoom Level
+
 Two new settings give you fine control over the editor appearance:
+
 - `markdownForHumans.paragraphSpacing` — adjust spacing between paragraphs
 - `markdownForHumans.zoomLevel` — zoom editor content without OS-level zoom
 - Heading-to-paragraph spacing now honors the paragraph spacing setting
 
 #### AI Coding Tool Reference
+
 New "Copy AI Ref" button in the formatting toolbar:
+
 - Copies a structured context reference for the current document
 - Useful for feeding document context into AI coding tools (Claude Code, Cursor, etc.)
 - Enhanced handling for AI context references across the audit panel
 
 #### Open with Markdown for Humans (Context Menu)
+
 Right-click any editor tab to open the file in the Markdown for Humans WYSIWYG editor,
 without changing it as your default editor.
 
 #### Markdown Serialization Improvements
+
 - Consistent blank line preservation between blocks
 - Better handling of empty elements and edge cases in markdown output
 - Font size resets to default normal on open (prevents stale font-size state)
@@ -130,25 +176,31 @@ without changing it as your default editor.
 ### 🎯 What's New
 
 #### Document Audit Tool
+
 A new audit panel lets you check document quality without leaving the editor:
+
 - Validates all URLs and local file links for broken references
 - Auto-fix suggestions for common issues
 - Toast notifications for audit results
 - Enhanced overlay with issue navigation and a horizontal separator for clarity
 
 #### Image Overlay Controls
+
 New image overlay feature (contributed by @tomarsuraj13):
+
 - Contextual controls appear on image hover for quick resize and alignment
 - Improved image resize modal with better interaction
 - Fixed nested checkbox list rendering within image captions
 - Resolved VS Code keyboard shortcut conflicts introduced by image handling
 
 #### Code Block Improvements
+
 - Pastes inside code blocks now insert as raw text, preventing unwanted markdown parsing
 - Improved code context detection using TipTap state and DOM checks
 - Raw HTML source no longer auto-renders when pasted as plain text
 
 #### HTML-Preserving Tables
+
 - New `HtmlPreservingTable` extension maintains HTML classes when syncing tables to markdown
 
 ### 🛠️ Bug Fixes
@@ -179,10 +231,13 @@ New image overlay feature (contributed by @tomarsuraj13):
 ### 🎯 What's New
 
 #### Critical Bug Fix
+
 **Fixed Auto-Linking Bug:** Previously, typing text ending with file extensions (like `.md`, `.txt`, `.pdf`) would automatically convert them into links. This has been fixed. File extensions now remain as plain text, giving you complete control over when text becomes a link.
 
 #### Enhanced Link Creation Experience
+
 **Completely Redesigned Link Dialog:** Creating links is now faster and more intuitive:
+
 - **Three Link Modes**: Switch between URL, File, and Headings with radio buttons positioned right after the Link Text input
 - **Smart File Search**: Type to search workspace files with fuzzy matching and category filters (Markdown, Images, Code, Config)
 - **In-Document Headings**: Instantly link to any heading (H1-H6) within your current document
@@ -190,12 +245,14 @@ New image overlay feature (contributed by @tomarsuraj13):
 - **Better Navigation**: Fixed image and file link clicking - images now open in VS Code's preview, files open correctly in both development and packaged builds
 
 #### Documentation & Discovery
+
 - **Enhanced README:** Added comparison table showing how Markdown for Humans differs from other markdown editors
 - **Improved Marketplace Listing:** Better keywords and descriptions to help users discover the extension more easily
 
 ### 🛠️ Technical Improvements
 
 This release includes several under-the-hood improvements that make the extension more stable and reliable:
+
 - Enhanced test coverage for better reliability
 - Improved CI/CD pipeline for faster packaging
 - Code quality improvements
@@ -217,7 +274,7 @@ This release includes several under-the-hood improvements that make the extensio
 ### Added
 
 - Added shouldAutoLink validation utility to prevent unwanted auto-linking of file extensions and bare filenames
-- Added comprehensive test suite for link autolink prevention (src/__tests__/webview/linkAutolink.test.ts)
+- Added comprehensive test suite for link autolink prevention (src/**tests**/webview/linkAutolink.test.ts)
 - Added pre-commit hook that automatically runs npm run lint:fix before each commit
 - Added enhanced test setup files (setup-after-env.ts) for improved test reliability
 - Added GitHub Actions workflow for automated package creation on push to main branch

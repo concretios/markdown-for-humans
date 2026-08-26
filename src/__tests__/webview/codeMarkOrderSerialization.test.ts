@@ -8,28 +8,17 @@
  * Regression tests for inline `code` combined with another mark (link, bold,
  * italic, strike) on the same text run.
  *
- * Root cause: ProseMirror's `Mark.setFrom` (used when the parsed markdown JSON
- * is loaded into the live document) sorts a text node's `marks` array by
- * schema rank, not by how the marks were nested in the source. `code` is the
- * only mark here whose markdown syntax is literal/opaque — anything nested
- * inside a code span is not parsed as markdown. So whenever `code` isn't
- * first (innermost) in the marks array, the markdown serializer emits it as
- * outermost, and everything nested inside (a link's `[text](url)`, `**bold**`
- * markers, etc.) gets swallowed as literal text instead of being parsed.
- *
- * `reorderMarksForSerialization` (markdownSerialization.ts) fixes this by
- * moving `code` to the front of the marks array right before serialization.
+ * TipTap 3.30 serializes marks by extension priority. MarkdownCode and
+ * MarkdownLink set explicit priorities so formatting stays outside links and
+ * inline code remains innermost, where its literal syntax cannot swallow any
+ * surrounding Markdown marks.
  */
 
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
-import Link from '@tiptap/extension-link';
 import { Markdown } from '@tiptap/markdown';
-import type { JSONContent } from '@tiptap/core';
-import {
-  reorderMarksForSerialization,
-  getEditorMarkdownForSync,
-} from '../../webview/utils/markdownSerialization';
+import { MarkdownCode, MarkdownLink } from '../../webview/extensions/markdownCompatibilityMarks';
+import { getEditorMarkdownForSync } from '../../webview/utils/markdownSerialization';
 import { getSelectionAsMarkdown } from '../../webview/utils/copyMarkdown';
 
 function createEditor(): Editor {
@@ -38,90 +27,13 @@ function createEditor(): Editor {
   return new Editor({
     element,
     extensions: [
-      StarterKit.configure({ link: false, undoRedo: { depth: 100 } }),
+      StarterKit.configure({ code: false, link: false, undoRedo: { depth: 100 } }),
       Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
-      Link.configure({ openOnClick: false }),
+      MarkdownCode,
+      MarkdownLink.configure({ openOnClick: false }),
     ],
   });
 }
-
-describe('reorderMarksForSerialization (unit)', () => {
-  it('leaves a text node with no marks unchanged', () => {
-    const node: JSONContent = { type: 'text', text: 'hello' };
-    expect(reorderMarksForSerialization(node)).toEqual(node);
-  });
-
-  it('leaves a text node with a single mark unchanged', () => {
-    const node: JSONContent = { type: 'text', text: 'hello', marks: [{ type: 'bold' }] };
-    expect(reorderMarksForSerialization(node)).toEqual(node);
-  });
-
-  it('leaves marks unchanged when code is already first', () => {
-    const node: JSONContent = {
-      type: 'text',
-      text: 'foo()',
-      marks: [{ type: 'code' }, { type: 'italic' }],
-    };
-    expect(reorderMarksForSerialization(node)).toEqual(node);
-  });
-
-  it('moves code from the end to the front', () => {
-    const node: JSONContent = {
-      type: 'text',
-      text: 'foo()',
-      marks: [{ type: 'link', attrs: { href: './bar.ts' } }, { type: 'code' }],
-    };
-    expect(reorderMarksForSerialization(node).marks).toEqual([
-      { type: 'code' },
-      { type: 'link', attrs: { href: './bar.ts' } },
-    ]);
-  });
-
-  it('moves code from the middle to the front, preserving relative order of the rest', () => {
-    const node: JSONContent = {
-      type: 'text',
-      text: 'foo()',
-      marks: [{ type: 'link', attrs: { href: 'x' } }, { type: 'code' }, { type: 'bold' }],
-    };
-    expect(reorderMarksForSerialization(node).marks).toEqual([
-      { type: 'code' },
-      { type: 'link', attrs: { href: 'x' } },
-      { type: 'bold' },
-    ]);
-  });
-
-  it('leaves marks unchanged when no code mark is present', () => {
-    const node: JSONContent = {
-      type: 'text',
-      text: 'x',
-      marks: [{ type: 'link', attrs: { href: 'x' } }, { type: 'bold' }, { type: 'italic' }],
-    };
-    expect(reorderMarksForSerialization(node)).toEqual(node);
-  });
-
-  it('recurses into nested content (doc > paragraph > text)', () => {
-    const doc: JSONContent = {
-      type: 'doc',
-      content: [
-        {
-          type: 'paragraph',
-          content: [
-            {
-              type: 'text',
-              text: 'foo()',
-              marks: [{ type: 'link', attrs: { href: './bar.ts' } }, { type: 'code' }],
-            },
-          ],
-        },
-      ],
-    };
-    const result = reorderMarksForSerialization(doc);
-    expect(result.content?.[0]?.content?.[0]?.marks).toEqual([
-      { type: 'code' },
-      { type: 'link', attrs: { href: './bar.ts' } },
-    ]);
-  });
-});
 
 describe('code + another mark round-trips through the real editor (save path)', () => {
   let editor: Editor;

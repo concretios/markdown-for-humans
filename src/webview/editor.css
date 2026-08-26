@@ -4694,6 +4694,15 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   box-shadow: inset 3px 0 0 var(--md4h-feedback-highlight-edge);
 }
 
+.feedback-review-active .markdown-editor .md4h-feedback-annotation-cell {
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--md4h-feedback-highlight-edge) 70%, transparent);
+}
+
+.feedback-review-active .markdown-editor .md4h-feedback-annotation-cell.is-feedback-active {
+  box-shadow: inset 0 0 0 2px var(--md4h-feedback-highlight-edge);
+}
+
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-highlight,
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-highlight-active,
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-annotation-inline {
@@ -4703,7 +4712,8 @@ body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-anno
 
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-block-target,
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-block-target-active,
-body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-annotation-node {
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-annotation-node,
+body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-annotation-cell {
   box-shadow: none;
 }
 
@@ -4790,7 +4800,8 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
 
 .feedback-capture-active .markdown-editor .md4h-feedback-block-target,
 .feedback-capture-active .markdown-editor .md4h-feedback-block-target-active,
-.feedback-capture-active .markdown-editor .md4h-feedback-annotation-node {
+.feedback-capture-active .markdown-editor .md4h-feedback-annotation-node,
+.feedback-capture-active .markdown-editor .md4h-feedback-annotation-cell {
   box-shadow: none !important;
 }
 
@@ -5490,6 +5501,14 @@ body.vscode-high-contrast-light.feedback-review-active
   box-shadow: inset 3px 0 0 var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
 }
 
+.vscode-high-contrast .feedback-review-active .markdown-editor .md4h-feedback-annotation-cell,
+.vscode-high-contrast-light
+  .feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-cell {
+  box-shadow: inset 0 0 0 2px var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+}
+
 body[data-feedback-comments-state='hidden'].vscode-high-contrast.feedback-review-active
   .markdown-editor
   .md4h-feedback-annotation-inline,
@@ -5508,6 +5527,15 @@ body[data-feedback-comments-state='hidden'].vscode-high-contrast.feedback-review
 body[data-feedback-comments-state='hidden'].vscode-high-contrast-light.feedback-review-active
   .markdown-editor
   .md4h-feedback-annotation-node {
+  box-shadow: none;
+}
+
+body[data-feedback-comments-state='hidden'].vscode-high-contrast.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-cell,
+body[data-feedback-comments-state='hidden'].vscode-high-contrast-light.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-cell {
   box-shadow: none;
 }
 
@@ -5608,6 +5636,7 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
   .md4h-feedback-highlight,
   .md4h-feedback-annotation-inline,
   .md4h-feedback-annotation-node,
+  .md4h-feedback-annotation-cell,
   .md4h-feedback-block-target,
   .feedback-target-bracket,
   .feedback-marker,

@@ -38,6 +38,23 @@ describe('feedback protocol', () => {
     });
   });
 
+  it('accepts blockless snapshot-capable start and resume requests', () => {
+    expect(
+      parseFeedbackWebviewMessage({ type: 'feedback.start', requestId: 'snapshot-start' })
+    ).toEqual({ type: 'feedback.start', requestId: 'snapshot-start' });
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.draft.resume',
+        requestId: 'snapshot-resume',
+        round: '20260826T120000Z-ab12',
+      })
+    ).toEqual({
+      type: 'feedback.draft.resume',
+      requestId: 'snapshot-resume',
+      round: '20260826T120000Z-ab12',
+    });
+  });
+
   it('accepts only an explicit new-round start bypass', () => {
     const message = {
       type: 'feedback.start.new',
@@ -47,6 +64,18 @@ describe('feedback protocol', () => {
 
     expect(parseFeedbackWebviewMessage(message)).toEqual(message);
     expect(parseFeedbackWebviewMessage({ ...message, skipResume: true })).toBeNull();
+  });
+
+  it('accepts only an exact controller-ready identity for one renderer generation', () => {
+    const message = {
+      type: 'feedback.controller.ready',
+      requestId: 'feedback-controller-view-current',
+      viewGeneration: 'view-current',
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, viewGeneration: '' })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, sessionId: 'stale-session' })).toBeNull();
   });
 
   it('accepts only an exact correlated close readiness message', () => {
@@ -168,6 +197,106 @@ describe('feedback protocol', () => {
     expect(parseFeedbackHostMessage({ ...message, force: true })).toBeNull();
   });
 
+  it('accepts only an exact authoritative peer release command', () => {
+    const message = {
+      type: 'feedback.peer.release',
+      phase: 'apply',
+      releaseId: 'peer-release-1',
+      requestId: 'finish-1',
+      lockId: 'session-1',
+      viewGeneration: 'view-current',
+      revision: 2,
+      documentVersion: 9,
+      contentSha256: 'a'.repeat(64),
+      content: '# Current saved source\n',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    const commit = {
+      type: message.type,
+      phase: 'commit',
+      releaseId: message.releaseId,
+      requestId: message.requestId,
+      lockId: message.lockId,
+      viewGeneration: message.viewGeneration,
+      revision: message.revision,
+      documentVersion: message.documentVersion,
+      contentSha256: message.contentSha256,
+    };
+    expect(parseFeedbackHostMessage(commit)).toEqual(commit);
+    expect(parseFeedbackHostMessage({ ...commit, content: message.content })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, phase: undefined })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, documentVersion: -1 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, contentSha256: 'not-a-digest' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, unlocked: true })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, content: '# Form\fFeed\n' })).toEqual({
+      ...message,
+      content: '# Form\fFeed\n',
+    });
+    expect(
+      parseFeedbackHostMessage({ ...message, content: 'x'.repeat(10 * 1024 * 1024 + 1) })
+    ).not.toBeNull();
+  });
+
+  it('accepts only an exact renderer-generation peer lock acquisition', () => {
+    const message = {
+      type: 'feedback.peer.lock.acquire',
+      acquisitionId: 'peer-acquire-1',
+      requestId: 'start-1',
+      lockId: 'transition-1',
+      replacesLockId: null,
+      viewGeneration: 'view-peer-current',
+      revision: 1,
+      message: 'Feedback is active in another editor split.',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, viewGeneration: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, sessionId: 'leaked' })).toBeNull();
+  });
+
+  it('accepts only an exact renderer-generation peer lock acknowledgement', () => {
+    const message = {
+      type: 'feedback.peer.lock.acquired',
+      acquisitionId: 'peer-acquire-1',
+      requestId: 'start-1',
+      lockId: 'transition-1',
+      replacesLockId: null,
+      viewGeneration: 'view-peer-current',
+      revision: 1,
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(
+      parseFeedbackWebviewMessage({ ...message, viewGeneration: 'view-stale', extra: true })
+    ).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, lockId: '' })).toBeNull();
+  });
+
+  it('accepts only an exact correlated peer release acknowledgement', () => {
+    const message = {
+      type: 'feedback.peer.released',
+      phase: 'apply',
+      releaseId: 'peer-release-1',
+      requestId: 'finish-1',
+      lockId: 'session-1',
+      viewGeneration: 'view-current',
+      revision: 2,
+      documentVersion: 9,
+      contentSha256: 'a'.repeat(64),
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, phase: 'commit' })).toEqual({
+      ...message,
+      phase: 'commit',
+    });
+    expect(parseFeedbackWebviewMessage({ ...message, lockId: '' })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, content: '# Leaked' })).toBeNull();
+  });
+
   it('accepts only an exact host-owned transition lock', () => {
     const message = {
       type: 'feedback.transition.locked',
@@ -222,6 +351,85 @@ describe('feedback protocol', () => {
     expect(parseFeedbackHostMessage({ ...message, message: `unsafe\0message` })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, message: 'x'.repeat(100_001) })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, requestId: 'must-not-cross' })).toBeNull();
+  });
+
+  it('accepts only exact generation-bound session-transfer apply, commit, abort, and ACK shapes', () => {
+    const apply = {
+      type: 'feedback.session.transfer',
+      phase: 'apply',
+      role: 'new-owner',
+      transferId: 'transfer-1',
+      requestId: 'resume-1',
+      oldSessionId: 'session-old',
+      newSessionId: 'session-new',
+      viewGeneration: 'view-new',
+      revision: 1,
+      documentVersion: 7,
+      sourceSha256: 'a'.repeat(64),
+      peerLockMessage: 'Feedback is active in another editor split.',
+      session: {
+        sessionId: 'session-new',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
+        items: [],
+      },
+    };
+    const commit = {
+      type: apply.type,
+      phase: 'commit',
+      role: apply.role,
+      transferId: apply.transferId,
+      requestId: apply.requestId,
+      oldSessionId: apply.oldSessionId,
+      newSessionId: apply.newSessionId,
+      viewGeneration: apply.viewGeneration,
+      revision: apply.revision,
+      documentVersion: apply.documentVersion,
+      sourceSha256: apply.sourceSha256,
+      peerLockMessage: apply.peerLockMessage,
+    };
+    const abort = { ...commit, phase: 'abort' };
+    const acknowledgement = {
+      type: 'feedback.session.transfer.ack',
+      phase: 'apply',
+      role: apply.role,
+      transferId: apply.transferId,
+      requestId: apply.requestId,
+      oldSessionId: apply.oldSessionId,
+      newSessionId: apply.newSessionId,
+      viewGeneration: apply.viewGeneration,
+      revision: apply.revision,
+      documentVersion: apply.documentVersion,
+      sourceSha256: apply.sourceSha256,
+      applied: true,
+    };
+
+    expect(parseFeedbackHostMessage(apply)).toEqual(apply);
+    expect(parseFeedbackHostMessage(commit)).toEqual(commit);
+    expect(parseFeedbackHostMessage(abort)).toEqual(abort);
+    expect(parseFeedbackWebviewMessage(acknowledgement)).toEqual(acknowledgement);
+    expect(parseFeedbackWebviewMessage({ ...acknowledgement, applied: false })).toEqual({
+      ...acknowledgement,
+      applied: false,
+    });
+    expect(parseFeedbackWebviewMessage({ ...acknowledgement, phase: 'abort' })).toEqual({
+      ...acknowledgement,
+      phase: 'abort',
+    });
+    expect(parseFeedbackHostMessage({ ...apply, newSessionId: apply.oldSessionId })).toBeNull();
+    expect(
+      parseFeedbackHostMessage({
+        ...apply,
+        session: { ...apply.session, sessionId: 'different-session' },
+      })
+    ).toBeNull();
+    expect(parseFeedbackHostMessage({ ...commit, session: apply.session })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...abort, session: apply.session })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...apply, unexpected: true })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...acknowledgement, unexpected: true })).toBeNull();
   });
 
   it('accepts strictly increasing non-contiguous ProseMirror ordinals', () => {
@@ -333,6 +541,135 @@ describe('feedback protocol', () => {
         endOffset: 3,
       },
     });
+  });
+
+  it('accepts a bounded table-cell target without trusting a containing-block hash', () => {
+    const message = {
+      type: 'feedback.text.add',
+      requestId: 'add-table-cells',
+      sessionId: 'session-1',
+      startOrdinal: 4,
+      endOrdinal: 4,
+      focus: 'R1C1\tR1C2\nR2C1\tR2C2',
+      feedback: 'Clarify these cells.',
+      cellTarget: {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+  });
+
+  it.each([
+    [
+      'a host-owned block hash',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+        tableBlockSha256: 'a'.repeat(64),
+      },
+    ],
+    [
+      'a mismatched table ordinal',
+      {
+        version: 1,
+        tableOrdinal: 3,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
+      'a collapsed rectangle',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 1, left: 0, bottom: 1, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
+      'an unbounded coordinate',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 100_001, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
+      'a non-canonical fingerprint',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'MD4H-table/v1:0123456789abcdef',
+      },
+    ],
+  ])('rejects a table-cell target with %s', (_label, cellTarget) => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-invalid-table-cells',
+        sessionId: 'session-1',
+        startOrdinal: 4,
+        endOrdinal: 4,
+        focus: 'Selected cells',
+        feedback: 'Clarify these cells.',
+        cellTarget,
+      })
+    ).toBeNull();
+  });
+
+  it('rejects a table-cell target whose ordinal exceeds the bounded block domain', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-unbounded-table-ordinal',
+        sessionId: 'session-1',
+        startOrdinal: 100_000,
+        endOrdinal: 100_000,
+        focus: 'Selected cells',
+        feedback: 'Clarify these cells.',
+        cellTarget: {
+          version: 1,
+          tableOrdinal: 100_000,
+          rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+          tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+        },
+      })
+    ).toBeNull();
+  });
+
+  it('rejects competing rendered-range and table-cell targets', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-competing-targets',
+        sessionId: 'session-1',
+        startOrdinal: 4,
+        endOrdinal: 4,
+        focus: 'Selected cells',
+        feedback: 'Clarify these cells.',
+        renderedRange: {
+          version: 1,
+          startOrdinal: 4,
+          startOffset: 0,
+          endOrdinal: 4,
+          endOffset: 1,
+        },
+        cellTarget: {
+          version: 1,
+          tableOrdinal: 4,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+          tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+        },
+      })
+    ).toBeNull();
   });
 
   it.each([
@@ -727,6 +1064,68 @@ describe('feedback protocol', () => {
     expect(parseFeedbackHostMessage({ ...message, prompt: `unsafe\0prompt` })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, prompt: 'x'.repeat(1_000_001) })).toBeNull();
     expect(parseFeedbackHostMessage({ ...message, leaked: true })).toBeNull();
+  });
+
+  it('accepts a host-enriched table-cell item summary', () => {
+    const message = {
+      type: 'feedback.updated',
+      requestId: 'update-table-cells',
+      sessionId: 'session-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 4,
+          endOrdinal: 4,
+          startLine: 10,
+          endLine: 15,
+          focus: 'R1C1\tR1C2\nR2C1\tR2C2',
+          feedback: 'Clarify these cells.',
+          cellTarget: {
+            version: 1,
+            tableOrdinal: 4,
+            rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+            tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+            tableBlockSha256: 'a'.repeat(64),
+          },
+        },
+      ],
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+  });
+
+  it.each([
+    ['missing block hash', undefined],
+    ['invalid block hash', 'not-a-sha256'],
+  ])('rejects a table-cell item summary with %s', (_label, tableBlockSha256) => {
+    const cellTarget = {
+      version: 1,
+      tableOrdinal: 4,
+      rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+      tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      ...(tableBlockSha256 === undefined ? {} : { tableBlockSha256 }),
+    };
+    expect(
+      parseFeedbackHostMessage({
+        type: 'feedback.updated',
+        requestId: 'update-invalid-table-cells',
+        sessionId: 'session-1',
+        items: [
+          {
+            id: 'F1',
+            kind: 'text',
+            startOrdinal: 4,
+            endOrdinal: 4,
+            startLine: 10,
+            endLine: 15,
+            focus: 'Selected cells',
+            feedback: 'Clarify these cells.',
+            cellTarget,
+          },
+        ],
+      })
+    ).toBeNull();
   });
 
   it.each([

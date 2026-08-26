@@ -11,7 +11,10 @@ import {
   captureSelectedFeedbackBlocks,
   startFeedbackAreaCapture,
 } from '../../webview/features/feedbackCaptureWorkflow';
-import { FeedbackCaptureError } from '../../webview/features/feedbackCapture';
+import {
+  FeedbackCaptureError,
+  type DomRasterizeRequest,
+} from '../../webview/features/feedbackCapture';
 import {
   createFeedbackDraftSurfaceGate,
   type FeedbackReviewController,
@@ -533,8 +536,11 @@ describe('keyboard Feedback block selector', () => {
       isWritable: () => true,
     } as unknown as FeedbackReviewController;
     let resolveRasterize!: (capture: { dataUrl: string; width: number; height: number }) => void;
-    const rasterize = jest.fn(
-      () =>
+    const rasterize = jest.fn<
+      Promise<{ dataUrl: string; width: number; height: number }>,
+      [DomRasterizeRequest]
+    >(
+      _request =>
         new Promise<{ dataUrl: string; width: number; height: number }>(resolve => {
           resolveRasterize = resolve;
         })
@@ -551,7 +557,11 @@ describe('keyboard Feedback block selector', () => {
     await Promise.resolve();
 
     expect(setAnnotationsSuspended.mock.calls).toEqual([[true]]);
+    const rasterSignal = rasterize.mock.calls[0]?.[0]?.signal as AbortSignal | undefined;
+    expect(rasterSignal).toBeInstanceOf(AbortSignal);
+    expect(rasterSignal?.aborted).toBe(false);
     window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
+    expect(rasterSignal?.aborted).toBe(true);
     expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
 
     resolveRasterize({ dataUrl: 'data:image/png;base64,AAAA', width: 100, height: 60 });
@@ -915,72 +925,84 @@ describe('keyboard Feedback block selector', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it('restores block-capture state once when invalidation aborts an in-flight rasterizer', async () => {
-    const editorDom = document.createElement('div');
-    const block = document.createElement('p');
-    const renderedImage = document.createElement('img');
-    block.append(renderedImage);
-    editorDom.append(block);
-    document.body.append(editorDom);
-    editorDom.getBoundingClientRect = () =>
-      ({ left: 0, top: 0, right: 500, bottom: 300, width: 500, height: 300 }) as DOMRect;
-    block.getBoundingClientRect = () =>
-      ({ left: 0, top: 0, right: 500, bottom: 100, width: 500, height: 100 }) as DOMRect;
-    renderedImage.getBoundingClientRect = () =>
-      ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) as DOMRect;
-    const editor = {
-      state: { selection: { empty: true, from: 1, to: 1 } },
-      view: { dom: editorDom },
-    } as unknown as Editor;
-    const setAnnotationsSuspended = jest.fn();
-    const setCaptureState = jest.fn();
-    const review = {
-      getSession: () => ({
-        sessionId: 'session-1',
-        source: 'docs/guide.md',
-        sourceSha256: 'a'.repeat(64),
-        round: '20260821T093000Z-k4p9',
-        anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
-        items: [],
-      }),
-      isWritable: () => true,
-      setAnnotationsSuspended,
-      setCaptureState,
-      reportCaptureError: jest.fn(),
-    } as unknown as FeedbackReviewController;
-    let resolveRasterize!: (capture: { dataUrl: string; width: number; height: number }) => void;
-    const rasterize = jest.fn(
-      () =>
-        new Promise<{ dataUrl: string; width: number; height: number }>(resolve => {
-          resolveRasterize = resolve;
-        })
-    );
+  it.each([
+    ['invalidation', 'feedbackInvalidated'],
+    ['session disposal', 'feedbackSessionEnded'],
+  ] as const)(
+    'aborts the selected-block rasterizer on %s and ignores late completion',
+    async (_reason, lifecycleEvent) => {
+      const editorDom = document.createElement('div');
+      const block = document.createElement('p');
+      const renderedImage = document.createElement('img');
+      block.append(renderedImage);
+      editorDom.append(block);
+      document.body.append(editorDom);
+      editorDom.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 500, bottom: 300, width: 500, height: 300 }) as DOMRect;
+      block.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 500, bottom: 100, width: 500, height: 100 }) as DOMRect;
+      renderedImage.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) as DOMRect;
+      const editor = {
+        state: { selection: { empty: true, from: 1, to: 1 } },
+        view: { dom: editorDom },
+      } as unknown as Editor;
+      const setAnnotationsSuspended = jest.fn();
+      const setCaptureState = jest.fn();
+      const review = {
+        getSession: () => ({
+          sessionId: 'session-1',
+          source: 'docs/guide.md',
+          sourceSha256: 'a'.repeat(64),
+          round: '20260821T093000Z-k4p9',
+          anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
+          items: [],
+        }),
+        isWritable: () => true,
+        setAnnotationsSuspended,
+        setCaptureState,
+        reportCaptureError: jest.fn(),
+      } as unknown as FeedbackReviewController;
+      let resolveRasterize!: (capture: { dataUrl: string; width: number; height: number }) => void;
+      const rasterize = jest.fn<
+        Promise<{ dataUrl: string; width: number; height: number }>,
+        [DomRasterizeRequest]
+      >(
+        _request =>
+          new Promise<{ dataUrl: string; width: number; height: number }>(resolve => {
+            resolveRasterize = resolve;
+          })
+      );
 
-    captureSelectedFeedbackBlocks({ editor, review, rasterize });
-    document
-      .querySelector<HTMLFormElement>('.feedback-block-selector')!
-      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    await Promise.resolve();
-    expect(setAnnotationsSuspended.mock.calls).toEqual([[true]]);
-    expect(document.body.classList).toContain('feedback-capture-active');
-    expect(document.body.getAttribute('data-feedback-capture-state')).toBe('rasterizing');
-    expect(setCaptureState.mock.calls).toEqual([['rasterizing']]);
+      captureSelectedFeedbackBlocks({ editor, review, rasterize });
+      document
+        .querySelector<HTMLFormElement>('.feedback-block-selector')!
+        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true]]);
+      expect(document.body.classList).toContain('feedback-capture-active');
+      expect(document.body.getAttribute('data-feedback-capture-state')).toBe('rasterizing');
+      expect(setCaptureState.mock.calls).toEqual([['rasterizing']]);
+      const rasterSignal = rasterize.mock.calls[0]?.[0]?.signal;
+      expect(rasterSignal).toBeInstanceOf(AbortSignal);
+      expect(rasterSignal?.aborted).toBe(false);
 
-    window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
-    window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
-    window.dispatchEvent(new CustomEvent('feedbackSessionEnded'));
-    expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
-    expect(document.body.classList).not.toContain('feedback-capture-active');
-    expect(document.body.hasAttribute('data-feedback-capture-state')).toBe(false);
-    expect(setCaptureState.mock.calls).toEqual([['rasterizing'], ['idle']]);
+      window.dispatchEvent(new CustomEvent(lifecycleEvent));
+      window.dispatchEvent(new CustomEvent(lifecycleEvent));
+      expect(rasterSignal?.aborted).toBe(true);
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
+      expect(document.body.classList).not.toContain('feedback-capture-active');
+      expect(document.body.hasAttribute('data-feedback-capture-state')).toBe(false);
+      expect(setCaptureState.mock.calls).toEqual([['rasterizing'], ['idle']]);
 
-    resolveRasterize({ dataUrl: 'data:image/png;base64,AAAA', width: 100, height: 60 });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
-    expect(setCaptureState.mock.calls).toEqual([['rasterizing'], ['idle']]);
-    expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
-  });
+      resolveRasterize({ dataUrl: 'data:image/png;base64,AAAA', width: 100, height: 60 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
+      expect(setCaptureState.mock.calls).toEqual([['rasterizing'], ['idle']]);
+      expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+    }
+  );
 
   it('closes on Escape and restores focus to the invoking control', () => {
     const trigger = document.createElement('button');
@@ -1244,6 +1266,67 @@ describe('keyboard Feedback block selector', () => {
       expect(document.activeElement).toBe(harness.trigger);
       expect(harness.rasterize).not.toHaveBeenCalled();
     });
+
+    it.each(['pointercancel', 'lostpointercapture'] as const)(
+      'terminates the owned drag on %s and restores the capture surface once',
+      eventType => {
+        const harness = createAreaHarness();
+        startFeedbackAreaCapture(harness);
+        const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+        const pointerDown = new MouseEvent('pointerdown', {
+          button: 0,
+          clientX: 10,
+          clientY: 10,
+          bubbles: true,
+        });
+        Object.defineProperty(pointerDown, 'pointerId', { value: 17 });
+        overlay.dispatchEvent(pointerDown);
+        const terminal = new MouseEvent(eventType, { bubbles: true });
+        Object.defineProperty(terminal, 'pointerId', { value: 17 });
+
+        overlay.dispatchEvent(terminal);
+        overlay.dispatchEvent(terminal);
+
+        expect(document.querySelector('.feedback-area-capture')).toBeNull();
+        expect(harness.setCaptureState.mock.calls).toEqual([['armed'], ['idle']]);
+        expect(document.body.hasAttribute('data-feedback-capture-state')).toBe(false);
+        expect(harness.rasterize).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['blur', 'visibilitychange'] as const)(
+      'terminates an owned drag when the document receives %s',
+      eventType => {
+        const harness = createAreaHarness();
+        startFeedbackAreaCapture(harness);
+        const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+        const pointerDown = new MouseEvent('pointerdown', {
+          button: 0,
+          clientX: 10,
+          clientY: 10,
+          bubbles: true,
+        });
+        Object.defineProperty(pointerDown, 'pointerId', { value: 23 });
+        overlay.dispatchEvent(pointerDown);
+        if (eventType === 'visibilitychange') {
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            value: 'hidden',
+          });
+          document.dispatchEvent(new Event('visibilitychange'));
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            value: 'visible',
+          });
+        } else {
+          window.dispatchEvent(new Event('blur'));
+        }
+
+        expect(document.querySelector('.feedback-area-capture')).toBeNull();
+        expect(harness.setCaptureState).toHaveBeenLastCalledWith('idle');
+        expect(harness.rasterize).not.toHaveBeenCalled();
+      }
+    );
 
     it('restores idle state exactly once when invalidation aborts an armed crop', () => {
       const harness = createAreaHarness();

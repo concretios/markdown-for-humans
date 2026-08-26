@@ -23,8 +23,20 @@
   },
   "homepage": "https://github.com/concretios/markdown-for-humans#readme",
   "engines": {
-    "vscode": "^1.85.0",
-    "node": ">=22"
+    "vscode": "^1.98.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Markdown for Humans currently requires a disk-backed workspace for document-adjacent images, exports, and Feedback drafts."
+    },
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Trust is required because the extension reads, writes, renders, and exports workspace content."
+    }
   },
   "categories": [
     "Other",
@@ -322,6 +334,7 @@
     "lint": "eslint src --ext ts --max-warnings 0",
     "lint:fix": "eslint src --ext ts --fix",
     "test": "jest",
+    "test:integration": "npm run build:release && vscode-test",
     "test:feedback-capture": "node scripts/feedback-capture-fixture/run.mjs",
     "test:feedback-annotations": "node --test scripts/feedback-annotation-fixture/verification.test.mjs && node scripts/feedback-annotation-fixture/run.mjs",
     "test:watch": "jest --watch",
@@ -334,16 +347,22 @@
     "install-hooks": "bash ./scripts/install-git-hooks.sh"
   },
   "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/plugin-transform-modules-commonjs": "7.29.7",
     "@eslint/eslintrc": "^3.3.3",
-    "@types/image-size": "^0.7.0",
+    "@eslint/js": "^9.39.5",
     "@types/jest": "^30.0.0",
-    "@types/node": "^20.10.6",
-    "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^8.48.1",
-    "@typescript-eslint/parser": "^8.48.1",
+    "@types/markdown-it": "14.2.0",
+    "@types/node": "20.17.58",
+    "@types/vscode": "1.98.0",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
+    "@vscode/test-cli": "0.0.15",
+    "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "^3.9.2",
-    "concurrently": "^8.2.2",
-    "esbuild": "^0.28.1",
+    "babel-jest": "30.4.1",
+    "concurrently": "^9.2.4",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
@@ -354,25 +373,34 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
-    "@tiptap/core": "^3.0.0",
-    "@tiptap/extension-code-block-lowlight": "^3.0.0",
-    "@tiptap/extension-image": "^3.0.0",
-    "@tiptap/extension-link": "^3.0.0",
-    "@tiptap/extension-list": "^3.0.0",
-    "@tiptap/extension-table": "^3.0.0",
-    "@tiptap/markdown": "^3.0.0",
-    "@tiptap/pm": "^3.0.0",
-    "@tiptap/starter-kit": "^3.0.0",
+    "@tiptap/core": "3.30.3",
+    "@tiptap/extension-code": "3.30.3",
+    "@tiptap/extension-code-block-lowlight": "3.30.3",
+    "@tiptap/extension-image": "3.30.3",
+    "@tiptap/extension-link": "3.30.3",
+    "@tiptap/extension-list": "3.30.3",
+    "@tiptap/extension-paragraph": "3.30.3",
+    "@tiptap/extension-table": "3.30.3",
+    "@tiptap/markdown": "3.30.3",
+    "@tiptap/pm": "3.30.3",
+    "@tiptap/starter-kit": "3.30.3",
     "@types/turndown": "^5.0.4",
     "cheerio": "^1.1.2",
     "docx": "^9.5.1",
     "highlight.js": "^11.11.1",
-    "image-size": "^2.0.2",
     "katex": "^0.16.9",
     "lowlight": "^2.9.0",
     "markdown-it": "^14.0.0",
-    "mermaid": "^11.16.0",
+    "mermaid": "^11.17.2",
     "modern-screenshot": "4.7.0",
     "turndown": "^7.1.2"
+  },
+  "overrides": {
+    "@vscode/test-cli": {
+      "mocha": {
+        "diff": "8.0.3",
+        "serialize-javascript": "7.1.0"
+      }
+    }
   }
 }

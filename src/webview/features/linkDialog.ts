@@ -9,7 +9,7 @@
  * @description Provides a modal dialog for inserting and editing hyperlinks.
  */
 import { getMarkRange, Editor } from '@tiptap/core';
-import { TextSelection } from 'prosemirror-state';
+import { TextSelection } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { buildOutlineFromEditor } from '../utils/outline';
 

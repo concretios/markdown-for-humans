@@ -103,6 +103,12 @@ describe('isMarkdownStructurallyEquivalent', () => {
       expect(isMarkdownStructurallyEquivalent(a, b)).toBe(false);
     });
 
+    test('whitespace rendered significant by raw HTML is preserved', () => {
+      const twoSpaces = '<span style="white-space: pre">a  b</span>\n';
+      const oneSpace = '<span style="white-space: pre">a b</span>\n';
+      expect(isMarkdownStructurallyEquivalent(twoSpaces, oneSpace)).toBe(false);
+    });
+
     test('list nesting depth change is a real edit', () => {
       const flat = '- one\n- two\n';
       const nested = '- one\n  - two\n';
@@ -158,6 +164,12 @@ describe('isMarkdownStructurallyEquivalent', () => {
       ].join('\n');
 
       expect(isMarkdownStructurallyEquivalent(lintFriendly, canonical)).toBe(true);
+    });
+
+    test('unchanged raw HTML does not prevent cosmetic normalization elsewhere', () => {
+      const star = '<span>fixed</span>\n\n* one\n* two\n';
+      const dash = '<span>fixed</span>\n\n- one\n- two\n';
+      expect(isMarkdownStructurallyEquivalent(star, dash)).toBe(true);
     });
   });
 });

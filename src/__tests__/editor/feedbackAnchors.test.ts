@@ -8,6 +8,7 @@ import {
   FEEDBACK_ANCHOR_ERROR_CODE,
   FEEDBACK_TARGET_ERROR_CODE,
   buildFeedbackAnchorMap,
+  findFeedbackOrdinalsForLines,
   mapFeedbackSelection,
   type CanonicalFeedbackBlock,
   type FeedbackAnchorMap,
@@ -312,6 +313,43 @@ describe('buildFeedbackAnchorMap', () => {
     // Mapping is a one-time session-start operation. This loose ceiling catches
     // accidental quadratic behavior without making the test sensitive to CI load.
     expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+});
+
+describe('findFeedbackOrdinalsForLines', () => {
+  it('uses logarithmic anchor reads for a large frozen map', () => {
+    const blockCount = 10_000;
+    let indexedReads = 0;
+    const blocks = new Proxy(
+      Array.from({ length: blockCount }, (_, index) => ({
+        ordinal: index,
+        kind: 'paragraph' as const,
+        startLine: index * 2 + 1,
+        endLine: index * 2 + 1,
+      })),
+      {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property)) indexedReads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      }
+    );
+
+    expect(findFeedbackOrdinalsForLines({ blocks }, 5_001, blockCount * 2 - 1)).toEqual({
+      startOrdinal: 2_500,
+      endOrdinal: blockCount - 1,
+    });
+    expect(indexedReads).toBeLessThanOrEqual(64);
+  });
+
+  it('rejects line endpoints that are absent or reversed in the anchor map', () => {
+    const anchorMap = expectAnchorMap('First\n\nSecond', [
+      block(3, 'paragraph', 'First'),
+      block(8, 'paragraph', 'Second'),
+    ]);
+
+    expect(findFeedbackOrdinalsForLines(anchorMap, 1, 2)).toBeNull();
+    expect(findFeedbackOrdinalsForLines(anchorMap, 3, 1)).toBeNull();
   });
 });
 

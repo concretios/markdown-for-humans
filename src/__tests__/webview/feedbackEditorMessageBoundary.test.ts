@@ -29,6 +29,10 @@ jest.mock('katex', () => ({
 }));
 jest.mock('katex/dist/katex.min.css', () => ({}), { virtual: true });
 jest.mock('@tiptap/pm/state', () => ({ Plugin: class {}, PluginKey: class {} }));
+jest.mock('@tiptap/pm/tables', () => ({
+  CellSelection: class {},
+  TableMap: { get: jest.fn() },
+}));
 jest.mock('@tiptap/pm/view', () => ({
   Decoration: { inline: jest.fn() },
   DecorationSet: { create: jest.fn(), empty: {} },
@@ -51,6 +55,10 @@ jest.mock('@tiptap/extension-list', () => ({
 jest.mock('@tiptap/extension-link', () => ({
   __esModule: true,
   default: { configure: () => ({}) },
+}));
+jest.mock('../../webview/extensions/markdownCompatibilityMarks', () => ({
+  MarkdownCode: {},
+  MarkdownLink: { configure: () => ({}) },
 }));
 jest.mock('@tiptap/extension-code-block-lowlight', () => ({
   __esModule: true,
@@ -111,6 +119,8 @@ type TestingModule = {
   setFeedbackReviewControllerForTests(controller: unknown): void;
   setFeedbackPeerLockControllerForTests(controller: unknown): void;
   setMockEditor(editor: unknown): void;
+  signalFeedbackControllerReadyForTests(): void;
+  getDocumentSyncIdentityForTests(): { acceptedDocumentVersion: number };
   openLinkDialogForTests(editor: unknown): boolean;
   insertAndEditMathForTests(editor: unknown, mode: 'inline' | 'block'): Promise<void>;
 };
@@ -126,6 +136,8 @@ describe('Feedback editor host-message boundary', () => {
   let lockPeer: jest.Mock;
   let unlockPeer: jest.Mock;
   let isPeerLocked: jest.Mock;
+  let getPeerLockId: jest.Mock;
+  let postHostMessage: jest.Mock;
   let warn: jest.SpyInstance;
   let windowListeners: Map<string, (event: unknown) => unknown>;
 
@@ -136,6 +148,7 @@ describe('Feedback editor host-message boundary', () => {
     ).document = { readyState: 'loading', addEventListener: jest.fn() };
 
     windowListeners = new Map<string, (event: unknown) => unknown>();
+    postHostMessage = jest.fn();
     (
       global as unknown as {
         window: {
@@ -160,7 +173,7 @@ describe('Feedback editor host-message boundary', () => {
         };
       }
     ).acquireVsCodeApi = jest.fn(() => ({
-      postMessage: jest.fn(),
+      postMessage: postHostMessage,
       getState: jest.fn(),
       setState: jest.fn(),
     }));
@@ -177,6 +190,7 @@ describe('Feedback editor host-message boundary', () => {
     lockPeer = jest.fn();
     unlockPeer = jest.fn();
     isPeerLocked = jest.fn(() => false);
+    getPeerLockId = jest.fn(() => null);
     mockRunAudit.mockReset();
     mockShowAuditOverlay.mockReset();
     mockShowAuditToast.mockReset().mockReturnValue('audit-loading');
@@ -187,12 +201,15 @@ describe('Feedback editor host-message boundary', () => {
       applyTransitionSync,
       completeClose,
       completeTransition,
+      hasPeerReleaseLock: jest.fn(() => false),
+      applyPeerRelease: jest.fn(() => false),
       getSession: () => null,
     });
     testing.setFeedbackPeerLockControllerForTests({
       lock: lockPeer,
       unlock: unlockPeer,
       isLocked: isPeerLocked,
+      getLockId: getPeerLockId,
       runHostUpdate: (update: () => unknown) => update(),
     });
     warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -325,6 +342,147 @@ describe('Feedback editor host-message boundary', () => {
     expect(handleHostMessage).not.toHaveBeenCalled();
   });
 
+  it('ACKs an exact-generation peer lock only after installing it', () => {
+    testing.signalFeedbackControllerReadyForTests();
+    const controllerReady = postHostMessage.mock.calls
+      .map(call => call[0] as { type?: string; viewGeneration?: string })
+      .find(message => message.type === 'feedback.controller.ready');
+    expect(controllerReady?.viewGeneration).toEqual(expect.any(String));
+
+    let currentLockId: string | null = null;
+    getPeerLockId.mockImplementation(() => currentLockId);
+    lockPeer.mockImplementation((lockId: string) => {
+      currentLockId = lockId;
+    });
+    const acquire = {
+      type: 'feedback.peer.lock.acquire',
+      acquisitionId: 'acquire-1',
+      requestId: 'start-1',
+      lockId: 'transition-1',
+      replacesLockId: null,
+      viewGeneration: controllerReady?.viewGeneration,
+      revision: 1,
+      message: 'Feedback is active in another editor split.',
+    };
+
+    messageHandler({ data: acquire } as MessageEvent);
+
+    expect(lockPeer).toHaveBeenCalledWith(acquire.lockId, acquire.message);
+    expect(postHostMessage).toHaveBeenCalledWith({
+      type: 'feedback.peer.lock.acquired',
+      acquisitionId: acquire.acquisitionId,
+      requestId: acquire.requestId,
+      lockId: acquire.lockId,
+      replacesLockId: acquire.replacesLockId,
+      viewGeneration: acquire.viewGeneration,
+      revision: acquire.revision,
+    });
+    expect(lockPeer.mock.invocationCallOrder[0]).toBeLessThan(
+      postHostMessage.mock.invocationCallOrder.at(-1) as number
+    );
+
+    currentLockId = 'newer-lock';
+    messageHandler({ data: acquire } as MessageEvent);
+    expect(lockPeer).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies an authoritative peer release under its lock, then unlocks on commit', () => {
+    testing.signalFeedbackControllerReadyForTests();
+    const viewGeneration = postHostMessage.mock.calls
+      .map(call => call[0] as { type?: string; viewGeneration?: string })
+      .find(message => message.type === 'feedback.controller.ready')?.viewGeneration;
+    const setContent = jest.fn(() => true);
+    testing.setMockEditor({
+      getMarkdown: jest.fn(() => '# Frozen source\n'),
+      state: {
+        selection: { from: 1, to: 1 },
+        doc: { content: { size: 16 } },
+      },
+      commands: {
+        setContent,
+        setTextSelection: jest.fn(),
+      },
+    });
+    let currentLockId: string | null = 'peer-lock-release';
+    isPeerLocked.mockImplementation(() => currentLockId !== null);
+    getPeerLockId.mockImplementation(() => currentLockId);
+    unlockPeer.mockImplementation(() => {
+      currentLockId = null;
+    });
+    messageHandler({
+      data: {
+        type: 'feedback.peer.locked',
+        lockId: 'peer-lock-release',
+        message: 'Feedback is active in another editor split.',
+      },
+    } as MessageEvent);
+
+    const release = {
+      type: 'feedback.peer.release',
+      phase: 'apply',
+      releaseId: 'release-1',
+      requestId: 'finish-1',
+      lockId: 'peer-lock-release',
+      viewGeneration,
+      revision: 2,
+      documentVersion: 7,
+      contentSha256: 'a'.repeat(64),
+      content: '# Authoritative source\n',
+    } as const;
+    messageHandler({ data: release } as MessageEvent);
+
+    expect(setContent).toHaveBeenCalledWith(release.content, { contentType: 'markdown' });
+    expect(unlockPeer).not.toHaveBeenCalled();
+    expect(postHostMessage).toHaveBeenCalledWith({
+      type: 'feedback.peer.released',
+      phase: 'apply',
+      releaseId: release.releaseId,
+      requestId: release.requestId,
+      lockId: release.lockId,
+      viewGeneration: release.viewGeneration,
+      revision: release.revision,
+      documentVersion: release.documentVersion,
+      contentSha256: release.contentSha256,
+    });
+    const applyAckOrder = postHostMessage.mock.calls.findIndex(
+      call => call[0]?.type === 'feedback.peer.released' && call[0]?.phase === 'apply'
+    );
+    expect(setContent.mock.invocationCallOrder[0]).toBeLessThan(
+      postHostMessage.mock.invocationCallOrder[applyAckOrder]
+    );
+
+    messageHandler({
+      data: {
+        type: release.type,
+        phase: 'commit',
+        releaseId: release.releaseId,
+        requestId: release.requestId,
+        lockId: release.lockId,
+        viewGeneration: release.viewGeneration,
+        revision: release.revision,
+        documentVersion: release.documentVersion,
+        contentSha256: release.contentSha256,
+      },
+    } as MessageEvent);
+
+    expect(unlockPeer).toHaveBeenCalledWith(release.lockId);
+    expect(postHostMessage).toHaveBeenCalledWith({
+      type: 'feedback.peer.released',
+      phase: 'commit',
+      releaseId: release.releaseId,
+      requestId: release.requestId,
+      lockId: release.lockId,
+      viewGeneration: release.viewGeneration,
+      revision: release.revision,
+      documentVersion: release.documentVersion,
+      contentSha256: release.contentSha256,
+    });
+    expect(unlockPeer.mock.invocationCallOrder[0]).toBeLessThan(
+      postHostMessage.mock.invocationCallOrder.at(-1) as number
+    );
+    expect(testing.getDocumentSyncIdentityForTests().acceptedDocumentVersion).toBe(7);
+  });
+
   it('atomically replaces a transferred review session with its new peer lock', () => {
     testing.setFeedbackReviewControllerForTests({
       handleHostMessage,
@@ -344,6 +502,127 @@ describe('Feedback editor host-message boundary', () => {
     expect(handleHostMessage.mock.invocationCallOrder[0]).toBeLessThan(
       lockPeer.mock.invocationCallOrder[0]
     );
+  });
+
+  it('stages and commits an exact-generation session transfer without an editable gap', () => {
+    testing.signalFeedbackControllerReadyForTests();
+    const currentGeneration = postHostMessage.mock.calls
+      .map(call => call[0] as { type?: string; viewGeneration?: string })
+      .find(message => message.type === 'feedback.controller.ready')?.viewGeneration;
+    if (!currentGeneration) throw new Error('Expected a renderer generation.');
+
+    let sessionId: string | null = null;
+    let peerLockId: string | null = 'session-old';
+    const prepareSessionTransfer = jest.fn(() => {
+      sessionId = 'session-new';
+      return true;
+    });
+    const commitSessionTransfer = jest.fn(() => true);
+    testing.setFeedbackReviewControllerForTests({
+      handleHostMessage,
+      prepareSessionTransfer,
+      commitSessionTransfer,
+      getSession: () => (sessionId ? { sessionId } : null),
+    });
+    getPeerLockId.mockImplementation(() => peerLockId);
+    unlockPeer.mockImplementation((lockId: string) => {
+      if (peerLockId === lockId) peerLockId = null;
+    });
+    const apply = {
+      type: 'feedback.session.transfer',
+      phase: 'apply',
+      role: 'new-owner',
+      transferId: 'transfer-1',
+      requestId: 'resume-1',
+      oldSessionId: 'session-old',
+      newSessionId: 'session-new',
+      viewGeneration: currentGeneration,
+      revision: 1,
+      documentVersion: 7,
+      sourceSha256: 'a'.repeat(64),
+      peerLockMessage: 'Feedback is active in another editor split.',
+      session: {
+        sessionId: 'session-new',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [],
+        items: [],
+      },
+    };
+
+    messageHandler({ data: apply } as MessageEvent);
+    messageHandler({ data: apply } as MessageEvent);
+
+    expect(prepareSessionTransfer).toHaveBeenCalledTimes(1);
+    expect(peerLockId).toBe('session-old');
+    expect(postHostMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: 'feedback.session.transfer.ack',
+        phase: 'apply',
+        transferId: apply.transferId,
+        applied: true,
+      })
+    );
+
+    const { session: transferredSession, ...identity } = apply;
+    expect(transferredSession.sessionId).toBe('session-new');
+    messageHandler({ data: { ...identity, phase: 'commit' } } as MessageEvent);
+
+    expect(commitSessionTransfer).toHaveBeenCalledTimes(1);
+    expect(unlockPeer).toHaveBeenCalledWith('session-old');
+    expect(peerLockId).toBeNull();
+    expect(commitSessionTransfer.mock.invocationCallOrder[0]).toBeLessThan(
+      unlockPeer.mock.invocationCallOrder[0]
+    );
+    expect(unlockPeer.mock.invocationCallOrder[0]).toBeLessThan(
+      postHostMessage.mock.invocationCallOrder.at(-1) as number
+    );
+  });
+
+  it('does not ACK a transfer from a stale renderer generation', () => {
+    const prepareSessionTransfer = jest.fn(() => true);
+    testing.setFeedbackReviewControllerForTests({
+      handleHostMessage,
+      prepareSessionTransfer,
+      commitSessionTransfer: jest.fn(() => true),
+      getSession: () => null,
+    });
+    getPeerLockId.mockReturnValue('session-old');
+
+    messageHandler({
+      data: {
+        type: 'feedback.session.transfer',
+        phase: 'apply',
+        role: 'new-owner',
+        transferId: 'transfer-stale',
+        requestId: 'resume-stale',
+        oldSessionId: 'session-old',
+        newSessionId: 'session-new',
+        viewGeneration: 'view-stale',
+        revision: 1,
+        documentVersion: 7,
+        sourceSha256: 'a'.repeat(64),
+        peerLockMessage: 'Feedback is active in another editor split.',
+        session: {
+          sessionId: 'session-new',
+          source: 'docs/guide.md',
+          sourceSha256: 'a'.repeat(64),
+          round: '20260821T093000Z-k4p9',
+          feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+          anchors: [],
+          items: [],
+        },
+      },
+    } as MessageEvent);
+
+    expect(prepareSessionTransfer).not.toHaveBeenCalled();
+    expect(
+      postHostMessage.mock.calls.some(
+        call => (call[0] as { type?: string }).type === 'feedback.session.transfer.ack'
+      )
+    ).toBe(false);
   });
 
   it('does not invoke Feedback commands from a read-only peer split', () => {

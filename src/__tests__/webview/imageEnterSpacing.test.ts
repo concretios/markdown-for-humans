@@ -3,7 +3,7 @@ import type { Extension } from '@tiptap/core';
 import type { EditorView } from '@tiptap/pm/view';
 import type { EditorState } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import type { Decoration } from 'prosemirror-view';
+import type { Decoration } from '@tiptap/pm/view';
 import { GapCursor } from '@tiptap/pm/gapcursor';
 import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import { Schema } from '@tiptap/pm/model';

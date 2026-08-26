@@ -41,6 +41,28 @@ export interface FeedbackRenderedRangeV1 extends FeedbackRenderedRangeInputV1 {
   endBlockSha256: string;
 }
 
+/** Untrusted rectangular table-cell selection sent by the frozen rich view. */
+export interface FeedbackCellTargetInputV1 {
+  version: 1;
+  tableOrdinal: number;
+  rectangle: {
+    /** Zero-based, inclusive row. */
+    top: number;
+    /** Zero-based, inclusive column. */
+    left: number;
+    /** Zero-based, exclusive row. */
+    bottom: number;
+    /** Zero-based, exclusive column. */
+    right: number;
+  };
+  tableFingerprint: string;
+}
+
+/** Host-enriched cell target persisted only while a feedback round is a draft. */
+export interface FeedbackCellTargetV1 extends FeedbackCellTargetInputV1 {
+  tableBlockSha256: string;
+}
+
 interface FeedbackItemSummaryBase {
   id: string;
   startOrdinal: number;
@@ -58,6 +80,8 @@ export type FeedbackItemSummary = FeedbackItemSummaryBase &
         focus: string;
         /** Present only when exact metadata validates against the frozen canonical blocks. */
         renderedRange?: FeedbackRenderedRangeV1;
+        /** Present only when a table target validates against its frozen containing block. */
+        cellTarget?: FeedbackCellTargetV1;
         imageUri?: never;
       }
     | {
@@ -66,6 +90,7 @@ export type FeedbackItemSummary = FeedbackItemSummaryBase &
         imageUri: string;
         focus?: never;
         renderedRange?: never;
+        cellTarget?: never;
       }
   );
 
@@ -77,6 +102,19 @@ export interface FeedbackDraftSummary {
   feedbackFile: string;
 }
 
+/** Complete active-session state staged during an acknowledged split handoff. */
+export interface FeedbackTransferSession {
+  sessionId: string;
+  source: string;
+  sourceSha256: string;
+  round: string;
+  feedbackFile: string;
+  anchors: Array<{ ordinal: number; startLine: number; endLine: number }>;
+  items: FeedbackItemSummary[];
+}
+
+export type FeedbackSessionTransferRole = 'new-owner' | 'old-owner' | 'same-owner';
+
 interface FeedbackRequestBase {
   requestId: string;
 }
@@ -87,17 +125,23 @@ interface FeedbackSessionRequestBase extends FeedbackRequestBase {
 
 export type FeedbackWebviewMessage =
   | (FeedbackRequestBase & {
+      /** Proves the Feedback controller exists for this exact renderer lifetime. */
+      type: 'feedback.controller.ready';
+      viewGeneration: string;
+    })
+  | (FeedbackRequestBase & {
       type: 'feedback.start';
-      blocks: CanonicalFeedbackBlock[];
+      /** Legacy fallback. Snapshot-capable renderers enumerate only after authoritative apply. */
+      blocks?: CanonicalFeedbackBlock[];
     })
   | (FeedbackRequestBase & {
       type: 'feedback.start.new';
-      blocks: CanonicalFeedbackBlock[];
+      blocks?: CanonicalFeedbackBlock[];
     })
   | (FeedbackRequestBase & {
       type: 'feedback.draft.resume';
       round: string;
-      blocks: CanonicalFeedbackBlock[];
+      blocks?: CanonicalFeedbackBlock[];
     })
   | (FeedbackRequestBase & {
       type: 'feedback.draft.reveal';
@@ -114,6 +158,7 @@ export type FeedbackWebviewMessage =
       focus: string;
       feedback: string;
       renderedRange?: FeedbackRenderedRangeInputV1;
+      cellTarget?: FeedbackCellTargetInputV1;
     })
   | (FeedbackSessionRequestBase & {
       type: 'feedback.screenshot.add';
@@ -164,6 +209,37 @@ export type FeedbackWebviewMessage =
       type: 'feedback.transition.retry';
       lockId: string;
       revision: number;
+    })
+  | (FeedbackRequestBase & {
+      type: 'feedback.peer.lock.acquired';
+      acquisitionId: string;
+      lockId: string;
+      replacesLockId: string | null;
+      viewGeneration: string;
+      revision: number;
+    })
+  | (FeedbackRequestBase & {
+      type: 'feedback.peer.released';
+      phase: 'apply' | 'commit';
+      releaseId: string;
+      lockId: string;
+      viewGeneration: string;
+      revision: number;
+      documentVersion: number;
+      contentSha256: string;
+    })
+  | (FeedbackRequestBase & {
+      type: 'feedback.session.transfer.ack';
+      phase: 'apply' | 'commit' | 'abort';
+      role: FeedbackSessionTransferRole;
+      transferId: string;
+      oldSessionId: string;
+      newSessionId: string;
+      viewGeneration: string;
+      revision: number;
+      documentVersion: number;
+      sourceSha256: string;
+      applied: boolean;
     });
 
 export type FeedbackHostMessage =
@@ -185,6 +261,52 @@ export type FeedbackHostMessage =
       /** Replacement owner token installed atomically as this view's peer lock. */
       lockId: string;
       message: string;
+    }
+  | {
+      /** Stage an exact active session while the current renderer guard remains installed. */
+      type: 'feedback.session.transfer';
+      phase: 'apply';
+      role: FeedbackSessionTransferRole;
+      transferId: string;
+      requestId: string;
+      oldSessionId: string;
+      newSessionId: string;
+      viewGeneration: string;
+      revision: number;
+      documentVersion: number;
+      sourceSha256: string;
+      peerLockMessage: string;
+      session: FeedbackTransferSession;
+    }
+  | {
+      /** Commit an already-staged ownership handoff without replaying session state. */
+      type: 'feedback.session.transfer';
+      phase: 'commit';
+      role: FeedbackSessionTransferRole;
+      transferId: string;
+      requestId: string;
+      oldSessionId: string;
+      newSessionId: string;
+      viewGeneration: string;
+      revision: number;
+      documentVersion: number;
+      sourceSha256: string;
+      peerLockMessage: string;
+    }
+  | {
+      /** Roll back an already-staged ownership handoff before host ownership changes. */
+      type: 'feedback.session.transfer';
+      phase: 'abort';
+      role: FeedbackSessionTransferRole;
+      transferId: string;
+      requestId: string;
+      oldSessionId: string;
+      newSessionId: string;
+      viewGeneration: string;
+      revision: number;
+      documentVersion: number;
+      sourceSha256: string;
+      peerLockMessage: string;
     }
   | {
       type: 'feedback.started';
@@ -275,10 +397,46 @@ export type FeedbackHostMessage =
       recoverable: boolean;
     }
   | {
+      /** Install a peer lock for one exact renderer generation, then ACK it. */
+      type: 'feedback.peer.lock.acquire';
+      acquisitionId: string;
+      requestId: string;
+      lockId: string;
+      replacesLockId: string | null;
+      viewGeneration: string;
+      revision: number;
+      message: string;
+    }
+  | {
       type: 'feedback.peer.locked';
       /** Correlates a later unlock so stale lifecycle messages fail closed. */
       lockId: string;
       message: string;
+    }
+  | {
+      /** Apply authoritative content under lock before global commit. */
+      type: 'feedback.peer.release';
+      phase: 'apply';
+      releaseId: string;
+      requestId: string;
+      lockId: string;
+      viewGeneration: string;
+      revision: number;
+      documentVersion: number;
+      contentSha256: string;
+      content: string;
+    }
+  | {
+      /** Unlock an already-applied identity without retransmitting Markdown. */
+      type: 'feedback.peer.release';
+      phase: 'commit';
+      releaseId: string;
+      requestId: string;
+      lockId: string;
+      viewGeneration: string;
+      revision: number;
+      documentVersion: number;
+      contentSha256: string;
     }
   | {
       type: 'feedback.peer.unlocked';
@@ -304,9 +462,11 @@ const MAX_FEEDBACK_LENGTH = 100_000;
 const MAX_FOCUS_LENGTH = 1_000_000;
 const MAX_BLOCKS = 100_000;
 const MAX_CANONICAL_MARKDOWN_LENGTH = 10 * 1024 * 1024;
+const MAX_DOCUMENT_CONTENT_LENGTH = 64 * 1024 * 1024;
 const MAX_PNG_DATA_URL_LENGTH = 14 * 1024 * 1024;
 const MAX_PATH_LENGTH = 32_768;
 const MAX_WEBVIEW_URI_LENGTH = 1024 * 1024;
+const MAX_TABLE_COORDINATE = 100_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -329,6 +489,14 @@ function isBoundedString(value: unknown, max: number, allowEmpty = false): value
     !hasUnsafeTextControl(value) &&
     (allowEmpty || value.trim().length > 0)
   );
+}
+
+function isDocumentContent(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= MAX_DOCUMENT_CONTENT_LENGTH;
+}
+
+function isDocumentVersion(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 
 function isRequestId(value: unknown): value is string {
@@ -407,6 +575,55 @@ function parseRenderedRangeInput(value: unknown): FeedbackRenderedRangeInputV1 |
   };
 }
 
+function parseCellRectangle(value: unknown): FeedbackCellTargetInputV1['rectangle'] | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['top', 'left', 'bottom', 'right']) ||
+    !isOrdinal(value.top) ||
+    !isOrdinal(value.left) ||
+    !isOrdinal(value.bottom) ||
+    !isOrdinal(value.right) ||
+    value.top >= value.bottom ||
+    value.left >= value.right ||
+    value.bottom > MAX_TABLE_COORDINATE ||
+    value.right > MAX_TABLE_COORDINATE
+  ) {
+    return null;
+  }
+  return {
+    top: value.top,
+    left: value.left,
+    bottom: value.bottom,
+    right: value.right,
+  };
+}
+
+function isTableFingerprint(value: unknown): value is string {
+  return typeof value === 'string' && /^md4h-table\/v1:[a-f0-9]{16}$/.test(value);
+}
+
+function parseCellTargetInput(value: unknown): FeedbackCellTargetInputV1 | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['version', 'tableOrdinal', 'rectangle', 'tableFingerprint']) ||
+    value.version !== 1 ||
+    !isOrdinal(value.tableOrdinal) ||
+    value.tableOrdinal >= MAX_BLOCKS ||
+    !isTableFingerprint(value.tableFingerprint)
+  ) {
+    return null;
+  }
+  const rectangle = parseCellRectangle(value.rectangle);
+  return rectangle === null
+    ? null
+    : {
+        version: 1,
+        tableOrdinal: value.tableOrdinal,
+        rectangle,
+        tableFingerprint: value.tableFingerprint,
+      };
+}
+
 function isRange(record: Record<string, unknown>): boolean {
   return (
     isOrdinal(record.startOrdinal) &&
@@ -477,21 +694,42 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
     return null;
   }
 
+  if (value.type === 'feedback.controller.ready') {
+    return hasExactKeys(value, ['type', 'requestId', 'viewGeneration']) &&
+      isSessionId(value.viewGeneration)
+      ? {
+          type: value.type,
+          requestId: value.requestId,
+          viewGeneration: value.viewGeneration,
+        }
+      : null;
+  }
+
   if (value.type === 'feedback.start' || value.type === 'feedback.start.new') {
-    if (!hasExactKeys(value, ['type', 'requestId', 'blocks'])) return null;
-    const blocks = parseBlocks(value.blocks);
-    return blocks ? { type: value.type, requestId: value.requestId, blocks } : null;
+    const hasBlocks = hasOwn(value, 'blocks');
+    if (!hasExactKeys(value, ['type', 'requestId', ...(hasBlocks ? ['blocks'] : [])])) return null;
+    const blocks = hasBlocks ? parseBlocks(value.blocks) : undefined;
+    return hasBlocks && !blocks
+      ? null
+      : {
+          type: value.type,
+          requestId: value.requestId,
+          ...(blocks ? { blocks } : {}),
+        };
   }
 
   if (value.type === 'feedback.draft.resume') {
-    if (!hasExactKeys(value, ['type', 'requestId', 'round', 'blocks'])) return null;
-    const blocks = parseBlocks(value.blocks);
-    return blocks && isRoundId(value.round)
+    const hasBlocks = hasOwn(value, 'blocks');
+    if (!hasExactKeys(value, ['type', 'requestId', 'round', ...(hasBlocks ? ['blocks'] : [])])) {
+      return null;
+    }
+    const blocks = hasBlocks ? parseBlocks(value.blocks) : undefined;
+    return (!hasBlocks || blocks) && isRoundId(value.round)
       ? {
           type: value.type,
           requestId: value.requestId,
           round: value.round,
-          blocks,
+          ...(blocks ? { blocks } : {}),
         }
       : null;
   }
@@ -516,6 +754,109 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
       : null;
   }
 
+  if (value.type === 'feedback.peer.released') {
+    return hasExactKeys(value, [
+      'type',
+      'phase',
+      'releaseId',
+      'requestId',
+      'lockId',
+      'viewGeneration',
+      'revision',
+      'documentVersion',
+      'contentSha256',
+    ]) &&
+      (value.phase === 'apply' || value.phase === 'commit') &&
+      isRequestId(value.releaseId) &&
+      isSessionId(value.lockId) &&
+      isSessionId(value.viewGeneration) &&
+      isCloseRevision(value.revision) &&
+      isDocumentVersion(value.documentVersion) &&
+      isSha256(value.contentSha256)
+      ? {
+          type: value.type,
+          phase: value.phase,
+          releaseId: value.releaseId,
+          requestId: value.requestId,
+          lockId: value.lockId,
+          viewGeneration: value.viewGeneration,
+          revision: value.revision,
+          documentVersion: value.documentVersion,
+          contentSha256: value.contentSha256,
+        }
+      : null;
+  }
+
+  if (value.type === 'feedback.session.transfer.ack') {
+    return hasExactKeys(value, [
+      'type',
+      'phase',
+      'role',
+      'transferId',
+      'requestId',
+      'oldSessionId',
+      'newSessionId',
+      'viewGeneration',
+      'revision',
+      'documentVersion',
+      'sourceSha256',
+      'applied',
+    ]) &&
+      (value.phase === 'apply' || value.phase === 'commit' || value.phase === 'abort') &&
+      (value.role === 'new-owner' || value.role === 'old-owner' || value.role === 'same-owner') &&
+      isRequestId(value.transferId) &&
+      isSessionId(value.oldSessionId) &&
+      isSessionId(value.newSessionId) &&
+      value.oldSessionId !== value.newSessionId &&
+      isSessionId(value.viewGeneration) &&
+      isCloseRevision(value.revision) &&
+      isDocumentVersion(value.documentVersion) &&
+      isSha256(value.sourceSha256) &&
+      typeof value.applied === 'boolean'
+      ? {
+          type: value.type,
+          phase: value.phase,
+          role: value.role,
+          transferId: value.transferId,
+          requestId: value.requestId,
+          oldSessionId: value.oldSessionId,
+          newSessionId: value.newSessionId,
+          viewGeneration: value.viewGeneration,
+          revision: value.revision,
+          documentVersion: value.documentVersion,
+          sourceSha256: value.sourceSha256,
+          applied: value.applied,
+        }
+      : null;
+  }
+
+  if (value.type === 'feedback.peer.lock.acquired') {
+    return hasExactKeys(value, [
+      'type',
+      'acquisitionId',
+      'requestId',
+      'lockId',
+      'replacesLockId',
+      'viewGeneration',
+      'revision',
+    ]) &&
+      isRequestId(value.acquisitionId) &&
+      isSessionId(value.lockId) &&
+      (value.replacesLockId === null || isSessionId(value.replacesLockId)) &&
+      isSessionId(value.viewGeneration) &&
+      isCloseRevision(value.revision)
+      ? {
+          type: value.type,
+          acquisitionId: value.acquisitionId,
+          requestId: value.requestId,
+          lockId: value.lockId,
+          replacesLockId: value.replacesLockId,
+          viewGeneration: value.viewGeneration,
+          revision: value.revision,
+        }
+      : null;
+  }
+
   if (!isSessionId(value.sessionId)) {
     return null;
   }
@@ -533,6 +874,7 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
           'focus',
           'feedback',
           ...(hasOwn(value, 'renderedRange') ? ['renderedRange'] : []),
+          ...(hasOwn(value, 'cellTarget') ? ['cellTarget'] : []),
         ])
       ) {
         return null;
@@ -541,11 +883,19 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
         value.renderedRange === undefined
           ? undefined
           : parseRenderedRangeInput(value.renderedRange);
+      const cellTarget =
+        value.cellTarget === undefined ? undefined : parseCellTargetInput(value.cellTarget);
       if (
         !isRange(value) ||
         !isBoundedString(value.focus, MAX_FOCUS_LENGTH) ||
         !isBoundedString(value.feedback, MAX_FEEDBACK_LENGTH) ||
-        (value.renderedRange !== undefined && renderedRange === null)
+        (value.renderedRange !== undefined && renderedRange === null) ||
+        (value.cellTarget !== undefined && cellTarget === null) ||
+        (renderedRange !== undefined && cellTarget !== undefined && cellTarget !== null) ||
+        (cellTarget !== undefined &&
+          cellTarget !== null &&
+          (value.startOrdinal !== value.endOrdinal ||
+            value.startOrdinal !== cellTarget.tableOrdinal))
       ) {
         return null;
       }
@@ -557,6 +907,7 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
         focus: value.focus,
         feedback: value.feedback,
         ...(renderedRange === undefined || renderedRange === null ? {} : { renderedRange }),
+        ...(cellTarget === undefined || cellTarget === null ? {} : { cellTarget }),
       };
     }
 
@@ -733,6 +1084,29 @@ function parseRenderedRange(value: unknown): FeedbackRenderedRangeV1 | null {
   };
 }
 
+function parseCellTarget(value: unknown): FeedbackCellTargetV1 | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'version',
+      'tableOrdinal',
+      'rectangle',
+      'tableFingerprint',
+      'tableBlockSha256',
+    ]) ||
+    !isSha256(value.tableBlockSha256)
+  ) {
+    return null;
+  }
+  const input = parseCellTargetInput({
+    version: value.version,
+    tableOrdinal: value.tableOrdinal,
+    rectangle: value.rectangle,
+    tableFingerprint: value.tableFingerprint,
+  });
+  return input === null ? null : { ...input, tableBlockSha256: value.tableBlockSha256 };
+}
+
 function parseFeedbackItems(value: unknown): FeedbackItemSummary[] | null {
   if (!Array.isArray(value) || value.length > MAX_BLOCKS) return null;
 
@@ -769,6 +1143,7 @@ function parseFeedbackItems(value: unknown): FeedbackItemSummary[] | null {
         ...commonKeys,
         'focus',
         ...(hasOwn(candidate, 'renderedRange') ? ['renderedRange'] : []),
+        ...(hasOwn(candidate, 'cellTarget') ? ['cellTarget'] : []),
       ];
       if (
         !hasExactKeys(candidate, expectedKeys) ||
@@ -780,11 +1155,19 @@ function parseFeedbackItems(value: unknown): FeedbackItemSummary[] | null {
       const renderedRange = hasOwn(candidate, 'renderedRange')
         ? parseRenderedRange(candidate.renderedRange)
         : undefined;
+      const cellTarget = hasOwn(candidate, 'cellTarget')
+        ? parseCellTarget(candidate.cellTarget)
+        : undefined;
       if (
         renderedRange === null ||
+        cellTarget === null ||
+        (renderedRange !== undefined && cellTarget !== undefined) ||
         (renderedRange !== undefined &&
           (renderedRange.startOrdinal !== candidate.startOrdinal ||
-            renderedRange.endOrdinal !== candidate.endOrdinal))
+            renderedRange.endOrdinal !== candidate.endOrdinal)) ||
+        (cellTarget !== undefined &&
+          (candidate.startOrdinal !== candidate.endOrdinal ||
+            cellTarget.tableOrdinal !== candidate.startOrdinal))
       ) {
         return null;
       }
@@ -798,6 +1181,7 @@ function parseFeedbackItems(value: unknown): FeedbackItemSummary[] | null {
         focus: candidate.focus,
         feedback: candidate.feedback,
         ...(renderedRange === undefined ? {} : { renderedRange }),
+        ...(cellTarget === undefined ? {} : { cellTarget }),
       });
       continue;
     }
@@ -876,6 +1260,41 @@ function parseFeedbackAnchors(
   return anchors;
 }
 
+function parseFeedbackTransferSession(value: unknown): FeedbackTransferSession | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, [
+      'sessionId',
+      'source',
+      'sourceSha256',
+      'round',
+      'feedbackFile',
+      'anchors',
+      'items',
+    ]) ||
+    !isSessionId(value.sessionId) ||
+    !isBoundedString(value.source, MAX_PATH_LENGTH) ||
+    !isSha256(value.sourceSha256) ||
+    !isRoundId(value.round) ||
+    !isBoundedString(value.feedbackFile, MAX_PATH_LENGTH)
+  ) {
+    return null;
+  }
+  const anchors = parseFeedbackAnchors(value.anchors);
+  const items = parseFeedbackItems(value.items);
+  return anchors === null || items === null
+    ? null
+    : {
+        sessionId: value.sessionId,
+        source: value.source,
+        sourceSha256: value.sourceSha256,
+        round: value.round,
+        feedbackFile: value.feedbackFile,
+        anchors,
+        items,
+      };
+}
+
 /**
  * Parse an untrusted extension-host message before it reaches Feedback UI state.
  * Every top-level and nested object must exactly match its discriminated shape.
@@ -923,6 +1342,60 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
             message: value.message,
           }
         : null;
+
+    case 'feedback.session.transfer': {
+      const identityKeys = [
+        'type',
+        'phase',
+        'role',
+        'transferId',
+        'requestId',
+        'oldSessionId',
+        'newSessionId',
+        'viewGeneration',
+        'revision',
+        'documentVersion',
+        'sourceSha256',
+        'peerLockMessage',
+      ];
+      if (
+        (value.phase !== 'apply' && value.phase !== 'commit' && value.phase !== 'abort') ||
+        (value.role !== 'new-owner' && value.role !== 'old-owner' && value.role !== 'same-owner') ||
+        !hasExactKeys(value, [...identityKeys, ...(value.phase === 'apply' ? ['session'] : [])]) ||
+        !isRequestId(value.transferId) ||
+        !isRequestId(value.requestId) ||
+        !isSessionId(value.oldSessionId) ||
+        !isSessionId(value.newSessionId) ||
+        value.oldSessionId === value.newSessionId ||
+        !isSessionId(value.viewGeneration) ||
+        !isCloseRevision(value.revision) ||
+        !isDocumentVersion(value.documentVersion) ||
+        !isSha256(value.sourceSha256) ||
+        !isBoundedString(value.peerLockMessage, MAX_FEEDBACK_LENGTH)
+      ) {
+        return null;
+      }
+      const identity = {
+        role: value.role,
+        transferId: value.transferId,
+        requestId: value.requestId,
+        oldSessionId: value.oldSessionId,
+        newSessionId: value.newSessionId,
+        viewGeneration: value.viewGeneration,
+        revision: value.revision,
+        documentVersion: value.documentVersion,
+        sourceSha256: value.sourceSha256,
+        peerLockMessage: value.peerLockMessage,
+      } as const;
+      if (value.phase !== 'apply') {
+        return { type: value.type, phase: value.phase, ...identity };
+      }
+      const session = parseFeedbackTransferSession(value.session);
+      return session?.sessionId === value.newSessionId &&
+        session.sourceSha256 === value.sourceSha256
+        ? { type: value.type, phase: 'apply', ...identity, session }
+        : null;
+    }
 
     case 'feedback.started': {
       if (
@@ -1022,7 +1495,7 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
         isRequestId(value.requestId) &&
         isSessionId(value.sessionId) &&
         isCloseRevision(value.revision) &&
-        isBoundedString(value.content, MAX_CANONICAL_MARKDOWN_LENGTH, true)
+        isDocumentContent(value.content)
         ? {
             type: value.type,
             requestId: value.requestId,
@@ -1050,7 +1523,7 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
         isRequestId(value.requestId) &&
         isSessionId(value.lockId) &&
         isCloseRevision(value.revision) &&
-        isBoundedString(value.content, MAX_CANONICAL_MARKDOWN_LENGTH, true)
+        isDocumentContent(value.content)
         ? {
             type: value.type,
             requestId: value.requestId,
@@ -1125,6 +1598,101 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
         isSessionId(value.lockId) &&
         isBoundedString(value.message, MAX_FEEDBACK_LENGTH)
         ? { type: value.type, lockId: value.lockId, message: value.message }
+        : null;
+
+    case 'feedback.peer.lock.acquire':
+      return hasExactKeys(value, [
+        'type',
+        'acquisitionId',
+        'requestId',
+        'lockId',
+        'replacesLockId',
+        'viewGeneration',
+        'revision',
+        'message',
+      ]) &&
+        isRequestId(value.acquisitionId) &&
+        isRequestId(value.requestId) &&
+        isSessionId(value.lockId) &&
+        (value.replacesLockId === null || isSessionId(value.replacesLockId)) &&
+        isSessionId(value.viewGeneration) &&
+        isCloseRevision(value.revision) &&
+        isBoundedString(value.message, MAX_FEEDBACK_LENGTH)
+        ? {
+            type: value.type,
+            acquisitionId: value.acquisitionId,
+            requestId: value.requestId,
+            lockId: value.lockId,
+            replacesLockId: value.replacesLockId,
+            viewGeneration: value.viewGeneration,
+            revision: value.revision,
+            message: value.message,
+          }
+        : null;
+
+    case 'feedback.peer.release':
+      if (
+        !isRequestId(value.releaseId) ||
+        !isRequestId(value.requestId) ||
+        !isSessionId(value.lockId) ||
+        !isSessionId(value.viewGeneration) ||
+        !isCloseRevision(value.revision) ||
+        !isDocumentVersion(value.documentVersion) ||
+        !isSha256(value.contentSha256)
+      ) {
+        return null;
+      }
+      if (value.phase === 'commit') {
+        return hasExactKeys(value, [
+          'type',
+          'phase',
+          'releaseId',
+          'requestId',
+          'lockId',
+          'viewGeneration',
+          'revision',
+          'documentVersion',
+          'contentSha256',
+        ])
+          ? {
+              type: value.type,
+              phase: value.phase,
+              releaseId: value.releaseId,
+              requestId: value.requestId,
+              lockId: value.lockId,
+              viewGeneration: value.viewGeneration,
+              revision: value.revision,
+              documentVersion: value.documentVersion,
+              contentSha256: value.contentSha256,
+            }
+          : null;
+      }
+      return value.phase === 'apply' &&
+        hasExactKeys(value, [
+          'type',
+          'phase',
+          'releaseId',
+          'requestId',
+          'lockId',
+          'viewGeneration',
+          'revision',
+          'documentVersion',
+          'contentSha256',
+          'content',
+        ]) &&
+        isDocumentContent(value.content)
+        ? {
+            type: value.type,
+            phase: value.phase,
+            releaseId: value.releaseId,
+            requestId: value.requestId,
+            lockId: value.lockId,
+            viewGeneration: value.viewGeneration,
+            revision: value.revision,
+            documentVersion: value.documentVersion,
+            contentSha256: value.contentSha256,
+            content: value.content,
+          }
         : null;
 
     case 'feedback.peer.unlocked':

@@ -72,7 +72,13 @@ it.todo('shows overlay when toggled');
 npm test              # Run all tests
 npm run test:watch    # Watch mode for development
 npm run test:coverage # Generate coverage report
+npm run test:integration # Build release bundles and run against VS Code stable
 ```
+
+The Extension Development Host suite lives in `test/integration/`. CI runs it
+on Ubuntu and Windows against VS Code 1.98.0 and current stable. To select a
+host version locally, set `VSCODE_TEST_VERSION` before running
+`npm run test:integration`; the default is `stable`.
 
 ---
 
@@ -126,6 +132,7 @@ Current minimum thresholds (see `jest.config.js`):
 | Test Type | When to Use | Location |
 |-----------|-------------|----------|
 | **Unit tests** | Pure functions, algorithms, utilities | `__tests__/` |
+| **Extension Host integration** | Activation, custom-editor registration, split views, `WorkspaceEdit`, save, and disposal | `test/integration/` |
 | **`it.todo()`** | DOM/browser features, integration behaviors | `__tests__/` |
 | **Manual testing** | Full UX flows, visual verification | UX checklist |
 

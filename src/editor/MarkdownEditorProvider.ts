@@ -17,6 +17,8 @@ import { outlineViewProvider, type OutlineEntry } from '../features/outlineView'
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
 import { hasSameBlankLineLayout, isMarkdownStructurallyEquivalent } from './markdownAstEquivalence';
+import { computeMinimalTextReplacement } from './minimalTextEdit';
+import { ImageSaveCompletionDelivery } from './imageSaveCompletionDelivery';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
 import {
   FeedbackSessionError,
@@ -26,6 +28,7 @@ import {
 import { renderFeedbackHandoffPrompt } from './feedbackHandoffPrompt';
 import {
   buildFeedbackAnchorMap,
+  findFeedbackOrdinalsForLines,
   mapFeedbackSelection,
   type FeedbackAnchorMap,
 } from './feedbackAnchors';
@@ -36,14 +39,234 @@ import {
   type FeedbackDraftSummary,
   type FeedbackHostMessage,
   type FeedbackItemSummary,
+  type FeedbackCellTargetInputV1,
+  type FeedbackCellTargetV1,
   type FeedbackRenderedRangeInputV1,
   type FeedbackRenderedRangeV1,
   type FeedbackWebviewMessage,
 } from '../shared/feedbackProtocol';
+import { DocumentEditCoordinator } from './documentEditCoordinator';
+import {
+  FeedbackSnapshotService,
+  computeFeedbackTextSha256,
+  type FeedbackPreparedSourceSnapshot,
+  type FeedbackSnapshotIdentity,
+  type FeedbackSplitSnapshotReport,
+} from './feedbackSnapshotService';
+import {
+  FeedbackTransport,
+  type FeedbackAcknowledgementDisposition,
+  type FeedbackDeliveryResult,
+} from './feedbackTransport';
+import {
+  DOCUMENT_SYNC_PROTOCOL_VERSION,
+  parseDocumentEditIdentity,
+  parseDocumentEditMessage,
+  parseDocumentFlushAck,
+  parseDocumentSyncReady,
+  parseDocumentTeardownEditMessage,
+  type DocumentEditAck,
+  type DocumentEditMessage,
+  type DocumentTeardownEditMessage,
+} from '../shared/documentSyncProtocol';
+import {
+  IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+  MAX_PENDING_IMAGE_SAVES,
+  PENDING_IMAGE_DESTINATION_PREFIX,
+  createPendingImageDestination,
+  parsePendingImageSaveCompletionAck,
+  replacePendingImageDestination,
+  type PendingImageSaveCompletion,
+} from '../shared/pendingImageProtocol';
+import {
+  FEEDBACK_DELIVERY_PROTOCOL_VERSION,
+  parseFeedbackDeliveryAcknowledgement,
+  parseFeedbackDeliveryStatusResponse,
+  type FeedbackDeliveryApplicationStatus,
+  type FeedbackDeliveryAcknowledgement,
+  type FeedbackDeliveryIdentity,
+  type FeedbackDeliveryStatusResponse,
+  type FeedbackStartedDelivery,
+} from '../shared/feedbackDeliveryProtocol';
+import {
+  FEEDBACK_SNAPSHOT_PROTOCOL_VERSION,
+  parseFeedbackSnapshotReport,
+  type FeedbackSnapshotAppliedReport,
+  type FeedbackSnapshotHostMessage,
+  type FeedbackSnapshotReport,
+} from '../shared/feedbackSnapshotProtocol';
 
 interface FeedbackCanonicalBlockState {
+  kind: string;
   contentSize: number;
   sha256: string;
+}
+
+type FeedbackStartedApplicationResult = { readonly messageType: 'feedback.started' };
+type FeedbackStartedTransport = FeedbackTransport<
+  FeedbackStartedDelivery,
+  FeedbackStartedApplicationResult,
+  never,
+  never,
+  FeedbackDeliveryApplicationStatus
+>;
+
+type FeedbackCriticalHostMessage = Extract<
+  FeedbackHostMessage,
+  {
+    type:
+      | 'feedback.finished'
+      | 'feedback.discarded'
+      | 'feedback.close.sync'
+      | 'feedback.close.release'
+      | 'feedback.transition.sync'
+      | 'feedback.peer.lock.acquire'
+      | 'feedback.peer.release'
+      | 'feedback.session.transfer';
+  }
+>;
+type FeedbackCriticalMessageType = FeedbackCriticalHostMessage['type'];
+type FeedbackCriticalApplicationResult = { readonly messageType: FeedbackCriticalMessageType };
+type FeedbackCriticalTransport = FeedbackTransport<
+  FeedbackCriticalHostMessage,
+  FeedbackCriticalApplicationResult,
+  never,
+  never,
+  never
+>;
+
+interface PendingFeedbackStatusQuery {
+  readonly identity: FeedbackDeliveryIdentity;
+  readonly resolve: (status: FeedbackDeliveryApplicationStatus) => void;
+  readonly reject: (error: Error) => void;
+}
+
+interface PendingFeedbackControllerRestore {
+  readonly documentKey: string;
+  readonly sessionId: string;
+  readonly viewGeneration: string;
+  controllerRequestId?: string;
+}
+
+interface PendingFeedbackSnapshotReport {
+  readonly webview: vscode.Webview;
+  readonly operationId: string;
+  readonly stage: FeedbackSnapshotReport['stage'];
+  readonly documentVersion: number;
+  readonly resolve: (report: FeedbackSnapshotReport | null) => void;
+  readonly timeout: ReturnType<typeof setTimeout>;
+}
+
+interface PendingFeedbackPeerReleaseTarget {
+  message: Extract<FeedbackHostMessage, { type: 'feedback.peer.release' }>;
+  applied: boolean;
+  committed: boolean;
+  deliveryAbortController?: AbortController;
+}
+
+interface PendingFeedbackPeerRelease {
+  readonly kind: 'session' | 'transition';
+  readonly document: vscode.TextDocument;
+  readonly requestId: string;
+  readonly lockId: string;
+  /** Revision owned by the close or transition controller. */
+  readonly lifecycleRevision: number;
+  /** Monotonic authoritative-content revision, including apply restarts. */
+  revision: number;
+  documentVersion: number;
+  contentSha256: string;
+  content: string;
+  phase: 'applying' | 'committing';
+  readonly targets: Map<vscode.Webview, PendingFeedbackPeerReleaseTarget>;
+  readonly completion: Promise<void>;
+  readonly resolveCompletion: () => void;
+}
+
+interface PendingFeedbackSessionTransferTarget {
+  readonly role: Extract<FeedbackHostMessage, { type: 'feedback.session.transfer' }>['role'];
+  message: Extract<FeedbackHostMessage, { type: 'feedback.session.transfer' }>;
+  applied: boolean;
+  committed: boolean;
+  aborted: boolean;
+  abortAcknowledged: boolean;
+  rendererUnavailable: boolean;
+  applyPosted: boolean;
+  deliveryAbortController?: AbortController;
+}
+
+type FeedbackSessionTransferCompletion =
+  'committed' | 'rolled-back' | 'unavailable' | 'failed-closed';
+
+interface PendingFeedbackSessionTransfer {
+  readonly document: vscode.TextDocument;
+  readonly transferId: string;
+  readonly requestId: string;
+  readonly oldSession: ActiveFeedbackSession;
+  readonly nextSession: ActiveFeedbackSession;
+  readonly oldOwner: vscode.Webview;
+  readonly newOwner: vscode.Webview;
+  readonly sourceSha256: string;
+  readonly documentVersion: number;
+  readonly revision: number;
+  phase: 'applying-new' | 'applying-old' | 'committing' | 'aborting';
+  readonly targets: Map<vscode.Webview, PendingFeedbackSessionTransferTarget>;
+  peerLocksStarted: boolean;
+  peerLocksComplete: boolean;
+  commitValidationPending: boolean;
+  completionSettled: boolean;
+  readonly completion: Promise<FeedbackSessionTransferCompletion>;
+  readonly resolveCompletion: (result: FeedbackSessionTransferCompletion) => void;
+  finalizationSettled: boolean;
+  readonly finalization: Promise<void>;
+  readonly resolveFinalization: () => void;
+  readonly deferredReleaseWebviews: Set<vscode.Webview>;
+  oldOwnerRecoveryGeneration?: string;
+  newOwnerRecoveryGeneration?: string;
+}
+
+interface PendingHostImageSave {
+  readonly placeholderId: string;
+  readonly viewGeneration: string;
+  readonly completionId: string;
+  data: Uint8Array | undefined;
+  readonly mimeType: string;
+  readonly completion: Promise<string | null>;
+  fallbackDataUri?: string;
+  settled: boolean;
+  deliveryRetired: boolean;
+  retireAfterSettlement: boolean;
+  completionDelivery?: ImageSaveCompletionDelivery;
+}
+
+interface PendingHostImageSaveRejection {
+  readonly placeholderId: string;
+  readonly viewGeneration: string;
+  readonly completionId: string;
+  readonly completionDelivery: ImageSaveCompletionDelivery;
+}
+
+type ImagePersistenceResult =
+  | { readonly kind: 'saved'; readonly destination: string }
+  | { readonly kind: 'error'; readonly error: string };
+
+/** One host flush boundary authorized for one exact renderer generation. */
+interface PendingDocumentFlush {
+  readonly webview: vscode.Webview;
+  readonly viewGeneration: string;
+  readonly documentVersion: number;
+  readonly resolve: (ok: boolean) => void;
+  readonly settled: Promise<void>;
+}
+
+interface FlushedFeedbackSnapshot {
+  readonly sourceBytes: Buffer;
+  readonly source: FeedbackPreparedSourceSnapshot;
+}
+
+interface FinalizedFeedbackRendererSnapshot {
+  readonly identity: FeedbackSnapshotIdentity;
+  readonly blocks: readonly CanonicalFeedbackBlock[];
+  readonly anchorMap: FeedbackAnchorMap;
 }
 
 interface ActiveFeedbackSession {
@@ -59,6 +282,8 @@ interface ActiveFeedbackSession {
   previewRevisions: Map<string, number>;
   /** Exact draft ranges that were structurally valid but no longer resolve. */
   degradedRenderedRangeIds: Set<string>;
+  /** Draft table-cell targets whose containing table identity no longer validates. */
+  degradedCellTargetIds: Set<string>;
   phase: 'active' | 'resuming' | 'finishing' | 'discarding';
   pendingMutationCount: number;
   mutationIdleWaiters: Set<() => void>;
@@ -67,11 +292,15 @@ interface ActiveFeedbackSession {
   /** Correlated close handshake retained until an applied revision is still current. */
   pendingClose?: {
     requestId: string;
+    terminalType: 'feedback.finished' | 'feedback.discarded';
     revision: number;
     contentSha256?: string;
     releaseRevision?: number;
+    deliveryAbortController?: AbortController;
   };
   invalidated: boolean;
+  /** The owning panel retired while peers still require a fail-closed release. */
+  ownerDisposed?: boolean;
   lastErrorCode?: string;
 }
 
@@ -89,6 +318,11 @@ interface FeedbackTransition {
   expectedFlushContentSha256?: string;
   recoveryRevision: number;
   recoveryContentSha256?: string;
+  deliveryAbortController?: AbortController;
+  /** The owner has installed the host-correlated transition lock locally. */
+  ownerLockPosted: boolean;
+  /** The initiating panel retired before this transition could finish. */
+  ownerDisposed?: boolean;
 }
 
 const FEEDBACK_BLOCKED_LEGACY_MESSAGES = new Set([
@@ -264,7 +498,7 @@ export function updateFilenameDimensions(
  * Custom Text Editor Provider for Markdown files
  * Provides WYSIWYG editing using TipTap in a webview
  */
-export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
+export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, vscode.Disposable {
   private static readonly MD012_MANAGED_STATE_KEY = 'markdownForHumans.blankLines.managedMd012';
 
   // Dedup the "Save the file to see the changes." prompt across panels.
@@ -338,14 +572,115 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   // Host delivery is also split-specific. A shared URI cache can leave later
   // splits empty or stale after the first split consumes an update.
   private lastHostContentByWebview = new WeakMap<vscode.Webview, string>();
-  // Most recent in-flight `applyEdit` per document. The autosave bridge awaits
-  // these before calling `document.save()` so VS Code doesn't persist a stale
-  // buffer when the user types and immediately switches focus.
-  // Key: document URI, Value: the latest applyEdit promise for that doc.
-  private inFlightApplyEdits = new Map<string, Promise<boolean>>();
-  // Resolvers for `flushPendingEdit` requests. Keyed by requestId. The webview
-  // replies with `flushPendingEditAck` and we resolve the matching promise.
-  private flushAckResolvers = new Map<string, (ok: boolean) => void>();
+  // A queued `postMessage` is not delivered merely because it was invoked.
+  // Keep in-flight payloads separate and promote only the latest successful
+  // delivery into the deduplication cache.
+  private pendingHostContentByWebview = new WeakMap<vscode.Webview, { readonly content: string }>();
+  // Every mutation of one TextDocument passes through this coordinator. VS Code
+  // applies WorkspaceEdits asynchronously, so fire-and-forget webview messages
+  // must be serialized explicitly to prevent an older completion from landing
+  // after newer content.
+  private readonly documentEditCoordinator = new DocumentEditCoordinator<string>();
+  private readonly feedbackSnapshotService = new FeedbackSnapshotService();
+  private readonly feedbackDeliveryCapableWebviews = new WeakSet<vscode.Webview>();
+  private readonly feedbackSnapshotCapableWebviews = new WeakSet<vscode.Webview>();
+  private readonly pendingFeedbackSnapshotReports = new Map<
+    string,
+    PendingFeedbackSnapshotReport
+  >();
+  private readonly feedbackStartedTransports = new Map<vscode.Webview, FeedbackStartedTransport>();
+  private readonly feedbackCriticalTransports = new Map<
+    vscode.Webview,
+    FeedbackCriticalTransport
+  >();
+  /** One fail-closed authoritative unlock barrier per document. */
+  private readonly pendingFeedbackPeerReleases = new Map<string, PendingFeedbackPeerRelease>();
+  /** One generation-bound, two-sided active-session handoff per document. */
+  private readonly pendingFeedbackSessionTransfers = new Map<
+    string,
+    PendingFeedbackSessionTransfer
+  >();
+  /** Last application-ACKed lock for each exact renderer generation. */
+  private readonly appliedFeedbackPeerLocks = new WeakMap<
+    vscode.Webview,
+    { readonly viewGeneration: string; readonly lockId: string }
+  >();
+  private readonly pendingFeedbackPeerLockAcquisitions = new WeakMap<
+    vscode.Webview,
+    Extract<FeedbackHostMessage, { type: 'feedback.peer.lock.acquire' }>
+  >();
+  /** Serialize lock replacement per renderer so reassertions share one identity. */
+  private readonly inFlightFeedbackPeerLockAcquisitions = new WeakMap<
+    vscode.Webview,
+    { readonly lockId: string; readonly promise: Promise<void> }
+  >();
+  private readonly pendingFeedbackStatusQueries = new Map<
+    vscode.Webview,
+    Map<string, PendingFeedbackStatusQuery>
+  >();
+  /** One automatic active-session restore per renderer generation. */
+  private readonly pendingFeedbackControllerRestores = new WeakMap<
+    vscode.Webview,
+    PendingFeedbackControllerRestore
+  >();
+  /** First controller-ready request accepted for each renderer generation. */
+  private readonly feedbackControllerReadyRequests = new WeakMap<
+    vscode.Webview,
+    { readonly viewGeneration: string; readonly requestId: string }
+  >();
+  private nextFeedbackDeliveryId = 1;
+  // A webview object survives a script reload. Rotate this lineage on each
+  // `ready` message so pending typing from an earlier renderer cannot coalesce
+  // with work produced by the replacement controller.
+  private readonly editViewGenerations = new WeakMap<vscode.Webview, string>();
+  /** Generations for which VS Code definitively rejected postMessage queueing. */
+  private readonly unavailableFeedbackViewGenerations = new WeakMap<vscode.Webview, string>();
+  private nextEditViewGeneration = 1;
+  private readonly pendingDocumentEditAcks = new WeakMap<
+    vscode.Webview,
+    Map<string, Promise<DocumentEditAck>>
+  >();
+  private readonly documentEditAckHistory = new WeakMap<
+    vscode.Webview,
+    Map<string, DocumentEditAck>
+  >();
+  /** Immutable request envelope retained beside each pending or replayable edit ACK. */
+  private readonly documentEditEnvelopeHashes = new WeakMap<vscode.Webview, Map<string, string>>();
+  /** Latest renderer-ready signal held behind edits from its predecessor. */
+  private readonly deferredReadyAfterDocumentEdits = new WeakMap<
+    vscode.Webview,
+    {
+      readonly message: { type: string; [key: string]: unknown };
+      readonly document: vscode.TextDocument;
+    }
+  >();
+  /** One drain waiter per panel while an old renderer generation still owns edits. */
+  private readonly pendingReadyDocumentEditDrains = new WeakMap<vscode.Webview, Promise<void>>();
+  /** Host-owned file writes used to resolve compact pending-image markers. */
+  private readonly pendingHostImageSaves = new WeakMap<
+    vscode.Webview,
+    Map<string, PendingHostImageSave>
+  >();
+  /** Capacity failures awaiting an exact renderer application ACK. */
+  private readonly pendingHostImageSaveRejections = new WeakMap<
+    vscode.Webview,
+    Map<string, PendingHostImageSaveRejection>
+  >();
+  /** Iterable ownership lets extension shutdown cancel timers that capture webviews. */
+  private readonly activeImageCompletionDeliveries = new Set<ImageSaveCompletionDelivery>();
+  private static readonly PENDING_HOST_IMAGE_SAVE_LIMIT = MAX_PENDING_IMAGE_SAVES;
+  private static readonly PENDING_HOST_IMAGE_SAVE_REJECTION_LIMIT = 128;
+  private static readonly PENDING_HOST_IMAGE_SAVE_BYTE_LIMIT = 64 * 1024 * 1024;
+  private static readonly IMAGE_SAVE_COMPLETION_ACK_TIMEOUT_MS = 1_000;
+  private static readonly IMAGE_SAVE_COMPLETION_RETRY_DELAY_MS = 250;
+  private static readonly IMAGE_SAVE_COMPLETION_MAX_RETRY_DELAY_MS = 4_000;
+  private static readonly DOCUMENT_EDIT_ACK_HISTORY_LIMIT = 128;
+  private static readonly FEEDBACK_SNAPSHOT_REPORT_TIMEOUT_MS = 2_000;
+  /** Avoid whole-buffer WorkspaceEdits once their undo/diff cost becomes material. */
+  private static readonly MINIMAL_EDIT_DOCUMENT_THRESHOLD = 32 * 1024;
+  // Flush acknowledgements are authorized against both the request identity
+  // and the exact renderer generation that received the host barrier.
+  private flushAckResolvers = new Map<string, PendingDocumentFlush>();
   // Panels grouped by document URI. Every split remains registered so closing
   // the newest split cannot orphan a surviving view from window autosave.
   private openPanels = new Map<
@@ -362,6 +697,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   // from the `flushAndSaveIfDirty` bridge (which only fires on focus/window
   // changes and depends on `files.autoSave` being set to onFocusChange/onWindowChange).
   private autoSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Panels whose focus-loss autosave must survive renderer destruction. */
+  private readonly inactiveAutoSaveWebviews = new WeakSet<vscode.Webview>();
   // Frozen feedback sessions are intentionally host-owned. The webview keeps
   // presentation state, while this map retains the source map and durable
   // bundle handle needed to validate every mutation.
@@ -379,6 +716,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   /** Last lock broadcast for each document, retained until peers are unlocked. */
   private feedbackPeerLockIds = new Map<string, string>();
   private static readonly AUTO_SAVE_DEBOUNCE_MS = 1000;
+  private disposed = false;
   // --- Audit Search Tuning ---
   /**
    * Minimum length required to attempt ANY file suggestions.
@@ -437,16 +775,71 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       provider,
       {
         webviewOptions: {
-          retainContextWhenHidden: true,
+          retainContextWhenHidden: false,
           enableFindWidget: true,
         },
-        supportsMultipleEditorsPerDocument: false,
+        supportsMultipleEditorsPerDocument: true,
       }
     );
-    return providerRegistration;
+    return {
+      dispose: () => {
+        providerRegistration.dispose();
+        provider.dispose();
+      },
+    };
   }
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  /** Release document queues, timers, and pending local waiters on extension shutdown. */
+  public dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+
+    this.documentEditCoordinator.dispose();
+    for (const delivery of this.activeImageCompletionDeliveries) delivery.dispose();
+    this.activeImageCompletionDeliveries.clear();
+    for (const transport of this.feedbackStartedTransports.values()) transport.dispose();
+    this.feedbackStartedTransports.clear();
+    for (const transport of this.feedbackCriticalTransports.values()) transport.dispose();
+    this.feedbackCriticalTransports.clear();
+    for (const pending of this.pendingFeedbackPeerReleases.values()) {
+      for (const target of pending.targets.values()) target.deliveryAbortController?.abort();
+      pending.resolveCompletion();
+    }
+    this.pendingFeedbackPeerReleases.clear();
+    for (const pending of this.pendingFeedbackSessionTransfers.values()) {
+      for (const target of pending.targets.values()) target.deliveryAbortController?.abort();
+      this.settleFeedbackSessionTransfer(pending, 'failed-closed');
+      this.settleFeedbackSessionTransferFinalization(pending);
+    }
+    this.pendingFeedbackSessionTransfers.clear();
+    for (const webview of [...this.pendingFeedbackStatusQueries.keys()]) {
+      this.cancelFeedbackStatusQueries(webview, 'Feedback provider disposed.');
+    }
+    for (const pending of this.pendingFeedbackSnapshotReports.values()) {
+      clearTimeout(pending.timeout);
+      pending.resolve(null);
+    }
+    this.pendingFeedbackSnapshotReports.clear();
+    for (const timer of this.autoSaveTimers.values()) clearTimeout(timer);
+    this.autoSaveTimers.clear();
+    for (const pending of this.flushAckResolvers.values()) pending.resolve(false);
+    this.flushAckResolvers.clear();
+    this.windowStateListener?.dispose();
+    this.windowStateListener = undefined;
+
+    for (const session of this.feedbackSessions.values()) {
+      session.mutationIdleWaiters.forEach(resolve => resolve());
+      session.mutationIdleWaiters.clear();
+    }
+    this.feedbackSessions.clear();
+    this.feedbackTransitions.clear();
+    this.feedbackEntryOperations.clear();
+    this.feedbackWebviews.clear();
+    this.feedbackPeerLockIds.clear();
+    this.openPanels.clear();
+  }
 
   /**
    * Get the document directory for file-based documents, or workspace folder for untitled files
@@ -553,8 +946,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   public async resolveCustomTextEditor(
     document: vscode.TextDocument,
     webviewPanel: vscode.WebviewPanel,
-    _token: vscode.CancellationToken
+    token: vscode.CancellationToken
   ): Promise<void> {
+    if (token.isCancellationRequested) return;
     // VS Code invalidates `webviewPanel.webview` before invoking onDidDispose.
     // Capture the live object once so disposal cleanup never re-reads that getter.
     const panelWebview = webviewPanel.webview;
@@ -574,12 +968,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     if (workspaceFolder) {
       localResourceRoots.push(workspaceFolder.uri);
-      // Also include parent directory to allow access to sibling directories
-      // This enables markdown files to reference images in ../sibling-folder/
-      const workspaceParent = path.dirname(workspaceFolder.uri.fsPath);
-      if (workspaceParent && workspaceParent !== workspaceFolder.uri.fsPath) {
-        localResourceRoots.push(vscode.Uri.file(workspaceParent));
-      }
     } else if (document.uri.scheme === 'file') {
       // If not in a workspace but is a file, allow the document's directory
       localResourceRoots.push(vscode.Uri.file(path.dirname(document.uri.fsPath)));
@@ -732,6 +1120,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webviewPanel.onDidChangeViewState(() => {
       if (webviewPanel.active) {
         setActiveWebviewPanel(webviewPanel, document);
+        this.inactiveAutoSaveWebviews.delete(panelWebview);
       } else if (getActiveWebviewPanel() === webviewPanel) {
         setActiveWebviewPanel(undefined);
       }
@@ -744,9 +1133,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       if (!webviewPanel.active) {
         const autoSave = vscode.workspace.getConfiguration('files').get<string>('autoSave', 'off');
         if (autoSave === 'onFocusChange' || autoSave === 'onWindowChange') {
-          void this.flushAndSaveIfDirty(document, panelWebview).catch(error => {
-            console.error('[MD4H] Autosave on view-state change failed:', error);
-          });
+          this.inactiveAutoSaveWebviews.add(panelWebview);
+          void this.flushAndSaveIfDirty(document, panelWebview)
+            .then(async rendererBoundarySaved => {
+              if (!rendererBoundarySaved) {
+                await this.saveInactiveDocumentAfterDrain(document, panelWebview);
+              }
+            })
+            .catch(error => {
+              console.error('[MD4H] Autosave on view-state change failed:', error);
+            });
         }
       }
     });
@@ -760,27 +1156,25 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       // after the final split closes. A peer disposal must not erase the
       // owner's in-flight flush or cancel its autosave timer.
       this.unregisterFeedbackWebview(docUri, panelWebview);
+      this.inactiveAutoSaveWebviews.delete(panelWebview);
       const hasRemainingWebviews = (this.feedbackWebviews.get(docUri)?.size ?? 0) > 0;
       if (this.lastWebviewContentSource.get(docUri) === panelWebview) {
         this.lastWebviewContentSource.delete(docUri);
         if (!hasRemainingWebviews) this.lastWebviewContent.delete(docUri);
       }
       this.lastHostContentByWebview.delete(panelWebview);
+      this.pendingHostContentByWebview.delete(panelWebview);
       if (!hasRemainingWebviews) {
         this.pendingEdits.delete(docUri);
         this.lastWebviewContent.delete(docUri);
         this.lastWebviewContentSource.delete(docUri);
-        this.inFlightApplyEdits.delete(docUri);
-        const autoSaveTimer = this.autoSaveTimers.get(docUri);
-        if (autoSaveTimer) {
-          clearTimeout(autoSaveTimer);
-          this.autoSaveTimers.delete(docUri);
-        }
+        this.preservePendingAutoSaveOnFinalPanelDispose(document);
       }
       // The draft itself remains on disk when a panel closes. Only volatile
       // controller state is released; sealed/draft bundles are never silently
       // deleted as part of editor disposal.
       this.releaseFeedbackStateForWebview(docUri, panelWebview, document);
+      if (!hasRemainingWebviews) this.documentEditCoordinator.release(docUri);
       const documentPanels = this.openPanels.get(docUri);
       documentPanels?.delete(webviewPanel);
       if (documentPanels?.size === 0) this.openPanels.delete(docUri);
@@ -810,10 +1204,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const rawContent = document.getText();
     const currentContent = applyBlankLinePolicy(rawContent, mode);
 
-    // Skip only content already delivered to this exact split. A document-wide
-    // cache would starve later splits after the first webview consumed it.
+    // Skip only content already delivered to this exact split when no different
+    // payload is still in flight. Otherwise A -> B -> A can suppress the final
+    // corrective A while B is still able to arrive and leave the renderer stale.
+    const pendingHostContent = this.pendingHostContentByWebview.get(webview);
+    if (!force && pendingHostContent?.content === currentContent) return;
     const lastHostContent = this.lastHostContentByWebview.get(webview);
-    if (!force && lastHostContent !== undefined && lastHostContent === currentContent) {
+    if (
+      !force &&
+      pendingHostContent === undefined &&
+      lastHostContent !== undefined &&
+      lastHostContent === currentContent
+    ) {
       return;
     }
 
@@ -841,8 +1243,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     // Transform content for webview (wrap frontmatter in code block)
     const transformedContent = this.wrapFrontmatterForWebview(currentContent);
-
-    this.lastHostContentByWebview.set(webview, currentContent);
 
     // Get skip warning setting
     const config = vscode.workspace.getConfiguration();
@@ -873,8 +1273,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const blankLineMode = this.getBlankLineMode();
     const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
 
-    webview.postMessage({
+    const payload = {
       type: 'update',
+      protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+      documentVersion: this.getDocumentVersion(document),
       content: transformedContent,
       ...(force ? { force: true } : {}),
       skipResizeWarning: skipWarning,
@@ -888,7 +1290,33 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       formattingShortcutsEnabled,
       blankLineMode,
       enableMath: enableMath,
-    });
+    };
+    const pendingDelivery = { content: currentContent };
+    // Once a new post is attempted, an older delivery is no longer proof of the
+    // renderer's final state. Clearing it also makes false/rejected corrective
+    // deliveries retryable on the next update boundary.
+    this.lastHostContentByWebview.delete(webview);
+    this.pendingHostContentByWebview.set(webview, pendingDelivery);
+    try {
+      const posted = webview.postMessage(payload);
+      void Promise.resolve(posted)
+        .then(delivered => {
+          if (this.pendingHostContentByWebview.get(webview) !== pendingDelivery) return;
+          this.pendingHostContentByWebview.delete(webview);
+          if (delivered !== false) this.lastHostContentByWebview.set(webview, currentContent);
+        })
+        .catch(error => {
+          if (this.pendingHostContentByWebview.get(webview) === pendingDelivery) {
+            this.pendingHostContentByWebview.delete(webview);
+          }
+          console.error('[MD4H] Failed posting document update:', error);
+        });
+    } catch (error) {
+      if (this.pendingHostContentByWebview.get(webview) === pendingDelivery) {
+        this.pendingHostContentByWebview.delete(webview);
+      }
+      console.error('[MD4H] Failed posting document update:', error);
+    }
   }
 
   /**
@@ -922,13 +1350,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       webview,
       applyBlankLinePolicy(document.getText(), this.getBlankLineMode())
     );
-    this.postFeedbackMessage(webview, {
+    const message: Extract<FeedbackCriticalHostMessage, { type: 'feedback.close.sync' }> = {
       type: 'feedback.close.sync',
       requestId: pendingClose.requestId,
       sessionId: session.sessionId,
       revision: pendingClose.revision,
       content,
-    });
+    };
+    pendingClose.deliveryAbortController = this.postFeedbackCriticalStage(
+      webview,
+      message,
+      session.sessionId,
+      pendingClose.revision,
+      pendingClose.deliveryAbortController
+    );
   }
 
   /**
@@ -939,6 +1374,38 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     document: vscode.TextDocument,
     webview: vscode.Webview
   ) {
+    if (message?.type === 'feedback.snapshot.report') {
+      const report = parseFeedbackSnapshotReport(message);
+      if (!report) {
+        console.warn('[MD4H] Rejected malformed Feedback snapshot report');
+        return;
+      }
+      this.acceptFeedbackSnapshotReport(webview, report);
+      return;
+    }
+
+    if (message?.type === 'feedback.delivery.status.response') {
+      const response = parseFeedbackDeliveryStatusResponse(message);
+      if (!response) {
+        console.warn('[MD4H] Rejected malformed Feedback delivery status response');
+        return;
+      }
+      this.acceptFeedbackDeliveryStatus(webview, response);
+      return;
+    }
+
+    if (message?.type === 'feedback.delivery.ack') {
+      const acknowledgement = parseFeedbackDeliveryAcknowledgement(message);
+      if (!acknowledgement) {
+        console.warn('[MD4H] Rejected malformed Feedback delivery acknowledgement');
+        return;
+      }
+      this.feedbackStartedTransports
+        .get(webview)
+        ?.acceptAcknowledgement(this.feedbackTransportAcknowledgement(acknowledgement));
+      return;
+    }
+
     if (typeof message?.type === 'string' && message.type.startsWith('feedback.')) {
       const parsed = parseFeedbackWebviewMessage(message);
       if (parsed === null) {
@@ -969,6 +1436,86 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const feedbackDocumentKey = document.uri.toString();
     const feedbackSession = this.feedbackSessions.get(feedbackDocumentKey);
     const feedbackTransition = this.feedbackTransitions.get(feedbackDocumentKey);
+    if (message.type === 'document.teardown.edit') {
+      const teardownEdit = parseDocumentTeardownEditMessage(message);
+      if (!teardownEdit) {
+        const identity = parseDocumentEditIdentity(message, 'document.teardown.edit');
+        if (identity) {
+          this.postDocumentEditAck(webview, {
+            type: 'document.edit.ack',
+            protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+            ...identity,
+            accepted: false,
+            documentVersion: this.getDocumentVersion(document),
+          });
+        }
+        console.warn('[MD4H] Rejected malformed teardown document edit');
+        return;
+      }
+
+      const rejectTeardownEdit = (): void => {
+        this.postDocumentEditAck(webview, {
+          type: 'document.edit.ack',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          editId: teardownEdit.editId,
+          viewGeneration: teardownEdit.viewGeneration,
+          localRevision: teardownEdit.localRevision,
+          accepted: false,
+          documentVersion: this.getDocumentVersion(document),
+        });
+      };
+      if (this.editViewGenerations.get(webview) !== teardownEdit.viewGeneration) {
+        rejectTeardownEdit();
+        return;
+      }
+      if (this.isConflictingDocumentEditEnvelope(webview, teardownEdit)) {
+        rejectTeardownEdit();
+        return;
+      }
+
+      const completedAck = this.documentEditAckHistory.get(webview)?.get(teardownEdit.editId);
+      if (completedAck) {
+        this.postDocumentEditAck(webview, completedAck);
+        return;
+      }
+      const pendingAck = this.pendingDocumentEditAcks.get(webview)?.get(teardownEdit.editId);
+      if (pendingAck) {
+        void pendingAck.then(ack => this.postDocumentEditAck(webview, ack));
+        return;
+      }
+
+      if (feedbackSession || feedbackTransition) {
+        rejectTeardownEdit();
+        this.postCurrentFeedbackPeerLock(feedbackDocumentKey, webview);
+        this.updateWebview(document, webview, { force: true });
+        return;
+      }
+
+      const predecessorCompleted = this.documentEditAckHistory
+        .get(webview)
+        ?.get(teardownEdit.predecessorEditId);
+      const predecessorPending = this.pendingDocumentEditAcks
+        .get(webview)
+        ?.get(teardownEdit.predecessorEditId);
+      const predecessor =
+        predecessorPending ??
+        (predecessorCompleted ? Promise.resolve(predecessorCompleted) : undefined);
+      if (
+        !predecessor ||
+        teardownEdit.editId === teardownEdit.predecessorEditId ||
+        (predecessorCompleted &&
+          (predecessorCompleted.viewGeneration !== teardownEdit.viewGeneration ||
+            predecessorCompleted.localRevision !== teardownEdit.predecessorLocalRevision))
+      ) {
+        rejectTeardownEdit();
+        return;
+      }
+
+      const result = this.applyDocumentTeardownEdit(teardownEdit, predecessor, document, webview);
+      this.trackDocumentEditAck(webview, document, teardownEdit, result);
+      return;
+    }
+
     const transitionMayFlush =
       feedbackTransition !== undefined &&
       message.type === 'edit' &&
@@ -979,6 +1526,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       FEEDBACK_BLOCKED_LEGACY_MESSAGES.has(message.type) &&
       (feedbackSession !== undefined || (feedbackTransition !== undefined && !transitionMayFlush))
     ) {
+      const blockedEdit = message.type === 'edit' ? parseDocumentEditMessage(message) : null;
+      if (blockedEdit) {
+        this.postDocumentEditAck(webview, {
+          type: 'document.edit.ack',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          editId: blockedEdit.editId,
+          viewGeneration: blockedEdit.viewGeneration,
+          localRevision: blockedEdit.localRevision,
+          accepted: false,
+          documentVersion: this.getDocumentVersion(document),
+        });
+      } else if (message.type === 'edit' && message.protocolVersion !== undefined) {
+        console.warn('[MD4H] Rejected malformed versioned document edit while Feedback was locked');
+      }
       if (
         (feedbackSession && feedbackSession.ownerWebview !== webview) ||
         (feedbackTransition && feedbackTransition.ownerWebview !== webview)
@@ -997,12 +1558,64 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
     switch (message.type) {
       case 'edit': {
+        const correlatedEdit = parseDocumentEditMessage(message);
+        if (correlatedEdit) {
+          const expectedGeneration = this.editViewGenerations.get(webview);
+          if (expectedGeneration !== correlatedEdit.viewGeneration) {
+            this.postDocumentEditAck(webview, {
+              type: 'document.edit.ack',
+              protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+              editId: correlatedEdit.editId,
+              viewGeneration: correlatedEdit.viewGeneration,
+              localRevision: correlatedEdit.localRevision,
+              accepted: false,
+              documentVersion: this.getDocumentVersion(document),
+            });
+            break;
+          }
+          if (this.isConflictingDocumentEditEnvelope(webview, correlatedEdit)) {
+            this.postDocumentEditAck(webview, {
+              type: 'document.edit.ack',
+              protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+              editId: correlatedEdit.editId,
+              viewGeneration: correlatedEdit.viewGeneration,
+              localRevision: correlatedEdit.localRevision,
+              accepted: false,
+              documentVersion: this.getDocumentVersion(document),
+            });
+            break;
+          }
+
+          const completedAck = this.documentEditAckHistory.get(webview)?.get(correlatedEdit.editId);
+          if (completedAck) {
+            this.postDocumentEditAck(webview, completedAck);
+            break;
+          }
+          const pendingAck = this.pendingDocumentEditAcks.get(webview)?.get(correlatedEdit.editId);
+          if (pendingAck) {
+            void pendingAck.then(ack => this.postDocumentEditAck(webview, ack));
+            break;
+          }
+        } else if (message.protocolVersion !== undefined) {
+          const identity = parseDocumentEditIdentity(message, 'edit');
+          if (identity) {
+            this.postDocumentEditAck(webview, {
+              type: 'document.edit.ack',
+              protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+              ...identity,
+              accepted: false,
+              documentVersion: this.getDocumentVersion(document),
+            });
+          }
+          console.warn('[MD4H] Rejected malformed versioned document edit');
+          break;
+        }
+
         // Fire-and-forget: errors are handled inside applyEdit and shown to user.
         // applyEdit only updates the in-memory TextDocument (via WorkspaceEdit) —
         // it never writes to disk. The file is only persisted to disk on an
         // explicit `save` message (Ctrl+S), when `copyAiContextRef` saves after
         // user confirmation, or when the autosave bridge fires `document.save()`.
-        const docUri = document.uri.toString();
         if (transitionMayFlush && feedbackTransition && typeof message.content === 'string') {
           // The normal host-to-webview echo is suppressed while a transition
           // owns the document. If any later transition step fails, keep the
@@ -1019,46 +1632,97 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             feedbackTransition.invalidated = true;
           }
         }
-        const editReason =
-          (message.editReason as 'typing' | 'save-policy-enforce' | undefined) ?? 'typing';
-        const editPromise = this.applyEdit(message.content as string, document, {
+        const editReason = correlatedEdit
+          ? correlatedEdit.editReason
+          : ((message.editReason as 'typing' | 'save-policy-enforce' | undefined) ?? 'typing');
+        const editContent = correlatedEdit?.content ?? (message.content as string);
+        const editPromise = this.applyEdit(editContent, document, {
           editReason,
           sourceWebview: webview,
+          ...(correlatedEdit
+            ? {
+                viewGeneration: correlatedEdit.viewGeneration,
+                baseDocumentVersion: correlatedEdit.baseDocumentVersion,
+                localRevision: correlatedEdit.localRevision,
+              }
+            : {}),
         });
-        // Track the latest in-flight edit so `flushAndSaveIfDirty` can await
-        // it before persisting; otherwise an in-flight WorkspaceEdit could
-        // land after save() and the saved bytes would be stale.
-        this.inFlightApplyEdits.set(docUri, editPromise);
         // `markdownForHumans.autoSave.enabled` debounced save — only for
         // ordinary typing edits. Save-policy-enforce edits are already saved
         // (or prompted for) by `handleBlankLineModeSavePolicy`.
         if (editReason === 'typing') {
-          void editPromise.then(success => {
-            if (success) this.scheduleAutoSave(document);
-          });
+          this.scheduleAutoSave(document, editPromise);
         }
-        void editPromise.finally(() => {
-          if (this.inFlightApplyEdits.get(docUri) === editPromise) {
-            this.inFlightApplyEdits.delete(docUri);
-          }
-        });
+        if (correlatedEdit) {
+          this.trackDocumentEditAck(webview, document, correlatedEdit, editPromise);
+        }
         break;
       }
       case 'save':
-        // Trigger VS Code's save command — only fired by Ctrl+S in the webview.
-        vscode.commands.executeCommand('workbench.action.files.save');
+        // Drain work already accepted by the host, then ask this exact
+        // renderer generation to flush any newer dirty revision before save.
+        void this.executeSaveAfterDocumentEdits(document, webview);
         break;
       case 'flushPendingEditAck': {
-        const requestId = message.requestId as string;
-        const resolve = this.flushAckResolvers.get(requestId);
-        if (resolve) {
-          this.flushAckResolvers.delete(requestId);
-          resolve(message.ok === true);
+        const acknowledgement = parseDocumentFlushAck(message);
+        if (!acknowledgement) break;
+        const pending = this.flushAckResolvers.get(acknowledgement.requestId);
+        if (
+          !pending ||
+          pending.webview !== webview ||
+          pending.viewGeneration !== acknowledgement.viewGeneration ||
+          this.editViewGenerations.get(webview) !== acknowledgement.viewGeneration ||
+          (acknowledgement.ok && pending.documentVersion !== acknowledgement.documentVersion)
+        ) {
+          break;
+        }
+        this.flushAckResolvers.delete(acknowledgement.requestId);
+        pending.resolve(acknowledgement.ok);
+        break;
+      }
+      case 'document.sync.request': {
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          message.viewGeneration === this.editViewGenerations.get(webview)
+        ) {
+          this.updateWebview(document, webview, { force: true });
         }
         break;
       }
       case 'ready': {
+        if (this.deferReadyUntilPendingDocumentBoundaries(message, document, webview)) {
+          // retainContextWhenHidden=false can recreate this renderer before
+          // its predecessor edits reach the shared TextDocument. Keep the old
+          // generation authoritative until they settle.
+          break;
+        }
         // Webview is ready, send initial content and settings
+        this.pendingHostContentByWebview.delete(webview);
+        this.lastHostContentByWebview.delete(webview);
+        this.cancelFeedbackStatusQueries(webview, 'Feedback renderer reloaded.');
+        this.cancelFeedbackSnapshotReports(webview);
+        this.feedbackStartedTransports.get(webview)?.dispose();
+        this.feedbackStartedTransports.delete(webview);
+        this.feedbackCriticalTransports.get(webview)?.dispose();
+        this.feedbackCriticalTransports.delete(webview);
+        this.pendingFeedbackControllerRestores.delete(webview);
+        this.feedbackControllerReadyRequests.delete(webview);
+        if (message.feedbackDeliveryProtocolVersion === FEEDBACK_DELIVERY_PROTOCOL_VERSION) {
+          this.feedbackDeliveryCapableWebviews.add(webview);
+        } else {
+          this.feedbackDeliveryCapableWebviews.delete(webview);
+        }
+        if (message.feedbackSnapshotProtocolVersion === FEEDBACK_SNAPSHOT_PROTOCOL_VERSION) {
+          this.feedbackSnapshotCapableWebviews.add(webview);
+        } else {
+          this.feedbackSnapshotCapableWebviews.delete(webview);
+        }
+        const syncReady = parseDocumentSyncReady(message);
+        if (syncReady) {
+          this.setEditViewGeneration(webview, syncReady.viewGeneration);
+        } else {
+          this.rotateEditViewGeneration(webview);
+        }
         this.registerFeedbackWebview(document.uri.toString(), webview);
         if (!this.recoverFeedbackControllerOnReady(document, webview)) {
           this.updateWebview(document, webview);
@@ -1122,7 +1786,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         break;
       }
       case 'saveImage':
-        this.handleSaveImage(message, document, webview);
+        this.trackPendingImageSave(message, document, webview);
+        break;
+      case 'imageSaveCompletionAck':
+        this.acceptPendingImageSaveCompletionAck(message, webview);
         break;
       case 'handleWorkspaceImage':
         void this.handleWorkspaceImage(message, document, webview);
@@ -1235,6 +1902,1509 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     void webview.postMessage(message);
   }
 
+  /** Resolve only a report bound to the exact renderer lifetime and snapshot stage. */
+  private acceptFeedbackSnapshotReport(
+    webview: vscode.Webview,
+    report: FeedbackSnapshotReport
+  ): void {
+    const pending = this.pendingFeedbackSnapshotReports.get(report.requestId);
+    if (
+      !pending ||
+      pending.webview !== webview ||
+      pending.operationId !== report.operationId ||
+      pending.stage !== report.stage ||
+      pending.documentVersion !== report.documentVersion ||
+      this.editViewGenerations.get(webview) !== report.viewGeneration
+    ) {
+      return;
+    }
+    this.pendingFeedbackSnapshotReports.delete(report.requestId);
+    clearTimeout(pending.timeout);
+    pending.resolve(report);
+  }
+
+  /** Cancel report waiters owned by one renderer without affecting sibling splits. */
+  private cancelFeedbackSnapshotReports(webview: vscode.Webview): void {
+    for (const [requestId, pending] of this.pendingFeedbackSnapshotReports) {
+      if (pending.webview !== webview) continue;
+      this.pendingFeedbackSnapshotReports.delete(requestId);
+      clearTimeout(pending.timeout);
+      pending.resolve(null);
+    }
+  }
+
+  /** Post one strict snapshot stage and wait for its application-level report. */
+  private async requestFeedbackSnapshotReport(
+    webview: vscode.Webview,
+    message: FeedbackSnapshotHostMessage
+  ): Promise<FeedbackSnapshotReport> {
+    const stage: FeedbackSnapshotReport['stage'] =
+      message.type === 'feedback.snapshot.inspect' ? 'inspect' : 'applied';
+    const reportPromise = new Promise<FeedbackSnapshotReport | null>(resolve => {
+      const timeout = setTimeout(() => {
+        const pending = this.pendingFeedbackSnapshotReports.get(message.requestId);
+        if (!pending) return;
+        this.pendingFeedbackSnapshotReports.delete(message.requestId);
+        pending.resolve(null);
+      }, MarkdownEditorProvider.FEEDBACK_SNAPSHOT_REPORT_TIMEOUT_MS);
+      this.pendingFeedbackSnapshotReports.set(message.requestId, {
+        webview,
+        operationId: message.operationId,
+        stage,
+        documentVersion: message.documentVersion,
+        resolve,
+        timeout,
+      });
+    });
+
+    let posted = false;
+    try {
+      posted = (await webview.postMessage(message)) !== false;
+    } catch {
+      posted = false;
+    }
+    if (!posted) {
+      const pending = this.pendingFeedbackSnapshotReports.get(message.requestId);
+      if (pending) {
+        this.pendingFeedbackSnapshotReports.delete(message.requestId);
+        clearTimeout(pending.timeout);
+        pending.resolve(null);
+      }
+    }
+
+    const report = await reportPromise;
+    if (!report) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        `A rich editor split did not confirm the ${stage} snapshot stage.`
+      );
+    }
+    return report;
+  }
+
+  /** Remove protocol-only fields before passing a validated ACK to the transport. */
+  private feedbackTransportAcknowledgement(
+    acknowledgement: FeedbackDeliveryAcknowledgement
+  ): Omit<FeedbackDeliveryAcknowledgement, 'type' | 'protocolVersion'> {
+    return {
+      messageId: acknowledgement.messageId,
+      operationEpoch: acknowledgement.operationEpoch,
+      sessionEpoch: acknowledgement.sessionEpoch,
+      stageRevision: acknowledgement.stageRevision,
+      outcome: acknowledgement.outcome,
+    };
+  }
+
+  /** Create one bounded transport per renderer lifetime. */
+  private getFeedbackStartedTransport(webview: vscode.Webview): FeedbackStartedTransport {
+    const existing = this.feedbackStartedTransports.get(webview);
+    if (existing) return existing;
+
+    const transport = new FeedbackTransport<
+      FeedbackStartedDelivery,
+      FeedbackStartedApplicationResult,
+      never,
+      never,
+      FeedbackDeliveryApplicationStatus
+    >({
+      sendCommand: command => webview.postMessage(command.payload),
+      sendAcknowledgement: () => false,
+      queryStatus: (identity, signal) => {
+        if (identity.sessionEpoch === null) {
+          return Promise.reject(new Error('Feedback start status requires a session identity.'));
+        }
+        return this.queryFeedbackStartedStatus(
+          webview,
+          {
+            messageId: identity.messageId,
+            operationEpoch: identity.operationEpoch,
+            sessionEpoch: identity.sessionEpoch,
+            stageRevision: identity.stageRevision,
+          },
+          signal
+        );
+      },
+      timers: {
+        setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+        clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      },
+      maxAttempts: 3,
+      ackTimeoutMs: 750,
+      retryDelayMs: 100,
+      maxRetainedEntries: 128,
+    });
+    this.feedbackStartedTransports.set(webview, transport);
+    return transport;
+  }
+
+  /** Create one retry transport for the close and transition stages of a renderer lifetime. */
+  private getFeedbackCriticalTransport(webview: vscode.Webview): FeedbackCriticalTransport {
+    const existing = this.feedbackCriticalTransports.get(webview);
+    if (existing) return existing;
+
+    const transport = new FeedbackTransport<
+      FeedbackCriticalHostMessage,
+      FeedbackCriticalApplicationResult,
+      never,
+      never,
+      never
+    >({
+      sendCommand: command => webview.postMessage(command.payload),
+      sendAcknowledgement: () => false,
+      // These stages are fail-closed. If all bounded posts go unanswered, the
+      // host retains the session or transition lock until renderer reload
+      // recovery can restore the durable draft and authoritative document.
+      queryStatus: () => Promise.reject(new Error('Critical Feedback stage remained unconfirmed.')),
+      timers: {
+        setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+        clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      },
+      maxAttempts: 4,
+      ackTimeoutMs: 750,
+      retryDelayMs: 100,
+      maxRetainedEntries: 128,
+    });
+    this.feedbackCriticalTransports.set(webview, transport);
+    return transport;
+  }
+
+  /** Retire completed identities before intentionally replaying one revision. */
+  private resetFeedbackCriticalTransport(webview: vscode.Webview): void {
+    this.feedbackCriticalTransports.get(webview)?.dispose();
+    this.feedbackCriticalTransports.delete(webview);
+  }
+
+  /** Bind one raw semantic stage to a deterministic transport identity. */
+  private feedbackCriticalIdentity(
+    messageType: FeedbackCriticalMessageType,
+    requestId: string,
+    sessionEpoch: string,
+    stageRevision: number
+  ): {
+    messageId: string;
+    operationEpoch: string;
+    sessionEpoch: string;
+    stageRevision: number;
+  } {
+    const digest = crypto
+      .createHash('sha256')
+      .update(`${messageType}\u0000${requestId}\u0000${sessionEpoch}\u0000${stageRevision}`)
+      .digest('hex');
+    return {
+      messageId: `feedback-critical-${digest}`,
+      operationEpoch: requestId,
+      sessionEpoch,
+      stageRevision,
+    };
+  }
+
+  /** Post a critical stage with bounded retries and cancel its predecessor. */
+  private postFeedbackCriticalStage(
+    webview: vscode.Webview,
+    message: FeedbackCriticalHostMessage,
+    sessionEpoch: string,
+    stageRevision: number,
+    previous?: AbortController
+  ): AbortController | undefined {
+    previous?.abort();
+    if (!this.feedbackDeliveryCapableWebviews.has(webview)) {
+      this.postFeedbackMessage(webview, message);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const identity = this.feedbackCriticalIdentity(
+      message.type,
+      message.requestId,
+      sessionEpoch,
+      stageRevision
+    );
+    const command = Object.freeze({
+      ...identity,
+      payload: Object.freeze(message),
+    });
+    void this.getFeedbackCriticalTransport(webview)
+      .send(command, { signal: controller.signal })
+      .then(result => {
+        if (result.kind === 'acknowledged') return;
+        if (result.kind !== 'cancelled') {
+          console.warn(
+            `[MD4H] Feedback renderer did not confirm ${message.type}; the document remains locked.`
+          );
+        }
+      });
+    return controller;
+  }
+
+  /** Translate a semantic renderer response into an application ACK. */
+  private acknowledgeFeedbackCriticalStage(
+    webview: vscode.Webview,
+    messageType: FeedbackCriticalMessageType,
+    requestId: string,
+    sessionEpoch: string,
+    stageRevision: number,
+    applied: boolean
+  ): FeedbackAcknowledgementDisposition {
+    const identity = this.feedbackCriticalIdentity(
+      messageType,
+      requestId,
+      sessionEpoch,
+      stageRevision
+    );
+    return this.getFeedbackCriticalTransport(webview).acceptAcknowledgement({
+      ...identity,
+      outcome: applied
+        ? { kind: 'applied', value: { messageType } }
+        : { kind: 'rejected', code: 'renderer-requested-retry' },
+    });
+  }
+
+  /** Stable semantic identity for one peer lock in one renderer generation. */
+  private feedbackPeerLockAcquisitionId(
+    requestId: string,
+    lockId: string,
+    viewGeneration: string
+  ): string {
+    const digest = crypto
+      .createHash('sha256')
+      .update(`${requestId}\u0000${lockId}\u0000${viewGeneration}`)
+      .digest('hex');
+    return `feedback-peer-lock-${digest}`;
+  }
+
+  /** Coalesce reassertions and serialize replacement locks for one renderer. */
+  private async acquireFeedbackPeerLockForWebview(
+    documentKey: string,
+    ownerWebview: vscode.Webview,
+    webview: vscode.Webview,
+    requestId: string,
+    lockId: string,
+    allowOwner = false
+  ): Promise<void> {
+    while (
+      this.feedbackWebviews.get(documentKey)?.has(webview) &&
+      (allowOwner || webview !== ownerWebview) &&
+      !this.isFeedbackViewGenerationUnavailable(webview)
+    ) {
+      const existing = this.inFlightFeedbackPeerLockAcquisitions.get(webview);
+      if (existing) {
+        if (existing.lockId === lockId) return existing.promise;
+        await existing.promise.catch(() => undefined);
+        continue;
+      }
+
+      const promise = this.performFeedbackPeerLockAcquisition(
+        documentKey,
+        ownerWebview,
+        webview,
+        requestId,
+        lockId,
+        allowOwner
+      );
+      const entry = { lockId, promise };
+      this.inFlightFeedbackPeerLockAcquisitions.set(webview, entry);
+      try {
+        return await promise;
+      } finally {
+        if (this.inFlightFeedbackPeerLockAcquisitions.get(webview) === entry) {
+          this.inFlightFeedbackPeerLockAcquisitions.delete(webview);
+        }
+      }
+    }
+  }
+
+  /** Reliably install one lock, restarting only when that renderer generation changes. */
+  private async performFeedbackPeerLockAcquisition(
+    documentKey: string,
+    ownerWebview: vscode.Webview,
+    webview: vscode.Webview,
+    requestId: string,
+    lockId: string,
+    allowOwner: boolean
+  ): Promise<void> {
+    while (
+      this.feedbackWebviews.get(documentKey)?.has(webview) &&
+      (allowOwner || webview !== ownerWebview)
+    ) {
+      const viewGeneration = this.getEditViewGeneration(webview);
+      const installed = this.appliedFeedbackPeerLocks.get(webview);
+      if (installed?.viewGeneration === viewGeneration && installed.lockId === lockId) return;
+      const replacesLockId = installed?.viewGeneration === viewGeneration ? installed.lockId : null;
+      const acquisitionId = this.feedbackPeerLockAcquisitionId(requestId, lockId, viewGeneration);
+      const message: Extract<FeedbackHostMessage, { type: 'feedback.peer.lock.acquire' }> =
+        Object.freeze({
+          type: 'feedback.peer.lock.acquire',
+          acquisitionId,
+          requestId,
+          lockId,
+          replacesLockId,
+          viewGeneration,
+          revision: 1,
+          message:
+            'Feedback is active in another editor split. This view is read-only until it ends.',
+        });
+      this.pendingFeedbackPeerLockAcquisitions.set(webview, message);
+
+      // Pre-protocol renderers still receive the old presentation message, but
+      // host progression always waits for the strict application ACK above.
+      if (!this.feedbackDeliveryCapableWebviews.has(webview)) {
+        this.postFeedbackMessage(webview, {
+          type: 'feedback.peer.locked',
+          lockId,
+          message: message.message,
+        });
+      }
+
+      const controller = new AbortController();
+      const identity = this.feedbackCriticalIdentity(
+        message.type,
+        acquisitionId,
+        lockId,
+        message.revision
+      );
+      const command = Object.freeze({ ...identity, payload: message });
+      const result = await this.getFeedbackCriticalTransport(webview).send(command, {
+        signal: controller.signal,
+      });
+      if (!this.feedbackWebviews.get(documentKey)?.has(webview)) {
+        if (this.pendingFeedbackPeerLockAcquisitions.get(webview) === message) {
+          this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+        }
+        return;
+      }
+      if (this.editViewGenerations.get(webview) !== viewGeneration) {
+        if (this.pendingFeedbackPeerLockAcquisitions.get(webview) === message) {
+          this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+        }
+        continue;
+      }
+      const installedAfterDelivery = this.appliedFeedbackPeerLocks.get(webview);
+      if (
+        installedAfterDelivery?.viewGeneration === viewGeneration &&
+        installedAfterDelivery.lockId === lockId
+      ) {
+        if (this.pendingFeedbackPeerLockAcquisitions.get(webview) === message) {
+          this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+        }
+        return;
+      }
+      if (result.kind === 'acknowledged') {
+        if (this.pendingFeedbackPeerLockAcquisitions.get(webview) === message) {
+          this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+        }
+        this.appliedFeedbackPeerLocks.set(webview, { viewGeneration, lockId });
+        return;
+      }
+      if (result.kind === 'unavailable') {
+        if (this.pendingFeedbackPeerLockAcquisitions.get(webview) === message) {
+          this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+        }
+        this.markFeedbackViewGenerationUnavailable(webview, viewGeneration);
+        return;
+      }
+      // Keep the exact identity pending after bounded delivery exhaustion. A
+      // renderer may have applied the lock while its ACK was delayed; that
+      // late application ACK must still establish the fail-closed barrier.
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'A rich editor split did not confirm its Feedback read-only lock.'
+      );
+    }
+  }
+
+  /** Do not freeze or commit until every live non-owner split is guarded. */
+  private async acquireFeedbackPeerLocks(
+    documentKey: string,
+    ownerWebview: vscode.Webview,
+    requestId: string,
+    lockId: string,
+    includeOwner = false
+  ): Promise<void> {
+    while (true) {
+      const peers = [...(this.feedbackWebviews.get(documentKey) ?? [])].filter(
+        candidate =>
+          (includeOwner || candidate !== ownerWebview) &&
+          !this.isFeedbackViewGenerationUnavailable(candidate)
+      );
+      await Promise.all(
+        peers.map(peer =>
+          this.acquireFeedbackPeerLockForWebview(
+            documentKey,
+            ownerWebview,
+            peer,
+            requestId,
+            lockId,
+            includeOwner
+          )
+        )
+      );
+      const missing = [...(this.feedbackWebviews.get(documentKey) ?? [])].some(candidate => {
+        if (!includeOwner && candidate === ownerWebview) return false;
+        if (this.isFeedbackViewGenerationUnavailable(candidate)) return false;
+        const generation = this.editViewGenerations.get(candidate);
+        const installed = this.appliedFeedbackPeerLocks.get(candidate);
+        return (
+          !generation || installed?.viewGeneration !== generation || installed.lockId !== lockId
+        );
+      });
+      if (!missing) return;
+    }
+  }
+
+  /** Build the exact active-session payload staged by a transfer target. */
+  private feedbackSessionTransferPayload(
+    session: ActiveFeedbackSession,
+    workspaceRoot: string,
+    webview: vscode.Webview
+  ): Extract<
+    FeedbackHostMessage,
+    { type: 'feedback.session.transfer'; phase: 'apply' }
+  >['session'] {
+    const snapshot = session.store.snapshot;
+    return {
+      sessionId: session.sessionId,
+      source: snapshot.source,
+      sourceSha256: snapshot.sourceSha256,
+      round: snapshot.round,
+      feedbackFile: path
+        .relative(workspaceRoot, session.store.feedbackFilePath)
+        .split(path.sep)
+        .join('/'),
+      anchors: session.anchorMap.blocks.map(block => ({
+        ordinal: block.ordinal,
+        startLine: block.startLine,
+        endLine: block.endLine,
+      })),
+      items: this.feedbackItems(session, webview),
+    };
+  }
+
+  /** Construct one semantic transfer stage for one exact renderer lifetime. */
+  private createFeedbackSessionTransferTarget(
+    pending: PendingFeedbackSessionTransfer,
+    webview: vscode.Webview,
+    role: PendingFeedbackSessionTransferTarget['role'],
+    phase: 'apply' | 'commit' | 'abort'
+  ): PendingFeedbackSessionTransferTarget {
+    const workspaceRoot = this.getWorkspaceFolderPath(pending.document);
+    if (!workspaceRoot) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-001',
+        'Open this saved Markdown file inside a workspace before transferring Feedback.'
+      );
+    }
+    const identity = {
+      type: 'feedback.session.transfer' as const,
+      phase,
+      role,
+      transferId: pending.transferId,
+      requestId: pending.requestId,
+      oldSessionId: pending.oldSession.sessionId,
+      newSessionId: pending.nextSession.sessionId,
+      viewGeneration: this.getEditViewGeneration(webview),
+      revision: pending.revision,
+      documentVersion: pending.documentVersion,
+      sourceSha256: pending.sourceSha256,
+      peerLockMessage: 'Feedback resumed in another rich view. This view is now read-only.',
+    };
+    const message: Extract<FeedbackHostMessage, { type: 'feedback.session.transfer' }> =
+      phase === 'apply'
+        ? {
+            ...identity,
+            phase: 'apply',
+            session: this.feedbackSessionTransferPayload(
+              pending.nextSession,
+              workspaceRoot,
+              webview
+            ),
+          }
+        : { ...identity, phase };
+    return {
+      role,
+      message: Object.freeze(message),
+      applied: false,
+      committed: false,
+      aborted: false,
+      abortAcknowledged: false,
+      rendererUnavailable: false,
+      applyPosted: false,
+    };
+  }
+
+  /** Deliver one transfer stage through bounded application-level retries. */
+  private postFeedbackSessionTransferTarget(
+    documentKey: string,
+    pending: PendingFeedbackSessionTransfer,
+    webview: vscode.Webview,
+    target: PendingFeedbackSessionTransferTarget
+  ): void {
+    if (target.deliveryAbortController && !target.deliveryAbortController.signal.aborted) return;
+    const controller = new AbortController();
+    target.deliveryAbortController = controller;
+    const message = target.message;
+    if (message.phase === 'apply') target.applyPosted = true;
+    const identity = this.feedbackCriticalIdentity(
+      message.type,
+      `${message.transferId}:${message.role}:${message.phase}`,
+      message.newSessionId,
+      message.revision
+    );
+    const command = Object.freeze({ ...identity, payload: message });
+    void this.getFeedbackCriticalTransport(webview)
+      .send(command, { signal: controller.signal })
+      .then(result => {
+        if (target.deliveryAbortController === controller) {
+          target.deliveryAbortController = undefined;
+        }
+        if (result.kind === 'acknowledged' || result.kind === 'cancelled') return;
+        if (
+          result.kind === 'unavailable' &&
+          this.pendingFeedbackSessionTransfers.get(documentKey) === pending &&
+          pending.targets.get(webview) === target &&
+          this.editViewGenerations.get(webview) === message.viewGeneration
+        ) {
+          this.markFeedbackViewGenerationUnavailable(webview, message.viewGeneration);
+          this.handleUnavailableFeedbackSessionTransferTarget(documentKey, pending, target);
+          return;
+        }
+        if (
+          this.pendingFeedbackSessionTransfers.get(documentKey) === pending &&
+          pending.targets.get(webview) === target
+        ) {
+          this.settleFeedbackSessionTransfer(pending, 'failed-closed');
+        }
+        console.warn(
+          `[MD4H] A live rich editor split did not confirm Feedback transfer ${message.phase}/${message.role}; ownership remains fail-closed.`
+        );
+      });
+  }
+
+  /** Resolve the public Resume operation exactly once while late ACK recovery remains possible. */
+  private settleFeedbackSessionTransfer(
+    pending: PendingFeedbackSessionTransfer,
+    result: FeedbackSessionTransferCompletion
+  ): void {
+    if (pending.completionSettled) return;
+    pending.completionSettled = true;
+    pending.resolveCompletion(result);
+  }
+
+  /** Wake disposal/reload cleanup only after the coordinator leaves its map. */
+  private settleFeedbackSessionTransferFinalization(pending: PendingFeedbackSessionTransfer): void {
+    if (pending.finalizationSettled) return;
+    pending.finalizationSettled = true;
+    pending.resolveFinalization();
+  }
+
+  /** Complete a two-sided rollback only after every staged renderer has ACKed it. */
+  private finalizeFeedbackSessionTransferRollback(
+    documentKey: string,
+    pending: PendingFeedbackSessionTransfer
+  ): void {
+    if (this.pendingFeedbackSessionTransfers.get(documentKey) !== pending) return;
+    this.pendingFeedbackSessionTransfers.delete(documentKey);
+    for (const target of pending.targets.values()) target.deliveryAbortController?.abort();
+    if (this.feedbackSessions.get(documentKey) === pending.oldSession) {
+      pending.oldSession.phase = 'active';
+    }
+    this.settleFeedbackSessionTransferFinalization(pending);
+    const sameOwnerTarget =
+      pending.oldOwner === pending.newOwner ? pending.targets.get(pending.oldOwner) : undefined;
+    this.settleFeedbackSessionTransfer(
+      pending,
+      sameOwnerTarget && !sameOwnerTarget.abortAcknowledged ? 'unavailable' : 'rolled-back'
+    );
+  }
+
+  /** Roll back every renderer that staged the proposed owner before host commit. */
+  private beginFeedbackSessionTransferRollback(
+    documentKey: string,
+    pending: PendingFeedbackSessionTransfer
+  ): void {
+    if (
+      this.pendingFeedbackSessionTransfers.get(documentKey) !== pending ||
+      pending.phase === 'committing' ||
+      pending.phase === 'aborting'
+    ) {
+      return;
+    }
+    pending.phase = 'aborting';
+    for (const [webview, target] of pending.targets) {
+      target.deliveryAbortController?.abort();
+      target.deliveryAbortController = undefined;
+      if (
+        !target.applyPosted ||
+        target.rendererUnavailable ||
+        this.isFeedbackViewGenerationUnavailable(webview) ||
+        this.editViewGenerations.get(webview) !== target.message.viewGeneration
+      ) {
+        target.aborted = true;
+        continue;
+      }
+      const abortTarget = this.createFeedbackSessionTransferTarget(
+        pending,
+        webview,
+        target.role,
+        'abort'
+      );
+      target.message = abortTarget.message;
+      target.aborted = false;
+      this.postFeedbackSessionTransferTarget(documentKey, pending, webview, target);
+    }
+    this.advanceFeedbackSessionTransfer(documentKey, pending);
+  }
+
+  /** Distinguish a definitively absent renderer from an ambiguous lost ACK. */
+  private handleUnavailableFeedbackSessionTransferTarget(
+    documentKey: string,
+    pending: PendingFeedbackSessionTransfer,
+    target: PendingFeedbackSessionTransferTarget
+  ): void {
+    target.rendererUnavailable = true;
+    if (pending.phase === 'aborting') {
+      target.aborted = true;
+      this.advanceFeedbackSessionTransfer(documentKey, pending);
+      return;
+    }
+    if (pending.phase === 'committing') {
+      target.committed = true;
+    } else if (target.role !== 'old-owner') {
+      target.aborted = true;
+      this.beginFeedbackSessionTransferRollback(documentKey, pending);
+      return;
+    } else {
+      target.applied = true;
+    }
+    this.advanceFeedbackSessionTransfer(documentKey, pending);
+  }
+
+  /** Accept only an exact application ACK from the target renderer generation. */
+  private acceptFeedbackSessionTransferAcknowledgement(
+    message: Extract<FeedbackWebviewMessage, { type: 'feedback.session.transfer.ack' }>,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): void {
+    const documentKey = document.uri.toString();
+    const pending = this.pendingFeedbackSessionTransfers.get(documentKey);
+    const target = pending?.targets.get(webview);
+    if (
+      !pending ||
+      !target ||
+      target.message.phase !== message.phase ||
+      target.message.role !== message.role ||
+      target.message.transferId !== message.transferId ||
+      target.message.requestId !== message.requestId ||
+      target.message.oldSessionId !== message.oldSessionId ||
+      target.message.newSessionId !== message.newSessionId ||
+      target.message.viewGeneration !== message.viewGeneration ||
+      target.message.revision !== message.revision ||
+      target.message.documentVersion !== message.documentVersion ||
+      target.message.sourceSha256 !== message.sourceSha256 ||
+      this.editViewGenerations.get(webview) !== message.viewGeneration
+    ) {
+      return;
+    }
+    this.acknowledgeFeedbackCriticalStage(
+      webview,
+      target.message.type,
+      `${target.message.transferId}:${target.message.role}:${target.message.phase}`,
+      target.message.newSessionId,
+      target.message.revision,
+      message.applied
+    );
+    if (!message.applied) return;
+
+    if (message.phase === 'apply') {
+      target.applied = true;
+    } else if (message.phase === 'commit') {
+      target.committed = true;
+      if (target.role === 'old-owner') {
+        this.appliedFeedbackPeerLocks.set(webview, {
+          viewGeneration: message.viewGeneration,
+          lockId: message.newSessionId,
+        });
+      } else {
+        this.appliedFeedbackPeerLocks.delete(webview);
+      }
+    } else {
+      target.aborted = true;
+      target.abortAcknowledged = true;
+    }
+    this.advanceFeedbackSessionTransfer(documentKey, pending);
+  }
+
+  /** Start the old-owner apply only after the new owner staged exact state. */
+  private advanceFeedbackSessionTransfer(
+    documentKey: string,
+    pending: PendingFeedbackSessionTransfer
+  ): void {
+    if (this.pendingFeedbackSessionTransfers.get(documentKey) !== pending) return;
+    if (pending.phase === 'aborting') {
+      if ([...pending.targets.values()].some(target => !target.aborted)) return;
+      this.finalizeFeedbackSessionTransferRollback(documentKey, pending);
+      return;
+    }
+    if (pending.phase === 'applying-new') {
+      const first = pending.targets.get(pending.newOwner);
+      if (!first?.applied) return;
+      if (pending.oldOwner === pending.newOwner) {
+        void this.commitFeedbackSessionTransferAfterRevalidation(documentKey, pending);
+        return;
+      }
+      pending.phase = 'applying-old';
+      const oldTarget = pending.targets.get(pending.oldOwner);
+      if (oldTarget) {
+        this.postFeedbackSessionTransferTarget(documentKey, pending, pending.oldOwner, oldTarget);
+      }
+      return;
+    }
+    if (pending.phase === 'applying-old') {
+      const oldTarget = pending.targets.get(pending.oldOwner);
+      if (!oldTarget?.applied) return;
+      void this.commitFeedbackSessionTransferAfterRevalidation(documentKey, pending);
+      return;
+    }
+    if (
+      [...pending.targets.values()].some(target => !target.committed) ||
+      !pending.peerLocksComplete
+    ) {
+      return;
+    }
+    this.pendingFeedbackSessionTransfers.delete(documentKey);
+    for (const target of pending.targets.values()) target.deliveryAbortController?.abort();
+    pending.nextSession.phase = 'active';
+    this.settleFeedbackSessionTransferFinalization(pending);
+    this.postDegradedFeedbackRangeWarning(pending.nextSession, pending.newOwner);
+    this.settleFeedbackSessionTransfer(pending, 'committed');
+  }
+
+  /** Re-read the frozen source immediately before the host changes ownership. */
+  private async commitFeedbackSessionTransferAfterRevalidation(
+    documentKey: string,
+    pending: PendingFeedbackSessionTransfer
+  ): Promise<void> {
+    if (
+      this.pendingFeedbackSessionTransfers.get(documentKey) !== pending ||
+      pending.commitValidationPending ||
+      (pending.phase !== 'applying-new' && pending.phase !== 'applying-old')
+    ) {
+      return;
+    }
+    pending.commitValidationPending = true;
+    try {
+      const current = this.feedbackSessions.get(documentKey);
+      const documentSha256 = crypto
+        .createHash('sha256')
+        .update(pending.document.getText(), 'utf8')
+        .digest('hex');
+      if (
+        current !== pending.oldSession ||
+        current.phase !== 'resuming' ||
+        current.invalidated ||
+        this.getDocumentVersion(pending.document) !== pending.documentVersion ||
+        documentSha256 !== pending.sourceSha256
+      ) {
+        this.beginFeedbackSessionTransferRollback(documentKey, pending);
+        return;
+      }
+      await this.assertFeedbackSourceSha256(pending.document, pending.sourceSha256);
+      if (
+        this.pendingFeedbackSessionTransfers.get(documentKey) !== pending ||
+        (pending.phase !== 'applying-new' && pending.phase !== 'applying-old') ||
+        this.feedbackSessions.get(documentKey) !== pending.oldSession ||
+        pending.oldSession.phase !== 'resuming' ||
+        pending.oldSession.invalidated ||
+        this.getDocumentVersion(pending.document) !== pending.documentVersion ||
+        crypto.createHash('sha256').update(pending.document.getText(), 'utf8').digest('hex') !==
+          pending.sourceSha256
+      ) {
+        this.beginFeedbackSessionTransferRollback(documentKey, pending);
+        return;
+      }
+
+      pending.phase = 'committing';
+      this.feedbackSessions.set(documentKey, pending.nextSession);
+      this.feedbackPeerLockIds.set(documentKey, pending.nextSession.sessionId);
+      pending.oldSession.mutationIdleWaiters.forEach(resolve => resolve());
+      pending.oldSession.mutationIdleWaiters.clear();
+
+      for (const [webview, target] of pending.targets) {
+        target.deliveryAbortController?.abort();
+        target.deliveryAbortController = undefined;
+        if (
+          target.rendererUnavailable ||
+          this.isFeedbackViewGenerationUnavailable(webview) ||
+          this.editViewGenerations.get(webview) !== target.message.viewGeneration
+        ) {
+          target.committed = true;
+          continue;
+        }
+        const commitTarget = this.createFeedbackSessionTransferTarget(
+          pending,
+          webview,
+          target.role,
+          'commit'
+        );
+        target.message = commitTarget.message;
+        this.postFeedbackSessionTransferTarget(documentKey, pending, webview, target);
+      }
+
+      pending.peerLocksStarted = true;
+      const otherPeers = [...(this.feedbackWebviews.get(documentKey) ?? [])].filter(
+        webview => webview !== pending.newOwner && webview !== pending.oldOwner
+      );
+      void Promise.all(
+        otherPeers.map(webview =>
+          this.acquireFeedbackPeerLockForWebview(
+            documentKey,
+            pending.newOwner,
+            webview,
+            pending.requestId,
+            pending.nextSession.sessionId
+          )
+        )
+      )
+        .then(() => {
+          if (this.pendingFeedbackSessionTransfers.get(documentKey) !== pending) return;
+          pending.peerLocksComplete = true;
+          this.advanceFeedbackSessionTransfer(documentKey, pending);
+        })
+        .catch(() => {
+          console.warn(
+            '[MD4H] A peer did not confirm the transferred Feedback lock; ownership remains read-only.'
+          );
+        });
+      this.advanceFeedbackSessionTransfer(documentKey, pending);
+    } catch (error) {
+      this.beginFeedbackSessionTransferRollback(documentKey, pending);
+      console.warn(
+        `[MD4H] Feedback transfer revalidation failed; the staged handoff is rolling back: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    } finally {
+      pending.commitValidationPending = false;
+    }
+  }
+
+  /** Begin one two-sided transfer without changing host ownership. */
+  private beginFeedbackSessionTransfer(
+    document: vscode.TextDocument,
+    requestId: string,
+    oldSession: ActiveFeedbackSession,
+    nextSession: ActiveFeedbackSession
+  ): Promise<FeedbackSessionTransferCompletion> {
+    const documentKey = document.uri.toString();
+    if (this.pendingFeedbackSessionTransfers.has(documentKey)) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-001',
+        'A different Feedback ownership transfer is already pending.'
+      );
+    }
+    let resolveCompletion: (result: FeedbackSessionTransferCompletion) => void = () => undefined;
+    const completion = new Promise<FeedbackSessionTransferCompletion>(resolve => {
+      resolveCompletion = resolve;
+    });
+    let resolveFinalization = (): void => undefined;
+    const finalization = new Promise<void>(resolve => {
+      resolveFinalization = resolve;
+    });
+    const pending: PendingFeedbackSessionTransfer = {
+      document,
+      transferId: `feedback-transfer-${crypto.randomBytes(16).toString('hex')}`,
+      requestId,
+      oldSession,
+      nextSession,
+      oldOwner: oldSession.ownerWebview,
+      newOwner: nextSession.ownerWebview,
+      sourceSha256: oldSession.store.snapshot.sourceSha256,
+      documentVersion: this.getDocumentVersion(document),
+      revision: 1,
+      phase: 'applying-new',
+      targets: new Map(),
+      peerLocksStarted: false,
+      peerLocksComplete: false,
+      commitValidationPending: false,
+      completionSettled: false,
+      completion,
+      resolveCompletion,
+      finalizationSettled: false,
+      finalization,
+      resolveFinalization,
+      deferredReleaseWebviews: new Set(),
+    };
+    const sameOwner = pending.oldOwner === pending.newOwner;
+    const newTarget = this.createFeedbackSessionTransferTarget(
+      pending,
+      pending.newOwner,
+      sameOwner ? 'same-owner' : 'new-owner',
+      'apply'
+    );
+    pending.targets.set(pending.newOwner, newTarget);
+    if (!sameOwner) {
+      pending.targets.set(
+        pending.oldOwner,
+        this.createFeedbackSessionTransferTarget(pending, pending.oldOwner, 'old-owner', 'apply')
+      );
+    }
+    this.pendingFeedbackSessionTransfers.set(documentKey, pending);
+    this.postFeedbackSessionTransferTarget(documentKey, pending, pending.newOwner, newTarget);
+    return completion;
+  }
+
+  /** Post one generation-bound peer release through the bounded critical transport. */
+  private postFeedbackPeerReleaseTarget(
+    documentKey: string,
+    pending: PendingFeedbackPeerRelease,
+    targetWebview: vscode.Webview,
+    target: PendingFeedbackPeerReleaseTarget
+  ): void {
+    if (target.deliveryAbortController && !target.deliveryAbortController.signal.aborted) return;
+    // A prior bounded cycle for this exact semantic identity may have retired
+    // as unacknowledged. Start a fresh transport lifetime before reasserting.
+    this.resetFeedbackCriticalTransport(targetWebview);
+    const controller = new AbortController();
+    target.deliveryAbortController = controller;
+    const message = target.message;
+    const identity = this.feedbackCriticalIdentity(
+      message.type,
+      `${message.releaseId}:${message.phase}`,
+      message.lockId,
+      message.revision
+    );
+    const command = Object.freeze({ ...identity, payload: message });
+    void this.getFeedbackCriticalTransport(targetWebview)
+      .send(command, { signal: controller.signal })
+      .then(result => {
+        if (target.deliveryAbortController === controller) {
+          target.deliveryAbortController = undefined;
+        }
+        if (result.kind === 'acknowledged' || result.kind === 'cancelled') return;
+        if (result.kind === 'unavailable') {
+          if (
+            this.pendingFeedbackPeerReleases.get(documentKey) === pending &&
+            pending.targets.get(targetWebview) === target &&
+            this.editViewGenerations.get(targetWebview) === message.viewGeneration
+          ) {
+            this.markFeedbackViewGenerationUnavailable(targetWebview, message.viewGeneration);
+            pending.targets.delete(targetWebview);
+            this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pending);
+          }
+          return;
+        }
+        console.warn(
+          message.phase === 'apply'
+            ? `[MD4H] A live rich editor split did not confirm Feedback apply ${message.requestId}; Feedback ownership remains reserved.`
+            : `[MD4H] A live rich editor split did not confirm Feedback commit ${message.requestId}; that split remains read-only.`
+        );
+      });
+  }
+
+  /** Build one target identity for the renderer generation that will apply it. */
+  private createFeedbackPeerReleaseTarget(
+    pending: PendingFeedbackPeerRelease,
+    webview: vscode.Webview
+  ): PendingFeedbackPeerReleaseTarget {
+    const viewGeneration = this.getEditViewGeneration(webview);
+    const digest = crypto
+      .createHash('sha256')
+      .update(
+        `${pending.kind}\u0000${pending.requestId}\u0000${pending.lockId}\u0000${pending.revision}\u0000${viewGeneration}`
+      )
+      .digest('hex');
+    return {
+      message: Object.freeze({
+        type: 'feedback.peer.release',
+        phase: 'apply',
+        releaseId: `feedback-peer-release-${digest}`,
+        requestId: pending.requestId,
+        lockId: pending.lockId,
+        viewGeneration,
+        revision: pending.revision,
+        documentVersion: pending.documentVersion,
+        contentSha256: pending.contentSha256,
+        content: pending.content,
+      }),
+      applied: false,
+      committed: false,
+    };
+  }
+
+  /** Capture the exact renderer-facing document identity used by a peer release. */
+  private feedbackPeerReleaseSnapshot(document: vscode.TextDocument): {
+    readonly content: string;
+    readonly contentSha256: string;
+    readonly documentVersion: number;
+  } {
+    const content = this.feedbackCloseSyncContent(document);
+    return {
+      content,
+      contentSha256: crypto.createHash('sha256').update(content, 'utf8').digest('hex'),
+      documentVersion: this.getDocumentVersion(document),
+    };
+  }
+
+  /** Populate current renderer generations for one apply-under-lock revision. */
+  private populateFeedbackPeerReleaseTargets(
+    documentKey: string,
+    pending: PendingFeedbackPeerRelease
+  ): void {
+    const transition =
+      pending.kind === 'transition' ? this.feedbackTransitions.get(documentKey) : undefined;
+    for (const webview of this.feedbackWebviews.get(documentKey) ?? []) {
+      if (this.isFeedbackViewGenerationUnavailable(webview)) continue;
+      // A failed pre-capture transition can end before the host has correlated
+      // the owner's local starting state. The owner handles that error locally;
+      // only renderers that received a host lock participate in this barrier.
+      if (
+        pending.kind === 'transition' &&
+        transition?.ownerWebview === webview &&
+        !transition.ownerLockPosted
+      ) {
+        continue;
+      }
+      pending.targets.set(webview, this.createFeedbackPeerReleaseTarget(pending, webview));
+    }
+  }
+
+  /** Start one authoritative apply-under-lock barrier for every registered split. */
+  private beginFeedbackPeerRelease(
+    kind: PendingFeedbackPeerRelease['kind'],
+    document: vscode.TextDocument,
+    requestId: string,
+    lockId: string,
+    revision: number
+  ): Promise<void> {
+    const documentKey = document.uri.toString();
+    const existing = this.pendingFeedbackPeerReleases.get(documentKey);
+    if (existing) {
+      if (
+        existing.kind === kind &&
+        existing.requestId === requestId &&
+        existing.lockId === lockId &&
+        existing.lifecycleRevision === revision
+      ) {
+        return existing.completion;
+      }
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-001',
+        'A different Feedback peer release is already pending.'
+      );
+    }
+
+    const snapshot = this.feedbackPeerReleaseSnapshot(document);
+    let resolveCompletion: () => void = () => undefined;
+    const completion = new Promise<void>(resolve => {
+      resolveCompletion = resolve;
+    });
+    const pending: PendingFeedbackPeerRelease = {
+      kind,
+      document,
+      requestId,
+      lockId,
+      lifecycleRevision: revision,
+      revision,
+      documentVersion: snapshot.documentVersion,
+      contentSha256: snapshot.contentSha256,
+      content: snapshot.content,
+      phase: 'applying',
+      targets: new Map(),
+      completion,
+      resolveCompletion,
+    };
+    this.populateFeedbackPeerReleaseTargets(documentKey, pending);
+    this.pendingFeedbackPeerReleases.set(documentKey, pending);
+    for (const [webview, target] of pending.targets) {
+      this.postFeedbackPeerReleaseTarget(documentKey, pending, webview, target);
+    }
+    this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pending);
+    return completion;
+  }
+
+  /** Restart apply with a fresh identity if the TextDocument changed in flight. */
+  private restartFeedbackPeerReleaseIfDocumentChanged(
+    documentKey: string,
+    pending: PendingFeedbackPeerRelease
+  ): boolean {
+    if (
+      this.pendingFeedbackPeerReleases.get(documentKey) !== pending ||
+      pending.phase !== 'applying'
+    ) {
+      return false;
+    }
+    const snapshot = this.feedbackPeerReleaseSnapshot(pending.document);
+    if (
+      snapshot.documentVersion === pending.documentVersion &&
+      snapshot.contentSha256 === pending.contentSha256
+    ) {
+      return false;
+    }
+
+    for (const target of pending.targets.values()) target.deliveryAbortController?.abort();
+    pending.targets.clear();
+    pending.revision += 1;
+    pending.documentVersion = snapshot.documentVersion;
+    pending.contentSha256 = snapshot.contentSha256;
+    pending.content = snapshot.content;
+    this.populateFeedbackPeerReleaseTargets(documentKey, pending);
+    for (const [webview, target] of pending.targets) {
+      this.postFeedbackPeerReleaseTarget(documentKey, pending, webview, target);
+    }
+    this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pending);
+    return true;
+  }
+
+  /** Accept only the exact target identity for the current renderer generation. */
+  private acceptFeedbackPeerRelease(
+    message: Extract<FeedbackWebviewMessage, { type: 'feedback.peer.released' }>,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): void {
+    const documentKey = document.uri.toString();
+    const pending = this.pendingFeedbackPeerReleases.get(documentKey);
+    const target = pending?.targets.get(webview);
+    if (
+      !pending ||
+      !target ||
+      target.message.releaseId !== message.releaseId ||
+      target.message.requestId !== message.requestId ||
+      target.message.lockId !== message.lockId ||
+      target.message.viewGeneration !== message.viewGeneration ||
+      target.message.revision !== message.revision ||
+      target.message.phase !== message.phase ||
+      target.message.documentVersion !== message.documentVersion ||
+      target.message.contentSha256 !== message.contentSha256 ||
+      this.editViewGenerations.get(webview) !== message.viewGeneration
+    ) {
+      return;
+    }
+    if (
+      message.phase === 'apply' &&
+      this.restartFeedbackPeerReleaseIfDocumentChanged(documentKey, pending)
+    ) {
+      return;
+    }
+    this.acknowledgeFeedbackCriticalStage(
+      webview,
+      target.message.type,
+      `${target.message.releaseId}:${target.message.phase}`,
+      target.message.lockId,
+      target.message.revision,
+      true
+    );
+    // Bounded delivery may already have exhausted. Exact current semantic
+    // identity still makes a late application ACK authoritative.
+    if (message.phase === 'apply') {
+      target.applied = true;
+    } else {
+      target.committed = true;
+      // This exact renderer has unlocked. A subsequent Feedback session must
+      // acquire from its real null predecessor, even if another split's commit
+      // ACK is still outstanding.
+      this.appliedFeedbackPeerLocks.delete(webview);
+    }
+    this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pending);
+  }
+
+  /** Retire ownership after all apply ACKs, then ask each applied split to unlock. */
+  private commitFeedbackPeerRelease(
+    documentKey: string,
+    pending: PendingFeedbackPeerRelease
+  ): void {
+    if (
+      this.pendingFeedbackPeerReleases.get(documentKey) !== pending ||
+      pending.phase !== 'applying'
+    ) {
+      return;
+    }
+
+    if (pending.kind === 'session') {
+      const session = this.feedbackSessions.get(documentKey);
+      if (
+        !session ||
+        session.sessionId !== pending.lockId ||
+        session.pendingClose?.requestId !== pending.requestId ||
+        session.pendingClose.releaseRevision !== pending.lifecycleRevision
+      ) {
+        return;
+      }
+      session.pendingClose.deliveryAbortController?.abort();
+      this.feedbackSessions.delete(documentKey);
+      session.mutationIdleWaiters.forEach(resolve => resolve());
+      session.mutationIdleWaiters.clear();
+    } else {
+      const transition = this.feedbackTransitions.get(documentKey);
+      if (
+        !transition ||
+        transition.requestId !== pending.requestId ||
+        transition.lockId !== pending.lockId ||
+        transition.recoveryRevision !== pending.lifecycleRevision
+      ) {
+        return;
+      }
+      transition.deliveryAbortController?.abort();
+      this.feedbackTransitions.delete(documentKey);
+    }
+
+    // Ownership is now retired because every live renderer holds the exact
+    // same applied baseline. Each target remains locally locked until commit.
+    pending.phase = 'committing';
+    if (this.feedbackPeerLockIds.get(documentKey) === pending.lockId) {
+      this.feedbackPeerLockIds.delete(documentKey);
+    }
+    for (const [webview, target] of pending.targets) {
+      target.deliveryAbortController?.abort();
+      target.deliveryAbortController = undefined;
+      const applyMessage = target.message;
+      if (applyMessage.phase !== 'apply') continue;
+      target.message = Object.freeze({
+        type: applyMessage.type,
+        phase: 'commit',
+        releaseId: applyMessage.releaseId,
+        requestId: applyMessage.requestId,
+        lockId: applyMessage.lockId,
+        viewGeneration: applyMessage.viewGeneration,
+        revision: applyMessage.revision,
+        documentVersion: applyMessage.documentVersion,
+        contentSha256: applyMessage.contentSha256,
+      });
+      this.postFeedbackPeerReleaseTarget(documentKey, pending, webview, target);
+    }
+    this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pending);
+  }
+
+  /** Advance the two-phase barrier only when every still-live target ACKed. */
+  private finalizeFeedbackPeerReleaseIfComplete(
+    documentKey: string,
+    pending: PendingFeedbackPeerRelease
+  ): void {
+    if (this.pendingFeedbackPeerReleases.get(documentKey) !== pending) return;
+    if (pending.phase === 'applying') {
+      if ([...pending.targets.values()].some(target => !target.applied)) return;
+      if (this.restartFeedbackPeerReleaseIfDocumentChanged(documentKey, pending)) return;
+      this.commitFeedbackPeerRelease(documentKey, pending);
+      return;
+    }
+    if ([...pending.targets.values()].some(target => !target.committed)) return;
+
+    this.pendingFeedbackPeerReleases.delete(documentKey);
+    for (const [webview, target] of pending.targets) {
+      target.deliveryAbortController?.abort();
+      this.appliedFeedbackPeerLocks.delete(webview);
+      if (!this.feedbackDeliveryCapableWebviews.has(webview)) {
+        // Compatibility-only presentation for pre-protocol test adapters.
+        this.updateWebview(pending.document, webview, { force: true });
+        this.postFeedbackMessage(webview, {
+          type: 'feedback.peer.unlocked',
+          lockId: pending.lockId,
+        });
+      }
+    }
+    pending.resolveCompletion();
+  }
+
+  private static readonly MAX_PENDING_FEEDBACK_STATUS_QUERIES = 128;
+  private static readonly FEEDBACK_STATUS_QUERY_TIMEOUT_MS = 750;
+
+  /** Ask one renderer for its actual state after application ACK retries expire. */
+  private queryFeedbackStartedStatus(
+    webview: vscode.Webview,
+    identity: FeedbackDeliveryIdentity,
+    signal: AbortSignal
+  ): Promise<FeedbackDeliveryApplicationStatus> {
+    if (this.disposed) return Promise.reject(new Error('Feedback provider disposed.'));
+    if (signal.aborted) return Promise.reject(new Error('Feedback status query cancelled.'));
+
+    let waiters = this.pendingFeedbackStatusQueries.get(webview);
+    if (!waiters) {
+      waiters = new Map();
+      this.pendingFeedbackStatusQueries.set(webview, waiters);
+    }
+    if (
+      waiters.has(identity.messageId) ||
+      waiters.size >= MarkdownEditorProvider.MAX_PENDING_FEEDBACK_STATUS_QUERIES
+    ) {
+      if (waiters.size === 0) this.pendingFeedbackStatusQueries.delete(webview);
+      return Promise.reject(new Error('Feedback status query capacity is unavailable.'));
+    }
+
+    return new Promise<FeedbackDeliveryApplicationStatus>((resolve, reject) => {
+      let settled = false;
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', abortListener);
+        const current = this.pendingFeedbackStatusQueries.get(webview);
+        if (current?.get(identity.messageId) === waiter) current.delete(identity.messageId);
+        if (current?.size === 0) this.pendingFeedbackStatusQueries.delete(webview);
+      };
+      const resolveStatus = (status: FeedbackDeliveryApplicationStatus): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(status);
+      };
+      const rejectStatus = (error: Error): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+      const abortListener = (): void => rejectStatus(new Error('Feedback status query cancelled.'));
+      const waiter: PendingFeedbackStatusQuery = {
+        identity: { ...identity },
+        resolve: resolveStatus,
+        reject: rejectStatus,
+      };
+
+      waiters.set(identity.messageId, waiter);
+      signal.addEventListener('abort', abortListener, { once: true });
+      const timer = setTimeout(
+        () => rejectStatus(new Error('Feedback renderer status query timed out.')),
+        MarkdownEditorProvider.FEEDBACK_STATUS_QUERY_TIMEOUT_MS
+      );
+
+      const query = {
+        type: 'feedback.delivery.status.query' as const,
+        protocolVersion: FEEDBACK_DELIVERY_PROTOCOL_VERSION,
+        ...identity,
+      };
+      let queued: Thenable<boolean>;
+      try {
+        queued = webview.postMessage(query);
+      } catch {
+        rejectStatus(new Error('Feedback renderer status query failed.'));
+        return;
+      }
+      void Promise.resolve(queued).then(
+        queued => {
+          if (!queued) rejectStatus(new Error('Feedback renderer status query was not queued.'));
+        },
+        () => rejectStatus(new Error('Feedback renderer status query failed.'))
+      );
+    });
+  }
+
+  /** Consume only a status response matching every field of the pending identity. */
+  private acceptFeedbackDeliveryStatus(
+    webview: vscode.Webview,
+    response: FeedbackDeliveryStatusResponse
+  ): void {
+    const waiter = this.pendingFeedbackStatusQueries.get(webview)?.get(response.messageId);
+    if (
+      !waiter ||
+      waiter.identity.operationEpoch !== response.operationEpoch ||
+      waiter.identity.sessionEpoch !== response.sessionEpoch ||
+      waiter.identity.stageRevision !== response.stageRevision
+    ) {
+      return;
+    }
+    waiter.resolve(response.status);
+  }
+
+  /** Reject and forget every status waiter owned by one renderer lifetime. */
+  private cancelFeedbackStatusQueries(webview: vscode.Webview, reason: string): void {
+    const waiters = this.pendingFeedbackStatusQueries.get(webview);
+    if (!waiters) return;
+    for (const waiter of [...waiters.values()]) waiter.reject(new Error(reason));
+    this.pendingFeedbackStatusQueries.delete(webview);
+  }
+
+  /** Restore editability while retaining the durable draft after delivery failure. */
+  private recoverFailedFeedbackStartedDelivery(
+    requestId: string,
+    session: ActiveFeedbackSession,
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    result: FeedbackDeliveryResult<
+      FeedbackStartedApplicationResult,
+      FeedbackDeliveryApplicationStatus
+    >
+  ): void {
+    if (result.kind === 'cancelled') return;
+    if (result.kind === 'acknowledged' && result.acknowledgement.outcome.kind === 'applied') {
+      this.completeFeedbackControllerRestore(requestId, session, webview);
+      return;
+    }
+    if (result.kind === 'status' && result.status.kind === 'applied') {
+      this.completeFeedbackControllerRestore(requestId, session, webview);
+      return;
+    }
+    if (result.kind === 'unavailable') {
+      const generation = this.editViewGenerations.get(webview);
+      if (generation) this.markFeedbackViewGenerationUnavailable(webview, generation);
+    }
+
+    console.warn('[MD4H] Feedback renderer did not apply the acknowledged start stage.');
+    this.demoteFeedbackSessionAfterRendererFailure(
+      requestId,
+      session,
+      document,
+      webview,
+      'MD4H-FB-STORE-002',
+      'The rich editor did not confirm Feedback activation. The draft was saved and editing was restored.'
+    );
+  }
+
+  /** Forget a completed automatic restore without affecting ordinary Start. */
+  private completeFeedbackControllerRestore(
+    requestId: string,
+    session: ActiveFeedbackSession,
+    webview: vscode.Webview
+  ): void {
+    const pending = this.pendingFeedbackControllerRestores.get(webview);
+    if (pending?.controllerRequestId === requestId && pending.sessionId === session.sessionId) {
+      this.pendingFeedbackControllerRestores.delete(webview);
+    }
+  }
+
+  /** Retire failed activation only after every available renderer applies it. */
+  private demoteFeedbackSessionAfterRendererFailure(
+    requestId: string,
+    session: ActiveFeedbackSession | undefined,
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    code: FeedbackHostErrorCode,
+    message: string
+  ): void {
+    const pending = this.pendingFeedbackControllerRestores.get(webview);
+    if (!session || pending?.sessionId === session.sessionId) {
+      this.pendingFeedbackControllerRestores.delete(webview);
+    }
+
+    const documentKey = document.uri.toString();
+    if (
+      !session ||
+      this.feedbackSessions.get(documentKey) !== session ||
+      session.ownerWebview !== webview
+    ) {
+      return;
+    }
+
+    this.feedbackActiveResumeOffers.delete(webview);
+    this.postFeedbackMessage(webview, {
+      type: 'feedback.error',
+      requestId,
+      code,
+      message,
+      recoverable: true,
+    });
+    void this.retireFeedbackSessionThroughPeerRelease(
+      documentKey,
+      session,
+      document,
+      requestId,
+      true
+    )
+      .then(() => this.announceMatchingFeedbackDrafts(document, webview))
+      .catch(error => {
+        console.warn(
+          `[MD4H] Could not safely demote failed Feedback activation: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
+  }
+
   /**
    * Builds webview summaries without exposing raw file URIs or image bytes.
    * Screenshot URLs are derived only from store-validated bundle assets and
@@ -1246,13 +3416,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webview: vscode.Webview
   ): FeedbackItemSummary[] {
     return session.store.items.map(item => {
-      const target = session.targets.get(item.id);
-      const fallback = this.feedbackOrdinalsForLines(
-        session.anchorMap,
-        item.startLine,
-        item.endLine
-      );
-      const ordinals = target ?? fallback;
+      const ordinals =
+        session.targets.get(item.id) ??
+        findFeedbackOrdinalsForLines(session.anchorMap, item.startLine, item.endLine);
       if (!ordinals) {
         session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
         throw Object.assign(
@@ -1276,6 +3442,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           ...(item.renderedRange === undefined || session.degradedRenderedRangeIds.has(item.id)
             ? {}
             : { renderedRange: item.renderedRange }),
+          ...(item.cellTarget === undefined || session.degradedCellTargetIds.has(item.id)
+            ? {}
+            : { cellTarget: item.cellTarget }),
         };
       }
       return {
@@ -1324,31 +3493,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return `${scopedUri}${separator}md4hFeedback=${encodeURIComponent(
       `${session.previewNonce}-${item.id}-${revision}`
     )}`;
-  }
-
-  private feedbackOrdinalsForLines(
-    anchorMap: FeedbackAnchorMap,
-    startLine: number,
-    endLine: number
-  ): { startOrdinal: number; endOrdinal: number } | null {
-    return this.findFeedbackOrdinalsForLines(anchorMap, startLine, endLine);
-  }
-
-  private findFeedbackOrdinalsForLines(
-    anchorMap: FeedbackAnchorMap,
-    startLine: number,
-    endLine: number
-  ): { startOrdinal: number; endOrdinal: number } | null {
-    const firstIndex = anchorMap.blocks.findIndex(block => block.startLine === startLine);
-    if (firstIndex < 0) return null;
-    const lastIndex = anchorMap.blocks.findIndex(
-      (block, index) => index >= firstIndex && block.endLine === endLine
-    );
-    if (lastIndex < firstIndex) return null;
-    return {
-      startOrdinal: anchorMap.blocks[firstIndex].ordinal,
-      endOrdinal: anchorMap.blocks[lastIndex].ordinal,
-    };
   }
 
   /**
@@ -1428,38 +3572,77 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     document: vscode.TextDocument,
     webview: vscode.Webview
   ): Promise<boolean> {
+    if (!(await this.drainDocumentEdits(document))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'Could not apply pending editor changes before starting feedback.'
+      );
+    }
+
     const requestId = `feedback-flush-${crypto.randomBytes(8).toString('hex')}`;
     const documentKey = document.uri.toString();
+    const viewGeneration = this.getEditViewGeneration(webview);
+    const documentVersion = this.getDocumentVersion(document);
     const registeredBeforeFlush = this.feedbackWebviews.get(documentKey)?.has(webview) === true;
-    let acknowledged = false;
-    let flushSucceeded = false;
+    const completedBefore = new Set(this.documentEditAckHistory.get(webview)?.keys() ?? []);
     let acknowledgementTimeout: ReturnType<typeof setTimeout> | undefined;
-    const acknowledgement = new Promise<void>(resolve => {
-      this.flushAckResolvers.set(requestId, ok => {
-        acknowledged = true;
-        flushSucceeded = ok;
-        if (acknowledgementTimeout) clearTimeout(acknowledgementTimeout);
-        resolve();
-      });
-      acknowledgementTimeout = setTimeout(() => {
-        if (this.flushAckResolvers.delete(requestId)) resolve();
-      }, FEEDBACK_FLUSH_ACK_TIMEOUT_MS);
+    let settled = false;
+    let markFlushSettled: () => void = () => undefined;
+    const flushSettled = new Promise<void>(resolve => {
+      markFlushSettled = resolve;
     });
-    let posted = false;
+    let settleBoundary: (
+      outcome: 'acknowledged' | 'rejected' | 'unavailable' | 'timeout'
+    ) => void = () => undefined;
+    const boundary = new Promise<'acknowledged' | 'rejected' | 'unavailable' | 'timeout'>(
+      resolve => {
+        settleBoundary = outcome => {
+          if (settled) return;
+          settled = true;
+          this.flushAckResolvers.delete(requestId);
+          if (acknowledgementTimeout) clearTimeout(acknowledgementTimeout);
+          markFlushSettled();
+          resolve(outcome);
+        };
+        this.flushAckResolvers.set(requestId, {
+          webview,
+          viewGeneration,
+          documentVersion,
+          settled: flushSettled,
+          resolve: ok => {
+            settleBoundary(ok ? 'acknowledged' : 'rejected');
+          },
+        });
+        acknowledgementTimeout = setTimeout(() => {
+          settleBoundary('timeout');
+        }, FEEDBACK_FLUSH_ACK_TIMEOUT_MS);
+      }
+    );
     try {
-      posted = (await webview.postMessage({ type: 'flushPendingEdit', requestId })) !== false;
+      const delivery = webview.postMessage({
+        type: 'flushPendingEdit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        requestId,
+        viewGeneration,
+        documentVersion,
+      });
+      void Promise.resolve(delivery).then(
+        posted => {
+          if (posted === false) settleBoundary('unavailable');
+        },
+        () => {
+          settleBoundary('unavailable');
+        }
+      );
     } catch {
       // Replaced panels can become unavailable just before their disposal
       // callbacks finish. The caller may prune peers, but never the owner.
-      posted = false;
+      settleBoundary('unavailable');
     }
-    if (!posted) {
-      this.flushAckResolvers.delete(requestId);
-      if (acknowledgementTimeout) clearTimeout(acknowledgementTimeout);
-      return false;
-    }
-    await acknowledgement;
-    if (!acknowledged) {
+
+    const outcome = await boundary;
+    if (outcome === 'unavailable') return false;
+    if (outcome === 'timeout') {
       if (registeredBeforeFlush && !this.feedbackWebviews.get(documentKey)?.has(webview)) {
         return false;
       }
@@ -1468,22 +3651,33 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         'Could not flush the latest editor changes, so feedback did not start.'
       );
     }
-    if (!flushSucceeded) {
+    if (outcome === 'rejected') {
       throw new FeedbackSessionError(
         'MD4H-FB-STORE-002',
         'Could not flush the latest editor changes, so feedback did not start.'
       );
     }
 
-    const inFlight = this.inFlightApplyEdits.get(document.uri.toString());
-    if (inFlight) {
-      const applied = await inFlight;
-      if (!applied) {
-        throw new FeedbackSessionError(
-          'MD4H-FB-STORE-002',
-          'Could not apply pending editor changes before starting feedback.'
-        );
-      }
+    const acknowledgements = [...(this.pendingDocumentEditAcks.get(webview)?.values() ?? [])];
+    const results = await Promise.all(acknowledgements);
+
+    if (!(await this.drainDocumentEdits(document))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'Could not apply pending editor changes before starting feedback.'
+      );
+    }
+    const completedAfter = this.documentEditAckHistory.get(webview);
+    const rejected =
+      results.some(result => !result.accepted) ||
+      [...(completedAfter?.entries() ?? [])].some(
+        ([editId, result]) => !completedBefore.has(editId) && !result.accepted
+      );
+    if (rejected) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'Could not apply the latest editor changes, so feedback did not start.'
+      );
     }
     return true;
   }
@@ -1509,6 +3703,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       const documentKey = document.uri.toString();
       this.unregisterFeedbackWebview(documentKey, target);
       this.lastHostContentByWebview.delete(target);
+      this.pendingHostContentByWebview.delete(target);
       if (this.lastWebviewContentSource.get(documentKey) === target) {
         this.lastWebviewContentSource.delete(documentKey);
       }
@@ -1521,10 +3716,63 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     }
   }
 
+  /** Return every currently registered split exactly once, with the owner last. */
+  private feedbackSnapshotWebviews(
+    document: vscode.TextDocument,
+    ownerWebview: vscode.Webview
+  ): vscode.Webview[] {
+    const registered = [...(this.feedbackWebviews.get(document.uri.toString()) ?? [])];
+    return [
+      ...new Set([...registered.filter(candidate => candidate !== ownerWebview), ownerWebview]),
+    ];
+  }
+
+  /** Fail before any flush can choose a winner when dirty split contents diverge. */
+  private async inspectFeedbackSnapshotSplits(
+    document: vscode.TextDocument,
+    ownerWebview: vscode.Webview,
+    operationId: string
+  ): Promise<void> {
+    const webviews = this.feedbackSnapshotWebviews(document, ownerWebview);
+    if (webviews.some(webview => !this.feedbackSnapshotCapableWebviews.has(webview))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        'Reload every open rich editor split before starting Feedback so their snapshots can be verified.'
+      );
+    }
+    const documentVersion = this.getDocumentVersion(document);
+    const reports = await Promise.all(
+      webviews.map((webview, index) =>
+        this.requestFeedbackSnapshotReport(webview, {
+          type: 'feedback.snapshot.inspect',
+          protocolVersion: FEEDBACK_SNAPSHOT_PROTOCOL_VERSION,
+          requestId: `${operationId}-inspect-${index + 1}`,
+          operationId,
+          documentVersion,
+        })
+      )
+    );
+    const dirtyDigests = new Set(
+      reports
+        .filter(
+          (report): report is Extract<FeedbackSnapshotReport, { stage: 'inspect' }> =>
+            report.stage === 'inspect' && report.dirty
+        )
+        .map(report => computeFeedbackTextSha256(report.content))
+    );
+    if (dirtyDigests.size > 1) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        'Two dirty rich editor splits contain divergent Markdown. Save or reconcile the splits before starting Feedback.'
+      );
+    }
+  }
+
   private async flushFeedbackSnapshot(
     document: vscode.TextDocument,
-    webview: vscode.Webview
-  ): Promise<Buffer> {
+    webview: vscode.Webview,
+    beforeCapture?: () => Promise<void>
+  ): Promise<FlushedFeedbackSnapshot> {
     if (document.uri.scheme !== 'file') {
       throw new FeedbackSessionError(
         'MD4H-FB-STORE-001',
@@ -1532,7 +3780,21 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       );
     }
 
+    const operationId = crypto.randomBytes(16).toString('hex');
+    if (this.feedbackSnapshotCapableWebviews.has(webview)) {
+      await this.inspectFeedbackSnapshotSplits(document, webview, operationId);
+    }
     await this.flushFeedbackWebviews(document, webview);
+    await beforeCapture?.();
+    if (!(await this.drainDocumentEdits(document))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'Could not settle editor changes after installing the Feedback split locks.'
+      );
+    }
+
+    const capturedDocumentVersion = this.getDocumentVersion(document);
+    const capturedSourceText = document.getText();
 
     if (document.isDirty) {
       let saved = false;
@@ -1552,7 +3814,120 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       }
     }
 
-    return readFile(document.uri.fsPath);
+    const sourceBytes = await readFile(document.uri.fsPath);
+    const prepared = this.feedbackSnapshotService.prepareSource({
+      documentUri: document.uri.toString(),
+      operationId,
+      capturedDocumentVersion,
+      currentDocumentVersion: this.getDocumentVersion(document),
+      sourceText: capturedSourceText,
+      savedBytes: sourceBytes,
+    });
+    if (!prepared.ok) {
+      throw new FeedbackSessionError(prepared.error.code, prepared.error.detail);
+    }
+    return { sourceBytes, source: prepared.source };
+  }
+
+  /** Apply one saved source to every split and verify the owner's fresh block map. */
+  private async finalizeFeedbackRendererSnapshot(
+    document: vscode.TextDocument,
+    ownerWebview: vscode.Webview,
+    source: FeedbackPreparedSourceSnapshot
+  ): Promise<FinalizedFeedbackRendererSnapshot> {
+    const webviews = this.feedbackSnapshotWebviews(document, ownerWebview);
+    if (webviews.some(webview => !this.feedbackSnapshotCapableWebviews.has(webview))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        'A rich editor split cannot verify the saved Feedback snapshot. Reload every split and try again.'
+      );
+    }
+
+    const descriptorRevision = 1;
+    const reports = await Promise.all(
+      webviews.map((webview, index) =>
+        this.requestFeedbackSnapshotReport(webview, {
+          type: 'feedback.snapshot.apply',
+          protocolVersion: FEEDBACK_SNAPSHOT_PROTOCOL_VERSION,
+          requestId: `${source.operationId}-apply-${index + 1}`,
+          operationId: source.operationId,
+          documentVersion: source.documentVersion,
+          content: this.wrapFrontmatterForWebview(source.sourceText),
+          descriptorRevision,
+          includeCanonicalBlocks: webview === ownerWebview,
+        })
+      )
+    );
+    if (reports.some(report => report.stage !== 'applied')) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        'A rich editor split returned the wrong Feedback snapshot stage.'
+      );
+    }
+    const appliedReports = reports as FeedbackSnapshotAppliedReport[];
+    if (
+      appliedReports.some(
+        report =>
+          report.canonicalDescriptorRevision !== descriptorRevision ||
+          !this.feedbackRendererContentMatchesSource(report.content, source.sourceText)
+      )
+    ) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        'A rich editor split applied a different Feedback snapshot revision.'
+      );
+    }
+    const ownerIndex = webviews.indexOf(ownerWebview);
+    const ownerReport = appliedReports[ownerIndex];
+    if (!ownerReport?.blocks || ownerReport.blocks.length === 0) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        'The active rich editor did not return canonical blocks for the saved snapshot.'
+      );
+    }
+
+    const splitReports: FeedbackSplitSnapshotReport[] = appliedReports.map(report => ({
+      viewId: report.viewGeneration,
+      viewGeneration: report.viewGeneration,
+      localRevision: report.localRevision,
+      documentVersion: report.documentVersion,
+      dirty: false,
+      // The renderer's actual serialization was independently validated just
+      // above. The snapshot identity remains bound to the exact saved source.
+      contentSha256: source.sourceTextSha256,
+    }));
+    const finalized = this.feedbackSnapshotService.finalize({
+      source,
+      currentDocumentVersion: this.getDocumentVersion(document),
+      splitReports,
+      renderer: {
+        viewId: ownerReport.viewGeneration,
+        viewGeneration: ownerReport.viewGeneration,
+        localRevision: ownerReport.localRevision,
+        documentVersion: ownerReport.documentVersion,
+        contentSha256: source.sourceTextSha256,
+        canonicalDescriptorRevision: ownerReport.canonicalDescriptorRevision,
+      },
+      descriptors: {
+        revision: ownerReport.canonicalDescriptorRevision,
+        blocks: ownerReport.blocks,
+      },
+    });
+    if (!finalized.ok) {
+      throw new FeedbackSessionError(finalized.error.code, finalized.error.detail);
+    }
+
+    for (const webview of webviews) {
+      this.pendingHostContentByWebview.delete(webview);
+      this.lastHostContentByWebview.set(webview, source.sourceText);
+    }
+    return {
+      identity: finalized.snapshot,
+      blocks: ownerReport.blocks,
+      anchorMap: {
+        blocks: finalized.snapshot.anchorMap.blocks.map(block => ({ ...block })),
+      },
+    };
   }
 
   private requireFeedbackSession(
@@ -1594,11 +3969,53 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       blocks.map(block => [
         block.ordinal,
         {
+          kind: block.kind,
           contentSize: block.contentSize,
           sha256: crypto.createHash('sha256').update(block.markdown, 'utf8').digest('hex'),
         },
       ])
     );
+  }
+
+  /**
+   * Bounds an untrusted rectangular cell selection to one frozen table block
+   * and adds the host-owned hash used to validate draft restoration.
+   */
+  private enrichFeedbackCellTarget(
+    session: ActiveFeedbackSession,
+    target: { startOrdinal: number; endOrdinal: number },
+    input: FeedbackCellTargetInputV1
+  ): FeedbackCellTargetV1 {
+    const tableBlock = session.canonicalBlocks.get(input.tableOrdinal);
+    const rectangle = input.rectangle;
+    if (
+      input.version !== 1 ||
+      target.startOrdinal !== target.endOrdinal ||
+      input.tableOrdinal !== target.startOrdinal ||
+      tableBlock?.kind !== 'table' ||
+      !Number.isSafeInteger(rectangle.top) ||
+      !Number.isSafeInteger(rectangle.left) ||
+      !Number.isSafeInteger(rectangle.bottom) ||
+      !Number.isSafeInteger(rectangle.right) ||
+      rectangle.top < 0 ||
+      rectangle.left < 0 ||
+      rectangle.bottom <= rectangle.top ||
+      rectangle.right <= rectangle.left
+    ) {
+      session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+      throw Object.assign(
+        new Error('The selected table cells do not map to the frozen Markdown table block.'),
+        { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+      );
+    }
+
+    return {
+      version: 1,
+      tableOrdinal: input.tableOrdinal,
+      rectangle: { ...rectangle },
+      tableFingerprint: input.tableFingerprint,
+      tableBlockSha256: tableBlock.sha256,
+    };
   }
 
   /**
@@ -1664,6 +4081,26 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       expected.startBlockSha256 !== persisted.startBlockSha256 ||
       expected.endBlockSha256 !== persisted.endBlockSha256
     ) {
+      session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+      return false;
+    }
+    return true;
+  }
+
+  /** Revalidate the host-owned containing-table identity on draft restoration. */
+  private validatePersistedFeedbackCellTarget(
+    session: ActiveFeedbackSession,
+    target: { startOrdinal: number; endOrdinal: number },
+    persisted: FeedbackCellTargetV1
+  ): boolean {
+    let expected: FeedbackCellTargetV1;
+    try {
+      expected = this.enrichFeedbackCellTarget(session, target, persisted);
+    } catch {
+      session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+      return false;
+    }
+    if (expected.tableBlockSha256 !== persisted.tableBlockSha256) {
       session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
       return false;
     }
@@ -1751,6 +4188,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         }
       | undefined;
     try {
+      if (message.type === 'feedback.controller.ready') {
+        this.handleFeedbackControllerReady(message, document, webview);
+        return;
+      }
+
       if (message.type === 'feedback.start' || message.type === 'feedback.start.new') {
         await this.runFeedbackEntryOperation(document.uri.toString(), () =>
           this.startFeedbackSession(message, document, webview)
@@ -1791,12 +4233,64 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         return;
       }
 
+      if (message.type === 'feedback.peer.lock.acquired') {
+        const pending = this.pendingFeedbackPeerLockAcquisitions.get(webview);
+        if (
+          !pending ||
+          pending.acquisitionId !== message.acquisitionId ||
+          pending.requestId !== message.requestId ||
+          pending.lockId !== message.lockId ||
+          pending.replacesLockId !== message.replacesLockId ||
+          pending.viewGeneration !== message.viewGeneration ||
+          pending.revision !== message.revision ||
+          this.editViewGenerations.get(webview) !== message.viewGeneration
+        ) {
+          return;
+        }
+        this.acknowledgeFeedbackCriticalStage(
+          webview,
+          pending.type,
+          pending.acquisitionId,
+          pending.lockId,
+          pending.revision,
+          true
+        );
+        // The transport may have already exhausted its bounded attempts. The
+        // exact pending semantic identity still makes a late ACK authoritative.
+        this.appliedFeedbackPeerLocks.set(webview, {
+          viewGeneration: pending.viewGeneration,
+          lockId: pending.lockId,
+        });
+        this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+        return;
+      }
+
+      // Peer release ACKs are correlated outside the owner-session union.
+      if (message.type === 'feedback.peer.released') {
+        this.acceptFeedbackPeerRelease(message, document, webview);
+        return;
+      }
+
+      if (message.type === 'feedback.session.transfer.ack') {
+        this.acceptFeedbackSessionTransferAcknowledgement(message, document, webview);
+        return;
+      }
+
       if (
         message.type === 'feedback.transition.applied' ||
         message.type === 'feedback.transition.retry'
       ) {
         const documentKey = document.uri.toString();
+        const acknowledgement = this.acknowledgeFeedbackCriticalStage(
+          webview,
+          'feedback.transition.sync',
+          message.requestId,
+          message.lockId,
+          message.revision,
+          message.type === 'feedback.transition.applied'
+        );
         const transition = this.feedbackTransitions.get(documentKey);
+        if (!transition && acknowledgement === 'duplicate') return;
         if (
           !transition ||
           transition.ownerWebview !== webview ||
@@ -1817,22 +4311,88 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           .update(currentContent, 'utf8')
           .digest('hex');
         if (message.type === 'feedback.transition.retry') {
-          this.postFeedbackTransitionSync(
-            document,
-            transition,
-            currentContent,
-            currentSha256 !== transition.recoveryContentSha256
-          );
+          const contentChanged = currentSha256 !== transition.recoveryContentSha256;
+          if (!contentChanged && this.feedbackDeliveryCapableWebviews.has(webview)) {
+            // The semantic revision is unchanged, but this is a new bounded
+            // delivery cycle requested by the renderer after a failed apply.
+            this.resetFeedbackCriticalTransport(webview);
+          }
+          this.postFeedbackTransitionSync(document, transition, currentContent, contentChanged);
           return;
         }
-        if (currentSha256 !== transition.recoveryContentSha256) {
-          this.postFeedbackTransitionSync(document, transition, currentContent);
+        await this.acquireFeedbackPeerLocks(
+          documentKey,
+          transition.ownerWebview,
+          transition.requestId,
+          transition.lockId
+        );
+        if (this.feedbackTransitions.get(documentKey) !== transition) return;
+        const releaseContent = this.feedbackCloseSyncContent(document);
+        const releaseSha256 = crypto
+          .createHash('sha256')
+          .update(releaseContent, 'utf8')
+          .digest('hex');
+        if (releaseSha256 !== transition.recoveryContentSha256) {
+          this.postFeedbackTransitionSync(document, transition, releaseContent);
           return;
         }
 
-        this.syncFeedbackPeerContent(document, transition.ownerWebview);
-        this.feedbackTransitions.delete(documentKey);
-        this.refreshFeedbackPeerLocks(documentKey);
+        transition.deliveryAbortController?.abort();
+        this.beginFeedbackPeerRelease(
+          'transition',
+          document,
+          transition.requestId,
+          transition.lockId,
+          transition.recoveryRevision
+        );
+        return;
+      }
+
+      let criticalCloseAcknowledgement: FeedbackAcknowledgementDisposition = 'ignored';
+      if (message.type === 'feedback.close.ready') {
+        const currentSession = this.feedbackSessions.get(document.uri.toString());
+        const terminalTypes: Array<'feedback.finished' | 'feedback.discarded'> =
+          currentSession?.pendingClose?.requestId === message.requestId &&
+          currentSession.sessionId === message.sessionId
+            ? [currentSession.pendingClose.terminalType]
+            : ['feedback.finished', 'feedback.discarded'];
+        for (const terminalType of terminalTypes) {
+          const disposition = this.acknowledgeFeedbackCriticalStage(
+            webview,
+            terminalType,
+            message.requestId,
+            message.sessionId,
+            1,
+            true
+          );
+          if (disposition !== 'ignored') criticalCloseAcknowledgement = disposition;
+        }
+      } else if (
+        message.type === 'feedback.close.applied' ||
+        message.type === 'feedback.close.retry'
+      ) {
+        criticalCloseAcknowledgement = this.acknowledgeFeedbackCriticalStage(
+          webview,
+          'feedback.close.sync',
+          message.requestId,
+          message.sessionId,
+          message.revision,
+          message.type === 'feedback.close.applied'
+        );
+      } else if (message.type === 'feedback.close.released') {
+        criticalCloseAcknowledgement = this.acknowledgeFeedbackCriticalStage(
+          webview,
+          'feedback.close.release',
+          message.requestId,
+          message.sessionId,
+          message.revision,
+          true
+        );
+      }
+      if (
+        criticalCloseAcknowledgement === 'duplicate' &&
+        !this.feedbackSessions.has(document.uri.toString())
+      ) {
         return;
       }
 
@@ -1867,6 +4427,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       }
       if (message.type === 'feedback.close.ready') {
         if (
+          session.pendingClose?.requestId === message.requestId &&
+          session.pendingClose.revision > 0 &&
+          (session.phase === 'finishing' || session.phase === 'discarding')
+        ) {
+          return;
+        }
+        if (
           session.pendingClose?.requestId !== message.requestId ||
           session.pendingClose.revision !== 0 ||
           (session.phase !== 'finishing' && session.phase !== 'discarding')
@@ -1883,6 +4450,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         return;
       }
       if (message.type === 'feedback.close.applied') {
+        if (
+          session.pendingClose?.requestId === message.requestId &&
+          session.pendingClose.revision === message.revision &&
+          session.pendingClose.releaseRevision === message.revision &&
+          (session.phase === 'finishing' || session.phase === 'discarding')
+        ) {
+          return;
+        }
         if (
           session.pendingClose?.requestId !== message.requestId ||
           session.pendingClose.revision !== message.revision ||
@@ -1907,12 +4482,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         }
 
         session.pendingClose.releaseRevision = session.pendingClose.revision;
-        this.postFeedbackMessage(webview, {
+        const releaseMessage: Extract<
+          FeedbackCriticalHostMessage,
+          { type: 'feedback.close.release' }
+        > = {
           type: 'feedback.close.release',
           requestId: message.requestId,
           sessionId: session.sessionId,
           revision: session.pendingClose.revision,
-        });
+        };
+        session.pendingClose.deliveryAbortController = this.postFeedbackCriticalStage(
+          webview,
+          releaseMessage,
+          session.sessionId,
+          session.pendingClose.revision,
+          session.pendingClose.deliveryAbortController
+        );
         return;
       }
       if (message.type === 'feedback.close.released') {
@@ -1928,6 +4513,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           );
         }
 
+        await this.acquireFeedbackPeerLocks(
+          document.uri.toString(),
+          session.ownerWebview,
+          session.pendingClose.requestId,
+          session.sessionId
+        );
+        if (this.feedbackSessions.get(document.uri.toString()) !== session) return;
         const currentContent = this.feedbackCloseSyncContent(document);
         const currentSha256 = crypto
           .createHash('sha256')
@@ -1939,10 +4531,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           return;
         }
 
-        const documentKey = document.uri.toString();
-        this.syncFeedbackPeerContent(document, session.ownerWebview);
-        this.feedbackSessions.delete(documentKey);
-        this.refreshFeedbackPeerLocks(documentKey);
+        session.pendingClose.deliveryAbortController?.abort();
+        this.beginFeedbackPeerRelease(
+          'session',
+          document,
+          session.pendingClose.requestId,
+          session.sessionId,
+          session.pendingClose.releaseRevision
+        );
         return;
       }
       if (session.phase !== 'active') {
@@ -1979,6 +4575,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             message.renderedRange === undefined
               ? undefined
               : this.enrichFeedbackRenderedRange(session, target, message.renderedRange);
+          const cellTarget =
+            message.cellTarget === undefined
+              ? undefined
+              : this.enrichFeedbackCellTarget(session, target, message.cellTarget);
           const item = await session.store.addTextFeedback(
             {
               startLine: target.startLine,
@@ -1986,6 +4586,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
               focus: message.focus,
               feedback: message.feedback,
               ...(renderedRange === undefined ? {} : { renderedRange }),
+              ...(cellTarget === undefined ? {} : { cellTarget }),
             },
             this.feedbackCommitGuard(session, document)
           );
@@ -2120,8 +4721,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             } catch (clipboardError) {
               console.error('[MD4H] Feedback clipboard write failed:', clipboardError);
             }
-            session.pendingClose = { requestId: message.requestId, revision: 0 };
-            this.postFeedbackMessage(webview, {
+            session.pendingClose = {
+              requestId: message.requestId,
+              terminalType: 'feedback.finished',
+              revision: 0,
+            };
+            const finishedMessage: Extract<
+              FeedbackCriticalHostMessage,
+              { type: 'feedback.finished' }
+            > = {
               type: 'feedback.finished',
               requestId: message.requestId,
               sessionId: session.sessionId,
@@ -2129,7 +4737,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
               itemCount: result.itemCount,
               prompt: handoff.prompt,
               promptCopied,
-            });
+            };
+            session.pendingClose.deliveryAbortController = this.postFeedbackCriticalStage(
+              webview,
+              finishedMessage,
+              session.sessionId,
+              1
+            );
             return;
           } catch (error) {
             if (this.feedbackSessions.get(document.uri.toString()) === session) {
@@ -2221,12 +4835,25 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
               useTrash: true,
             });
             session.store.finalizeDiscard();
-            session.pendingClose = { requestId: message.requestId, revision: 0 };
-            this.postFeedbackMessage(webview, {
+            session.pendingClose = {
+              requestId: message.requestId,
+              terminalType: 'feedback.discarded',
+              revision: 0,
+            };
+            const discardedMessage: Extract<
+              FeedbackCriticalHostMessage,
+              { type: 'feedback.discarded' }
+            > = {
               type: 'feedback.discarded',
               requestId: message.requestId,
               sessionId: session.sessionId,
-            });
+            };
+            session.pendingClose.deliveryAbortController = this.postFeedbackCriticalStage(
+              webview,
+              discardedMessage,
+              session.sessionId,
+              1
+            );
             return;
           } catch (error) {
             if (
@@ -2323,32 +4950,36 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     webview: vscode.Webview
   ): Promise<void> {
     const documentKey = document.uri.toString();
-    const pendingEdit = this.inFlightApplyEdits.get(documentKey);
-    if (pendingEdit) await pendingEdit.catch(() => false);
+    if (this.hasPendingDocumentEdits(documentKey)) {
+      await this.drainDocumentEdits(document);
+    }
 
     let released = false;
     const session = this.feedbackSessions.get(documentKey);
     if (session?.ownerWebview === webview && session.invalidated) {
-      await this.waitForFeedbackMutations(session);
-      if (this.feedbackSessions.get(documentKey) === session) {
-        this.feedbackSessions.delete(documentKey);
-        session.mutationIdleWaiters.forEach(resolve => resolve());
-        session.mutationIdleWaiters.clear();
-        released = true;
-      }
+      await this.retireFeedbackSessionThroughPeerRelease(
+        documentKey,
+        session,
+        document,
+        `feedback-start-retry-${session.sessionId}`,
+        false
+      );
+      released = this.feedbackSessions.get(documentKey) !== session;
     }
 
     const transition = this.feedbackTransitions.get(documentKey);
     if (transition?.ownerWebview === webview) {
-      this.feedbackTransitions.delete(documentKey);
-      released = true;
+      await this.retireFeedbackTransitionThroughPeerRelease(
+        documentKey,
+        transition,
+        document,
+        !transition.ownerLockPosted
+      );
+      released = released || this.feedbackTransitions.get(documentKey) !== transition;
     }
 
     if (released) {
       this.feedbackActiveResumeOffers.delete(webview);
-      this.syncFeedbackPeerContent(document, webview);
-      this.updateWebview(document, webview, { force: true });
-      this.refreshFeedbackPeerLocks(documentKey);
     }
   }
 
@@ -2361,12 +4992,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const retrySession = this.feedbackSessions.get(documentKey);
     const retryTransition = this.feedbackTransitions.get(documentKey);
     if (
-      this.inFlightApplyEdits.has(documentKey) ||
+      this.hasPendingDocumentEdits(documentKey) ||
       (retrySession?.ownerWebview === webview && retrySession.invalidated) ||
       retryTransition?.ownerWebview === webview
     ) {
       await this.prepareFeedbackStartRetry(document, webview);
     }
+    const orphanRetirement = this.retireOrphanedFeedbackStateForStart(
+      document,
+      webview,
+      message.requestId
+    );
+    if (orphanRetirement) await orphanRetirement;
     if (
       message.type === 'feedback.start' &&
       this.offerActiveFeedbackResume(message, document, webview)
@@ -2374,6 +5011,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       return;
     }
     const transitionToken = this.beginFeedbackTransition(documentKey, webview, message.requestId);
+    const transitionLockId = this.feedbackTransitions.get(documentKey)?.lockId;
+    if (!transitionLockId) throw new Error('Feedback transition lock was not created.');
     try {
       const workspaceRoot = this.getWorkspaceFolderPath(document);
       if (!workspaceRoot) {
@@ -2383,7 +5022,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
       }
 
-      const sourceBytes = await this.flushFeedbackSnapshot(document, webview);
+      const flushedSnapshot = await this.flushFeedbackSnapshot(document, webview, async () => {
+        await this.acquireFeedbackPeerLocks(
+          documentKey,
+          webview,
+          message.requestId,
+          transitionLockId
+        );
+      });
+      const { sourceBytes } = flushedSnapshot;
       const transition = this.assertFeedbackTransition(documentKey, transitionToken);
       this.postFeedbackTransitionOwnerLock(transition);
       this.lockFeedbackTransition(documentKey, transitionToken);
@@ -2404,11 +5051,36 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           return;
         }
       }
-      const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
-      if (!anchorResult.ok) {
-        throw Object.assign(new Error(anchorResult.error.detail), {
-          code: anchorResult.error.code,
-        });
+      let anchorMap: FeedbackAnchorMap;
+      let canonicalBlocks: readonly CanonicalFeedbackBlock[] | undefined = message.blocks;
+      if (this.feedbackSnapshotCapableWebviews.has(webview)) {
+        const finalized = await this.finalizeFeedbackRendererSnapshot(
+          document,
+          webview,
+          flushedSnapshot.source
+        );
+        anchorMap = finalized.anchorMap;
+        canonicalBlocks = finalized.blocks;
+      } else {
+        if (!message.blocks) {
+          throw new FeedbackSessionError(
+            'MD4H-FB-SNAPSHOT-001',
+            'Reload the rich editor before starting Feedback so the saved snapshot can be verified.'
+          );
+        }
+        const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
+        if (!anchorResult.ok) {
+          throw Object.assign(new Error(anchorResult.error.detail), {
+            code: anchorResult.error.code,
+          });
+        }
+        anchorMap = anchorResult.map;
+      }
+      if (!canonicalBlocks) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-SNAPSHOT-001',
+          'The rich editor did not provide canonical blocks for the saved snapshot.'
+        );
       }
       const store = await FeedbackSessionStore.create({
         workspaceRoot,
@@ -2422,26 +5094,85 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         ownerWebview: webview,
         sessionId: crypto.randomBytes(16).toString('hex'),
         store,
-        anchorMap: anchorResult.map,
-        canonicalBlocks: this.buildFeedbackCanonicalBlocks(message.blocks),
+        anchorMap,
+        canonicalBlocks: this.buildFeedbackCanonicalBlocks(canonicalBlocks),
         targets: new Map(),
         previewNonce: crypto.randomBytes(8).toString('hex'),
         previewRevisions: new Map(),
         degradedRenderedRangeIds: new Set(),
+        degradedCellTargetIds: new Set(),
         phase: 'active',
         pendingMutationCount: 0,
         mutationIdleWaiters: new Set(),
         invalidated: false,
       };
       transition.recoveryRequired = false;
+      await this.acquireFeedbackPeerLocks(
+        documentKey,
+        webview,
+        message.requestId,
+        session.sessionId
+      );
+      this.assertFeedbackTransition(documentKey, transitionToken);
       this.feedbackSessions.set(documentKey, session);
       // Activate the owner before retiring its transition token. Otherwise a
       // queued transition unlock can briefly make the rich view editable.
-      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, session, webview);
+      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, session, document, webview);
       this.refreshFeedbackPeerLocks(documentKey);
     } finally {
-      this.endFeedbackTransition(documentKey, transitionToken, document);
+      await this.endFeedbackTransition(documentKey, transitionToken, document);
     }
+  }
+
+  /** Reclaim an absent owner through the authoritative peer-release barrier before Start. */
+  private retireOrphanedFeedbackStateForStart(
+    document: vscode.TextDocument,
+    incomingWebview: vscode.Webview,
+    requestId: string
+  ): Promise<void> | null {
+    const documentKey = document.uri.toString();
+    if (
+      this.hasPendingDocumentEdits(documentKey) ||
+      this.pendingFeedbackSessionTransfers.has(documentKey) ||
+      this.pendingFeedbackPeerReleases.has(documentKey)
+    ) {
+      return null;
+    }
+    const registered = this.feedbackWebviews.get(documentKey);
+    const ownerIsAvailable = (owner: vscode.Webview): boolean =>
+      owner === incomingWebview || registered?.has(owner) === true;
+    const candidateSession = this.feedbackSessions.get(documentKey);
+    const session =
+      candidateSession && !ownerIsAvailable(candidateSession.ownerWebview)
+        ? candidateSession
+        : undefined;
+    const candidateTransition = this.feedbackTransitions.get(documentKey);
+    const transition =
+      candidateTransition && !ownerIsAvailable(candidateTransition.ownerWebview)
+        ? candidateTransition
+        : undefined;
+    if (!session && !transition) return null;
+    return (async () => {
+      if (session) {
+        session.ownerDisposed = true;
+        await this.retireFeedbackSessionThroughPeerRelease(
+          documentKey,
+          session,
+          document,
+          `feedback-orphan-${requestId}`,
+          false
+        );
+      }
+      if (transition) {
+        transition.ownerDisposed = true;
+        await this.retireFeedbackTransitionThroughPeerRelease(
+          documentKey,
+          transition,
+          document,
+          false
+        );
+      }
+    })();
   }
 
   /**
@@ -2488,7 +5219,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     requestId: string
   ): symbol {
     this.reclaimOrphanedFeedbackState(documentKey, webview);
-    if (this.feedbackSessions.has(documentKey) || this.feedbackTransitions.has(documentKey)) {
+    if (
+      this.feedbackSessions.has(documentKey) ||
+      this.feedbackTransitions.has(documentKey) ||
+      this.pendingFeedbackPeerReleases.has(documentKey) ||
+      this.pendingFeedbackSessionTransfers.has(documentKey)
+    ) {
       throw new FeedbackSessionError(
         'MD4H-FB-STORE-001',
         'Feedback state changed while Start was being prepared. Select Start feedback again to Resume or recover the draft.'
@@ -2504,14 +5240,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       invalidated: false,
       recoveryRequired: false,
       recoveryRevision: 0,
+      ownerLockPosted: false,
     };
     this.feedbackTransitions.set(documentKey, transition);
-    this.refreshFeedbackPeerLocks(documentKey);
+    this.feedbackPeerLockIds.set(documentKey, transition.lockId);
     return token;
   }
 
   /** Bind the initiating view to the host transition after all debounces drain. */
   private postFeedbackTransitionOwnerLock(transition: FeedbackTransition): void {
+    transition.ownerLockPosted = true;
     this.postFeedbackMessage(transition.ownerWebview, {
       type: 'feedback.transition.locked',
       requestId: transition.requestId,
@@ -2519,21 +5257,82 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     });
   }
 
-  /**
-   * A second `ready` from the owning webview means its JavaScript controller
-   * was recreated. Demote volatile ownership to the durable draft, restore
-   * authoritative Markdown, then let the normal draft banner offer Resume.
-   */
+  /** Prepare a recreated owner for automatic host-authoritative restoration. */
   private recoverFeedbackControllerOnReady(
     document: vscode.TextDocument,
     webview: vscode.Webview
   ): boolean {
     const documentKey = document.uri.toString();
+    // A recreated finalizing owner has no review controller state to restore.
+    // Treat that generation as a peer: strict acquisition applies its lock,
+    // then the pending authoritative release initializes and unlocks it.
+    if (this.pendingFeedbackPeerReleases.get(documentKey)?.phase === 'applying') return false;
+    const pendingTransfer = this.pendingFeedbackSessionTransfers.get(documentKey);
+    const viewGeneration = this.editViewGenerations.get(webview);
+    const recoveringOldOwner =
+      pendingTransfer?.oldOwner === webview &&
+      this.feedbackSessions.get(documentKey) === pendingTransfer.oldSession;
+    const recoveringNewOwner =
+      pendingTransfer?.phase === 'committing' && pendingTransfer.newOwner === webview;
+    if (pendingTransfer && viewGeneration && (recoveringOldOwner || recoveringNewOwner)) {
+      const recoveryLockId = recoveringNewOwner
+        ? pendingTransfer.nextSession.sessionId
+        : pendingTransfer.oldSession.sessionId;
+      this.postFeedbackMessage(webview, {
+        type: 'feedback.peer.locked',
+        lockId: recoveryLockId,
+        message: 'Restoring Feedback after the rich view reloaded. This view is read-only.',
+      });
+      this.updateWebview(document, webview, { force: true });
+      const recoveryField = recoveringNewOwner
+        ? 'newOwnerRecoveryGeneration'
+        : 'oldOwnerRecoveryGeneration';
+      if (pendingTransfer[recoveryField] !== viewGeneration) {
+        pendingTransfer[recoveryField] = viewGeneration;
+        void pendingTransfer.finalization.then(() => {
+          if (
+            this.editViewGenerations.get(webview) !== viewGeneration ||
+            this.feedbackWebviews.get(documentKey)?.has(webview) !== true
+          ) {
+            return;
+          }
+          if (!this.recoverFeedbackControllerOnReady(document, webview)) {
+            this.updateWebview(document, webview, { force: true });
+            this.postCurrentFeedbackPeerLock(documentKey, webview);
+          }
+        });
+      }
+      return true;
+    }
     const session = this.feedbackSessions.get(documentKey);
     const transition = this.feedbackTransitions.get(documentKey);
     const ownedSession = session?.ownerWebview === webview ? session : undefined;
     const ownedTransition = transition?.ownerWebview === webview ? transition : undefined;
     if (!ownedSession && !ownedTransition) return false;
+
+    const canRestoreActiveSession =
+      ownedSession !== undefined &&
+      ownedSession.phase === 'active' &&
+      !ownedSession.invalidated &&
+      viewGeneration !== undefined &&
+      this.feedbackDeliveryCapableWebviews.has(webview);
+    if (canRestoreActiveSession) {
+      this.pendingFeedbackControllerRestores.set(webview, {
+        documentKey,
+        sessionId: ownedSession.sessionId,
+        viewGeneration,
+      });
+      this.postFeedbackMessage(webview, {
+        type: 'feedback.peer.locked',
+        lockId: ownedSession.sessionId,
+        message: 'Restoring active Feedback. This view is temporarily read-only.',
+      });
+      // This payload initializes TipTap before it can create and announce the
+      // replacement Feedback controller. The later acknowledged activation is
+      // therefore causally ordered after authoritative Markdown application.
+      this.updateWebview(document, webview, { force: true });
+      return true;
+    }
 
     const lockId = ownedSession?.sessionId ?? ownedTransition?.lockId;
     if (lockId) {
@@ -2554,6 +5353,125 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return true;
   }
 
+  /** Accept only the first controller-ready request from the current generation. */
+  private handleFeedbackControllerReady(
+    message: Extract<FeedbackWebviewMessage, { type: 'feedback.controller.ready' }>,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): void {
+    if (this.editViewGenerations.get(webview) !== message.viewGeneration) return;
+
+    const acceptedReady = this.feedbackControllerReadyRequests.get(webview);
+    if (
+      acceptedReady &&
+      (acceptedReady.viewGeneration !== message.viewGeneration ||
+        acceptedReady.requestId !== message.requestId)
+    ) {
+      return;
+    }
+    if (!acceptedReady) {
+      this.feedbackControllerReadyRequests.set(webview, {
+        viewGeneration: message.viewGeneration,
+        requestId: message.requestId,
+      });
+    }
+
+    const pending = this.pendingFeedbackControllerRestores.get(webview);
+    if (
+      !pending ||
+      pending.documentKey !== document.uri.toString() ||
+      pending.viewGeneration !== message.viewGeneration ||
+      pending.controllerRequestId !== undefined
+    ) {
+      return;
+    }
+    pending.controllerRequestId = message.requestId;
+    void this.restoreActiveFeedbackController(message.requestId, pending, document, webview);
+  }
+
+  /** Revalidate the frozen source, then replay the exact active session by ACKed delivery. */
+  private async restoreActiveFeedbackController(
+    requestId: string,
+    pending: PendingFeedbackControllerRestore,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<void> {
+    const documentKey = document.uri.toString();
+    const session = this.feedbackSessions.get(documentKey);
+    try {
+      if (
+        !session ||
+        session.ownerWebview !== webview ||
+        session.sessionId !== pending.sessionId ||
+        session.phase !== 'active'
+      ) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-STORE-001',
+          'The active Feedback session changed while its renderer was being restored.'
+        );
+      }
+      if (session.invalidated) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-SNAPSHOT-001',
+          'The Markdown source changed outside the frozen feedback snapshot.'
+        );
+      }
+
+      await this.waitForFeedbackMutations(session);
+      if (
+        this.feedbackSessions.get(documentKey) !== session ||
+        this.editViewGenerations.get(webview) !== pending.viewGeneration ||
+        this.feedbackControllerReadyRequests.get(webview)?.requestId !== requestId
+      ) {
+        return;
+      }
+
+      const documentSha256 = crypto
+        .createHash('sha256')
+        .update(document.getText(), 'utf8')
+        .digest('hex');
+      if (documentSha256 !== session.store.snapshot.sourceSha256) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-SNAPSHOT-001',
+          'The Markdown source changed outside the frozen feedback snapshot.'
+        );
+      }
+      await this.assertFeedbackSourceSha256(document, session.store.snapshot.sourceSha256);
+      if (
+        this.feedbackSessions.get(documentKey) !== session ||
+        this.editViewGenerations.get(webview) !== pending.viewGeneration ||
+        this.feedbackControllerReadyRequests.get(webview)?.requestId !== requestId
+      ) {
+        return;
+      }
+
+      const workspaceRoot = this.getWorkspaceFolderPath(document);
+      if (!workspaceRoot || document.uri.scheme !== 'file') {
+        throw new FeedbackSessionError(
+          'MD4H-FB-STORE-001',
+          'Open this saved Markdown file inside a workspace before restoring Feedback.'
+        );
+      }
+      this.postFeedbackSessionStarted(requestId, workspaceRoot, session, document, webview);
+      this.postDegradedFeedbackRangeWarning(session, webview);
+    } catch (error) {
+      const code =
+        error instanceof FeedbackSessionError && isFeedbackHostErrorCode(error.code)
+          ? error.code
+          : 'MD4H-FB-STORE-002';
+      this.demoteFeedbackSessionAfterRendererFailure(
+        requestId,
+        session,
+        document,
+        webview,
+        code,
+        error instanceof Error
+          ? error.message
+          : 'The active Feedback session could not be restored.'
+      );
+    }
+  }
+
   /** Finish in-flight writes before releasing a controller that no longer exists. */
   private async demoteFeedbackOwnerAfterReady(
     document: vscode.TextDocument,
@@ -2562,8 +5480,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const documentKey = document.uri.toString();
     const entryOperation = this.feedbackEntryOperations.get(documentKey);
     if (entryOperation) await entryOperation.catch(() => undefined);
-    const pendingEdit = this.inFlightApplyEdits.get(documentKey);
-    if (pendingEdit) await pendingEdit.catch(() => false);
+    if (this.hasPendingDocumentEdits(documentKey)) {
+      await this.drainDocumentEdits(document);
+    }
 
     const session = this.feedbackSessions.get(documentKey);
     if (session?.ownerWebview === webview) {
@@ -2585,29 +5504,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     }
 
     if (latestSession?.ownerWebview === webview) {
-      // If the controller retained its pending Start request across an unusual
-      // duplicate ready event, explicitly deactivate the runtime it may just
-      // have accepted before demoting the host state to a saved draft.
-      this.postFeedbackMessage(webview, {
-        type: 'feedback.session.transferred',
-        oldSessionId: latestSession.sessionId,
-        lockId: latestSession.sessionId,
-        message: 'Feedback was restored as a saved draft after the rich view reloaded.',
-      });
-      this.syncFeedbackPeerContent(document, webview);
-      this.feedbackSessions.delete(documentKey);
-      latestSession.mutationIdleWaiters.forEach(resolve => resolve());
-      latestSession.mutationIdleWaiters.clear();
-    }
-    if (latestTransition?.ownerWebview === webview) {
-      this.syncFeedbackPeerContent(document, webview);
-      this.feedbackTransitions.delete(documentKey);
+      await this.retireFeedbackSessionThroughPeerRelease(
+        documentKey,
+        latestSession,
+        document,
+        `feedback-ready-demote-${latestSession.sessionId}`,
+        true
+      );
+    } else if (latestTransition?.ownerWebview === webview) {
+      await this.retireFeedbackTransitionThroughPeerRelease(
+        documentKey,
+        latestTransition,
+        document,
+        true
+      );
     }
     this.feedbackActiveResumeOffers.delete(webview);
-    // Content must arrive before the correlated unlock so the recreated
-    // controller is never briefly editable with an empty or stale document.
-    this.updateWebview(document, webview, { force: true });
-    this.refreshFeedbackPeerLocks(documentKey);
     await this.announceMatchingFeedbackDrafts(document, webview);
   }
 
@@ -2620,6 +5532,114 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       this.feedbackWebviews.set(documentKey, webviews);
     }
     webviews.add(webview);
+    if (this.isFeedbackViewGenerationUnavailable(webview)) return;
+    const pendingTransfer = this.pendingFeedbackSessionTransfers.get(documentKey);
+    const transferTarget = pendingTransfer?.targets.get(webview);
+    if (pendingTransfer && transferTarget) {
+      const currentGeneration = this.getEditViewGeneration(webview);
+      transferTarget.deliveryAbortController?.abort();
+      transferTarget.deliveryAbortController = undefined;
+      if (transferTarget.message.viewGeneration === currentGeneration) {
+        const stageComplete =
+          transferTarget.message.phase === 'apply'
+            ? transferTarget.applied
+            : transferTarget.message.phase === 'commit'
+              ? transferTarget.committed
+              : transferTarget.aborted;
+        if (!stageComplete) {
+          this.resetFeedbackCriticalTransport(webview);
+          this.postFeedbackSessionTransferTarget(
+            documentKey,
+            pendingTransfer,
+            webview,
+            transferTarget
+          );
+        }
+        return;
+      }
+
+      // A new script lifetime cannot contain state staged in the retired
+      // generation. Before host commit, cancel the handoff and roll every
+      // still-live participant back. During commit, the replacement renderer
+      // is restored authoritatively after the remaining ACK barrier settles.
+      transferTarget.rendererUnavailable = true;
+      if (pendingTransfer.phase === 'committing') {
+        transferTarget.committed = true;
+      } else if (pendingTransfer.phase === 'aborting') {
+        transferTarget.aborted = true;
+      } else {
+        transferTarget.aborted = true;
+        this.beginFeedbackSessionTransferRollback(documentKey, pendingTransfer);
+      }
+      this.advanceFeedbackSessionTransfer(documentKey, pendingTransfer);
+    }
+    const pendingRelease = this.pendingFeedbackPeerReleases.get(documentKey);
+    if (pendingRelease?.phase === 'committing') {
+      const obsoleteTarget = pendingRelease.targets.get(webview);
+      const currentGeneration = this.getEditViewGeneration(webview);
+      if (obsoleteTarget?.message.viewGeneration === currentGeneration) {
+        // Duplicate readiness in the same renderer lifetime cannot dispose its
+        // still-installed lock. Reassert commit until its exact ACK arrives.
+        if (!obsoleteTarget.committed) {
+          this.postFeedbackPeerReleaseTarget(documentKey, pendingRelease, webview, obsoleteTarget);
+        }
+        return;
+      }
+      // A new renderer lifetime did not participate in the retired ownership
+      // barrier and therefore has no old local lock to commit. Treat only the
+      // previous generation as disposed and initialize this one normally.
+      obsoleteTarget?.deliveryAbortController?.abort();
+      if (obsoleteTarget) {
+        pendingRelease.targets.delete(webview);
+        this.appliedFeedbackPeerLocks.delete(webview);
+        this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pendingRelease);
+      }
+    } else if (pendingRelease) {
+      const currentGeneration = this.getEditViewGeneration(webview);
+      const existingTarget = pendingRelease.targets.get(webview);
+      if (existingTarget?.message.viewGeneration === currentGeneration) {
+        if (!existingTarget.applied) {
+          this.postFeedbackPeerReleaseTarget(documentKey, pendingRelease, webview, existingTarget);
+        }
+        return;
+      }
+      existingTarget?.deliveryAbortController?.abort();
+      const target = this.createFeedbackPeerReleaseTarget(pendingRelease, webview);
+      pendingRelease.targets.set(webview, target);
+      const current = this.currentFeedbackPeerLock(documentKey);
+      const acquire = current
+        ? this.acquireFeedbackPeerLockForWebview(
+            documentKey,
+            current.ownerWebview,
+            webview,
+            pendingRelease.requestId,
+            pendingRelease.lockId,
+            true
+          )
+        : Promise.reject(new Error('Feedback release ownership disappeared.'));
+      void acquire
+        .then(() => {
+          if (this.isFeedbackViewGenerationUnavailable(webview)) {
+            if (
+              this.pendingFeedbackPeerReleases.get(documentKey) === pendingRelease &&
+              pendingRelease.targets.get(webview) === target
+            ) {
+              pendingRelease.targets.delete(webview);
+              this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pendingRelease);
+            }
+            return;
+          }
+          if (
+            this.pendingFeedbackPeerReleases.get(documentKey) === pendingRelease &&
+            pendingRelease.targets.get(webview) === target &&
+            this.editViewGenerations.get(webview) === target.message.viewGeneration
+          ) {
+            this.postFeedbackPeerReleaseTarget(documentKey, pendingRelease, webview, target);
+          }
+        })
+        .catch(() => undefined);
+      return;
+    }
     this.postCurrentFeedbackPeerLock(documentKey, webview);
   }
 
@@ -2633,7 +5653,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // Keep sibling views locked until a departing owner's accepted edit has
     // settled. A later Start retries reconciliation after the edit pipeline
     // removes this marker.
-    if (this.inFlightApplyEdits.has(documentKey)) return;
+    if (
+      this.hasPendingDocumentEdits(documentKey) ||
+      this.pendingFeedbackSessionTransfers.has(documentKey)
+    ) {
+      return;
+    }
     const registered = this.feedbackWebviews.get(documentKey);
     const ownerIsAvailable = (owner: vscode.Webview): boolean =>
       owner === incomingWebview || registered?.has(owner) === true;
@@ -2641,13 +5666,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const transition = this.feedbackTransitions.get(documentKey);
     let reclaimed = false;
 
-    if (session && !ownerIsAvailable(session.ownerWebview)) {
+    if (session && !session.ownerDisposed && !ownerIsAvailable(session.ownerWebview)) {
+      session.pendingClose?.deliveryAbortController?.abort();
       this.feedbackSessions.delete(documentKey);
       session.mutationIdleWaiters.forEach(resolve => resolve());
       session.mutationIdleWaiters.clear();
       reclaimed = true;
     }
-    if (transition && !ownerIsAvailable(transition.ownerWebview)) {
+    if (transition && !transition.ownerDisposed && !ownerIsAvailable(transition.ownerWebview)) {
+      transition.deliveryAbortController?.abort();
       this.feedbackTransitions.delete(documentKey);
       reclaimed = true;
     }
@@ -2656,10 +5683,44 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
   /** Remove one disposed split without disturbing the document owner's session. */
   private unregisterFeedbackWebview(documentKey: string, webview: vscode.Webview): void {
+    this.cancelFeedbackStatusQueries(webview, 'Feedback renderer disposed.');
+    this.cancelFeedbackSnapshotReports(webview);
+    this.feedbackStartedTransports.get(webview)?.dispose();
+    this.feedbackStartedTransports.delete(webview);
+    this.feedbackCriticalTransports.get(webview)?.dispose();
+    this.feedbackCriticalTransports.delete(webview);
+    this.feedbackDeliveryCapableWebviews.delete(webview);
+    this.feedbackSnapshotCapableWebviews.delete(webview);
+    this.pendingFeedbackControllerRestores.delete(webview);
+    this.feedbackControllerReadyRequests.delete(webview);
+    this.deferredReadyAfterDocumentEdits.delete(webview);
+    this.pendingReadyDocumentEditDrains.delete(webview);
+    this.retirePendingImageCompletionDeliveries(webview);
+    this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+    this.inFlightFeedbackPeerLockAcquisitions.delete(webview);
+    this.appliedFeedbackPeerLocks.delete(webview);
+    this.unavailableFeedbackViewGenerations.delete(webview);
     const webviews = this.feedbackWebviews.get(documentKey);
     if (!webviews) return;
     webviews.delete(webview);
     if (webviews.size === 0) this.feedbackWebviews.delete(documentKey);
+    const pendingRelease = this.pendingFeedbackPeerReleases.get(documentKey);
+    const releaseTarget = pendingRelease?.targets.get(webview);
+    releaseTarget?.deliveryAbortController?.abort();
+    if (pendingRelease && releaseTarget) {
+      pendingRelease.targets.delete(webview);
+      this.finalizeFeedbackPeerReleaseIfComplete(documentKey, pendingRelease);
+    }
+    const pendingTransfer = this.pendingFeedbackSessionTransfers.get(documentKey);
+    const transferTarget = pendingTransfer?.targets.get(webview);
+    transferTarget?.deliveryAbortController?.abort();
+    if (pendingTransfer && transferTarget) {
+      this.handleUnavailableFeedbackSessionTransferTarget(
+        documentKey,
+        pendingTransfer,
+        transferTarget
+      );
+    }
   }
 
   /** Return the current owner and correlated UI lock token, if one exists. */
@@ -2676,10 +5737,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   private postCurrentFeedbackPeerLock(documentKey: string, webview: vscode.Webview): void {
     const current = this.currentFeedbackPeerLock(documentKey);
     if (!current || current.ownerWebview === webview) return;
-    this.postFeedbackMessage(webview, {
-      type: 'feedback.peer.locked',
-      lockId: current.lockId,
-      message: 'Feedback is active in another editor split. This view is read-only until it ends.',
+    void this.acquireFeedbackPeerLockForWebview(
+      documentKey,
+      current.ownerWebview,
+      webview,
+      `feedback-peer-current-${current.lockId}`,
+      current.lockId
+    ).catch(() => {
+      console.warn(
+        '[MD4H] A rich editor split did not confirm its Feedback lock; the document remains reserved.'
+      );
     });
   }
 
@@ -2739,41 +5806,250 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     documentKey: string,
     webview: vscode.Webview,
     document?: vscode.TextDocument,
-    settledEdit?: Promise<boolean>
+    editsDrained = false
   ): void {
     this.feedbackActiveResumeOffers.delete(webview);
+    const pendingTransfer = this.pendingFeedbackSessionTransfers.get(documentKey);
+    if (
+      pendingTransfer &&
+      (pendingTransfer.oldOwner === webview || pendingTransfer.newOwner === webview)
+    ) {
+      if (!pendingTransfer.deferredReleaseWebviews.has(webview)) {
+        pendingTransfer.deferredReleaseWebviews.add(webview);
+        void pendingTransfer.finalization.then(() => {
+          pendingTransfer.deferredReleaseWebviews.delete(webview);
+          this.releaseFeedbackStateForWebview(documentKey, webview, document, editsDrained);
+        });
+      }
+      return;
+    }
     const session = this.feedbackSessions.get(documentKey);
     const transition = this.feedbackTransitions.get(documentKey);
     const ownsFeedbackState =
       session?.ownerWebview === webview || transition?.ownerWebview === webview;
-    const inFlightEdit = this.inFlightApplyEdits.get(documentKey);
-    if (ownsFeedbackState && inFlightEdit && inFlightEdit !== settledEdit) {
+    const registeredWebviews = this.feedbackWebviews.get(documentKey);
+    const requiresPeerRelease =
+      document !== undefined &&
+      ownsFeedbackState &&
+      registeredWebviews?.has(webview) !== true &&
+      (registeredWebviews?.size ?? 0) > 0;
+    if (requiresPeerRelease) {
+      if (session?.ownerWebview === webview) session.ownerDisposed = true;
+      if (transition?.ownerWebview === webview) transition.ownerDisposed = true;
+    }
+    if (ownsFeedbackState && !editsDrained && this.hasPendingDocumentEdits(documentKey)) {
       // Disposing the owner must not expose a sibling's stale DOM while the
-      // owner's final WorkspaceEdit is still pending. Retain the document lock,
+      // owner's final edit queue is still pending. Retain the document lock,
       // then force-sync the settled TextDocument before broadcasting unlock.
-      void inFlightEdit.then(
-        () => this.releaseFeedbackStateForWebview(documentKey, webview, document, inFlightEdit),
-        () => this.releaseFeedbackStateForWebview(documentKey, webview, document, inFlightEdit)
+      void this.drainDocumentEditsByKey(documentKey).then(() =>
+        this.releaseFeedbackStateForWebview(documentKey, webview, document, true)
       );
+      return;
+    }
+    if (requiresPeerRelease && document) {
+      void this.releaseFeedbackOwnerAfterDisposal(documentKey, webview, document).catch(error => {
+        console.warn(
+          `[MD4H] Could not safely release Feedback after its owner closed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      });
       return;
     }
     if (document && ownsFeedbackState) {
       this.syncFeedbackPeerContent(document, webview);
     }
     if (session?.ownerWebview === webview) {
+      session.pendingClose?.deliveryAbortController?.abort();
       this.feedbackSessions.delete(documentKey);
       session.mutationIdleWaiters.forEach(resolve => resolve());
       session.mutationIdleWaiters.clear();
     }
     if (transition?.ownerWebview === webview) {
+      transition.deliveryAbortController?.abort();
       this.feedbackTransitions.delete(documentKey);
     }
     this.refreshFeedbackPeerLocks(documentKey);
   }
 
+  /**
+   * Keep every surviving split locked until it applies one authoritative
+   * TextDocument revision after the owner panel disappears.
+   */
+  private async releaseFeedbackOwnerAfterDisposal(
+    documentKey: string,
+    ownerWebview: vscode.Webview,
+    document: vscode.TextDocument
+  ): Promise<void> {
+    const session = this.feedbackSessions.get(documentKey);
+    if (session?.ownerWebview === ownerWebview && session.ownerDisposed) {
+      await this.retireFeedbackSessionThroughPeerRelease(
+        documentKey,
+        session,
+        document,
+        `feedback-owner-disposed-${session.sessionId}`,
+        false
+      );
+      return;
+    }
+
+    const transition = this.feedbackTransitions.get(documentKey);
+    if (transition?.ownerWebview !== ownerWebview || !transition.ownerDisposed) return;
+    await this.retireFeedbackTransitionThroughPeerRelease(documentKey, transition, document, false);
+  }
+
+  /** Retire one session only after every available generation applies and unlocks. */
+  private async retireFeedbackSessionThroughPeerRelease(
+    documentKey: string,
+    session: ActiveFeedbackSession,
+    document: vscode.TextDocument,
+    fallbackRequestId: string,
+    includeOwner: boolean
+  ): Promise<void> {
+    const existingRelease = this.pendingFeedbackPeerReleases.get(documentKey);
+    if (existingRelease?.kind === 'session' && existingRelease.lockId === session.sessionId) {
+      await existingRelease.completion;
+      return;
+    }
+    await this.waitForFeedbackMutations(session);
+    if (this.feedbackSessions.get(documentKey) !== session) {
+      const pending = this.pendingFeedbackPeerReleases.get(documentKey);
+      if (pending?.kind === 'session' && pending.lockId === session.sessionId) {
+        await pending.completion;
+      }
+      return;
+    }
+    const requestId = session.pendingClose?.requestId ?? fallbackRequestId;
+    await this.acquireFeedbackPeerLocks(
+      documentKey,
+      session.ownerWebview,
+      requestId,
+      session.sessionId,
+      includeOwner
+    );
+    if (this.feedbackSessions.get(documentKey) !== session) {
+      const pending = this.pendingFeedbackPeerReleases.get(documentKey);
+      if (pending?.kind === 'session' && pending.lockId === session.sessionId) {
+        await pending.completion;
+      }
+      return;
+    }
+    if (!(await this.drainDocumentEdits(document))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'Could not settle editor changes before releasing Feedback ownership.'
+      );
+    }
+    await this.acquireFeedbackPeerLocks(
+      documentKey,
+      session.ownerWebview,
+      requestId,
+      session.sessionId,
+      includeOwner
+    );
+    if (this.feedbackSessions.get(documentKey) !== session) {
+      const pending = this.pendingFeedbackPeerReleases.get(documentKey);
+      if (pending?.kind === 'session' && pending.lockId === session.sessionId) {
+        await pending.completion;
+      }
+      return;
+    }
+
+    const revision = Math.max(
+      session.pendingClose?.releaseRevision ?? session.pendingClose?.revision ?? 1,
+      1
+    );
+    const contentSha256 = crypto
+      .createHash('sha256')
+      .update(this.feedbackCloseSyncContent(document), 'utf8')
+      .digest('hex');
+    session.pendingClose?.deliveryAbortController?.abort();
+    session.phase =
+      session.phase === 'finishing' || session.phase === 'discarding'
+        ? session.phase
+        : 'discarding';
+    session.pendingClose = {
+      requestId,
+      terminalType: session.pendingClose?.terminalType ?? 'feedback.discarded',
+      revision,
+      contentSha256,
+      releaseRevision: revision,
+    };
+    await this.beginFeedbackPeerRelease(
+      'session',
+      document,
+      requestId,
+      session.sessionId,
+      revision
+    );
+  }
+
+  /** Retire one transition through the same apply-before-unlock barrier. */
+  private async retireFeedbackTransitionThroughPeerRelease(
+    documentKey: string,
+    transition: FeedbackTransition,
+    document: vscode.TextDocument,
+    includeOwner: boolean
+  ): Promise<void> {
+    const existingRelease = this.pendingFeedbackPeerReleases.get(documentKey);
+    if (existingRelease?.kind === 'transition' && existingRelease.lockId === transition.lockId) {
+      await existingRelease.completion;
+      return;
+    }
+    await this.acquireFeedbackPeerLocks(
+      documentKey,
+      transition.ownerWebview,
+      transition.requestId,
+      transition.lockId,
+      includeOwner
+    );
+    if (this.feedbackTransitions.get(documentKey) !== transition) {
+      const pending = this.pendingFeedbackPeerReleases.get(documentKey);
+      if (pending?.kind === 'transition' && pending.lockId === transition.lockId) {
+        await pending.completion;
+      }
+      return;
+    }
+    transition.acceptingFlushEdit = false;
+    if (!(await this.drainDocumentEdits(document))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'Could not settle editor changes before releasing Feedback transition ownership.'
+      );
+    }
+    await this.acquireFeedbackPeerLocks(
+      documentKey,
+      transition.ownerWebview,
+      transition.requestId,
+      transition.lockId,
+      includeOwner
+    );
+    if (this.feedbackTransitions.get(documentKey) !== transition) {
+      const pending = this.pendingFeedbackPeerReleases.get(documentKey);
+      if (pending?.kind === 'transition' && pending.lockId === transition.lockId) {
+        await pending.completion;
+      }
+      return;
+    }
+    if (includeOwner) transition.ownerLockPosted = true;
+    transition.recoveryRevision = Math.max(transition.recoveryRevision, 1);
+    await this.beginFeedbackPeerRelease(
+      'transition',
+      document,
+      transition.requestId,
+      transition.lockId,
+      transition.recoveryRevision
+    );
+  }
+
   /** Prevent stale recovery-banner actions from racing an active or starting session. */
   private assertNoActiveFeedbackOperation(documentKey: string): void {
-    if (this.feedbackSessions.has(documentKey) || this.feedbackTransitions.has(documentKey)) {
+    if (
+      this.feedbackSessions.has(documentKey) ||
+      this.feedbackTransitions.has(documentKey) ||
+      this.pendingFeedbackPeerReleases.has(documentKey) ||
+      this.pendingFeedbackSessionTransfers.has(documentKey)
+    ) {
       throw new FeedbackSessionError(
         'MD4H-FB-STORE-001',
         'Feedback changed since this draft action was shown. Select Start feedback to Resume or recover the current session.'
@@ -2795,6 +6071,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         'The Markdown source changed while the feedback snapshot was starting.'
       );
     }
+    if (transition.ownerDisposed) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-001',
+        'The feedback start was cancelled because its editor closed.'
+      );
+    }
     return transition;
   }
 
@@ -2802,12 +6084,49 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     this.assertFeedbackTransition(documentKey, token).acceptingFlushEdit = false;
   }
 
-  private endFeedbackTransition(
+  private async endFeedbackTransition(
     documentKey: string,
     token: symbol,
     document: vscode.TextDocument
-  ): void {
-    const transition = this.feedbackTransitions.get(documentKey);
+  ): Promise<void> {
+    let transition = this.feedbackTransitions.get(documentKey);
+    if (transition?.token !== token) return;
+    if (this.feedbackSessions.has(documentKey)) {
+      // Successful Start/Resume replaces the transition lock with a session
+      // lock that every peer already acknowledged before activation.
+      this.feedbackTransitions.delete(documentKey);
+      this.refreshFeedbackPeerLocks(documentKey);
+      return;
+    }
+
+    // A transition may fail before the normal pre-capture lock barrier. Install
+    // the exact lock now, then drain edits accepted before its application ACK.
+    // No renderer can interleave a new edit between the final acquisition and
+    // the authoritative release snapshot.
+    await this.acquireFeedbackPeerLocks(
+      documentKey,
+      transition.ownerWebview,
+      transition.requestId,
+      transition.lockId
+    );
+    transition = this.feedbackTransitions.get(documentKey);
+    if (transition?.token !== token) return;
+    transition.acceptingFlushEdit = false;
+    if (!(await this.drainDocumentEdits(document))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-002',
+        'Could not settle editor changes before releasing the Feedback transition.'
+      );
+    }
+    transition = this.feedbackTransitions.get(documentKey);
+    if (transition?.token !== token) return;
+    await this.acquireFeedbackPeerLocks(
+      documentKey,
+      transition.ownerWebview,
+      transition.requestId,
+      transition.lockId
+    );
+    transition = this.feedbackTransitions.get(documentKey);
     if (transition?.token !== token) return;
     if (transition.invalidated || transition.recoveryRequired) {
       // A change consumed while the transition owned the document never
@@ -2816,8 +6135,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       this.postFeedbackTransitionSync(document, transition);
       return;
     }
-    this.feedbackTransitions.delete(documentKey);
-    this.refreshFeedbackPeerLocks(documentKey);
+
+    // Cancellation and ordinary failures still need an authoritative apply
+    // before any installed transition lock is retired. Revision 1 identifies
+    // this terminal transition even when no recovery sync was necessary.
+    transition.recoveryRevision = Math.max(transition.recoveryRevision, 1);
+    this.beginFeedbackPeerRelease(
+      'transition',
+      document,
+      transition.requestId,
+      transition.lockId,
+      transition.recoveryRevision
+    );
   }
 
   /** Send the next authoritative transition recovery revision. */
@@ -2827,6 +6156,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     content = this.feedbackCloseSyncContent(document),
     incrementRevision = true
   ): void {
+    // Applying a recovery sync also establishes the owner's correlated lock,
+    // even when the ordinary transition.locked presentation was never reached.
+    transition.ownerLockPosted = true;
     if (incrementRevision) transition.recoveryRevision += 1;
     transition.recoveryContentSha256 = crypto
       .createHash('sha256')
@@ -2836,13 +6168,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       transition.ownerWebview,
       applyBlankLinePolicy(document.getText(), this.getBlankLineMode())
     );
-    this.postFeedbackMessage(transition.ownerWebview, {
+    const message: Extract<FeedbackCriticalHostMessage, { type: 'feedback.transition.sync' }> = {
       type: 'feedback.transition.sync',
       requestId: transition.requestId,
       lockId: transition.lockId,
       revision: transition.recoveryRevision,
       content,
-    });
+    };
+    transition.deliveryAbortController = this.postFeedbackCriticalStage(
+      transition.ownerWebview,
+      message,
+      transition.lockId,
+      transition.recoveryRevision,
+      transition.deliveryAbortController
+    );
   }
 
   /**
@@ -2889,6 +6228,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     const documentKey = document.uri.toString();
     if (await this.resumeActiveFeedbackSession(message, document, webview)) return;
     const transitionToken = this.beginFeedbackTransition(documentKey, webview, message.requestId);
+    const transitionLockId = this.feedbackTransitions.get(documentKey)?.lockId;
+    if (!transitionLockId) throw new Error('Feedback transition lock was not created.');
     try {
       const workspaceRoot = this.getWorkspaceFolderPath(document);
       if (!workspaceRoot) {
@@ -2898,15 +6239,48 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         );
       }
 
-      const sourceBytes = await this.flushFeedbackSnapshot(document, webview);
+      const flushedSnapshot = await this.flushFeedbackSnapshot(document, webview, async () => {
+        await this.acquireFeedbackPeerLocks(
+          documentKey,
+          webview,
+          message.requestId,
+          transitionLockId
+        );
+      });
+      const { sourceBytes } = flushedSnapshot;
       const transition = this.assertFeedbackTransition(documentKey, transitionToken);
       this.postFeedbackTransitionOwnerLock(transition);
       this.lockFeedbackTransition(documentKey, transitionToken);
-      const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
-      if (!anchorResult.ok) {
-        throw Object.assign(new Error(anchorResult.error.detail), {
-          code: anchorResult.error.code,
-        });
+      let anchorMap: FeedbackAnchorMap;
+      let snapshotBlocks: readonly CanonicalFeedbackBlock[] | undefined = message.blocks;
+      if (this.feedbackSnapshotCapableWebviews.has(webview)) {
+        const finalized = await this.finalizeFeedbackRendererSnapshot(
+          document,
+          webview,
+          flushedSnapshot.source
+        );
+        anchorMap = finalized.anchorMap;
+        snapshotBlocks = finalized.blocks;
+      } else {
+        if (!message.blocks) {
+          throw new FeedbackSessionError(
+            'MD4H-FB-SNAPSHOT-001',
+            'Reload the rich editor before resuming Feedback so the saved snapshot can be verified.'
+          );
+        }
+        const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
+        if (!anchorResult.ok) {
+          throw Object.assign(new Error(anchorResult.error.detail), {
+            code: anchorResult.error.code,
+          });
+        }
+        anchorMap = anchorResult.map;
+      }
+      if (!snapshotBlocks) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-SNAPSHOT-001',
+          'The rich editor did not provide canonical blocks for the saved snapshot.'
+        );
       }
       const store = await FeedbackSessionStore.resume({
         workspaceRoot,
@@ -2917,13 +6291,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       this.assertFeedbackTransition(documentKey, transitionToken);
       await this.assertFeedbackSourceSha256(document, store.snapshot.sourceSha256);
       this.assertFeedbackTransition(documentKey, transitionToken);
-      const canonicalBlocks = this.buildFeedbackCanonicalBlocks(message.blocks);
+      const canonicalBlocks = this.buildFeedbackCanonicalBlocks(snapshotBlocks);
       const targets = new Map<string, { startOrdinal: number; endOrdinal: number }>();
       const session: ActiveFeedbackSession = {
         ownerWebview: webview,
         sessionId: crypto.randomBytes(16).toString('hex'),
         store,
-        anchorMap: anchorResult.map,
+        anchorMap,
         canonicalBlocks,
         targets,
         previewNonce: crypto.randomBytes(8).toString('hex'),
@@ -2933,6 +6307,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             .map(item => [item.id, 1])
         ),
         degradedRenderedRangeIds: new Set(),
+        degradedCellTargetIds: new Set(),
         phase: 'active',
         pendingMutationCount: 0,
         mutationIdleWaiters: new Set(),
@@ -2940,12 +6315,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       };
       this.restoreFeedbackTargets(session);
       transition.recoveryRequired = false;
+      await this.acquireFeedbackPeerLocks(
+        documentKey,
+        webview,
+        message.requestId,
+        session.sessionId
+      );
+      this.assertFeedbackTransition(documentKey, transitionToken);
       this.feedbackSessions.set(documentKey, session);
-      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, session, webview);
+      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, session, document, webview);
       this.refreshFeedbackPeerLocks(documentKey);
       this.postDegradedFeedbackRangeWarning(session, webview);
     } finally {
-      this.endFeedbackTransition(documentKey, transitionToken, document);
+      await this.endFeedbackTransition(documentKey, transitionToken, document);
     }
   }
 
@@ -2960,6 +6342,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   ): Promise<boolean> {
     const documentKey = document.uri.toString();
     const current = this.feedbackSessions.get(documentKey);
+    let transferCompletion: FeedbackSessionTransferCompletion | undefined;
     if (!current || current.store.snapshot.round !== message.round) return false;
     const resumeOffer = this.feedbackActiveResumeOffers.get(webview);
     const isAuthorizedOffer =
@@ -2975,11 +6358,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       }
       await this.waitForFeedbackMutations(current);
       if (this.feedbackSessions.get(documentKey) === current) {
-        this.feedbackSessions.delete(documentKey);
-        current.mutationIdleWaiters.forEach(resolve => resolve());
-        current.mutationIdleWaiters.clear();
-        this.updateWebview(document, webview, { force: true });
-        this.refreshFeedbackPeerLocks(documentKey);
+        await this.retireFeedbackSessionThroughPeerRelease(
+          documentKey,
+          current,
+          document,
+          message.requestId,
+          false
+        );
       }
       return false;
     }
@@ -3023,21 +6408,52 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           'The feedback session changed while Resume was being confirmed.'
         );
       }
-      const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
-      if (!anchorResult.ok) {
-        throw Object.assign(new Error(anchorResult.error.detail), {
-          code: anchorResult.error.code,
+      let nextAnchorMap = current.anchorMap;
+      let nextCanonicalBlocks = current.canonicalBlocks;
+      if (this.feedbackSnapshotCapableWebviews.has(webview)) {
+        const sourceText = document.getText();
+        const report = await this.requestFeedbackSnapshotReport(webview, {
+          type: 'feedback.snapshot.apply',
+          protocolVersion: FEEDBACK_SNAPSHOT_PROTOCOL_VERSION,
+          requestId: `feedback-transfer-${crypto.randomBytes(8).toString('hex')}`,
+          operationId: `feedback-transfer-${current.sessionId}`,
+          documentVersion: this.getDocumentVersion(document),
+          content: this.wrapFrontmatterForWebview(sourceText),
+          descriptorRevision: 1,
+          includeCanonicalBlocks: false,
         });
+        if (
+          report.stage !== 'applied' ||
+          !this.feedbackRendererContentMatchesSource(report.content, sourceText)
+        ) {
+          throw new FeedbackSessionError(
+            'MD4H-FB-SNAPSHOT-001',
+            'The rich editor did not apply the active Feedback snapshot.'
+          );
+        }
+      } else {
+        if (!message.blocks) {
+          throw new FeedbackSessionError(
+            'MD4H-FB-SNAPSHOT-001',
+            'Reload the rich editor before moving this Feedback session.'
+          );
+        }
+        const anchorResult = buildFeedbackAnchorMap(sourceBytes.toString('utf8'), message.blocks);
+        if (!anchorResult.ok) {
+          throw Object.assign(new Error(anchorResult.error.detail), {
+            code: anchorResult.error.code,
+          });
+        }
+        nextAnchorMap = anchorResult.map;
+        nextCanonicalBlocks = this.buildFeedbackCanonicalBlocks(message.blocks);
       }
 
-      const previousOwner = current.ownerWebview;
-      const previousSessionId = current.sessionId;
       const nextSession: ActiveFeedbackSession = {
         ...current,
         ownerWebview: webview,
         sessionId: crypto.randomBytes(16).toString('hex'),
-        anchorMap: anchorResult.map,
-        canonicalBlocks: this.buildFeedbackCanonicalBlocks(message.blocks),
+        anchorMap: nextAnchorMap,
+        canonicalBlocks: nextCanonicalBlocks,
         targets: new Map(),
         previewNonce: crypto.randomBytes(8).toString('hex'),
         previewRevisions: new Map(
@@ -3046,28 +6462,28 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             .map(item => [item.id, 1])
         ),
         degradedRenderedRangeIds: new Set(),
-        phase: 'active',
+        degradedCellTargetIds: new Set(),
+        phase: 'resuming',
         pendingMutationCount: 0,
         mutationIdleWaiters: new Set(),
         pendingClose: undefined,
         lastErrorCode: undefined,
       };
       this.restoreFeedbackTargets(nextSession);
-      this.feedbackSessions.set(documentKey, nextSession);
-      if (previousOwner !== webview) {
-        this.postFeedbackMessage(previousOwner, {
-          type: 'feedback.session.transferred',
-          oldSessionId: previousSessionId,
-          lockId: nextSession.sessionId,
-          message: 'Feedback resumed in another rich view. This view is now read-only.',
-        });
+      transferCompletion = await this.beginFeedbackSessionTransfer(
+        document,
+        message.requestId,
+        current,
+        nextSession
+      );
+      if (transferCompletion !== 'committed') {
+        throw new FeedbackSessionError(
+          'MD4H-FB-STORE-002',
+          transferCompletion === 'rolled-back'
+            ? 'The Feedback handoff was cancelled because the source changed during transfer.'
+            : 'The target rich editor was unavailable. Feedback remains reserved in its previous view.'
+        );
       }
-      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, nextSession, webview);
-      // The new owner activates review mode while its old peer lock is still
-      // installed. The following unlock then hands off read-only ownership in
-      // one webview task without an editable interval.
-      this.refreshFeedbackPeerLocks(documentKey);
-      this.postDegradedFeedbackRangeWarning(nextSession, webview);
       return true;
     } catch (error) {
       if (this.feedbackSessions.get(documentKey) === current) {
@@ -3077,16 +6493,36 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
             : error instanceof Error && 'code' in error && typeof error.code === 'string'
               ? error.code
               : undefined;
-        if (current.ownerWebview === webview) {
+        if (transferCompletion === 'failed-closed') {
+          // The host request has terminated, but an ambiguous renderer may
+          // still hold staged state. Keep the durable owner fail-closed until
+          // late exact abort ACKs complete the rollback.
+        } else if (transferCompletion === 'rolled-back') {
+          current.phase = 'active';
+          const currentSha256 = crypto
+            .createHash('sha256')
+            .update(document.getText(), 'utf8')
+            .digest('hex');
+          if (currentSha256 !== current.store.snapshot.sourceSha256 && !current.invalidated) {
+            current.invalidated = true;
+            this.postFeedbackMessage(current.ownerWebview, {
+              type: 'feedback.invalidated',
+              sessionId: current.sessionId,
+              code: FEEDBACK_ERROR_CODES.sourceChanged,
+              message: 'The Markdown source changed outside the frozen feedback snapshot.',
+            });
+          }
+        } else if (current.ownerWebview === webview) {
           // The controller asking to rehydrate has no usable active UI. Keep
           // the durable bundle, but retire the volatile runtime so Start can
           // perform a fresh exact-hash preflight instead of looping forever.
-          this.syncFeedbackPeerContent(document, webview);
-          this.feedbackSessions.delete(documentKey);
-          current.mutationIdleWaiters.forEach(resolve => resolve());
-          current.mutationIdleWaiters.clear();
-          this.updateWebview(document, webview, { force: true });
-          this.refreshFeedbackPeerLocks(documentKey);
+          await this.retireFeedbackSessionThroughPeerRelease(
+            documentKey,
+            current,
+            document,
+            message.requestId,
+            false
+          );
         } else {
           current.phase = 'active';
           if (candidateCode === FEEDBACK_ERROR_CODES.sourceChanged && !current.invalidated) {
@@ -3107,11 +6543,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   /** Restore exact item-to-block targets from persisted inclusive source lines. */
   private restoreFeedbackTargets(session: ActiveFeedbackSession): void {
     for (const item of session.store.items) {
-      const target = this.findFeedbackOrdinalsForLines(
-        session.anchorMap,
-        item.startLine,
-        item.endLine
-      );
+      const target = findFeedbackOrdinalsForLines(session.anchorMap, item.startLine, item.endLine);
       if (!target) {
         throw Object.assign(
           new Error(`Feedback item ${item.id} no longer maps to the frozen Markdown blocks.`),
@@ -3125,6 +6557,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       ) {
         session.degradedRenderedRangeIds.add(item.id);
       }
+      if (
+        item.kind === 'text' &&
+        item.cellTarget !== undefined &&
+        !this.validatePersistedFeedbackCellTarget(session, target, item.cellTarget)
+      ) {
+        session.degradedCellTargetIds.add(item.id);
+      }
       session.targets.set(item.id, target);
     }
   }
@@ -3134,10 +6573,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     session: ActiveFeedbackSession,
     webview: vscode.Webview
   ): void {
-    if (session.degradedRenderedRangeIds.size === 0) return;
-    const degradedIds = [...session.degradedRenderedRangeIds].sort(
-      (left, right) => Number(left.slice(1)) - Number(right.slice(1))
-    );
+    const degradedIds = [
+      ...new Set([...session.degradedRenderedRangeIds, ...session.degradedCellTargetIds]),
+    ].sort((left, right) => Number(left.slice(1)) - Number(right.slice(1)));
+    if (degradedIds.length === 0) return;
     const visibleIds = degradedIds.slice(0, 5).join(', ');
     const remaining = degradedIds.length - Math.min(degradedIds.length, 5);
     this.postFeedbackMessage(webview, {
@@ -3155,10 +6594,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     requestId: string,
     workspaceRoot: string,
     session: ActiveFeedbackSession,
+    document: vscode.TextDocument,
     webview: vscode.Webview
   ): void {
     const snapshot = session.store.snapshot;
-    this.postFeedbackMessage(webview, {
+    const startedMessage: Extract<FeedbackHostMessage, { type: 'feedback.started' }> = {
       type: 'feedback.started',
       requestId,
       sessionId: session.sessionId,
@@ -3175,7 +6615,38 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         endLine: block.endLine,
       })),
       items: this.feedbackItems(session, webview),
+    };
+
+    if (!this.feedbackDeliveryCapableWebviews.has(webview)) {
+      this.postFeedbackMessage(webview, startedMessage);
+      return;
+    }
+
+    const messageId = `feedback-start-${this.nextFeedbackDeliveryId.toString(36)}-${crypto
+      .randomBytes(8)
+      .toString('hex')}`;
+    this.nextFeedbackDeliveryId += 1;
+    const delivery: FeedbackStartedDelivery = Object.freeze({
+      type: 'feedback.delivery',
+      protocolVersion: FEEDBACK_DELIVERY_PROTOCOL_VERSION,
+      messageId,
+      operationEpoch: requestId,
+      sessionEpoch: session.sessionId,
+      stageRevision: 1,
+      payload: startedMessage,
     });
+    const command = Object.freeze({
+      messageId,
+      operationEpoch: requestId,
+      sessionEpoch: session.sessionId,
+      stageRevision: 1,
+      payload: delivery,
+    });
+    void this.getFeedbackStartedTransport(webview)
+      .send(command)
+      .then(result =>
+        this.recoverFailedFeedbackStartedDelivery(requestId, session, document, webview, result)
+      );
   }
 
   private async discardInactiveFeedbackDraft(
@@ -3185,12 +6656,21 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   ): Promise<void> {
     const documentKey = document.uri.toString();
     const transitionToken = this.beginFeedbackTransition(documentKey, webview, message.requestId);
+    const transitionLockId = this.feedbackTransitions.get(documentKey)?.lockId;
+    if (!transitionLockId) throw new Error('Feedback transition lock was not created.');
     try {
       // Preserve and save an edit that was already queued when the recovery
       // banner was clicked. The local UI is frozen before the request is
       // posted, so this drains the last legitimate debounce before the host
       // binds that freeze to a correlated transition lock.
-      const sourceBytes = await this.flushFeedbackSnapshot(document, webview);
+      const { sourceBytes } = await this.flushFeedbackSnapshot(document, webview, async () => {
+        await this.acquireFeedbackPeerLocks(
+          documentKey,
+          webview,
+          message.requestId,
+          transitionLockId
+        );
+      });
       const transition = this.assertFeedbackTransition(documentKey, transitionToken);
       transition.recoveryRequired =
         transition.recoveryRequired || transition.expectedFlushContentSha256 !== undefined;
@@ -3237,7 +6717,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         round: message.round,
       });
     } finally {
-      this.endFeedbackTransition(documentKey, transitionToken, document);
+      await this.endFeedbackTransition(documentKey, transitionToken, document);
     }
   }
 
@@ -3694,8 +7174,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     document: vscode.TextDocument,
     webview: vscode.Webview
   ): void {
-    const rawRelativePath = message.relativePath as string;
+    const rawRelativePath = message.relativePath;
     const requestId = message.requestId as string;
+
+    if (typeof rawRelativePath !== 'string' || rawRelativePath.length === 0) {
+      webview.postMessage({
+        type: 'imageUriResolved',
+        requestId,
+        webviewUri: '',
+        relativePath: typeof rawRelativePath === 'string' ? rawRelativePath : '',
+        error: 'Cannot resolve image path: the path is missing or invalid',
+      });
+      return;
+    }
 
     // Normalize the path (decode URL-encoded segments like %20 → space)
     const relativePath = normalizeImagePath(rawRelativePath);
@@ -3713,6 +7204,17 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       return;
     }
     const absolutePath = path.resolve(basePath, relativePath);
+    const allowedRoots = this.getAllowedFileRoots(document);
+    if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, path.resolve(root)))) {
+      webview.postMessage({
+        type: 'imageUriResolved',
+        requestId,
+        webviewUri: '',
+        relativePath: rawRelativePath,
+        error: 'Cannot resolve image path: the file is outside the allowed document roots',
+      });
+      return;
+    }
     const fileUri = vscode.Uri.file(absolutePath);
 
     // Convert to webview URI
@@ -3937,17 +7439,388 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   /**
-   * Handle image save from webview
-   * Saves the image to the workspace and returns the relative path
+   * Start one host-owned image write before any pending marker can be applied.
+   * The renderer may be destroyed while the file is saving, so the completion
+   * stays correlated to its webview and placeholder until document sync uses it.
+   */
+  private trackPendingImageSave(
+    message: { type: string; [key: string]: unknown },
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): void {
+    const placeholderId = message.placeholderId;
+    const data = message.data;
+    const mimeType = message.mimeType;
+    const viewGeneration = message.viewGeneration;
+    if (message.protocolVersion === undefined && Array.isArray(data)) {
+      // Compatibility for a pre-versioned renderer already alive during an
+      // extension-host restart. New renderers send Uint8Array plus generation.
+      void this.handleSaveImage(message, document, webview);
+      return;
+    }
+    if (
+      message.protocolVersion !== IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION ||
+      typeof placeholderId !== 'string' ||
+      placeholderId.length === 0 ||
+      placeholderId.length > 256 ||
+      typeof viewGeneration !== 'string' ||
+      viewGeneration !== this.editViewGenerations.get(webview) ||
+      !(data instanceof Uint8Array) ||
+      typeof mimeType !== 'string' ||
+      !mimeType.startsWith('image/')
+    ) {
+      console.warn('[MD4H] Rejected malformed or stale pending image save');
+      return;
+    }
+    // Copy the accepted view exactly once. This prevents a tiny subview from
+    // retaining a large backing buffer and isolates the file write from any
+    // later mutation of a direct adapter's message object.
+    const denseData = data.slice();
+
+    let pending = this.pendingHostImageSaves.get(webview);
+    if (!pending) {
+      pending = new Map();
+      this.pendingHostImageSaves.set(webview, pending);
+    }
+    const existing = pending.get(placeholderId);
+    if (existing) {
+      // The renderer may replay saveImage while waiting for its terminal result.
+      // Reuse the original file write and immutable completion identity.
+      if (existing.viewGeneration === viewGeneration) return;
+      console.warn('[MD4H] Rejected a pending image id reused across renderer generations');
+      return;
+    }
+
+    const retainedBytes = [...pending.values()].reduce(
+      (total, entry) => total + (entry.data?.byteLength ?? 0),
+      0
+    );
+    if (
+      pending.size >= MarkdownEditorProvider.PENDING_HOST_IMAGE_SAVE_LIMIT ||
+      denseData.byteLength > MarkdownEditorProvider.PENDING_HOST_IMAGE_SAVE_BYTE_LIMIT ||
+      retainedBytes + denseData.byteLength >
+        MarkdownEditorProvider.PENDING_HOST_IMAGE_SAVE_BYTE_LIMIT
+    ) {
+      const error =
+        'Too many images are still being saved. Wait for the current image saves to finish and try again.';
+      vscode.window.showErrorMessage(error);
+      this.startPendingImageSaveRejectionDelivery(webview, placeholderId, viewGeneration, error);
+      return;
+    }
+
+    // Assigned before the persistence microtask settles; its callbacks mutate
+    // the same entry later retained in pendingHostImageSaves.
+    // eslint-disable-next-line prefer-const
+    let entry: PendingHostImageSave;
+    const completionId = crypto.randomBytes(16).toString('hex');
+    const persistence = Promise.resolve().then(() =>
+      this.persistImage(message, document, denseData)
+    );
+    const completion = persistence.then(
+      result => {
+        entry.settled = true;
+        if (result.kind === 'error' && entry.data) {
+          // Failure is the only path that needs a durable preview fallback for
+          // an accepted teardown marker. Encode without another binary copy,
+          // then release the dense transfer buffer at settlement.
+          entry.fallbackDataUri = `data:${entry.mimeType};base64,${Buffer.from(
+            entry.data.buffer,
+            entry.data.byteOffset,
+            entry.data.byteLength
+          ).toString('base64')}`;
+        }
+        entry.data = undefined;
+        this.startPendingImageCompletionDelivery(webview, entry, result);
+        return result.kind === 'saved' ? result.destination : null;
+      },
+      error => {
+        entry.settled = true;
+        if (entry.data) {
+          entry.fallbackDataUri = `data:${entry.mimeType};base64,${Buffer.from(
+            entry.data.buffer,
+            entry.data.byteOffset,
+            entry.data.byteLength
+          ).toString('base64')}`;
+        }
+        entry.data = undefined;
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error('[MD4H] Unexpected pending image save rejection:', errorMessage);
+        this.startPendingImageCompletionDelivery(webview, entry, {
+          kind: 'error',
+          error: errorMessage || 'Image save failed unexpectedly.',
+        });
+        return null;
+      }
+    );
+    entry = {
+      placeholderId,
+      viewGeneration,
+      completionId,
+      data: denseData,
+      mimeType,
+      completion,
+      settled: false,
+      deliveryRetired: false,
+      retireAfterSettlement: false,
+    };
+    pending.set(placeholderId, entry);
+  }
+
+  /** Deliver one bounded capacity rejection until its exact renderer ACKs it. */
+  private startPendingImageSaveRejectionDelivery(
+    webview: vscode.Webview,
+    placeholderId: string,
+    viewGeneration: string,
+    error: string
+  ): void {
+    if (this.disposed) return;
+    let rejections = this.pendingHostImageSaveRejections.get(webview);
+    if (!rejections) {
+      rejections = new Map();
+      this.pendingHostImageSaveRejections.set(webview, rejections);
+    }
+    const existing = rejections.get(placeholderId);
+    if (existing?.viewGeneration === viewGeneration) return;
+    if (
+      existing ||
+      rejections.size >= MarkdownEditorProvider.PENDING_HOST_IMAGE_SAVE_REJECTION_LIMIT
+    ) {
+      console.error('[MD4H] Pending-image rejection delivery capacity exhausted');
+      return;
+    }
+
+    const completionId = crypto.randomBytes(16).toString('hex');
+    const completion: PendingImageSaveCompletion = {
+      type: 'imageError',
+      protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+      completionId,
+      placeholderId,
+      viewGeneration,
+      error: error.slice(0, 32 * 1024),
+    };
+    const completionDelivery = this.createImageCompletionDelivery(webview, completion);
+    rejections.set(placeholderId, {
+      placeholderId,
+      viewGeneration,
+      completionId,
+      completionDelivery,
+    });
+    this.activateImageCompletionDelivery(completionDelivery);
+  }
+
+  /** Create one retry transport without starting it before its owner is recorded. */
+  private createImageCompletionDelivery(
+    webview: vscode.Webview,
+    completion: PendingImageSaveCompletion
+  ): ImageSaveCompletionDelivery {
+    return new ImageSaveCompletionDelivery({
+      message: completion,
+      postMessage: message => webview.postMessage(message),
+      ackTimeoutMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_ACK_TIMEOUT_MS,
+      retryDelayMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_RETRY_DELAY_MS,
+      maxRetryDelayMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_MAX_RETRY_DELAY_MS,
+    });
+  }
+
+  /** Retain and start a delivery so provider disposal can cancel its timer. */
+  private activateImageCompletionDelivery(delivery: ImageSaveCompletionDelivery): void {
+    if (this.disposed) {
+      delivery.dispose();
+      return;
+    }
+    this.activeImageCompletionDeliveries.add(delivery);
+    delivery.start();
+  }
+
+  /** Cancel a delivery and release provider-wide iterable ownership. */
+  private disposeImageCompletionDelivery(delivery: ImageSaveCompletionDelivery | undefined): void {
+    if (!delivery) return;
+    delivery.dispose();
+    this.activeImageCompletionDeliveries.delete(delivery);
+  }
+
+  /** Start or replay one immutable completion until its renderer ACKs application. */
+  private startPendingImageCompletionDelivery(
+    webview: vscode.Webview,
+    entry: PendingHostImageSave,
+    result: ImagePersistenceResult
+  ): void {
+    if (this.disposed || entry.deliveryRetired) return;
+
+    const completion: PendingImageSaveCompletion =
+      result.kind === 'saved'
+        ? {
+            type: 'imageSaved',
+            protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+            completionId: entry.completionId,
+            placeholderId: entry.placeholderId,
+            viewGeneration: entry.viewGeneration,
+            newSrc: result.destination,
+          }
+        : {
+            type: 'imageError',
+            protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+            completionId: entry.completionId,
+            placeholderId: entry.placeholderId,
+            viewGeneration: entry.viewGeneration,
+            error: (result.error || 'Image save failed.').slice(0, 32 * 1024),
+          };
+    this.disposeImageCompletionDelivery(entry.completionDelivery);
+    entry.completionDelivery = this.createImageCompletionDelivery(webview, completion);
+    this.activateImageCompletionDelivery(entry.completionDelivery);
+  }
+
+  /** Stop retry only after an exact, generation-bound renderer application ACK. */
+  private acceptPendingImageSaveCompletionAck(message: unknown, webview: vscode.Webview): void {
+    const acknowledgement = parsePendingImageSaveCompletionAck(message);
+    if (!acknowledgement) return;
+    const entry = this.pendingHostImageSaves.get(webview)?.get(acknowledgement.placeholderId);
+    if (
+      entry &&
+      entry.completionId === acknowledgement.completionId &&
+      entry.viewGeneration === acknowledgement.viewGeneration
+    ) {
+      const delivery = entry.completionDelivery;
+      if (delivery?.acceptAcknowledgement(acknowledgement) === 'accepted') {
+        this.activeImageCompletionDeliveries.delete(delivery);
+      }
+      return;
+    }
+
+    const rejections = this.pendingHostImageSaveRejections.get(webview);
+    const rejection = rejections?.get(acknowledgement.placeholderId);
+    if (
+      !rejection ||
+      rejection.completionId !== acknowledgement.completionId ||
+      rejection.viewGeneration !== acknowledgement.viewGeneration
+    ) {
+      return;
+    }
+    if (rejection.completionDelivery.acceptAcknowledgement(acknowledgement) === 'accepted') {
+      this.activeImageCompletionDeliveries.delete(rejection.completionDelivery);
+      rejections?.delete(rejection.placeholderId);
+      if (rejections?.size === 0) this.pendingHostImageSaveRejections.delete(webview);
+    }
+  }
+
+  /** Cancel panel-bound retry timers but preserve teardown marker resolution. */
+  private retirePendingImageCompletionDeliveries(
+    webview: vscode.Webview,
+    options: { readonly discardAfterSettlement?: boolean } = {}
+  ): void {
+    const rejections = this.pendingHostImageSaveRejections.get(webview);
+    if (rejections) {
+      for (const rejection of rejections.values()) {
+        this.disposeImageCompletionDelivery(rejection.completionDelivery);
+      }
+      this.pendingHostImageSaveRejections.delete(webview);
+    }
+    const pending = this.pendingHostImageSaves.get(webview);
+    if (!pending) return;
+    for (const entry of pending.values()) {
+      entry.deliveryRetired = true;
+      this.disposeImageCompletionDelivery(entry.completionDelivery);
+      entry.completionDelivery = undefined;
+      if (!options.discardAfterSettlement) continue;
+      entry.retireAfterSettlement = true;
+      void entry.completion.finally(() => {
+        if (
+          entry.retireAfterSettlement &&
+          this.pendingHostImageSaves.get(webview)?.get(entry.placeholderId) === entry
+        ) {
+          this.disposeImageCompletionDelivery(entry.completionDelivery);
+          pending.delete(entry.placeholderId);
+          if (pending.size === 0) this.pendingHostImageSaves.delete(webview);
+        }
+      });
+    }
+  }
+
+  /** Resolve only markers present in this exact renderer revision. */
+  private async resolvePendingImageDestinations(
+    content: string,
+    webview: vscode.Webview,
+    viewGeneration: string
+  ): Promise<string> {
+    const pending = this.pendingHostImageSaves.get(webview);
+    if (!pending) {
+      if (content.includes(PENDING_IMAGE_DESTINATION_PREFIX)) {
+        throw new Error('Cannot resolve a pending image marker without its host file operation.');
+      }
+      return content;
+    }
+
+    let resolvedContent = content;
+    for (const entry of [...pending.values()]) {
+      if (entry.viewGeneration !== viewGeneration) continue;
+      const marker = createPendingImageDestination(entry.placeholderId);
+      if (!resolvedContent.includes(marker)) {
+        // A serialized renderer revision without this marker proves that its
+        // placeholder was replaced or removed. Completed metadata is no longer
+        // needed for teardown recovery.
+        if (entry.settled) {
+          this.disposeImageCompletionDelivery(entry.completionDelivery);
+          pending.delete(entry.placeholderId);
+        }
+        continue;
+      }
+      const savedDestination = await entry.completion;
+      resolvedContent = replacePendingImageDestination(
+        resolvedContent,
+        entry.placeholderId,
+        savedDestination ?? entry.fallbackDataUri ?? ''
+      );
+      this.disposeImageCompletionDelivery(entry.completionDelivery);
+      pending.delete(entry.placeholderId);
+      entry.data = undefined;
+      entry.fallbackDataUri = undefined;
+    }
+    if (resolvedContent.includes(PENDING_IMAGE_DESTINATION_PREFIX)) {
+      throw new Error('Cannot apply a document edit containing an unknown pending image marker.');
+    }
+    if (pending.size === 0) this.pendingHostImageSaves.delete(webview);
+    return resolvedContent;
+  }
+
+  /**
+   * Compatibility wrapper for direct adapters. Production saveImage messages
+   * use trackPendingImageSave so terminal delivery is ACKed and retried.
    */
   private async handleSaveImage(
     message: { type: string; [key: string]: unknown },
     document: vscode.TextDocument,
     webview: vscode.Webview
-  ): Promise<void> {
+  ): Promise<string | null> {
+    const rawData = message.data;
+    const bytes =
+      rawData instanceof Uint8Array
+        ? rawData
+        : new Uint8Array(Array.isArray(rawData) ? rawData : []);
+    const result = await this.persistImage(message, document, bytes);
     const placeholderId = message.placeholderId as string;
+    if (result.kind === 'saved') {
+      await webview.postMessage({
+        type: 'imageSaved',
+        placeholderId,
+        newSrc: result.destination,
+      });
+      return result.destination;
+    }
+    await webview.postMessage({
+      type: 'imageError',
+      placeholderId,
+      error: result.error,
+    });
+    return null;
+  }
+
+  /** Persist one validated dense image buffer without owning renderer delivery. */
+  private async persistImage(
+    message: { type: string; [key: string]: unknown },
+    document: vscode.TextDocument,
+    data: Uint8Array
+  ): Promise<ImagePersistenceResult> {
     const name = message.name as string;
-    const data = message.data as number[];
     const mimeType = message.mimeType as string;
 
     // Use user-selected folder from confirmation dialog
@@ -3958,19 +7831,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     if (!saveBasePath) {
       const errorMessage = 'Cannot save image: no base directory available';
       vscode.window.showErrorMessage(errorMessage);
-      webview.postMessage({
-        type: 'imageError',
-        placeholderId,
-        error: errorMessage,
-      });
-      return;
+      return { kind: 'error', error: errorMessage };
     }
     const imagesDir = path.join(saveBasePath, imageFolderName);
     if (!isPathContainedWithin(imagesDir, saveBasePath)) {
       const errorMessage = `Refusing to save image outside the base directory: ${imageFolderName}`;
       vscode.window.showErrorMessage(errorMessage);
-      webview.postMessage({ type: 'imageError', placeholderId, error: errorMessage });
-      return;
+      return { kind: 'error', error: errorMessage };
     }
 
     console.warn(`[MD4H] Saving image "${name}" to folder: ${imagesDir}`);
@@ -4021,7 +7888,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         }
       }
 
-      await vscode.workspace.fs.writeFile(imageUri, new Uint8Array(data));
+      await vscode.workspace.fs.writeFile(imageUri, data);
 
       // Markdown link should always be relative to the markdown file directory (portable in git).
       const markdownDir =
@@ -4034,24 +7901,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
 
       console.warn(`[MD4H] Image saved successfully. Path: ${relativePath}`);
 
-      webview.postMessage({
-        type: 'imageSaved',
-        placeholderId,
-        newSrc: relativePath, // Use relative path (markdown-friendly)
-      });
-
       // Log success (mimeType used for potential future validation)
       if (mimeType) {
         // Image type validation could be added here
       }
+      return { kind: 'saved', destination: relativePath };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       vscode.window.showErrorMessage(`Failed to save image: ${errorMessage}`);
-      webview.postMessage({
-        type: 'imageError',
-        placeholderId,
-        error: errorMessage,
-      });
+      return { kind: 'error', error: errorMessage };
     }
   }
 
@@ -5659,41 +9517,51 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   private async flushAndSaveIfDirty(
     document: vscode.TextDocument,
     webview: vscode.Webview
-  ): Promise<void> {
-    if (document.uri.scheme === 'untitled') return;
+  ): Promise<boolean> {
+    if (document.uri.scheme === 'untitled') return false;
 
-    // 1. Ask the webview to fire any debounced edit synchronously so the
-    //    latest content lands in our message queue *before* we save.
-    const requestId = `flush-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    const ack = new Promise<void>(resolve => {
-      this.flushAckResolvers.set(requestId, () => resolve());
-      // Defensive: don't block save forever if the ack never arrives
-      // (webview unloading, message channel torn down, etc.).
-      setTimeout(() => {
-        if (this.flushAckResolvers.delete(requestId)) resolve();
-      }, 250);
-    });
-    webview.postMessage({ type: 'flushPendingEdit', requestId });
-    await ack;
-
-    // 2. The `edit` message (if the webview sent one) reaches `handleWebviewMessage`
-    //    before the ack, so by now its applyEdit Promise is in-flight. Await it
-    //    so save() sees the post-edit buffer.
-    const inFlight = this.inFlightApplyEdits.get(document.uri.toString());
-    if (inFlight) {
-      try {
-        await inFlight;
-      } catch {
-        // applyEdit handles its own errors; ignore here.
-      }
+    if (
+      !(await this.flushRendererAtDocumentBoundary(
+        document,
+        webview,
+        FEEDBACK_FLUSH_ACK_TIMEOUT_MS,
+        'autosave-flush'
+      ))
+    ) {
+      return false;
     }
 
-    if (!document.isDirty) return;
+    if (!document.isDirty) return true;
 
     try {
-      await document.save();
+      return await document.save();
     } catch (error) {
       console.error('[MD4H] Autosave document.save() failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Persist host-accepted edits after VS Code has discarded an inactive
+   * renderer. Every later accepted teardown tail calls this again, so saving
+   * an earlier revision cannot leave the final hidden revision only in memory.
+   */
+  private async saveInactiveDocumentAfterDrain(
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<boolean> {
+    if (!this.inactiveAutoSaveWebviews.has(webview) || document.uri.scheme === 'untitled') {
+      return false;
+    }
+    const autoSave = vscode.workspace.getConfiguration('files').get<string>('autoSave', 'off');
+    if (autoSave !== 'onFocusChange' && autoSave !== 'onWindowChange') return false;
+    if (!(await this.drainDocumentEdits(document))) return false;
+    if (!document.isDirty) return true;
+    try {
+      return await document.save();
+    } catch (error) {
+      console.error('[MD4H] Inactive renderer autosave failed:', error);
+      return false;
     }
   }
 
@@ -5706,8 +9574,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
    * a user opts in.
    *
    * No-ops for untitled documents — saving those would pop a "Save As" dialog.
+   *
+   * @param document - Document whose accepted typing edit should be persisted
+   * @param editCompletion - Result of the coordinated edit that armed this debounce
    */
-  private scheduleAutoSave(document: vscode.TextDocument): void {
+  private scheduleAutoSave(document: vscode.TextDocument, editCompletion: Promise<boolean>): void {
     if (document.uri.scheme === 'untitled') return;
 
     const config = vscode.workspace.getConfiguration();
@@ -5719,13 +9590,63 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     if (existing) clearTimeout(existing);
 
     const timer = setTimeout(() => {
-      this.autoSaveTimers.delete(docUri);
-      if (!document.isDirty) return;
-      void document.save().then(undefined, (error: unknown) => {
-        console.error('[MD4H] Auto-save document.save() failed:', error);
-      });
+      // Start the debounce when typing is accepted, not when its queued
+      // WorkspaceEdit finishes. At the deadline, wait for that edit and the
+      // full queue so slow edits cannot save stale bytes or restart the delay.
+      const stillOwnsDebounce = (): boolean => this.autoSaveTimers.get(docUri) === timer;
+      void editCompletion.then(
+        async success => {
+          if (!stillOwnsDebounce()) return;
+          if (!success) {
+            this.autoSaveTimers.delete(docUri);
+            return;
+          }
+          const drained = await this.drainDocumentEdits(document);
+          // A newer edit may have reset the debounce while this callback was
+          // waiting for the queue. Only the newest timer may initiate a save.
+          if (!stillOwnsDebounce()) return;
+          this.autoSaveTimers.delete(docUri);
+          if (!drained || !document.isDirty) return;
+          try {
+            await document.save();
+          } catch (error) {
+            console.error('[MD4H] Auto-save document.save() failed:', error);
+          }
+        },
+        error => {
+          if (stillOwnsDebounce()) this.autoSaveTimers.delete(docUri);
+          console.error('[MD4H] Auto-save edit completion failed:', error);
+        }
+      );
     }, MarkdownEditorProvider.AUTO_SAVE_DEBOUNCE_MS);
     this.autoSaveTimers.set(docUri, timer);
+  }
+
+  /**
+   * Convert an armed custom-autosave debounce into a host-owned drain when its
+   * last renderer closes. Cancelling the timer alone can leave an accepted
+   * WorkspaceEdit dirty forever when VS Code's own files.autoSave is disabled.
+   */
+  private preservePendingAutoSaveOnFinalPanelDispose(document: vscode.TextDocument): void {
+    const documentKey = document.uri.toString();
+    const timer = this.autoSaveTimers.get(documentKey);
+    if (!timer) return;
+
+    clearTimeout(timer);
+    this.autoSaveTimers.delete(documentKey);
+    void this.drainDocumentEdits(document)
+      .then(async drained => {
+        if (!drained || !document.isDirty) return;
+        try {
+          const saved = await document.save();
+          if (!saved) console.error('[MD4H] Final-panel custom autosave was rejected.');
+        } catch (error) {
+          console.error('[MD4H] Final-panel custom autosave failed:', error);
+        }
+      })
+      .catch(error => {
+        console.error('[MD4H] Could not drain edits for final-panel custom autosave:', error);
+      });
   }
 
   /**
@@ -5772,8 +9693,404 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
   }
 
   /**
-   * Apply edits from webview to TextDocument
-   * Marks the edit with a timestamp to prevent feedback loops
+   * Verify the renderer's real post-apply serialization against saved source.
+   * TipTap may canonicalize equivalent Markdown syntax, so exact normalized
+   * text wins first and structural equivalence is accepted only when the
+   * configured blank-line contract is also preserved.
+   */
+  private feedbackRendererContentMatchesSource(
+    rendererContent: string,
+    sourceText: string
+  ): boolean {
+    const normalizedRenderer = this.normalizeWebviewEditContent(rendererContent);
+    const normalizedSource = this.normalizeWebviewEditContent(sourceText);
+    if (normalizedRenderer === normalizedSource) return true;
+    if (!isMarkdownStructurallyEquivalent(normalizedRenderer, normalizedSource)) return false;
+    return (
+      this.getBlankLineMode() !== 'preserve' ||
+      hasSameBlankLineLayout(normalizedRenderer, normalizedSource)
+    );
+  }
+
+  /** Return a stable non-negative version for protocol messages and test adapters. */
+  private getDocumentVersion(document: vscode.TextDocument): number {
+    return typeof document.version === 'number' && Number.isSafeInteger(document.version)
+      ? Math.max(0, document.version)
+      : 0;
+  }
+
+  /**
+   * Hold a replacement renderer behind every edit or flush boundary accepted
+   * from its previous generation. Rotating early would reject a queued exact
+   * ACK and could discard the final hidden-view revision.
+   */
+  private deferReadyUntilPendingDocumentBoundaries(
+    message: { type: string; [key: string]: unknown },
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): boolean {
+    const pending: Promise<unknown>[] = [
+      ...(this.pendingDocumentEditAcks.get(webview)?.values() ?? []),
+      ...[...this.flushAckResolvers.values()]
+        .filter(boundary => boundary.webview === webview)
+        .map(boundary => boundary.settled),
+    ];
+    if (pending.length === 0) return false;
+
+    this.deferredReadyAfterDocumentEdits.set(webview, { message, document });
+    if (this.pendingReadyDocumentEditDrains.has(webview)) return true;
+
+    const drain = Promise.allSettled(pending).then(() => undefined);
+    this.pendingReadyDocumentEditDrains.set(webview, drain);
+    void drain.then(() => {
+      if (this.pendingReadyDocumentEditDrains.get(webview) !== drain) return;
+      this.pendingReadyDocumentEditDrains.delete(webview);
+      const deferred = this.deferredReadyAfterDocumentEdits.get(webview);
+      if (!deferred || this.disposed) return;
+      this.deferredReadyAfterDocumentEdits.delete(webview);
+      this.handleWebviewMessage(deferred.message, deferred.document, webview);
+    });
+    return true;
+  }
+
+  /** Assign a fresh renderer lineage after a webview script starts or reloads. */
+  private rotateEditViewGeneration(webview: vscode.Webview): string {
+    const generation = `view-${this.nextEditViewGeneration}`;
+    this.nextEditViewGeneration += 1;
+    this.setEditViewGeneration(webview, generation);
+    return generation;
+  }
+
+  /** Install one renderer lineage and retire ACK caches from its predecessor. */
+  private setEditViewGeneration(webview: vscode.Webview, generation: string): void {
+    const unavailableGeneration = this.unavailableFeedbackViewGenerations.get(webview);
+    this.retirePendingImageCompletionDeliveries(webview, { discardAfterSettlement: true });
+    this.editViewGenerations.set(webview, generation);
+    if (unavailableGeneration !== generation) {
+      this.unavailableFeedbackViewGenerations.delete(webview);
+    }
+    this.appliedFeedbackPeerLocks.delete(webview);
+    this.pendingDocumentEditAcks.delete(webview);
+    this.documentEditAckHistory.delete(webview);
+    this.documentEditEnvelopeHashes.delete(webview);
+  }
+
+  /** Return the current renderer lineage, creating one for pre-ready test/adaptor calls. */
+  private getEditViewGeneration(webview?: vscode.Webview): string {
+    if (!webview) return 'unattributed-view';
+    return this.editViewGenerations.get(webview) ?? this.rotateEditViewGeneration(webview);
+  }
+
+  /** True only for the exact renderer lineage whose queueing was rejected. */
+  private isFeedbackViewGenerationUnavailable(webview: vscode.Webview): boolean {
+    const generation = this.editViewGenerations.get(webview);
+    return (
+      generation !== undefined &&
+      this.unavailableFeedbackViewGenerations.get(webview) === generation
+    );
+  }
+
+  /** Retire one destroyed renderer lineage without unregistering its panel. */
+  private markFeedbackViewGenerationUnavailable(webview: vscode.Webview, generation: string): void {
+    if (this.editViewGenerations.get(webview) !== generation) return;
+    this.unavailableFeedbackViewGenerations.set(webview, generation);
+    this.appliedFeedbackPeerLocks.delete(webview);
+    this.pendingFeedbackPeerLockAcquisitions.delete(webview);
+  }
+
+  /** Post an application-level edit result without treating queueing as delivery. */
+  private postDocumentEditAck(webview: vscode.Webview, ack: DocumentEditAck): void {
+    void Promise.resolve(webview.postMessage(ack)).catch(error => {
+      console.error('[MD4H] Failed posting document edit acknowledgement:', error);
+    });
+  }
+
+  /** Retain and replay a bounded idempotent acknowledgement for one renderer edit. */
+  private trackDocumentEditAck(
+    webview: vscode.Webview,
+    document: vscode.TextDocument,
+    edit: DocumentEditMessage | DocumentTeardownEditMessage,
+    result: Promise<boolean>
+  ): void {
+    let pending = this.pendingDocumentEditAcks.get(webview);
+    if (!pending) {
+      pending = new Map();
+      this.pendingDocumentEditAcks.set(webview, pending);
+    }
+    let envelopes = this.documentEditEnvelopeHashes.get(webview);
+    if (!envelopes) {
+      envelopes = new Map();
+      this.documentEditEnvelopeHashes.set(webview, envelopes);
+    }
+    envelopes.set(edit.editId, this.hashDocumentEditEnvelope(edit));
+
+    const acknowledgement = result.then(accepted => ({
+      type: 'document.edit.ack' as const,
+      protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+      editId: edit.editId,
+      viewGeneration: edit.viewGeneration,
+      localRevision: edit.localRevision,
+      accepted,
+      documentVersion: this.getDocumentVersion(document),
+    }));
+    pending.set(edit.editId, acknowledgement);
+
+    void acknowledgement.then(ack => {
+      pending?.delete(edit.editId);
+      if (this.editViewGenerations.get(webview) === edit.viewGeneration) {
+        let completed = this.documentEditAckHistory.get(webview);
+        if (!completed) {
+          completed = new Map();
+          this.documentEditAckHistory.set(webview, completed);
+        }
+        completed.set(edit.editId, ack);
+        while (completed.size > MarkdownEditorProvider.DOCUMENT_EDIT_ACK_HISTORY_LIMIT) {
+          const oldest = completed.keys().next().value as string | undefined;
+          if (oldest === undefined) break;
+          completed.delete(oldest);
+          envelopes?.delete(oldest);
+        }
+      }
+      this.postDocumentEditAck(webview, ack);
+      if (ack.accepted && this.inactiveAutoSaveWebviews.has(webview)) {
+        void this.saveInactiveDocumentAfterDrain(document, webview).catch(error => {
+          console.error('[MD4H] Post-edit inactive autosave failed:', error);
+        });
+      }
+    });
+  }
+
+  /**
+   * Reject reuse of one idempotency key with different immutable request data.
+   * Replaying the earlier ACK for a conflicting payload would falsely claim
+   * that content the host never applied had been accepted.
+   */
+  private isConflictingDocumentEditEnvelope(
+    webview: vscode.Webview,
+    edit: DocumentEditMessage | DocumentTeardownEditMessage
+  ): boolean {
+    const known = this.documentEditEnvelopeHashes.get(webview)?.get(edit.editId);
+    return known !== undefined && known !== this.hashDocumentEditEnvelope(edit);
+  }
+
+  /** Hash one parsed edit without retaining another potentially large Markdown string. */
+  private hashDocumentEditEnvelope(
+    edit: DocumentEditMessage | DocumentTeardownEditMessage
+  ): string {
+    const hash = crypto.createHash('sha256');
+    const fields = [
+      edit.type,
+      String(edit.protocolVersion),
+      edit.editId,
+      edit.viewGeneration,
+      String(edit.localRevision),
+      String(edit.baseDocumentVersion),
+      ...(edit.type === 'edit'
+        ? [edit.editReason]
+        : [edit.predecessorEditId, String(edit.predecessorLocalRevision)]),
+    ];
+    for (const field of fields) hash.update(field, 'utf8').update('\0');
+    return hash.update(edit.content, 'utf8').digest('hex');
+  }
+
+  /**
+   * Queue one final renderer revision behind the exact edit it was derived
+   * from. The webview may be destroyed before either ACK arrives, so execution
+   * is authorized at receipt and later guarded by the predecessor result and
+   * resulting document version rather than the disposed panel lifetime.
+   */
+  private applyDocumentTeardownEdit(
+    edit: DocumentTeardownEditMessage,
+    predecessor: Promise<DocumentEditAck>,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<boolean> {
+    const documentKey = document.uri.toString();
+    return this.documentEditCoordinator
+      .enqueue(documentKey, {
+        kind: 'operation',
+        execute: async () => {
+          const predecessorAck = await predecessor;
+          if (
+            !predecessorAck.accepted ||
+            predecessorAck.editId !== edit.predecessorEditId ||
+            predecessorAck.viewGeneration !== edit.viewGeneration ||
+            predecessorAck.localRevision !== edit.predecessorLocalRevision ||
+            this.getDocumentVersion(document) !== predecessorAck.documentVersion
+          ) {
+            return false;
+          }
+          return this.applyEditNow(edit.content, document, {
+            editReason: 'typing',
+            sourceWebview: webview,
+            pendingImageViewGeneration: edit.viewGeneration,
+          });
+        },
+      })
+      .then(result => {
+        if (result.status === 'completed') return result.value;
+        if (result.status === 'failed') {
+          console.error('[MD4H] Teardown document edit failed:', result.error);
+        }
+        return false;
+      });
+  }
+
+  /** Return true while the coordinator owns active or queued work for a document. */
+  private hasPendingDocumentEdits(documentKey: string): boolean {
+    return this.documentEditCoordinator.hasPending(documentKey);
+  }
+
+  /**
+   * Wait for every document edit accepted before this call to settle.
+   *
+   * The barrier belongs to the same per-document queue as WorkspaceEdits, so
+   * coalesced promises cannot make a still-active older edit appear idle.
+   */
+  private async drainDocumentEdits(document: vscode.TextDocument): Promise<boolean> {
+    return this.drainDocumentEditsByKey(document.uri.toString());
+  }
+
+  /** Queue-key adapter used by Feedback cleanup paths that may outlive a panel. */
+  private async drainDocumentEditsByKey(documentKey: string): Promise<boolean> {
+    if (!this.documentEditCoordinator.hasPending(documentKey)) return true;
+
+    const result = await this.documentEditCoordinator.barrier(documentKey);
+    if (result.status === 'completed') return true;
+    if (result.status === 'failed') {
+      console.error('[MD4H] Document edit barrier failed:', result.error);
+    }
+    return false;
+  }
+
+  /**
+   * Ask one renderer generation to flush against the host's drained document
+   * version. The acknowledgement is an ordering boundary, not proof that a
+   * newly emitted WorkspaceEdit has completed, so callers must drain again.
+   */
+  private async requestDocumentFlush(
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    timeoutMs: number,
+    requestPrefix: string
+  ): Promise<boolean> {
+    const requestId = `${requestPrefix}-${crypto.randomBytes(8).toString('hex')}`;
+    const viewGeneration = this.getEditViewGeneration(webview);
+    const documentVersion = this.getDocumentVersion(document);
+    let acknowledgementTimeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let markFlushSettled: () => void = () => undefined;
+    const flushSettled = new Promise<void>(resolve => {
+      markFlushSettled = resolve;
+    });
+    let settleBoundary: (ok: boolean) => void = () => undefined;
+    const acknowledgement = new Promise<boolean>(resolve => {
+      settleBoundary = ok => {
+        if (settled) return;
+        settled = true;
+        this.flushAckResolvers.delete(requestId);
+        if (acknowledgementTimeout) clearTimeout(acknowledgementTimeout);
+        markFlushSettled();
+        resolve(ok);
+      };
+      this.flushAckResolvers.set(requestId, {
+        webview,
+        viewGeneration,
+        documentVersion,
+        resolve: settleBoundary,
+        settled: flushSettled,
+      });
+      acknowledgementTimeout = setTimeout(() => {
+        settleBoundary(false);
+      }, timeoutMs);
+    });
+
+    try {
+      const delivery = webview.postMessage({
+        type: 'flushPendingEdit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        requestId,
+        viewGeneration,
+        documentVersion,
+      });
+      void Promise.resolve(delivery).then(
+        posted => {
+          if (posted === false) settleBoundary(false);
+        },
+        error => {
+          console.error('[MD4H] Document flush post failed:', error);
+          settleBoundary(false);
+        }
+      );
+    } catch (error) {
+      console.error('[MD4H] Document flush post failed:', error);
+      settleBoundary(false);
+    }
+    return acknowledgement;
+  }
+
+  /**
+   * Establish a two-sided document boundary with one renderer. Any edit that
+   * the barrier emits must receive an accepted application result before the
+   * caller may save, snapshot, or otherwise consume the TextDocument.
+   */
+  private async flushRendererAtDocumentBoundary(
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    timeoutMs: number,
+    requestPrefix: string
+  ): Promise<boolean> {
+    if (!(await this.drainDocumentEdits(document))) return false;
+
+    const completedBefore = new Set(this.documentEditAckHistory.get(webview)?.keys() ?? []);
+    if (!(await this.requestDocumentFlush(document, webview, timeoutMs, requestPrefix))) {
+      return false;
+    }
+
+    // The renderer posts its edit before the flush acknowledgement. Capture
+    // exact application promises now, including a fast result that may move to
+    // bounded history before the coordinator barrier below resolves.
+    const acknowledgements = [...(this.pendingDocumentEditAcks.get(webview)?.values() ?? [])];
+    const results = await Promise.all(acknowledgements);
+    if (!(await this.drainDocumentEdits(document))) return false;
+    if (results.some(result => !result.accepted)) return false;
+
+    const completedAfter = this.documentEditAckHistory.get(webview);
+    if (!completedAfter) return true;
+    for (const [editId, result] of completedAfter) {
+      if (!completedBefore.has(editId) && !result.accepted) return false;
+    }
+    return true;
+  }
+
+  /** Invoke VS Code save only after the renderer and document edit queue agree. */
+  private async executeSaveAfterDocumentEdits(
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): Promise<void> {
+    if (
+      !(await this.flushRendererAtDocumentBoundary(
+        document,
+        webview,
+        FEEDBACK_FLUSH_ACK_TIMEOUT_MS,
+        'save-flush'
+      ))
+    ) {
+      return;
+    }
+    try {
+      if (!(await document.save())) {
+        void vscode.window.showErrorMessage('VS Code could not save this Markdown document.');
+      }
+    } catch (error) {
+      console.error('[MD4H] Document save failed:', error);
+    }
+  }
+
+  /**
+   * Queue an edit from a webview for ordered application to its TextDocument.
+   * Typing may coalesce only while pending in the same renderer/version lineage;
+   * policy enforcement and every edit that has started remain strict barriers.
    *
    * @param content - Markdown content from webview (may include wrapped frontmatter)
    * @param document - Target VS Code document to update
@@ -5787,16 +10104,96 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     options?: {
       editReason?: 'typing' | 'save-policy-enforce';
       sourceWebview?: vscode.Webview;
+      viewGeneration?: string;
+      baseDocumentVersion?: number;
+      localRevision?: number;
+      pendingImageViewGeneration?: string;
     }
   ): Promise<boolean> {
+    const documentKey = document.uri.toString();
+    const executionOptions =
+      options?.editReason === 'typing'
+        ? {
+            ...options,
+            viewGeneration:
+              options.viewGeneration ?? this.getEditViewGeneration(options.sourceWebview),
+            baseDocumentVersion: options.baseDocumentVersion ?? this.getDocumentVersion(document),
+          }
+        : options;
+    const execute = (): Promise<boolean> => this.applyEditNow(content, document, executionOptions);
+    const result =
+      options?.editReason === 'typing'
+        ? await this.documentEditCoordinator.enqueue(documentKey, {
+            kind: 'typing',
+            viewGeneration: executionOptions?.viewGeneration ?? 'unattributed-view',
+            baseVersion: executionOptions?.baseDocumentVersion ?? this.getDocumentVersion(document),
+            execute,
+          })
+        : await this.documentEditCoordinator.enqueue(documentKey, {
+            kind: 'operation',
+            execute,
+          });
+
+    if (result.status === 'completed') return result.value;
+    if (result.status === 'coalesced') return true;
+    if (result.status === 'failed') {
+      vscode.window.showErrorMessage('Failed to apply editor changes. Please try again.');
+      console.error('[MD4H] Coordinated applyEdit exception:', result.error);
+    }
+    return false;
+  }
+
+  /** Execute one already ordered edit against the latest TextDocument version. */
+  private async applyEditNow(
+    content: string,
+    document: vscode.TextDocument,
+    options?: {
+      editReason?: 'typing' | 'save-policy-enforce';
+      sourceWebview?: vscode.Webview;
+      viewGeneration?: string;
+      baseDocumentVersion?: number;
+      localRevision?: number;
+      pendingImageViewGeneration?: string;
+    }
+  ): Promise<boolean> {
+    // Authorization at message receipt is insufficient because this work may
+    // wait behind another WorkspaceEdit. Revalidate both identities at the
+    // exact queue execution boundary before reading or replacing any bytes.
+    if (
+      options?.sourceWebview &&
+      options.viewGeneration !== undefined &&
+      this.editViewGenerations.get(options.sourceWebview) !== options.viewGeneration
+    ) {
+      return false;
+    }
+    if (
+      options?.baseDocumentVersion !== undefined &&
+      this.getDocumentVersion(document) !== options.baseDocumentVersion
+    ) {
+      return false;
+    }
+
+    // A hidden renderer can serialize a compact marker while its image file
+    // is still being written. Resolve that marker on the host before any
+    // equality, Markdown analysis, or WorkspaceEdit sees the payload.
+    const effectiveContent = options?.sourceWebview
+      ? await this.resolvePendingImageDestinations(
+          content,
+          options.sourceWebview,
+          options.pendingImageViewGeneration ??
+            options.viewGeneration ??
+            this.getEditViewGeneration(options.sourceWebview)
+        )
+      : content;
+
     // Skip if content unchanged (avoid redundant edits)
-    const unwrappedContent = this.unwrapFrontmatterFromWebview(content);
+    const unwrappedContent = this.unwrapFrontmatterFromWebview(effectiveContent);
     const blankLineMode = this.getBlankLineMode();
     // Normalize the inbound text to exactly one trailing newline (markdownlint
     // MD047). Done up-front so the equality and AST checks below compare the
     // form we'd actually write — a doc on disk that already ends with `\n`
     // matches a no-newline serialization and is short-circuited as a no-op.
-    const normalizedContent = this.normalizeWebviewEditContent(content);
+    const normalizedContent = this.normalizeWebviewEditContent(effectiveContent);
     const currentText = document.getText();
     if (normalizedContent === currentText) {
       return true;
@@ -5808,6 +10205,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     // and leave the rich view stale at B.
     if (options?.sourceWebview) {
       this.lastHostContentByWebview.delete(options.sourceWebview);
+      this.pendingHostContentByWebview.delete(options.sourceWebview);
     }
 
     // Suppress writes whose only difference is the WYSIWYG serializer's house
@@ -5860,14 +10258,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     }
 
     const edit = new vscode.WorkspaceEdit();
-
-    // Replace entire document content
-    const fullRange = new vscode.Range(
-      document.positionAt(0),
-      document.positionAt(document.getText().length)
+    const useMinimalReplacement =
+      Math.max(currentText.length, normalizedContent.length) >=
+      MarkdownEditorProvider.MINIMAL_EDIT_DOCUMENT_THRESHOLD;
+    const replacement = useMinimalReplacement
+      ? computeMinimalTextReplacement(currentText, normalizedContent)
+      : null;
+    const startOffset = replacement?.startOffset ?? 0;
+    const endOffset = replacement?.endOffset ?? currentText.length;
+    edit.replace(
+      document.uri,
+      new vscode.Range(document.positionAt(startOffset), document.positionAt(endOffset)),
+      replacement?.text ?? normalizedContent
     );
-
-    edit.replace(document.uri, fullRange, normalizedContent);
 
     try {
       const success = await vscode.workspace.applyEdit(edit);

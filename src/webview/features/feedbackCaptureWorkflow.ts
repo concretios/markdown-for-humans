@@ -20,6 +20,13 @@ import {
   type VisibleAreaCapture,
 } from './feedbackCapture';
 import {
+  createFeedbackCaptureMachine,
+  reduceFeedbackCapture,
+  type FeedbackCaptureEvent,
+  type FeedbackCaptureMachine,
+  type FeedbackCaptureViewport,
+} from './feedbackCaptureMachine';
+import {
   createFeedbackDraftSurfaceGate,
   getFeedbackSelectionTarget,
   type FeedbackDraftSurfaceGate,
@@ -334,7 +341,8 @@ function openAnnotation(
 async function captureRectangle(
   options: FeedbackCaptureWorkflowOptions,
   start: CapturePoint,
-  end: CapturePoint
+  end: CapturePoint,
+  signal?: AbortSignal
 ): Promise<VisibleAreaCapture> {
   const session = options.review.getSession();
   const root = options.editor.view.dom as HTMLElement;
@@ -351,6 +359,7 @@ async function captureRectangle(
     blocks: mappedBlocks(root, session),
     rasterize: options.rasterize,
     minimumSize: 8,
+    signal,
   });
 }
 
@@ -358,11 +367,12 @@ async function captureRectangle(
 export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions): void {
   const session = options.review.getSession();
   const root = options.editor.view.dom as HTMLElement;
-  const viewport = visibleEditorViewport(root);
-  if (!session || !viewport) {
+  const initialViewport = visibleEditorViewport(root);
+  if (!session || !initialViewport) {
     showCaptureError('Start Feedback and keep the rendered document visible before capturing.');
     return;
   }
+  let viewport: CaptureRectangle = initialViewport;
   if (!isReviewWritable(options.review)) {
     showCaptureError(snapshotChangedError().message);
     return;
@@ -420,6 +430,20 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
   let restoreAnnotations: (() => void) | null = null;
   let restoreChrome: (() => void) | null = null;
   let restoreBackground: (() => void) | null = null;
+  let viewportGeneration = 1;
+  let captureSequence = 0;
+  let activeRasterAbort: AbortController | null = null;
+  let viewportObserver: ResizeObserver | null = null;
+  const toMachineViewport = (
+    rectangle: CaptureRectangle,
+    generation: number
+  ): FeedbackCaptureViewport => ({ generation, ...rectangle });
+  let captureMachine: FeedbackCaptureMachine = createFeedbackCaptureMachine();
+  captureMachine = reduceFeedbackCapture(captureMachine, {
+    type: 'armed',
+    viewport: toMachineViewport(viewport, viewportGeneration),
+  }).machine;
+  const currentCaptureState = (): FeedbackCaptureMachine['state'] => captureMachine.state;
 
   const restoreCaptureAnnotations = (): void => {
     restoreAnnotations?.();
@@ -450,9 +474,19 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
   const cleanup = (restoreFocus = true): void => {
     if (closed) return;
     closed = true;
+    activeRasterAbort?.abort();
+    activeRasterAbort = null;
+    viewportObserver?.disconnect();
+    viewportObserver = null;
     window.removeEventListener('feedbackInvalidated', handleFeedbackLifecycleEnd);
     window.removeEventListener(FEEDBACK_SESSION_ENDED_EVENT, handleFeedbackLifecycleEnd);
     window.removeEventListener('feedbackCaptureCancelRequested', handleToolbarCancel);
+    window.removeEventListener('blur', handleWindowBlur);
+    window.removeEventListener('resize', handleViewportMutation);
+    window.removeEventListener('scroll', handleViewportMutation, true);
+    window.visualViewport?.removeEventListener('resize', handleViewportMutation);
+    window.visualViewport?.removeEventListener('scroll', handleViewportMutation);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
     document.removeEventListener('keydown', handleCaptureKeyDown, true);
     document.removeEventListener('focusin', handleCaptureFocus, true);
     restoreCaptureAnnotations();
@@ -471,14 +505,75 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
       }
     }
   };
-  const cancelCapture = (): void => cleanup(true);
+  const applyCaptureEvent = (event: FeedbackCaptureEvent, restoreFocusOnCleanup = true): void => {
+    const reduction = reduceFeedbackCapture(captureMachine, event);
+    captureMachine = reduction.machine;
+    for (const effect of reduction.effects) {
+      if (effect.type === 'setPointerCapture') {
+        try {
+          overlay.setPointerCapture?.(effect.pointerId);
+        } catch {
+          // A detached or synthetic pointer surface cannot own capture. The
+          // reducer still guarantees that its matching terminal event is safe.
+        }
+      } else if (effect.type === 'releasePointerCapture') {
+        try {
+          if (overlay.hasPointerCapture?.(effect.pointerId) !== false) {
+            overlay.releasePointerCapture?.(effect.pointerId);
+          }
+        } catch {
+          // Pointer capture can already be gone after browser cancellation.
+        }
+      } else if (effect.type === 'abortPhase') {
+        activeRasterAbort?.abort();
+      } else {
+        cleanup(restoreFocusOnCleanup);
+      }
+    }
+  };
+  const cancelCapture = (): void => applyCaptureEvent({ type: 'cancelRequested' }, true);
   const handleFeedbackLifecycleEnd = (): void => cancelCapture();
   const handleToolbarCancel = (): void => cancelCapture();
+  const handleWindowBlur = (): void => applyCaptureEvent({ type: 'windowBlurred' });
+  const handleVisibilityChange = (): void => {
+    if (document.visibilityState === 'hidden') {
+      applyCaptureEvent({ type: 'visibilityLost' });
+    }
+  };
+  const handleViewportMutation = (): void => {
+    if (closed) return;
+    const measured = visibleEditorViewport(root);
+    if (!measured) {
+      showCaptureError('The rendered document is no longer visible for capture.');
+      cancelCapture();
+      return;
+    }
+    if (
+      measured.left === viewport.left &&
+      measured.top === viewport.top &&
+      measured.width === viewport.width &&
+      measured.height === viewport.height
+    ) {
+      return;
+    }
+    viewport = measured;
+    viewportGeneration += 1;
+    applyCaptureEvent({
+      type: 'viewportMeasured',
+      viewport: toMachineViewport(viewport, viewportGeneration),
+    });
+    if (captureMachine.state.kind === 'Armed' && !captureMachine.state.selection) {
+      start = null;
+      end = null;
+      selection.hidden = true;
+      error.textContent = 'The viewport changed. Drag again using the current visible area.';
+    }
+  };
   const handleCaptureKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopImmediatePropagation();
-      cancelCapture();
+      applyCaptureEvent({ type: 'escapePressed' });
       return;
     }
     if (event.key !== 'Tab') return;
@@ -516,12 +611,57 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
   window.addEventListener('feedbackInvalidated', handleFeedbackLifecycleEnd);
   window.addEventListener(FEEDBACK_SESSION_ENDED_EVENT, handleFeedbackLifecycleEnd);
   window.addEventListener('feedbackCaptureCancelRequested', handleToolbarCancel);
+  window.addEventListener('blur', handleWindowBlur);
+  window.addEventListener('resize', handleViewportMutation);
+  window.addEventListener('scroll', handleViewportMutation, true);
+  window.visualViewport?.addEventListener('resize', handleViewportMutation);
+  window.visualViewport?.addEventListener('scroll', handleViewportMutation);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   document.addEventListener('keydown', handleCaptureKeyDown, true);
   document.addEventListener('focusin', handleCaptureFocus, true);
+  if (typeof ResizeObserver === 'function') {
+    viewportObserver = new ResizeObserver(handleViewportMutation);
+    viewportObserver.observe(root);
+  }
+
+  const syncSelectionFromMachine = (): void => {
+    if (captureMachine.state.kind === 'Dragging') {
+      start = { ...captureMachine.state.start };
+      end = { ...captureMachine.state.current };
+      renderSelection();
+      return;
+    }
+    if (captureMachine.state.kind === 'Armed' && captureMachine.state.selection) {
+      start = { ...captureMachine.state.selection.start };
+      end = { ...captureMachine.state.selection.end };
+      renderSelection();
+    }
+  };
+  const pointerIdFor = (event: PointerEvent): number =>
+    Number.isInteger(event.pointerId) && event.pointerId >= 0 ? event.pointerId : 1;
 
   const complete = async (): Promise<void> => {
     if (!start || !end || busy || closed) return;
+    // Layout can change between pointerup and asynchronous rasterization. The
+    // reducer rejects the stale selection instead of cropping different bytes.
+    handleViewportMutation();
+    const readyState = currentCaptureState();
+    if (closed || readyState.kind !== 'Armed' || readyState.selection === null) {
+      return;
+    }
+    start = { ...readyState.selection.start };
+    end = { ...readyState.selection.end };
+    const captureId = `capture-${++captureSequence}`;
+    applyCaptureEvent({
+      type: 'rasterStarted',
+      captureId,
+      viewportGeneration,
+    });
+    const startedState = currentCaptureState();
+    if (startedState.kind !== 'Rasterizing') return;
     busy = true;
+    const rasterAbort = new AbortController();
+    activeRasterAbort = rasterAbort;
     workflow.kind = 'capture-rasterizing';
     updateCaptureWorkflowSurface(workflow);
     retry.hidden = true;
@@ -534,12 +674,28 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
     try {
       restoreCaptureAnnotations();
       restoreAnnotations = suspendAnnotations(options);
-      const capture = await captureRectangle(options, start, end);
-      if (closed || !isReviewWritable(options.review)) return;
+      const capture = await captureRectangle(options, start, end, rasterAbort.signal);
+      const rasterState = currentCaptureState();
+      if (
+        closed ||
+        rasterAbort.signal.aborted ||
+        rasterState.kind !== 'Rasterizing' ||
+        rasterState.captureId !== captureId ||
+        !isReviewWritable(options.review)
+      ) {
+        return;
+      }
+      applyCaptureEvent({ type: 'rasterSucceeded', captureId }, false);
       cleanup(false);
       openAnnotation(options, capture, options.initialFeedback ?? '', resolveReturnFocus());
     } catch (captureError) {
-      if (closed) return;
+      if (closed || rasterAbort.signal.aborted) return;
+      applyCaptureEvent({
+        type: 'rasterFailed',
+        captureId,
+        errorCode:
+          captureError instanceof FeedbackCaptureError ? captureError.code : 'MD4H-FB-CAPTURE-002',
+      });
       reportCaptureError(options.review, captureError);
       busy = false;
       workflow.kind = 'area-capture';
@@ -556,38 +712,50 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
       error.textContent = message;
       retry.hidden = false;
     } finally {
+      if (activeRasterAbort === rasterAbort) activeRasterAbort = null;
       restoreCaptureAnnotations();
     }
   };
 
   overlay.addEventListener('pointerdown', event => {
     if (busy || event.button !== 0 || event.target instanceof HTMLButtonElement) return;
-    if (
-      event.clientX < viewport.left ||
-      event.clientX > viewport.left + viewport.width ||
-      event.clientY < viewport.top ||
-      event.clientY > viewport.top + viewport.height
-    ) {
-      return;
-    }
     event.preventDefault();
-    start = { x: event.clientX, y: event.clientY };
-    end = { ...start };
-    overlay.setPointerCapture?.(event.pointerId);
-    renderSelection();
+    applyCaptureEvent({
+      type: 'pointerDown',
+      pointerId: pointerIdFor(event),
+      viewportGeneration,
+      point: { x: event.clientX, y: event.clientY },
+    });
+    syncSelectionFromMachine();
   });
   overlay.addEventListener('pointermove', event => {
-    if (!start || busy) return;
+    if (captureMachine.state.kind !== 'Dragging' || busy) return;
     event.preventDefault();
-    end = { x: event.clientX, y: event.clientY };
-    renderSelection();
+    applyCaptureEvent({
+      type: 'pointerMove',
+      pointerId: pointerIdFor(event),
+      viewportGeneration,
+      point: { x: event.clientX, y: event.clientY },
+    });
+    syncSelectionFromMachine();
   });
   overlay.addEventListener('pointerup', event => {
-    if (!start || busy) return;
+    if (captureMachine.state.kind !== 'Dragging' || busy) return;
     event.preventDefault();
-    end = { x: event.clientX, y: event.clientY };
-    renderSelection();
+    applyCaptureEvent({
+      type: 'pointerUp',
+      pointerId: pointerIdFor(event),
+      viewportGeneration,
+      point: { x: event.clientX, y: event.clientY },
+    });
+    syncSelectionFromMachine();
     void complete();
+  });
+  overlay.addEventListener('pointercancel', event => {
+    applyCaptureEvent({ type: 'pointerCancelled', pointerId: pointerIdFor(event) });
+  });
+  overlay.addEventListener('lostpointercapture', event => {
+    applyCaptureEvent({ type: 'pointerCaptureLost', pointerId: pointerIdFor(event) });
   });
   overlay.addEventListener('wheel', event => event.preventDefault(), { passive: false });
   retry.addEventListener('click', () => void complete());
@@ -717,6 +885,7 @@ async function captureBlockRange(
   if (!claimCaptureWorkflow(options.review, workflow)) return;
 
   let aborted = false;
+  const rasterAbort = new AbortController();
   let restoreAnnotations: (() => void) | null = null;
   let restoreChrome: (() => void) | null = suspendCaptureChrome();
   let captureStateActive = true;
@@ -743,6 +912,7 @@ async function captureBlockRange(
   const abortCapture = (): void => {
     if (aborted) return;
     aborted = true;
+    rasterAbort.abort();
     removeAbortListeners();
     restoreCaptureAnnotations();
     restoreCaptureChrome();
@@ -755,7 +925,7 @@ async function captureBlockRange(
   let capture: VisibleAreaCapture | null = null;
   try {
     restoreAnnotations = suspendAnnotations(options);
-    capture = await captureRectangle(options, rectangle.start, rectangle.end);
+    capture = await captureRectangle(options, rectangle.start, rectangle.end, rasterAbort.signal);
   } catch (error) {
     if (!aborted) throw error;
   } finally {
