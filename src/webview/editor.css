@@ -1651,6 +1651,10 @@
     opacity: 0.75;
   }
   
+  .toolbar-button > .toolbar-icon {
+    pointer-events: none;
+  }
+  
   .toolbar-button:hover {
     background-color: var(--md-hover-bg);
     opacity: 1;
