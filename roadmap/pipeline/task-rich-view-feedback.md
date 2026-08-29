@@ -755,6 +755,12 @@ idle -> armed -> rasterizing -> annotation dialog
 - **RED/GREEN:** Toolbar tests cover adjacency, exact tooltips, Codicons, five-action Feedback layout, the separator, event dispatch, focus, invalidation, and busy states. Controller and provider tests cover invalidated discard plus the authoritative saved-item count. CSS contracts keep the action in the error family rather than the yellow Feedback state family, including high contrast.
 - **Verification:** The focused toolbar, layout, style, controller, and provider run passes 282 tests. The deterministic repository run passes 95 suites and 1,668 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Repository lint, strict TypeScript, the production release build and bundle verification, and `git diff --check` pass. All 14 annotation theme/zoom/layout cases, the 10,000-line stress gate, the real-controller lifecycle gate, and all nine screenshot-capture theme/zoom combinations pass. Live Extension Host visual review remains manual.
 
+### 13.6 PR and VSIX package gate
+
+- **Package boundary:** Added a regression contract for `.vscodeignore`. Release packages now include `THIRD_PARTY_LICENSES.md`, including the new `modern-screenshot` notice, while excluding repository-local `.chetana` profile metadata and the irrelevant `.gitmodules` file.
+- **Automated gate:** The final deterministic run passes 96 suites and 1,669 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Lint, strict TypeScript, coverage thresholds, the production release build, VSIX content inspection, both Electron fixtures, and `git diff --check` pass.
+- **Dependency review (2026-08-29):** `npm audit` and `npm audit --omit=dev` both report zero advisories. A separate upstream review found TipTap security fixes released in 3.30.4 and 3.30.5 while the repository remains pinned to 3.30.3; `npm audit` does not currently surface those advisories. Upgrade the complete direct `@tiptap/*` family to 3.30.5 in an isolated prerequisite change before further Feedback feature work rather than mixing unrelated dependency upgrades into this completed feature.
+
 ---
 
 ## 14. Follow-up & Future Work
