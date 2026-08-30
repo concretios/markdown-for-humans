@@ -4,7 +4,9 @@
 
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+import { TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { DraggableBlocks, isDraggableBlock } from '../../webview/extensions/draggableBlocks';
+import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTable';
 
 describe('DraggableBlocks Extension', () => {
   let editor: Editor;
@@ -12,6 +14,20 @@ describe('DraggableBlocks Extension', () => {
   const createEditor = (initialContent: string = '') => {
     return new Editor({
       extensions: [StarterKit, DraggableBlocks],
+      content: initialContent,
+    });
+  };
+
+  const createTableEditor = (initialContent: string = '') => {
+    return new Editor({
+      extensions: [
+        StarterKit,
+        HtmlPreservingTable,
+        TableRow,
+        TableHeader,
+        TableCell,
+        DraggableBlocks,
+      ],
       content: initialContent,
     });
   };
@@ -85,6 +101,52 @@ describe('DraggableBlocks Extension', () => {
       const moved = editor.commands.moveBlockUp();
       expect(moved).toBe(false);
       expect(editor.getHTML()).toBe('<p></p><p>Block 1</p>');
+    });
+  });
+
+  describe('Line movement commands', () => {
+    it('moves a bullet list item independently of the list block', () => {
+      editor = createEditor(
+        '<ul><li><p>Item A</p></li><li><p>Item B</p></li><li><p>Item C</p></li></ul>'
+      );
+
+      let target = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (target !== -1) return false;
+        if (node.isTextblock && node.textContent === 'Item B') {
+          target = pos + 1;
+          return false;
+        }
+        return true;
+      });
+      editor.commands.setTextSelection(target);
+
+      expect(editor.commands.moveLineUp()).toBe(true);
+      const html = editor.getHTML();
+      expect(html.indexOf('Item B')).toBeLessThan(html.indexOf('Item A'));
+      expect(html.indexOf('Item A')).toBeLessThan(html.indexOf('Item C'));
+    });
+
+    it('moves a table body row independently of the table block', () => {
+      editor = createTableEditor(
+        '<table><tbody><tr><th>Name</th><th>Score</th></tr><tr><td>Alice</td><td>3</td></tr><tr><td>Bob</td><td>1</td></tr></tbody></table>'
+      );
+
+      let target = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (target !== -1) return false;
+        if (node.isTextblock && node.textContent === 'Bob') {
+          target = pos + 1;
+          return false;
+        }
+        return true;
+      });
+      editor.commands.setTextSelection(target);
+
+      expect(editor.commands.moveLineUp()).toBe(true);
+      const html = editor.getHTML();
+      expect(html.indexOf('Name')).toBeLessThan(html.indexOf('Bob'));
+      expect(html.indexOf('Bob')).toBeLessThan(html.indexOf('Alice'));
     });
   });
 
@@ -166,7 +228,7 @@ describe('DraggableBlocks Extension', () => {
       expect(handle).not.toBeNull();
       // Pointer-event drag — no native HTML5 draggable attribute.
       expect(handle?.hasAttribute('draggable')).toBe(false);
-      expect(handle?.getAttribute('aria-label')).toBe('Drag to move block');
+      expect(handle?.getAttribute('aria-label')).toBe('Drag to move block or line');
     });
   });
 
@@ -273,7 +335,12 @@ describe('DraggableBlocks Extension', () => {
       const shortcuts = addKeyboardShortcuts?.call({ editor });
       expect(shortcuts).toBeDefined();
       expect(Object.keys(shortcuts as object)).toEqual(
-        expect.arrayContaining(['Alt-ArrowUp', 'Alt-ArrowDown'])
+        expect.arrayContaining([
+          'Alt-ArrowUp',
+          'Alt-ArrowDown',
+          'Alt-Shift-ArrowUp',
+          'Alt-Shift-ArrowDown',
+        ])
       );
     });
   });
