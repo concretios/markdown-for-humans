@@ -77,6 +77,10 @@ Any ambiguity must fail closed with the snapshot error. Never fuzzy-match a simi
 
 The custom editor intentionally uses `retainContextWhenHidden: false` to release hidden renderer memory.
 
+Always bypass content deduplication for the webview `ready` handshake. The
+optimistic startup post can run before the webview installs its listener, and
+every panel, including an empty document, needs an authoritative `update`.
+
 A teardown flush cannot simply ignore `DocumentSyncController.flush()` returning
 `blocked`. If a newer dirty revision depends on one in-flight edit, pipeline it
 with the exact predecessor identity. The host may apply it only after that

@@ -62,6 +62,10 @@ schema version + document version + selection + scrollTop
 
 `vscode.setState()` writes are animation-frame coalesced. Restore occurs after authoritative content initialization, checks the document version, clamps positions and yields to Feedback recovery. Never put Markdown, Feedback sessions, draft content or peer-lock authority in webview state.
 
+The `ready` handshake always forces one authoritative document update. The
+optimistic startup post can occur before the webview listener is installed, so
+normal content deduplication is not safe at this boundary.
+
 ## Feedback Snapshot and Delivery
 
 - A new Start and a durable-draft Resume inspect every split first. Divergent dirty split digests fail before any flush chooses a winner.

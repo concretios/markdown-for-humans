@@ -1768,7 +1768,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         }
         this.registerFeedbackWebview(document.uri.toString(), webview);
         if (!this.recoverFeedbackControllerOnReady(document, webview)) {
-          this.updateWebview(document, webview);
+          // An optimistic initial post can precede the renderer's listener.
+          // The ready handshake must bypass delivery deduplication.
+          this.updateWebview(document, webview, { force: true });
           void this.announceMatchingFeedbackDrafts(document, webview);
         }
         // Also send settings separately

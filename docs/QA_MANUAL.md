@@ -78,6 +78,19 @@ Pick one:
 
 ### 5.1 Editor basics (typing, selection, save, undo)
 
+#### Startup and tab lifecycle
+
+**What to do**
+- Open a zero-byte `.md` file and immediately click in the editor.
+- Rapidly open at least three different Markdown files in separate tabs, including a long document.
+- Switch among the tabs, then close and reopen one file.
+
+**Expected**
+- Every file, including the zero-byte file, immediately shows the toolbar and an editable surface.
+- Each file renders its own content; no tab stays blank while another initializes.
+- Pinned tabs remain open. An italic preview tab may be replaced by the next Explorer single-click,
+  which is standard VS Code preview-mode behavior rather than an extension-initiated close.
+
 **What to do**
 
 - Type continuously for ~30 seconds; include punctuation and multiple paragraphs.
