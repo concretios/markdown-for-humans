@@ -95,6 +95,15 @@ describe('buildFeedbackAnchorMap', () => {
     ]);
   });
 
+  it('maps the webview alert alias to its blockquote source span', () => {
+    const rawMarkdown = ['> [!IMPORTANT]', '> Keep the snapshot exact.'].join('\n');
+    const canonical = '> [!IMPORTANT]\n> Keep the snapshot exact.';
+
+    expect(expectAnchorMap(rawMarkdown, [block(0, 'alert', canonical)]).blocks).toEqual([
+      { ordinal: 0, kind: 'blockquote', startLine: 1, endLine: 2 },
+    ]);
+  });
+
   it('maps an HTML-preserved table as a table block', () => {
     const rawMarkdown = [
       '<table>',

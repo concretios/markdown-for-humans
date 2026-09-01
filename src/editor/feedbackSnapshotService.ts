@@ -19,6 +19,7 @@ import {
   type FeedbackAnchorSpan,
 } from './feedbackAnchors';
 import type { CanonicalFeedbackBlock } from '../shared/feedbackProtocol';
+import { isMarkdownRendererEquivalent } from './markdownAstEquivalence';
 
 export const FEEDBACK_SNAPSHOT_ERROR_CODE = 'MD4H-FB-SNAPSHOT-001' as const;
 
@@ -525,10 +526,16 @@ export class FeedbackSnapshotService {
       const sourceFingerprint = blockFingerprint(anchor.kind, sourceMarkdown);
       const canonicalFingerprint = blockFingerprint(anchor.kind, descriptor.markdown);
 
+      // Keep the historical soft-wrap fingerprint first. The rich renderer
+      // may instead serialize its visible single-newline break as `  \n`, so
+      // accept that second, explicit rendering contract for non-frontmatter
+      // blocks without weakening frontmatter's source-derived comparison.
       if (
         sourceFingerprint === null ||
         canonicalFingerprint === null ||
-        sourceFingerprint !== canonicalFingerprint
+        (sourceFingerprint !== canonicalFingerprint &&
+          (anchor.kind === 'frontmatter' ||
+            !isMarkdownRendererEquivalent(sourceMarkdown, descriptor.markdown)))
       ) {
         return failure(
           'block-content-mismatch',

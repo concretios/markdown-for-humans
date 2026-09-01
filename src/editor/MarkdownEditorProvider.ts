@@ -16,7 +16,11 @@ import { readFile } from 'fs/promises';
 import { outlineViewProvider, type OutlineEntry } from '../features/outlineView';
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
-import { hasSameBlankLineLayout, isMarkdownStructurallyEquivalent } from './markdownAstEquivalence';
+import {
+  hasSameBlankLineLayout,
+  isMarkdownRendererEquivalent,
+  isMarkdownStructurallyEquivalent,
+} from './markdownAstEquivalence';
 import { computeMinimalTextReplacement } from './minimalTextEdit';
 import { ImageSaveCompletionDelivery } from './imageSaveCompletionDelivery';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
@@ -10291,7 +10295,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     const normalizedRenderer = this.normalizeWebviewEditContent(rendererContent);
     const normalizedSource = this.normalizeWebviewEditContent(sourceText);
     if (normalizedRenderer === normalizedSource) return true;
-    if (!isMarkdownStructurallyEquivalent(normalizedRenderer, normalizedSource)) return false;
+    if (!isMarkdownRendererEquivalent(normalizedRenderer, normalizedSource)) return false;
     return (
       this.getBlankLineMode() !== 'preserve' ||
       hasSameBlankLineLayout(normalizedRenderer, normalizedSource)

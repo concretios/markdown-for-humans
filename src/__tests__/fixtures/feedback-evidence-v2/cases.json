@@ -64,8 +64,8 @@
             "endOrdinal": 8,
             "startKind": "table",
             "endKind": "table",
-            "startBlockSha256": "32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486",
-            "endBlockSha256": "32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486"
+            "startBlockSha256": "38b0213cc53194c1d25d80cc9765663e3a2359ee659a8700e762268f3e194a97",
+            "endBlockSha256": "38b0213cc53194c1d25d80cc9765663e3a2359ee659a8700e762268f3e194a97"
           },
           "locator": {
             "kind": "table-cells",
@@ -78,8 +78,8 @@
                 "bottom": 2,
                 "right": 2
               },
-              "tableFingerprint": "md4h-table/v1:760f144c16594872",
-              "tableBlockSha256": "32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486"
+              "tableFingerprint": "md4h-table/v1:0c9fd04efe98eba3",
+              "tableBlockSha256": "38b0213cc53194c1d25d80cc9765663e3a2359ee659a8700e762268f3e194a97"
             }
           }
         },
@@ -255,7 +255,7 @@
         "kind": "text",
         "startLine": 35,
         "endLine": 35,
-        "focus": "the safer option",
+        "focus": "the more reliable option",
         "feedback": "Make the linked recommendation more specific.",
         "target": {
           "version": 2,
@@ -267,8 +267,8 @@
             "endOrdinal": 10,
             "startKind": "paragraph",
             "endKind": "paragraph",
-            "startBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6",
-            "endBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6"
+            "startBlockSha256": "7f9365fdecd85f942352df158c79b3045feab4fcbf04ba27ff57c891c6e5e758",
+            "endBlockSha256": "7f9365fdecd85f942352df158c79b3045feab4fcbf04ba27ff57c891c6e5e758"
           },
           "locator": {
             "kind": "rendered-range",
@@ -277,9 +277,9 @@
               "startOrdinal": 10,
               "startOffset": 7,
               "endOrdinal": 10,
-              "endOffset": 23,
-              "startBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6",
-              "endBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6"
+              "endOffset": 31,
+              "startBlockSha256": "7f9365fdecd85f942352df158c79b3045feab4fcbf04ba27ff57c891c6e5e758",
+              "endBlockSha256": "7f9365fdecd85f942352df158c79b3045feab4fcbf04ba27ff57c891c6e5e758"
             }
           }
         },
@@ -287,7 +287,7 @@
           "effective": {
             "kind": "rendered-text",
             "fidelity": "rendered-exact",
-            "text": "the safer option",
+            "text": "the more reliable option",
             "complete": true
           }
         }

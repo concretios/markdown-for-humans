@@ -236,6 +236,7 @@ function normalizeCanonicalKind(kind: string): FeedbackAnchorKind | null {
     case 'tasklist':
       return 'list';
     case 'blockquote':
+    case 'alert':
     case 'githubalert':
       return 'blockquote';
     case 'code':

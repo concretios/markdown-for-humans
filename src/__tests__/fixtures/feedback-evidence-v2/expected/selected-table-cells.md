@@ -2,7 +2,7 @@
 
 **Source lines:** 29-31
 
-<!-- md4h-target-v2:{"version":2,"requestedScope":"table-cells","effectiveScope":"table-cells","resolution":"exact","blockSpan":{"startOrdinal":8,"endOrdinal":8,"startKind":"table","endKind":"table","startBlockSha256":"32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486","endBlockSha256":"32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486"},"locator":{"kind":"table-cells","value":{"version":1,"tableOrdinal":8,"rectangle":{"top":0,"left":0,"bottom":2,"right":2},"tableFingerprint":"md4h-table/v1:760f144c16594872","tableBlockSha256":"32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486"}}} -->
+<!-- md4h-target-v2:{"version":2,"requestedScope":"table-cells","effectiveScope":"table-cells","resolution":"exact","blockSpan":{"startOrdinal":8,"endOrdinal":8,"startKind":"table","endKind":"table","startBlockSha256":"38b0213cc53194c1d25d80cc9765663e3a2359ee659a8700e762268f3e194a97","endBlockSha256":"38b0213cc53194c1d25d80cc9765663e3a2359ee659a8700e762268f3e194a97"},"locator":{"kind":"table-cells","value":{"version":1,"tableOrdinal":8,"rectangle":{"top":0,"left":0,"bottom":2,"right":2},"tableFingerprint":"md4h-table/v1:0c9fd04efe98eba3","tableBlockSha256":"38b0213cc53194c1d25d80cc9765663e3a2359ee659a8700e762268f3e194a97"}}} -->
 
 <!-- md4h-evidence-v2:{"effective":{"kind":"table-cells","fidelity":"structured-semantic","complete":true,"rowCount":2,"columnCount":2}} -->
 

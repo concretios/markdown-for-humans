@@ -1721,6 +1721,42 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
   });
 
+  it('accepts TipTap hard-break serialization reported after snapshot apply', async () => {
+    const source = '# Guide\n\nCompatible VS Code hosts\nmust provide webview APIs.\n';
+    const canonical = '# Guide\n\nCompatible VS Code hosts  \nmust provide webview APIs.\n';
+    const blocks = [
+      { ordinal: 0, kind: 'heading', markdown: '# Guide', contentSize: 5 },
+      {
+        ordinal: 1,
+        kind: 'paragraph',
+        markdown: 'Compatible VS Code hosts  \nmust provide webview APIs.',
+        contentSize: 52,
+      },
+    ];
+    await writeFile(sourcePath, source, 'utf8');
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, source);
+    const webview = createWebview(provider, document);
+    enableSnapshotProtocol(provider, document, webview, {
+      viewGeneration: 'snapshot-canonical-hard-break-generation',
+      inspectContent: source,
+      appliedContent: canonical,
+      dirty: false,
+      blocks,
+    });
+
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-canonical-hard-break-snapshot' },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await expect(
+      waitForMessage(webview, 'feedback.started', 'start-canonical-hard-break-snapshot')
+    ).resolves.toEqual(expect.objectContaining({ sourceSha256: expect.any(String) }));
+    expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+  });
+
   it('wraps frontmatter for apply and verifies the renderer serialization after unwrapping', async () => {
     const source = ['---', 'title: Guide', '---', '', '# Guide', ''].join('\n');
     const wrapped = ['```yaml', '---', 'title: Guide', '---', '```', '', '# Guide', ''].join('\n');

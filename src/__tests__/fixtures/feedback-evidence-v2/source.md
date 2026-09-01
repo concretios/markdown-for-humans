@@ -28,11 +28,11 @@ if (role) {
 
 | Name | Notes |
 | --- | --- |
-| A\B | Close --> |
+| A\B | Close `-->` |
 
 ## Formatted prose
 
-Choose [the **safer** option](./safe.md "Safety note") before shipping.
+Choose [the **more reliable** option](./safe.md "Safety note") before shipping.
 
 ## Authored fence
 

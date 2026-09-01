@@ -27,6 +27,16 @@ export const CodeBlockWithCopy = CodeBlockLowlight.extend({
           return { 'data-indent-prefix': prefix };
         },
       },
+      'fence-marker': {
+        default: null,
+        parseHTML: element => element.getAttribute('data-fence-marker'),
+        renderHTML: attributes => {
+          const marker = attributes['fence-marker'];
+          return typeof marker === 'string' && /^(?:`{3,}|~{3,})$/.test(marker)
+            ? { 'data-fence-marker': marker }
+            : {};
+        },
+      },
     };
   },
 

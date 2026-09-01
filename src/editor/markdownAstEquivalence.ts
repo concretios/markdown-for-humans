@@ -38,22 +38,39 @@ const md = new MarkdownIt({
   linkify: false,
 });
 
+// The rich editor intentionally treats a single source newline as a visible
+// break (`markedOptions.breaks: true`). TipTap then serializes that node with
+// two trailing spaces. Feedback snapshot verification must compare the source
+// using the same rendering contract or a byte-preserving authoritative apply
+// can be rejected solely because of this canonical hard-break form.
+const rendererMd = new MarkdownIt({
+  html: true,
+  breaks: true,
+  linkify: false,
+});
+
 /**
  * Collapse runs of whitespace to a single space, but leave content inside
- * `<pre>...</pre>` and inline `<code>...</code>` untouched. Raw HTML contexts
- * have already passed an exact comparison before this normalization runs.
+ * `<pre>...</pre>` and inline `<code>...</code>` untouched. Renderer snapshot
+ * checks may also ignore the one paragraph wrapper Markdown uses to distinguish
+ * loose from tight list items because TipTap does not retain that source-only
+ * distinction. Multiple real paragraphs are deliberately left intact. Raw HTML
+ * contexts have already passed an exact comparison before normalization runs.
  */
-function normalizeRenderedHtml(html: string): string {
+function normalizeRenderedHtml(html: string, ignoreListTightness = false): string {
+  const comparableHtml = ignoreListTightness
+    ? html.replace(/(<li\b[^>]*>)\s*<p>([\s\S]*?)<\/p>(?=\s*(?:<(?:ul|ol)\b|<\/li>))/gi, '$1$2')
+    : html;
   const verbatimRegex = /<(pre|code)\b[\s\S]*?<\/\1>/gi;
   const parts: string[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
-  while ((match = verbatimRegex.exec(html)) !== null) {
-    parts.push(html.slice(cursor, match.index).replace(/\s+/g, ' '));
+  while ((match = verbatimRegex.exec(comparableHtml)) !== null) {
+    parts.push(comparableHtml.slice(cursor, match.index).replace(/\s+/g, ' '));
     parts.push(match[0]);
     cursor = match.index + match[0].length;
   }
-  parts.push(html.slice(cursor).replace(/\s+/g, ' '));
+  parts.push(comparableHtml.slice(cursor).replace(/\s+/g, ' '));
   return parts.join('').trim();
 }
 
@@ -96,10 +113,32 @@ function hasSameRawHtmlContexts(a: string, b: string): boolean {
  * notice (added/removed text, changed link target, edited code, etc.).
  */
 export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean {
+  return isEquivalentWhenRendered(a, b, md, false);
+}
+
+/**
+ * Return true when both strings render identically under the rich editor's
+ * single-newline-as-break contract. This is narrower than source equality but
+ * intentionally accepts TipTap's `  \n` serialization of a source soft wrap.
+ */
+export function isMarkdownRendererEquivalent(a: string, b: string): boolean {
+  return isEquivalentWhenRendered(a, b, rendererMd, true);
+}
+
+/** Compare two Markdown strings with one explicit rendering contract. */
+function isEquivalentWhenRendered(
+  a: string,
+  b: string,
+  renderer: MarkdownIt,
+  ignoreListTightness: boolean
+): boolean {
   if (a === b) return true;
   try {
     if (!hasSameRawHtmlContexts(a, b)) return false;
-    return normalizeRenderedHtml(md.render(a)) === normalizeRenderedHtml(md.render(b));
+    return (
+      normalizeRenderedHtml(renderer.render(a), ignoreListTightness) ===
+      normalizeRenderedHtml(renderer.render(b), ignoreListTightness)
+    );
   } catch {
     // If either side fails to render, fall back to "not equivalent" so the
     // caller takes the safe path of writing the change through.

@@ -4,7 +4,10 @@
  * Licensed under the MIT License. See LICENSE file in the project root for details.
  */
 
-import { isMarkdownStructurallyEquivalent } from '../../editor/markdownAstEquivalence';
+import {
+  isMarkdownRendererEquivalent,
+  isMarkdownStructurallyEquivalent,
+} from '../../editor/markdownAstEquivalence';
 
 describe('isMarkdownStructurallyEquivalent', () => {
   describe('returns true for cosmetic-only differences (lint-style preferences)', () => {
@@ -171,5 +174,36 @@ describe('isMarkdownStructurallyEquivalent', () => {
       const dash = '<span>fixed</span>\n\n- one\n- two\n';
       expect(isMarkdownStructurallyEquivalent(star, dash)).toBe(true);
     });
+  });
+});
+
+describe('isMarkdownRendererEquivalent', () => {
+  test('accepts the renderer hard-break form of a source soft wrap', () => {
+    const source = 'Compatible VS Code hosts\nmust provide webview APIs.\n';
+    const renderer = 'Compatible VS Code hosts  \nmust provide webview APIs.\n';
+
+    expect(isMarkdownStructurallyEquivalent(renderer, source)).toBe(false);
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+  });
+
+  test('still rejects changed text across a wrapped line', () => {
+    const source = 'Compatible VS Code hosts\nmust provide webview APIs.\n';
+    const renderer = 'Compatible VS Code hosts  \nmust provide browser APIs.\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+  });
+
+  test('accepts TipTap list-tightness canonicalization around a nested list', () => {
+    const source = '- **Setting**\n\n  - First choice\n  - Second choice\n';
+    const renderer = '- **Setting**\n  - First choice\n  - Second choice\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+  });
+
+  test('does not collapse two real list-item paragraphs into one', () => {
+    const source = '- First paragraph.\n\n  Second paragraph.\n';
+    const renderer = '- First paragraph. Second paragraph.\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
   });
 });
