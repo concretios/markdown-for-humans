@@ -17,11 +17,13 @@ import { MarkdownEditorProvider } from '../../editor/MarkdownEditorProvider';
 import { FEEDBACK_DELIVERY_PROTOCOL_VERSION } from '../../shared/feedbackDeliveryProtocol';
 import { DOCUMENT_SYNC_PROTOCOL_VERSION } from '../../shared/documentSyncProtocol';
 import { FEEDBACK_SNAPSHOT_PROTOCOL_VERSION } from '../../shared/feedbackSnapshotProtocol';
-import {
-  FeedbackSessionStore,
-  type AddTextFeedbackInput,
-  type TextFeedbackItem,
-} from '../../editor/feedbackSessionStore';
+import { FeedbackSessionStore } from '../../editor/feedbackSessionStore';
+import type {
+  FeedbackBlockKindV2,
+  FeedbackBlockSpanV2,
+  FeedbackEvidenceEnvelopeV2,
+  FeedbackTargetV2,
+} from '../../shared/feedbackEvidenceV2';
 
 interface FeedbackMessage {
   type: string;
@@ -152,6 +154,7 @@ const TABLE_BLOCKS = [
     kind: 'table',
     markdown: TABLE_SOURCE_TEXT.trimEnd(),
     contentSize: 12,
+    tableFingerprint: 'md4h-table/v1:0123456789abcdef',
   },
 ];
 const TABLE_CELL_TARGET_INPUT = {
@@ -160,6 +163,50 @@ const TABLE_CELL_TARGET_INPUT = {
   rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
   tableFingerprint: 'md4h-table/v1:0123456789abcdef',
 };
+
+function v2TableCellSelection(
+  cellTarget: typeof TABLE_CELL_TARGET_INPUT,
+  label = 'Cell'
+): Record<string, unknown> {
+  const { top, left, bottom, right } = cellTarget.rectangle;
+  return {
+    target: {
+      version: 2,
+      requestedScope: 'table-cells',
+      locator: { kind: 'table-cells', value: cellTarget },
+    },
+    evidence: {
+      kind: 'table-cells',
+      complete: true,
+      rows: Array.from({ length: bottom - top }, (_, row) =>
+        Array.from({ length: right - left }, (_, column) => ({
+          role: row === 0 ? 'header' : 'data',
+          text: `${label} ${top + row + 1}:${left + column + 1}`,
+          complete: true,
+        }))
+      ),
+    },
+  };
+}
+const CODE_SOURCE_TEXT = '```typescript\nconst role = "admin";\n```\n';
+const CODE_BLOCKS = [
+  {
+    ordinal: 0,
+    kind: 'code',
+    markdown: CODE_SOURCE_TEXT.trimEnd(),
+    contentSize: 'const role = "admin";'.length,
+  },
+];
+const MERMAID_SOURCE_TEXT = '# Diagram\n\n```mermaid\nflowchart LR\n  Draft --> Review\n```\n';
+const MERMAID_BLOCKS = [
+  { ordinal: 0, kind: 'heading', markdown: '# Diagram', contentSize: 'Diagram'.length },
+  {
+    ordinal: 1,
+    kind: 'mermaid',
+    markdown: '```mermaid\nflowchart LR\n  Draft --> Review\n```',
+    contentSize: 'flowchart LR\n  Draft --> Review'.length,
+  },
+];
 const ONE_PIXEL_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
@@ -1945,7 +1992,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(internals(provider).feedbackSessions.size).toBe(1);
 
     const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
-    expect(report).toContain('schema: md4h-feedback/v1');
+    expect(report).toContain('schema: md4h-feedback/v2');
     expect(report).toContain('state: draft');
     expect(report).toMatch(/source: ["']?docs\/guide\.md["']?/);
   });
@@ -2614,6 +2661,278 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(internals(provider).feedbackSessions.size).toBe(0);
   });
 
+  it('starts new host-owned rounds with the v2 report schema', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+
+    sendStart(provider, document, webview, 'start-v2-schema');
+    const started = await waitForMessage(webview, 'feedback.started', 'start-v2-schema');
+
+    expect(started.evidenceVersion).toBe(2);
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    expect(report).toContain('schema: md4h-feedback/v2\n');
+    expect(report).toContain('guide_version: 2\n');
+    expect(report).not.toContain('**Focus:**');
+  });
+
+  it('persists an explicit whole-table action as frozen authored source, never TSV', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-v2-whole-table', blocks: TABLE_BLOCKS },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(webview, 'feedback.started', 'start-v2-whole-table');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-v2-whole-table',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'Clarify this decision table.',
+        target: { version: 2, requestedScope: 'blocks' },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitForMessage(webview, 'feedback.updated', 'add-v2-whole-table');
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    expect(report).toContain('**Target:** Whole table · exact · block 1');
+    expect(report).toContain('### Selected source');
+    expect(report).toContain(TABLE_SOURCE_TEXT.trimEnd());
+    expect(report).not.toContain('### Selected cells');
+    expect(report).not.toContain('**Focus:**');
+  });
+
+  it('persists a v2 rectangular cell selection as a typed matrix with derived TSV', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-v2-table-cells', blocks: TABLE_BLOCKS },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(webview, 'feedback.started', 'start-v2-table-cells');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-v2-table-cells',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'Review these cells.',
+        target: {
+          version: 2,
+          requestedScope: 'table-cells',
+          locator: { kind: 'table-cells', value: TABLE_CELL_TARGET_INPUT },
+        },
+        evidence: {
+          kind: 'table-cells',
+          complete: true,
+          rows: [
+            [
+              { role: 'header', text: 'A', complete: true },
+              { role: 'header', text: 'B', complete: true },
+            ],
+            [
+              { role: 'data', text: '1', complete: true },
+              { role: 'data', text: '2', complete: true },
+            ],
+          ],
+        },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitForMessage(webview, 'feedback.updated', 'add-v2-table-cells');
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    expect(report).toContain('**Fidelity:** Typed table-cell matrix');
+    expect(report).toContain('### Cell matrix');
+    expect(report).toContain('### Selected cells (escaped TSV)');
+    expect(report).toContain('"role": "header"');
+    expect(report).toContain('"text": "A"');
+    expect(report).toContain('A\tB\n1\t2');
+    expect(report).not.toContain('**Focus:**');
+  });
+
+  it('keeps v2 partial code as exact rendered text without synthesizing Markdown', async () => {
+    await writeFile(sourcePath, CODE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, CODE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-v2-rendered-text', blocks: CODE_BLOCKS },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(webview, 'feedback.started', 'start-v2-rendered-text');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-v2-rendered-text',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'Make this precise.',
+        target: {
+          version: 2,
+          requestedScope: 'rendered-text',
+          locator: {
+            kind: 'rendered-range',
+            value: {
+              version: 1,
+              startOrdinal: 0,
+              startOffset: 0,
+              endOrdinal: 0,
+              endOffset: 'const role'.length,
+            },
+          },
+        },
+        evidence: {
+          kind: 'rendered-text',
+          text: 'const role',
+          complete: true,
+          language: 'typescript',
+        },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitForMessage(webview, 'feedback.updated', 'add-v2-rendered-text');
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    expect(report).toContain('**Fidelity:** Exact rendered text');
+    expect(report).toContain('### Selected content');
+    expect(report).toContain('const role');
+    expect(report).toContain('**Language:** `typescript`');
+    expect(report).not.toContain(CODE_SOURCE_TEXT.trimEnd());
+    expect(report).not.toContain('**Focus:**');
+  });
+
+  it('classifies normalized HTML blocks as HTML source evidence', async () => {
+    const htmlSource = '<div><strong>Decision</strong></div>\n';
+    const htmlBlocks = [
+      {
+        ordinal: 0,
+        kind: 'htmlBlock',
+        markdown: htmlSource.trimEnd(),
+        contentSize: htmlSource.trimEnd().length,
+      },
+    ];
+    await writeFile(sourcePath, htmlSource);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, htmlSource);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-v2-html', blocks: htmlBlocks },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(webview, 'feedback.started', 'start-v2-html');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-v2-html',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'Preserve the authored HTML.',
+        target: { version: 2, requestedScope: 'blocks' },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitForMessage(webview, 'feedback.updated', 'add-v2-html');
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    expect(report).toContain('"format":"html"');
+    expect(report).toContain(htmlSource.trimEnd());
+  });
+
+  it('rejects a table-cell locator whose fingerprint differs from frozen table state', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-v2-fingerprint', blocks: TABLE_BLOCKS },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(webview, 'feedback.started', 'start-v2-fingerprint');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-v2-forged-fingerprint',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'This must fail closed.',
+        ...v2TableCellSelection({
+          ...TABLE_CELL_TARGET_INPUT,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+          tableFingerprint: 'md4h-table/v1:fedcba9876543210',
+        }),
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const error = await waitForMessage(webview, 'feedback.error', 'add-v2-forged-fingerprint');
+    expect(error.code).toBe('MD4H-FB-ANCHOR-001');
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())!.store.items).toEqual(
+      []
+    );
+  });
+
+  it('rejects locator-free legacy adds after advertising structured evidence v2', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    sendStart(provider, document, webview, 'start-v2-legacy-policy');
+    const started = await waitForMessage(webview, 'feedback.started', 'start-v2-legacy-policy');
+    expect(started.evidenceVersion).toBe(2);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-v2-legacy-without-locator',
+        sessionId: started.sessionId,
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Paragraph.',
+        feedback: 'Do not create migration-only evidence for a new item.',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const error = await waitForMessage(webview, 'feedback.error', 'add-v2-legacy-without-locator');
+    expect(error).toEqual(
+      expect.objectContaining({
+        code: 'MD4H-FB-ANCHOR-001',
+        message: expect.stringMatching(/predates structured evidence/i),
+      })
+    );
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())!.store.items).toEqual(
+      []
+    );
+  });
+
   it('bounds an exact rendered range against frozen blocks and adds host-owned hashes', async () => {
     const provider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, SOURCE_TEXT);
@@ -2678,9 +2997,8 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
         sessionId: started.sessionId,
         startOrdinal: 0,
         endOrdinal: 0,
-        focus: 'A\tB\n1\t2',
         feedback: 'Review these cells.',
-        cellTarget: TABLE_CELL_TARGET_INPUT,
+        ...v2TableCellSelection(TABLE_CELL_TARGET_INPUT),
       },
       document as unknown as vscode.TextDocument,
       webview as unknown as vscode.Webview
@@ -2696,9 +3014,358 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     ]);
     const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
     expect(report).toContain(`"tableBlockSha256":"${tableHash}"`);
+    expect(report).toContain('**Fidelity:** Typed table-cell matrix');
   });
 
-  it('degrades a restored table target to its safe block marker when its table hash changed', async () => {
+  it('rejects a forged table-cell target above the exact-cell budget before persistence', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-oversized-table-cell', blocks: TABLE_BLOCKS },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(webview, 'feedback.started', 'start-oversized-table-cell');
+    const session = internals(provider).feedbackSessions.get(document.uri.toString())!;
+    const reportBefore = await readFile(session.store.feedbackFilePath);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-oversized-table-cell',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'Must not be stored.',
+        target: {
+          version: 2,
+          requestedScope: 'table-cells',
+          constraint: { reason: 'item-cell-limit' },
+        },
+        evidence: { kind: 'semantic-text', text: 'Oversized table selection', complete: false },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitForMessage(webview, 'feedback.updated', 'add-oversized-table-cell');
+    expect(session.store.items).toEqual([
+      expect.objectContaining({
+        target: expect.objectContaining({
+          requestedScope: 'table-cells',
+          effectiveScope: 'blocks',
+          resolution: 'degraded',
+          coarsening: { reason: 'item-cell-limit', origin: 'renderer' },
+        }),
+      }),
+    ]);
+    await expect(readFile(session.store.feedbackFilePath)).resolves.not.toEqual(reportBefore);
+  });
+
+  it('bounds aggregate exact table-cell geometry at the host boundary', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.start', requestId: 'start-cell-session-budget', blocks: TABLE_BLOCKS },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(webview, 'feedback.started', 'start-cell-session-budget');
+    const maximumItemTarget = {
+      ...TABLE_CELL_TARGET_INPUT,
+      rectangle: { top: 0, left: 0, bottom: 16, right: 16 },
+    };
+    for (let index = 0; index < 16; index += 1) {
+      const requestId = `add-cell-session-budget-${index + 1}`;
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.text.add',
+          requestId,
+          sessionId: started.sessionId,
+          startOrdinal: 0,
+          endOrdinal: 0,
+          feedback: 'Keep this exact target.',
+          ...v2TableCellSelection(maximumItemTarget, `Selection ${index + 1}`),
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      await waitForMessage(webview, 'feedback.updated', requestId);
+    }
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-cell-session-budget-overflow',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'Must fall back before reaching this boundary.',
+        ...v2TableCellSelection({
+          ...TABLE_CELL_TARGET_INPUT,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+        }),
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitForMessage(webview, 'feedback.updated', 'add-cell-session-budget-overflow');
+    const items = internals(provider).feedbackSessions.get(document.uri.toString())!.store.items;
+    expect(items).toHaveLength(17);
+    expect(items[16]).toEqual(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          resolution: 'degraded',
+          coarsening: { reason: 'session-cell-budget', origin: 'host' },
+        }),
+      })
+    );
+  });
+
+  it('atomically migrates restored stale v1 cell locators before accepting a new exact cell', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const tableHash = createHash('sha256').update(TABLE_BLOCKS[0].markdown).digest('hex');
+    const legacy = await FeedbackSessionStore.create({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: Buffer.from(TABLE_SOURCE_TEXT, 'utf8'),
+      now: new Date('2026-08-21T09:30:00.000Z'),
+      roundSuffix: 'cl01',
+    });
+    const maximumItemTarget = {
+      ...TABLE_CELL_TARGET_INPUT,
+      version: 1 as const,
+      rectangle: { top: 0, left: 0, bottom: 16, right: 16 },
+      tableBlockSha256: tableHash,
+    };
+    for (let index = 0; index < 16; index += 1) {
+      await legacy.addTextFeedback({
+        startLine: 1,
+        endLine: 3,
+        focus: `Restored cell selection ${index + 1}`,
+        feedback: 'Keep this legacy target and degrade it honestly if stale.',
+        cellTarget: maximumItemTarget,
+      });
+    }
+
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-restored-cell-budget',
+        round: legacy.snapshot.round,
+        blocks: TABLE_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(
+      webview,
+      'feedback.started',
+      'resume-restored-cell-budget'
+    );
+    const session = internals(provider).feedbackSessions.get(
+      document.uri.toString()
+    ) as unknown as {
+      sessionId: string;
+      store: FeedbackSessionStore;
+      canonicalBlocks: Map<number, { sha256: string; tableFingerprint?: string }>;
+      targets: Map<string, { startOrdinal: number; endOrdinal: number }>;
+      degradedCellTargetIds: Set<string>;
+    };
+    session.canonicalBlocks.get(0)!.sha256 = 'c'.repeat(64);
+    session.canonicalBlocks.get(0)!.tableFingerprint = 'md4h-table/v1:fedcba9876543210';
+    session.targets.clear();
+    (
+      provider as unknown as { restoreFeedbackTargets(value: unknown): void }
+    ).restoreFeedbackTargets(session);
+    expect(session.degradedCellTargetIds).toEqual(
+      new Set(Array.from({ length: 16 }, (_, index) => `F${index + 1}`))
+    );
+    const v1Report = await readFile(session.store.feedbackFilePath);
+    expect(v1Report.toString('utf8')).toContain('schema: md4h-feedback/v1');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-after-restored-cell-degradation',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'This new exact target should fit after stale migration.',
+        ...v2TableCellSelection({
+          ...TABLE_CELL_TARGET_INPUT,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+          tableFingerprint: 'md4h-table/v1:fedcba9876543210',
+        }),
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await waitForMessage(webview, 'feedback.updated', 'add-after-restored-cell-degradation');
+    expect(session.store.schemaVersion).toBe(2);
+    expect(session.store.items).toHaveLength(17);
+    expect(session.store.items.slice(0, 16)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: expect.objectContaining({
+            resolution: 'degraded',
+            coarsening: { reason: 'stale-locator', origin: 'host' },
+          }),
+        }),
+      ])
+    );
+    expect(session.store.items[16]).toEqual(
+      expect.objectContaining({ target: expect.objectContaining({ resolution: 'exact' }) })
+    );
+    await expect(readFile(session.store.feedbackFilePath)).resolves.not.toEqual(v1Report);
+  });
+
+  it('revalidates every rendered range at Finish and preserves unrelated valid locators', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    sendStart(provider, document, webview, 'start-finish-range-revalidation');
+    const started = await waitForMessage(
+      webview,
+      'feedback.started',
+      'start-finish-range-revalidation'
+    );
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-finish-range-paragraph',
+        sessionId: started.sessionId,
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Paragraph.',
+        feedback: 'This locator will become stale.',
+        renderedRange: PARAGRAPH_RENDERED_RANGE_INPUT,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.updated', 'add-finish-range-paragraph');
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-finish-range-heading',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: 'Guide',
+        feedback: 'This locator must remain exact.',
+        renderedRange: {
+          version: 1,
+          startOrdinal: 0,
+          startOffset: 0,
+          endOrdinal: 0,
+          endOffset: 'Guide'.length,
+        },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.updated', 'add-finish-range-heading');
+
+    const session = internals(provider).feedbackSessions.get(
+      document.uri.toString()
+    ) as unknown as {
+      canonicalBlocks: Map<number, { sha256: string }>;
+    };
+    session.canonicalBlocks.get(1)!.sha256 = 'd'.repeat(64);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-range-revalidation',
+        sessionId: started.sessionId,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.finished', 'finish-range-revalidation');
+
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    const staleSection = feedbackItemSection(report, 'F1');
+    const validSection = feedbackItemSection(report, 'F2');
+    expect(staleSection).toContain('"resolution":"degraded"');
+    expect(staleSection).toContain('"reason":"stale-locator"');
+    expect(staleSection).not.toContain('"kind":"rendered-range","value"');
+    expect(validSection).toContain('"kind":"rendered-range"');
+    expect(validSection).toContain('**Target:** Selected rendered text · exact');
+  });
+
+  it('revalidates every table-cell locator at Finish', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.start',
+        requestId: 'start-finish-cell-revalidation',
+        blocks: TABLE_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(
+      webview,
+      'feedback.started',
+      'start-finish-cell-revalidation'
+    );
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-finish-cell-revalidation',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        feedback: 'This cell locator will become stale.',
+        ...v2TableCellSelection(TABLE_CELL_TARGET_INPUT),
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.updated', 'add-finish-cell-revalidation');
+
+    const session = internals(provider).feedbackSessions.get(
+      document.uri.toString()
+    ) as unknown as {
+      canonicalBlocks: Map<number, { sha256: string }>;
+    };
+    session.canonicalBlocks.get(0)!.sha256 = 'e'.repeat(64);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-cell-revalidation',
+        sessionId: started.sessionId,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.finished', 'finish-cell-revalidation');
+
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    const section = feedbackItemSection(report, 'F1');
+    expect(section).toContain('"resolution":"degraded"');
+    expect(section).toContain('"reason":"stale-locator"');
+    expect(section).not.toContain('"kind":"table-cells","value"');
+    expect(section).toContain('**Source lines:** 1-3');
+  });
+
+  it('degrades a restored exact cell locator after its enclosing block span is proven', async () => {
     await writeFile(sourcePath, TABLE_SOURCE_TEXT);
     const provider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
@@ -2720,9 +3387,11 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
         sessionId: started.sessionId,
         startOrdinal: 0,
         endOrdinal: 0,
-        focus: 'A',
         feedback: 'Keep the line anchor.',
-        cellTarget: TABLE_CELL_TARGET_INPUT,
+        ...v2TableCellSelection({
+          ...TABLE_CELL_TARGET_INPUT,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+        }),
       },
       document as unknown as vscode.TextDocument,
       webview as unknown as vscode.Webview
@@ -2732,11 +3401,11 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     const session = internals(provider).feedbackSessions.get(
       document.uri.toString()
     ) as unknown as {
-      canonicalBlocks: Map<number, { sha256: string }>;
+      canonicalBlocks: Map<number, { sha256: string; tableFingerprint?: string }>;
       targets: Map<string, { startOrdinal: number; endOrdinal: number }>;
       degradedCellTargetIds: Set<string>;
     };
-    session.canonicalBlocks.get(0)!.sha256 = 'c'.repeat(64);
+    session.canonicalBlocks.get(0)!.tableFingerprint = 'md4h-table/v1:fedcba9876543210';
     session.targets.clear();
     session.degradedCellTargetIds.clear();
     (
@@ -3214,8 +3883,8 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
         sessionId: resumedSessionId,
         startOrdinal: 1,
         endOrdinal: 1,
-        focus: 'Paragraph.',
         feedback: 'Keep the recovered session writable.',
+        target: { version: 2, requestedScope: 'blocks' },
       },
       document as unknown as vscode.TextDocument,
       webview as unknown as vscode.Webview
@@ -4854,28 +5523,25 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(session).toBeDefined();
     const store = session!.store;
     const reportBefore = await readFile(store.feedbackFilePath);
-    const originalAdd = store.addTextFeedback.bind(store);
-    const originalAddWithGuard = originalAdd as unknown as (
-      input: AddTextFeedbackInput,
-      beforeCommit?: () => void | Promise<void>
-    ) => Promise<TextFeedbackItem>;
-    store.addTextFeedback = (async (
-      input: AddTextFeedbackInput,
-      beforeCommit?: () => void | Promise<void>
-    ) => {
-      expect(beforeCommit).toEqual(expect.any(Function));
+    const originalAdd = store.addTextFeedbackV2.bind(store);
+    store.addTextFeedbackV2 = (async (...args: Parameters<typeof originalAdd>) => {
+      const [input, options] = args;
+      expect(options?.beforeCommit).toEqual(expect.any(Function));
       let guardCalls = 0;
-      return originalAddWithGuard(input, async () => {
-        await beforeCommit?.();
-        guardCalls += 1;
-        if (guardCalls === 1) {
-          internals(provider).invalidateFeedbackSession(
-            documentKey,
-            webview as unknown as vscode.Webview
-          );
-        }
+      return originalAdd(input, {
+        ...options,
+        beforeCommit: async () => {
+          await options?.beforeCommit?.();
+          guardCalls += 1;
+          if (guardCalls === 1) {
+            internals(provider).invalidateFeedbackSession(
+              documentKey,
+              webview as unknown as vscode.Webview
+            );
+          }
+        },
       });
-    }) as typeof store.addTextFeedback;
+    }) as typeof store.addTextFeedbackV2;
 
     internals(provider).handleWebviewMessage(
       {
@@ -4935,7 +5601,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     await expect(readFile(session!.store.feedbackFilePath)).resolves.toEqual(reportBefore);
   });
 
-  it('keeps the draft active when invalidation lands during the seal commit', async () => {
+  it('restores the exact locator-bearing draft when the second seal guard fails', async () => {
     const writeText = jest.fn(async () => undefined);
     (vscode.env as unknown as { clipboard: { writeText: typeof writeText } }).clipboard = {
       writeText,
@@ -4948,20 +5614,28 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     const session = internals(provider).feedbackSessions.get(documentKey);
     expect(session).toBeDefined();
     const store = session!.store;
+    const itemsBefore = store.items;
     const reportBefore = await readFile(store.feedbackFilePath);
     const originalSeal = store.seal.bind(store);
-    store.seal = (async (bytes, sealedAt, beforeCommit) => {
-      expect(beforeCommit).toEqual(expect.any(Function));
+    store.seal = (async (bytes, sealedAt, optionsOrBeforeCommit) => {
+      const options =
+        typeof optionsOrBeforeCommit === 'function'
+          ? { beforeCommit: optionsOrBeforeCommit }
+          : optionsOrBeforeCommit;
+      expect(options?.beforeCommit).toEqual(expect.any(Function));
       let guardCalls = 0;
-      return originalSeal(bytes, sealedAt, async () => {
-        await beforeCommit?.();
-        guardCalls += 1;
-        if (guardCalls === 1) {
-          internals(provider).invalidateFeedbackSession(
-            documentKey,
-            webview as unknown as vscode.Webview
-          );
-        }
+      return originalSeal(bytes, sealedAt, {
+        ...options,
+        beforeCommit: async () => {
+          await options?.beforeCommit?.();
+          guardCalls += 1;
+          if (guardCalls === 1) {
+            internals(provider).invalidateFeedbackSession(
+              documentKey,
+              webview as unknown as vscode.Webview
+            );
+          }
+        },
       });
     }) as typeof store.seal;
 
@@ -4970,6 +5644,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
         type: 'feedback.finish',
         requestId: 'finish-during-invalidation',
         sessionId: started.sessionId,
+        degradedTargetIds: ['F1'],
       },
       document as unknown as vscode.TextDocument,
       webview as unknown as vscode.Webview
@@ -4982,8 +5657,178 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(writeText).not.toHaveBeenCalled();
     expect(internals(provider).feedbackSessions.get(documentKey)).toBe(session);
     expect(store.snapshot.state).toBe('draft');
+    expect(store.items).toEqual(itemsBefore);
+    expect(store.items[0]).toEqual(
+      expect.objectContaining({
+        target: expect.objectContaining({
+          locator: expect.objectContaining({
+            kind: 'rendered-range',
+            value: expect.objectContaining(PARAGRAPH_RENDERED_RANGE_INPUT),
+          }),
+        }),
+      })
+    );
     await expect(readFile(store.feedbackFilePath)).resolves.toEqual(reportBefore);
     await expect(pathExists(`${store.feedbackFilePath}.lock`)).resolves.toBe(false);
+  });
+
+  it('strips only a renderer-reported rendered-range locator at the provider boundary', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-renderer-valid-range',
+        sessionId: started.sessionId,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: 'Guide',
+        feedback: 'Keep this exact locator.',
+        renderedRange: {
+          version: 1,
+          startOrdinal: 0,
+          startOffset: 0,
+          endOrdinal: 0,
+          endOffset: 'Guide'.length,
+        },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.updated', 'add-renderer-valid-range');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-renderer-range-degradation',
+        sessionId: started.sessionId,
+        degradedTargetIds: ['F1'],
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.finished', 'finish-renderer-range-degradation');
+
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    expect(feedbackItemSection(report, 'F1')).toContain('"resolution":"degraded"');
+    expect(feedbackItemSection(report, 'F1')).toContain('"reason":"stale-locator"');
+    expect(feedbackItemSection(report, 'F2')).toContain('"kind":"rendered-range"');
+    expect(feedbackItemSection(report, 'F2')).toContain(
+      '**Target:** Selected rendered text · exact'
+    );
+  });
+
+  it('strips only a renderer-reported table-cell locator at the provider boundary', async () => {
+    await writeFile(sourcePath, TABLE_SOURCE_TEXT);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, TABLE_SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.start',
+        requestId: 'start-renderer-cell-degradation',
+        blocks: TABLE_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const started = await waitForMessage(
+      webview,
+      'feedback.started',
+      'start-renderer-cell-degradation'
+    );
+    for (const [requestId, feedback] of [
+      ['add-renderer-degraded-cell', 'Strip this exact cell locator.'],
+      ['add-renderer-valid-cell', 'Keep this exact cell locator.'],
+    ] as const) {
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.text.add',
+          requestId,
+          sessionId: started.sessionId,
+          startOrdinal: 0,
+          endOrdinal: 0,
+          feedback,
+          ...v2TableCellSelection(TABLE_CELL_TARGET_INPUT),
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      await waitForMessage(webview, 'feedback.updated', requestId);
+    }
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-renderer-cell-degradation',
+        sessionId: started.sessionId,
+        degradedTargetIds: ['F1'],
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.finished', 'finish-renderer-cell-degradation');
+
+    const report = await readFile(path.join(workspaceRoot, started.feedbackFile as string), 'utf8');
+    expect(feedbackItemSection(report, 'F1')).toContain('"resolution":"degraded"');
+    expect(feedbackItemSection(report, 'F1')).toContain('"reason":"stale-locator"');
+    expect(feedbackItemSection(report, 'F2')).toContain('"kind":"table-cells"');
+    expect(feedbackItemSection(report, 'F2')).toContain('**Target:** Selected table cells · exact');
+  });
+
+  it('rejects a renderer degradation claim for a locator-free item and preserves the draft', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    sendStart(provider, document, webview, 'start-no-locator-degradation');
+    const started = await waitForMessage(
+      webview,
+      'feedback.started',
+      'start-no-locator-degradation'
+    );
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.text.add',
+        requestId: 'add-no-locator-degradation',
+        sessionId: started.sessionId,
+        startOrdinal: 1,
+        endOrdinal: 1,
+        feedback: 'Keep this whole-block feedback.',
+        target: { version: 2, requestedScope: 'blocks' },
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitForMessage(webview, 'feedback.updated', 'add-no-locator-degradation');
+    const session = internals(provider).feedbackSessions.get(document.uri.toString())!;
+    const itemsBefore = session.store.items;
+    const reportBefore = await readFile(session.store.feedbackFilePath);
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-no-locator-degradation',
+        sessionId: started.sessionId,
+        degradedTargetIds: ['F1'],
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const error = await waitForMessage(webview, 'feedback.error', 'finish-no-locator-degradation');
+    expect(error).toEqual(
+      expect.objectContaining({
+        code: 'MD4H-FB-ANCHOR-001',
+        recoverable: true,
+      })
+    );
+    expect(messagesOfType(webview, 'feedback.finished')).toHaveLength(0);
+    expect(session.phase).toBe('active');
+    expect(session.store.snapshot.state).toBe('draft');
+    expect(session.store.items).toEqual(itemsBefore);
+    await expect(readFile(session.store.feedbackFilePath)).resolves.toEqual(reportBefore);
   });
 
   it('seals a valid draft and copies the exact agent handoff prompt', async () => {
@@ -5401,6 +6246,77 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     );
   });
 
+  it('keeps the original close reservation through a duplicate close and renderer reload', async () => {
+    const writeText = jest.fn(async () => undefined);
+    (vscode.env as unknown as { clipboard: { writeText: typeof writeText } }).clipboard = {
+      writeText,
+    };
+
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, webview);
+    const session = internals(provider).feedbackSessions.get(document.uri.toString());
+    expect(session).toBeDefined();
+    const store = session!.store;
+    const originalSeal = store.seal.bind(store);
+    let releaseSeal!: () => void;
+    const sealGate = new Promise<void>(resolve => {
+      releaseSeal = resolve;
+    });
+    let announceSealStarted!: () => void;
+    const sealStarted = new Promise<void>(resolve => {
+      announceSealStarted = resolve;
+    });
+    store.seal = (async (...args: Parameters<typeof originalSeal>) => {
+      announceSealStarted();
+      await sealGate;
+      return originalSeal(...args);
+    }) as typeof store.seal;
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish',
+        requestId: 'finish-close-reservation',
+        sessionId: started.sessionId,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await sealStarted;
+    const originalCloseOperation = session!.closeOperation;
+    expect(originalCloseOperation).toBeDefined();
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.discard',
+        requestId: 'duplicate-close-reservation',
+        sessionId: started.sessionId,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await expect(
+      waitForMessage(webview, 'feedback.error', 'duplicate-close-reservation')
+    ).resolves.toEqual(expect.objectContaining({ recoverable: true }));
+    expect(session!.closeOperation).toBe(originalCloseOperation);
+
+    internals(provider).handleWebviewMessage(
+      { type: 'ready' },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())).toBe(session);
+    expect(messagesOfType(webview, 'feedback.peer.release')).toHaveLength(0);
+
+    releaseSeal();
+    await expect(
+      waitForMessage(webview, 'feedback.finished', 'finish-close-reservation')
+    ).resolves.toEqual(expect.objectContaining({ promptCopied: true }));
+    await waitUntil(() => internals(provider).feedbackSessions.size === 0);
+  });
+
   it('waits for an in-flight item mutation before discarding the draft', async () => {
     const showWarningMessage = vscode.window.showWarningMessage as jest.Mock;
     showWarningMessage.mockReset();
@@ -5421,7 +6337,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     const session = internals(provider).feedbackSessions.get(document.uri.toString());
     expect(session).toBeDefined();
     const store = session!.store;
-    const originalAdd = store.addTextFeedback.bind(store);
+    const originalAdd = store.addTextFeedbackV2.bind(store);
     let releaseAdd!: () => void;
     const addGate = new Promise<void>(resolve => {
       releaseAdd = resolve;
@@ -5430,11 +6346,11 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     const addStarted = new Promise<void>(resolve => {
       announceAddStarted = resolve;
     });
-    store.addTextFeedback = (async (...args: Parameters<typeof originalAdd>) => {
+    store.addTextFeedbackV2 = (async (...args: Parameters<typeof originalAdd>) => {
       announceAddStarted();
       await addGate;
       return originalAdd(...args);
-    }) as typeof store.addTextFeedback;
+    }) as typeof store.addTextFeedbackV2;
 
     internals(provider).handleWebviewMessage(
       {
@@ -5746,6 +6662,311 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     );
   });
 
+  it('resumes a v2 whole-block draft whose block span matches the line-mapped canonical block', async () => {
+    const paragraphSpan = feedbackBlockSpanV2(1, 'paragraph', 'Paragraph.');
+    const draft = await FeedbackSessionStore.create({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      schemaVersion: 2,
+      now: new Date('2026-08-31T09:30:00.000Z'),
+      roundSuffix: 'bv01',
+    });
+    await draft.addTextFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Keep this valid whole-block target.',
+      target: {
+        version: 2,
+        requestedScope: 'blocks',
+        effectiveScope: 'blocks',
+        resolution: 'exact',
+        blockSpan: paragraphSpan,
+      },
+      evidence: feedbackSourceEvidenceV2('Paragraph.', 'selected-blocks'),
+    });
+
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-valid-v2-block-span',
+        round: draft.snapshot.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const resumed = await waitForOneOfMessages(
+      webview,
+      ['feedback.started', 'feedback.error'],
+      'resume-valid-v2-block-span'
+    );
+    expect(resumed).toEqual(
+      expect.objectContaining({
+        type: 'feedback.started',
+        items: [
+          expect.objectContaining({ id: 'F1', startOrdinal: 1, endOrdinal: 1, kind: 'text' }),
+        ],
+      })
+    );
+    expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+  });
+
+  it('degrades a stale v2 rendered locator only after its enclosing block span is proven', async () => {
+    const paragraphSpan = feedbackBlockSpanV2(1, 'paragraph', 'Paragraph.');
+    const draft = await FeedbackSessionStore.create({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      schemaVersion: 2,
+      now: new Date('2026-08-31T09:30:00.000Z'),
+      roundSuffix: 'rv01',
+    });
+    await draft.addTextFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Preserve a safe block fallback for this stale locator.',
+      target: {
+        version: 2,
+        requestedScope: 'rendered-text',
+        effectiveScope: 'rendered-text',
+        resolution: 'exact',
+        blockSpan: paragraphSpan,
+        locator: {
+          kind: 'rendered-range',
+          value: {
+            version: 1,
+            startOrdinal: 1,
+            startOffset: 0,
+            endOrdinal: 1,
+            endOffset: 'Paragraph.'.length + 1,
+            startBlockSha256: paragraphSpan.startBlockSha256,
+            endBlockSha256: paragraphSpan.endBlockSha256,
+          },
+        },
+      },
+      evidence: {
+        effective: {
+          kind: 'rendered-text',
+          fidelity: 'rendered-exact',
+          text: 'Paragraph.',
+          complete: true,
+        },
+      },
+    });
+
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-v2-stale-rendered-locator',
+        round: draft.snapshot.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const resumed = await waitForMessage(
+      webview,
+      'feedback.started',
+      'resume-v2-stale-rendered-locator'
+    );
+    expect((resumed.items as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
+      'renderedRange'
+    );
+    await expect(waitForMessage(webview, 'feedback.error')).resolves.toEqual(
+      expect.objectContaining({
+        code: 'MD4H-FB-ANCHOR-001',
+        message: expect.stringMatching(/F1.*block markers/i),
+      })
+    );
+  });
+
+  it.each([
+    {
+      label: 'whole-block SHA-256',
+      fixture: 'whole-block',
+      roundSuffix: 'bh01',
+      mutate: (target: FeedbackTargetV2) => {
+        target.blockSpan.startBlockSha256 = 'b'.repeat(64);
+        target.blockSpan.endBlockSha256 = 'b'.repeat(64);
+      },
+    },
+    {
+      label: 'degraded Mermaid ordinal',
+      fixture: 'degraded',
+      roundSuffix: 'do01',
+      mutate: (target: FeedbackTargetV2) => {
+        target.blockSpan.startOrdinal = 0;
+        target.blockSpan.endOrdinal = 0;
+      },
+    },
+    {
+      label: 'legacy-unknown SHA-256',
+      fixture: 'legacy-unknown',
+      roundSuffix: 'lh01',
+      mutate: (target: FeedbackTargetV2) => {
+        target.blockSpan.startBlockSha256 = 'c'.repeat(64);
+        target.blockSpan.endBlockSha256 = 'c'.repeat(64);
+      },
+    },
+    {
+      label: 'visual block kind',
+      fixture: 'visual',
+      roundSuffix: 'vk01',
+      mutate: (target: FeedbackTargetV2) => {
+        target.blockSpan.startKind = 'heading';
+        target.blockSpan.endKind = 'heading';
+      },
+      rewriteSummary: (summary: string) => summary.replace('Mermaid block 2', 'heading 2'),
+    },
+  ] as const)(
+    'fails closed when a restored v2 item has a mismatched $label binding',
+    async ({ fixture, roundSuffix, mutate, rewriteSummary }) => {
+      const usesMermaidSource = fixture === 'degraded' || fixture === 'visual';
+      const sourceText = usesMermaidSource ? MERMAID_SOURCE_TEXT : SOURCE_TEXT;
+      const sourceBytes = Buffer.from(sourceText, 'utf8');
+      const blocks = usesMermaidSource ? MERMAID_BLOCKS : START_BLOCKS;
+      await writeFile(sourcePath, sourceBytes);
+      const draft = await FeedbackSessionStore.create({
+        workspaceRoot,
+        sourcePath,
+        sourceBytes,
+        schemaVersion: 2,
+        now: new Date('2026-08-31T09:30:00.000Z'),
+        roundSuffix,
+      });
+
+      if (fixture === 'whole-block') {
+        const blockSpan = feedbackBlockSpanV2(1, 'paragraph', 'Paragraph.');
+        await draft.addTextFeedbackV2({
+          startLine: 3,
+          endLine: 3,
+          feedback: 'Reject a forged whole-block binding.',
+          target: {
+            version: 2,
+            requestedScope: 'blocks',
+            effectiveScope: 'blocks',
+            resolution: 'exact',
+            blockSpan,
+          },
+          evidence: feedbackSourceEvidenceV2('Paragraph.', 'selected-blocks'),
+        });
+      } else if (fixture === 'degraded') {
+        const mermaidMarkdown = MERMAID_BLOCKS[1].markdown;
+        const blockSpan = feedbackBlockSpanV2(1, 'mermaid', mermaidMarkdown);
+        await draft.addTextFeedbackV2({
+          startLine: 3,
+          endLine: 6,
+          feedback: 'Reject a forged degraded binding.',
+          target: {
+            version: 2,
+            requestedScope: 'visual-region',
+            effectiveScope: 'blocks',
+            resolution: 'degraded',
+            coarsening: { reason: 'opaque-node', origin: 'renderer' },
+            blockSpan,
+          },
+          evidence: {
+            ...feedbackSourceEvidenceV2(mermaidMarkdown, 'containing-blocks'),
+            original: {
+              kind: 'semantic-text',
+              fidelity: 'semantic-context',
+              text: 'Draft to Review',
+              complete: true,
+              provenance: 'renderer-fallback',
+            },
+          },
+        });
+      } else if (fixture === 'legacy-unknown') {
+        const blockSpan = feedbackBlockSpanV2(1, 'paragraph', 'Paragraph.');
+        await draft.addTextFeedbackV2({
+          startLine: 3,
+          endLine: 3,
+          feedback: 'Reject a forged migrated binding.',
+          target: {
+            version: 2,
+            effectiveScope: 'blocks',
+            resolution: 'legacy-unknown',
+            legacyOrigin: 'v1-no-locator',
+            blockSpan,
+          },
+          evidence: {
+            ...feedbackSourceEvidenceV2('Paragraph.', 'containing-blocks'),
+            original: {
+              kind: 'legacy-focus',
+              fidelity: 'legacy-unclassified',
+              text: 'Paragraph.',
+            },
+          },
+        });
+      } else {
+        const mermaidMarkdown = MERMAID_BLOCKS[1].markdown;
+        const blockSpan = feedbackBlockSpanV2(1, 'mermaid', mermaidMarkdown);
+        await draft.addScreenshotFeedbackV2({
+          startLine: 3,
+          endLine: 6,
+          feedback: 'Reject a forged visual binding.',
+          pngData: ONE_PIXEL_PNG_BASE64,
+          target: {
+            version: 2,
+            requestedScope: 'visual-region',
+            effectiveScope: 'visual-region',
+            resolution: 'exact',
+            blockSpan,
+          },
+          sourceReference: {
+            relationship: 'containing-blocks',
+            format: 'markdown',
+            normalization: 'lf',
+            sourceSliceSha256: createHash('sha256').update(mermaidMarkdown).digest('hex'),
+          },
+        });
+      }
+
+      const originalReport = await readFile(draft.feedbackFilePath, 'utf8');
+      const tamperedReport = mutateFeedbackTargetV2(originalReport, 'F1', mutate, rewriteSummary);
+      await writeFile(draft.feedbackFilePath, tamperedReport);
+
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, sourceText);
+      const webview = createWebview(provider, document);
+      const requestId = `resume-forged-${fixture}`;
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.draft.resume',
+          requestId,
+          round: draft.snapshot.round,
+          blocks,
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+
+      const outcome = await waitForOneOfMessages(
+        webview,
+        ['feedback.error', 'feedback.started'],
+        requestId
+      );
+      expect(outcome).toEqual(
+        expect.objectContaining({
+          type: 'feedback.error',
+          code: 'MD4H-FB-ANCHOR-001',
+          message: expect.stringMatching(/F1.*block/i),
+        })
+      );
+      expect(internals(provider).feedbackSessions.size).toBe(0);
+      await expect(readFile(draft.feedbackFilePath, 'utf8')).resolves.toBe(tamperedReport);
+    }
+  );
+
   it('announces a matching draft without freezing and strictly resumes its items and ID sequence', async () => {
     const firstProvider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, SOURCE_TEXT);
@@ -5858,6 +7079,77 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(item).not.toHaveProperty('renderedRange');
   });
 
+  it('serializes simultaneous first mutations while atomically migrating one v1 draft', async () => {
+    const paragraphHash = createHash('sha256').update('Paragraph.').digest('hex');
+    const legacy = await FeedbackSessionStore.create({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      now: new Date('2026-08-21T09:30:00.000Z'),
+      roundSuffix: 'cq01',
+    });
+    await legacy.addTextFeedback({
+      startLine: 3,
+      endLine: 3,
+      focus: 'Paragraph.',
+      feedback: 'Preserve this v1 item through the first concurrent writes.',
+      renderedRange: {
+        ...PARAGRAPH_RENDERED_RANGE_INPUT,
+        version: 1,
+        startBlockSha256: paragraphHash,
+        endBlockSha256: paragraphHash,
+      },
+    });
+    const v1Bytes = await readFile(legacy.feedbackFilePath);
+
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-concurrent-v1',
+        round: legacy.snapshot.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    const resumed = await waitForMessage(webview, 'feedback.started', 'resume-concurrent-v1');
+    await expect(readFile(legacy.feedbackFilePath)).resolves.toEqual(v1Bytes);
+
+    for (const [requestId, ordinal, feedback] of [
+      ['concurrent-v2-first', 0, 'Clarify the title.'],
+      ['concurrent-v2-second', 1, 'Clarify the paragraph.'],
+    ] as const) {
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.text.add',
+          requestId,
+          sessionId: resumed.sessionId,
+          startOrdinal: ordinal,
+          endOrdinal: ordinal,
+          feedback,
+          target: { version: 2, requestedScope: 'blocks' },
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+    }
+
+    await Promise.all([
+      waitForMessage(webview, 'feedback.updated', 'concurrent-v2-first'),
+      waitForMessage(webview, 'feedback.updated', 'concurrent-v2-second'),
+    ]);
+    expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+    const session = internals(provider).feedbackSessions.get(document.uri.toString())!;
+    expect(session.store.schemaVersion).toBe(2);
+    expect(session.store.items.map(item => item.id)).toEqual(['F1', 'F2', 'F3']);
+    const report = await readFile(session.store.feedbackFilePath, 'utf8');
+    expect(report).toContain('schema: md4h-feedback/v2');
+    expect(report).toContain('next_id: F4');
+  });
+
   it.each([
     [
       'an out-of-bounds persisted offset',
@@ -5895,7 +7187,16 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       const metadataLine = report
         .split('\n')
         .find(line => line.startsWith('<!-- md4h-rendered-range:'))!;
-      await writeFile(draft.feedbackFilePath, report.replace(metadataLine, tamper(metadataLine)));
+      const tamperedReport = report.replace(metadataLine, tamper(metadataLine));
+      await writeFile(
+        draft.feedbackFilePath,
+        _label === 'an out-of-bounds persisted offset'
+          ? tamperedReport.replace(
+              '**Target:** Exact rendered text · block 2 offsets 0-10',
+              '**Target:** Exact rendered text · block 2 offsets 0-11'
+            )
+          : tamperedReport
+      );
 
       const provider = createProvider(workspaceRoot);
       const document = createDocument(sourcePath, SOURCE_TEXT);
@@ -5929,6 +7230,23 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       );
       expect(error.message).toContain('F1');
       expect(internals(provider).feedbackSessions.size).toBe(1);
+
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.finish',
+          requestId: 'finish-degraded-rendered-range',
+          sessionId: resumed.sessionId,
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      await waitForMessage(webview, 'feedback.finished', 'finish-degraded-rendered-range');
+      const sealedReport = await readFile(draft.feedbackFilePath, 'utf8');
+      expect(sealedReport).toContain('state: sealed');
+      expect(sealedReport).not.toContain('md4h-rendered-range');
+      expect(sealedReport).not.toContain('**Target:** Exact rendered text');
+      expect(sealedReport).toContain('**Source lines:** 3');
+      expect(sealedReport).toContain('Do not fuzzy match this.');
     }
   );
 
@@ -5955,7 +7273,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     );
 
     const error = await waitForMessage(recoveryWebview, 'feedback.error', 'resume-bad-range');
-    expect(error.code).toBe('MD4H-FB-ANCHOR-001');
+    expect(error.code).toBe('MD4H-FB-STORE-001');
     expect(internals(recoveryProvider).feedbackSessions.size).toBe(0);
   });
 
@@ -6537,6 +7855,73 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     return started;
   }
 });
+
+function feedbackBlockSpanV2(
+  ordinal: number,
+  kind: FeedbackBlockKindV2,
+  markdown: string
+): FeedbackBlockSpanV2 {
+  const sha256 = createHash('sha256').update(markdown).digest('hex');
+  return {
+    startOrdinal: ordinal,
+    endOrdinal: ordinal,
+    startKind: kind,
+    endKind: kind,
+    startBlockSha256: sha256,
+    endBlockSha256: sha256,
+  };
+}
+
+function feedbackSourceEvidenceV2(
+  text: string,
+  relationship: 'selected-blocks' | 'containing-blocks'
+): FeedbackEvidenceEnvelopeV2 {
+  return {
+    effective: {
+      kind: 'source',
+      fidelity: 'source-exact',
+      relationship,
+      format: 'markdown',
+      normalization: 'lf',
+      sourceSliceSha256: createHash('sha256').update(text).digest('hex'),
+      availability: 'embedded',
+      text,
+      utf8Bytes: Buffer.byteLength(text, 'utf8'),
+    },
+  };
+}
+
+function mutateFeedbackTargetV2(
+  report: string,
+  id: string,
+  mutate: (target: FeedbackTargetV2) => void,
+  rewriteSummary?: (summary: string) => string
+): string {
+  const section = feedbackItemSection(report, id);
+  const metadataLine = section.split('\n').find(line => line.startsWith('<!-- md4h-target-v2:'));
+  if (metadataLine === undefined) throw new Error(`Missing v2 target metadata for ${id}.`);
+  const payload = metadataLine.slice('<!-- md4h-target-v2:'.length, -' -->'.length);
+  const target = JSON.parse(payload) as FeedbackTargetV2;
+  mutate(target);
+  let nextSection = section.replace(
+    metadataLine,
+    `<!-- md4h-target-v2:${JSON.stringify(target)} -->`
+  );
+  if (rewriteSummary !== undefined) {
+    const summaryLine = nextSection.split('\n').find(line => line.startsWith('**Target:** '));
+    if (summaryLine === undefined) throw new Error(`Missing visible target summary for ${id}.`);
+    nextSection = nextSection.replace(summaryLine, rewriteSummary(summaryLine));
+  }
+  return report.replace(section, nextSection);
+}
+
+function feedbackItemSection(report: string, id: string): string {
+  const marker = `## ${id} ·`;
+  const start = report.indexOf(marker);
+  if (start < 0) return '';
+  const next = report.indexOf('\n## F', start + marker.length);
+  return report.slice(start, next < 0 ? report.length : next);
+}
 
 function createProvider(workspaceRoot: string): MarkdownEditorProvider {
   return new MarkdownEditorProvider({

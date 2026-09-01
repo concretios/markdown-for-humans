@@ -7,6 +7,8 @@ import StarterKit from '@tiptap/starter-kit';
 import { createCodeBlockCopyNodeView } from '../../webview/extensions/codeBlockCopyNodeView';
 import {
   blockRelativeRangeFromPositions,
+  feedbackFocusForBlockRange,
+  feedbackFocusForMappedBlock,
   getFeedbackTargetFromDomRange,
   getFeedbackTargetFromProseMirrorSelection,
   resolveFeedbackRenderedRange,
@@ -444,6 +446,171 @@ describe('feedback rendered ranges', () => {
     editor.destroy();
   });
 
+  it('keeps an opaque Mermaid selection mapped when a retained GapCursor widget precedes it', () => {
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'before' }] },
+        {
+          type: 'mermaid',
+          content: [{ type: 'text', text: 'graph TD; A-->B' }],
+        },
+      ],
+    });
+    const mermaid = editor.view.dom.querySelector('[data-mermaid-like]') as HTMLElement;
+    const widget = document.createElement('div');
+    widget.className = 'ProseMirror-gapcursor ProseMirror-widget';
+    editor.view.dom.insertBefore(widget, mermaid);
+    const renderedText = textNode(mermaid);
+    const nativeRange = selectDomText(renderedText, 0, renderedText, 8);
+
+    expect(getFeedbackTargetFromDomRange(editor, nativeRange)).toEqual({
+      kind: 'block',
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus: 'Rendered',
+      reason: 'opaque-node',
+    });
+    editor.destroy();
+  });
+
+  it('keeps an unmappable table selection mapped when a retained widget precedes it', () => {
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'before' }] },
+        {
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                {
+                  type: 'tableCell',
+                  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Role' }] }],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const table = editor.view.dom.querySelector('table') as HTMLTableElement;
+    const tableBlock = table.parentElement as HTMLElement;
+    const widget = document.createElement('span');
+    widget.className = 'ProseMirror-widget';
+    editor.view.dom.insertBefore(widget, tableBlock);
+    const renderedText = textNode(table.querySelector('p'));
+    const nativeRange = selectDomText(renderedText, 0, renderedText, renderedText.length);
+    const positionSpy = jest.spyOn(editor.view, 'posAtDOM').mockImplementation(() => {
+      throw new DOMException('Unmappable table NodeView');
+    });
+
+    try {
+      expect(getFeedbackTargetFromDomRange(editor, nativeRange)).toEqual({
+        kind: 'block',
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Role',
+        reason: 'unmappable-dom',
+      });
+    } finally {
+      positionSpy.mockRestore();
+      editor.destroy();
+    }
+  });
+
+  it('uses the canonical opaque block for DOM-only Focus when nodeDOM is unavailable', () => {
+    document.body.innerHTML = `
+      <div class="tiptap">
+        <p>before</p>
+        <div class="ProseMirror-gapcursor ProseMirror-widget">Gap cursor chrome</div>
+        <div data-dom-only-opaque>Rendered fallback</div>
+        <p>after</p>
+      </div>
+    `;
+    const nodes = [
+      {
+        type: { name: 'paragraph' },
+        attrs: {},
+        content: { size: 6 },
+        nodeSize: 8,
+        isAtom: false,
+        isLeaf: false,
+        isText: false,
+        textBetween: () => 'before',
+      },
+      {
+        type: { name: 'domOnlyOpaque' },
+        attrs: {},
+        content: { size: 0 },
+        nodeSize: 1,
+        isAtom: true,
+        isLeaf: true,
+        isText: false,
+        textBetween: () => '',
+      },
+      {
+        type: { name: 'paragraph' },
+        attrs: {},
+        content: { size: 5 },
+        nodeSize: 7,
+        isAtom: false,
+        isLeaf: false,
+        isText: false,
+        textBetween: () => 'after',
+      },
+    ];
+    const doc = {
+      childCount: nodes.length,
+      maybeChild: (ordinal: number) => nodes[ordinal] ?? null,
+      forEach: (
+        callback: (node: (typeof nodes)[number], offset: number, ordinal: number) => void
+      ) => {
+        let offset = 0;
+        nodes.forEach((node, ordinal) => {
+          callback(node, offset, ordinal);
+          offset += node.nodeSize;
+        });
+      },
+    };
+    const editor = {
+      state: { doc },
+      view: { dom: document.querySelector('.tiptap') as HTMLElement },
+    } as unknown as Editor;
+
+    expect(feedbackFocusForBlockRange(editor, 1, 1)).toBe('Rendered fallback');
+  });
+
+  it('fails closed when ambiguous direct DOM cannot be resolved through nodeDOM', () => {
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'before' }] },
+        {
+          type: 'mermaid',
+          content: [{ type: 'text', text: 'graph TD; A-->B' }],
+        },
+      ],
+    });
+    const mermaid = editor.view.dom.querySelector('[data-mermaid-like]') as HTMLElement;
+    const foreign = document.createElement('div');
+    foreign.dataset.foreign = '';
+    editor.view.dom.insertBefore(foreign, mermaid);
+    const renderedText = textNode(mermaid);
+    const nativeRange = selectDomText(renderedText, 0, renderedText, 8);
+    const positionSpy = jest.spyOn(editor.view, 'nodeDOM').mockImplementation(() => {
+      throw new DOMException('Ambiguous custom DOM');
+    });
+
+    try {
+      expect(getFeedbackTargetFromDomRange(editor, nativeRange)).toBeNull();
+    } finally {
+      positionSpy.mockRestore();
+      editor.destroy();
+    }
+  });
+
   it('canonicalizes an end endpoint at the next block start back to visible content', () => {
     const editor = createEditor('<p>first</p><p>second</p>');
     const paragraphs = editor.view.dom.querySelectorAll('p');
@@ -546,6 +713,85 @@ describe('feedback rendered ranges', () => {
         : undefined
     ).toBe(target?.focus);
     editor.destroy();
+  });
+
+  it('uses semantic whole-block Focus when a native selection cannot expose a DOM Range', () => {
+    const editor = createEditor('<p>alpha beta</p>');
+    const text = textNode(editor.view.dom.querySelector('p'));
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: text,
+      focusNode: text,
+      anchorOffset: 0,
+      focusOffset: 5,
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => {
+        throw new DOMException('Range unavailable');
+      },
+      toString: () => 'alpha',
+    } as unknown as Selection);
+
+    try {
+      expect(
+        getFeedbackSelectionTarget(editor, [{ ordinal: 0, startLine: 1, endLine: 1 }])
+      ).toEqual({
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: 'alpha beta',
+        startLine: 1,
+        endLine: 1,
+        presentationReason: 'unmappable-dom',
+      });
+    } finally {
+      selectionSpy.mockRestore();
+      editor.destroy();
+    }
+  });
+
+  it('ignores a retained direct-child widget in the native no-Range fallback', () => {
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'before' }] },
+        {
+          type: 'mermaid',
+          content: [{ type: 'text', text: 'graph TD; A-->B' }],
+        },
+      ],
+    });
+    const mermaid = editor.view.dom.querySelector('[data-mermaid-like]') as HTMLElement;
+    const widget = document.createElement('div');
+    widget.className = 'ProseMirror-gapcursor ProseMirror-widget';
+    editor.view.dom.insertBefore(widget, mermaid);
+    const renderedText = textNode(mermaid);
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: renderedText,
+      focusNode: renderedText,
+      anchorOffset: 0,
+      focusOffset: 8,
+      isCollapsed: false,
+      rangeCount: 0,
+      toString: () => 'Rendered',
+    } as unknown as Selection);
+
+    try {
+      expect(
+        getFeedbackSelectionTarget(editor, [
+          { ordinal: 0, startLine: 1, endLine: 1 },
+          { ordinal: 1, startLine: 3, endLine: 5 },
+        ])
+      ).toEqual({
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'graph TD; A-->B',
+        startLine: 3,
+        endLine: 5,
+        presentationReason: 'unmappable-dom',
+      });
+    } finally {
+      selectionSpy.mockRestore();
+      editor.destroy();
+    }
   });
 
   it('normalizes endpoints on block boundaries to blocks containing visible text', () => {
@@ -813,6 +1059,44 @@ describe('feedback rendered ranges', () => {
       reason: 'block-selection',
     });
     editor.destroy();
+  });
+
+  it('bounds whole-block Focus before traversing a block larger than one MiB', () => {
+    const source = 'x'.repeat(1024 * 1024 + 1);
+    const editor = createEditor({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: source }] }],
+    });
+    const block = editor.state.doc.child(0);
+    const textBetweenSpy = jest.spyOn(block, 'textBetween');
+    editor.view.dispatch(editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, 0)));
+
+    try {
+      const hoverFocus = feedbackFocusForMappedBlock(
+        editor,
+        0,
+        editor.view.dom.firstElementChild as HTMLElement
+      );
+      const target = getFeedbackTargetFromProseMirrorSelection(editor);
+
+      expect(hoverFocus).toHaveLength(64 * 1024);
+      expect(hoverFocus.endsWith('\n[Focus truncated]')).toBe(true);
+      expect(target).toMatchObject({
+        kind: 'block',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        reason: 'block-selection',
+      });
+      expect(target?.focus).toHaveLength(64 * 1024);
+      expect(target?.focus.endsWith('\n[Focus truncated]')).toBe(true);
+      expect(textBetweenSpy).toHaveBeenCalled();
+      expect(
+        textBetweenSpy.mock.calls.every(([, to]) => typeof to === 'number' && to <= 64 * 1024)
+      ).toBe(true);
+    } finally {
+      textBetweenSpy.mockRestore();
+      editor.destroy();
+    }
   });
 
   it('resolves valid block-relative positions and validates exact visible Focus', () => {

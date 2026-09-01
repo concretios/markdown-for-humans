@@ -7,7 +7,9 @@ import { NodeSelection, TextSelection } from '@tiptap/pm/state';
 import { CellSelection } from '@tiptap/pm/tables';
 import StarterKit from '@tiptap/starter-kit';
 import {
+  FEEDBACK_MAX_EXACT_CELL_COUNT,
   fingerprintFeedbackTable,
+  isFeedbackCellTargetValid,
   mapFeedbackSelection,
   resolveFeedbackCellTarget,
   type FeedbackSelectionMappingInput,
@@ -27,7 +29,11 @@ function paragraph(text: string): Record<string, unknown> {
   return { type: 'paragraph', content: [{ type: 'text', text }] };
 }
 
-function rectangularTable(rows: number, columns: number): Record<string, unknown> {
+function rectangularTable(
+  rows: number,
+  columns: number,
+  cellText?: (row: number, column: number) => string
+): Record<string, unknown> {
   return {
     type: 'doc',
     content: [
@@ -37,7 +43,11 @@ function rectangularTable(rows: number, columns: number): Record<string, unknown
           type: 'tableRow',
           content: Array.from({ length: columns }, (_, column) => ({
             type: row === 0 ? 'tableHeader' : 'tableCell',
-            content: [paragraph(row === 0 ? `H${column + 1}` : `R${row}C${column + 1}`)],
+            content: [
+              paragraph(
+                cellText?.(row, column) ?? (row === 0 ? `H${column + 1}` : `R${row}C${column + 1}`)
+              ),
+            ],
           })),
         })),
       },
@@ -155,6 +165,37 @@ describe('typed Feedback selection mapping', () => {
     editor.destroy();
   });
 
+  it('bounds aggregate Focus for 256 oversized cells before traversing complete cell content', () => {
+    const editor = createEditor(rectangularTable(16, 16, () => 'x'.repeat(4_100)));
+    const positions = cellPositions(editor.state.doc);
+    const textBetweenSpies = positions.map(position => {
+      const cell = editor.state.doc.nodeAt(position);
+      if (!cell) throw new Error('Expected a table cell');
+      return jest.spyOn(cell, 'textBetween');
+    });
+
+    try {
+      const result = mapFeedbackSelection(
+        cellSelectionInput(editor.state.doc, positions[0], positions[positions.length - 1])
+      );
+
+      expect(result.kind).toBe('cells');
+      if (result.kind === 'cells') {
+        expect(result.focusText.length).toBeLessThanOrEqual(64 * 1024);
+        expect(result.focusText).toContain('[truncated]');
+      }
+      expect(textBetweenSpies.every(spy => spy.mock.calls.length === 1)).toBe(true);
+      expect(
+        textBetweenSpies.every(spy =>
+          spy.mock.calls.every(([, to]) => typeof to === 'number' && to <= 240)
+        )
+      ).toBe(true);
+    } finally {
+      textBetweenSpies.forEach(spy => spy.mockRestore());
+      editor.destroy();
+    }
+  });
+
   it('keeps CellSelection authoritative over a transient collapsed native caret', () => {
     const editor = createEditor(rectangularTable(2, 2));
     const cells = cellPositions(editor.state.doc);
@@ -170,6 +211,31 @@ describe('typed Feedback selection mapping', () => {
       expect(result.authority).toBe('prosemirror-structural');
       expect(result.rectangle).toEqual({ top: 0, left: 0, bottom: 2, right: 2 });
     }
+    editor.destroy();
+  });
+
+  it('falls back before walking or fingerprinting an oversized cell rectangle', () => {
+    const rows = 17;
+    const columns = 16;
+    expect(rows * columns).toBeGreaterThan(FEEDBACK_MAX_EXACT_CELL_COUNT);
+    const editor = createEditor(rectangularTable(rows, columns));
+    const cells = cellPositions(editor.state.doc);
+    const input = cellSelectionInput(editor.state.doc, cells[0], cells[cells.length - 1]);
+    const table = editor.state.doc.child(0);
+    const nodeAt = jest.spyOn(table, 'nodeAt');
+    const toJSON = jest.spyOn(table, 'toJSON');
+
+    const result = mapFeedbackSelection(input);
+
+    expect(result).toEqual({
+      kind: 'blocks',
+      authority: 'prosemirror-structural',
+      blockRange: { fromOrdinal: 0, toOrdinal: 0 },
+      focusText: '[table]',
+      reason: 'large-table-selection',
+    });
+    expect(nodeAt).not.toHaveBeenCalled();
+    expect(toJSON).not.toHaveBeenCalled();
     editor.destroy();
   });
 
@@ -445,6 +511,50 @@ describe('typed Feedback selection mapping', () => {
     editor.destroy();
   });
 
+  it('validates persisted cell metadata without expanding cell geometry', () => {
+    const editor = createEditor(rectangularTable(4, 4));
+    const table = editor.state.doc.child(0);
+    const tableFingerprint = fingerprintFeedbackTable({
+      version: 1,
+      tableOrdinal: 0,
+      table,
+    }).fingerprint;
+    const nodeAt = jest.spyOn(table, 'nodeAt');
+
+    expect(
+      isFeedbackCellTargetValid(editor.state.doc, {
+        version: 1,
+        tableOrdinal: 0,
+        rectangle: { top: 1, left: 1, bottom: 3, right: 3 },
+        tableFingerprint,
+      })
+    ).toBe(true);
+    expect(nodeAt).not.toHaveBeenCalled();
+    editor.destroy();
+  });
+
+  it('caches top-level table offsets for repeated resolution against one immutable document', () => {
+    const editor = createEditor(rectangularTable(4, 4));
+    const table = editor.state.doc.child(0);
+    const tableFingerprint = fingerprintFeedbackTable({
+      version: 1,
+      tableOrdinal: 0,
+      table,
+    }).fingerprint;
+    const forEach = jest.spyOn(editor.state.doc, 'forEach');
+    const target = {
+      version: 1 as const,
+      tableOrdinal: 0,
+      rectangle: { top: 1, left: 1, bottom: 3, right: 3 },
+      tableFingerprint,
+    };
+
+    expect(resolveFeedbackCellTarget(editor.state.doc, target).kind).toBe('cells');
+    expect(resolveFeedbackCellTarget(editor.state.doc, target).kind).toBe('cells');
+    expect(forEach).toHaveBeenCalledTimes(1);
+    editor.destroy();
+  });
+
   it('fails closed when persisted cell metadata has a stale fingerprint or invalid bounds', () => {
     const editor = createEditor(rectangularTable(2, 2));
     const tableFingerprint = fingerprintFeedbackTable({
@@ -469,6 +579,25 @@ describe('typed Feedback selection mapping', () => {
         tableFingerprint,
       })
     ).toEqual({ kind: 'fallback' });
+    editor.destroy();
+  });
+
+  it('rejects an oversized persisted cell rectangle before fingerprint or cell traversal', () => {
+    const editor = createEditor(rectangularTable(17, 16));
+    const table = editor.state.doc.child(0);
+    const nodeAt = jest.spyOn(table, 'nodeAt');
+    const toJSON = jest.spyOn(table, 'toJSON');
+
+    expect(
+      resolveFeedbackCellTarget(editor.state.doc, {
+        version: 1,
+        tableOrdinal: 0,
+        rectangle: { top: 0, left: 0, bottom: 17, right: 16 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      })
+    ).toEqual({ kind: 'fallback' });
+    expect(nodeAt).not.toHaveBeenCalled();
+    expect(toJSON).not.toHaveBeenCalled();
     editor.destroy();
   });
 

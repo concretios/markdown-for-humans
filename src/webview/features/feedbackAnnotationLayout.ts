@@ -33,6 +33,12 @@ export interface FeedbackAnnotationLayoutItem {
   cardVisible?: boolean;
   /** Optional caller-selected top, used when a card must avoid covering its target. */
   preferredCardTop?: number;
+  /**
+   * Keep the active card at `preferredCardTop`, subject only to `topBound`.
+   * Earlier nonactive cards pack upward and may overflow above `topBound`;
+   * later cards pack downward and contribute to normal EOF overflow.
+   */
+  pinPreferredCardTop?: boolean;
 }
 
 /** Complete numeric input for a single annotation layout pass. */
@@ -177,11 +183,20 @@ function validateInput(input: FeedbackAnnotationLayoutInput): ValidatedItem[] {
     if (item.preferredCardTop !== undefined) {
       assertFinite(`items[${index}].preferredCardTop`, item.preferredCardTop);
     }
+    if (item.pinPreferredCardTop !== undefined && typeof item.pinPreferredCardTop !== 'boolean') {
+      throw new TypeError(`items[${index}].pinPreferredCardTop must be boolean.`);
+    }
+    if (item.pinPreferredCardTop === true && item.preferredCardTop === undefined) {
+      throw new TypeError(`items[${index}] cannot pin a missing preferredCardTop.`);
+    }
     return { ...item, numericId };
   });
 
   if (input.activeId !== undefined && !identifiers.has(input.activeId)) {
     throw new TypeError(`Active Feedback annotation does not exist: ${input.activeId}`);
+  }
+  if (validated.some(item => item.pinPreferredCardTop === true && item.id !== input.activeId)) {
+    throw new TypeError('Only the active Feedback annotation may pin preferredCardTop.');
   }
   return validated;
 }
@@ -253,6 +268,10 @@ function packCards(
 
   const activeIndex = activeId ? drafts.findIndex(candidate => candidate.item.id === activeId) : -1;
   const pivotIndex = activeIndex >= 0 ? activeIndex : 0;
+  const pinsActiveTop = activeIndex >= 0 && drafts[activeIndex]!.item.pinPreferredCardTop === true;
+  if (pinsActiveTop) {
+    drafts[activeIndex]!.top = Math.max(topBound, drafts[activeIndex]!.preferredTop);
+  }
 
   for (let index = pivotIndex - 1; index >= 0; index -= 1) {
     const current = drafts[index]!;
@@ -272,6 +291,8 @@ function packCards(
     );
     current.top = Math.max(current.preferredTop, packedTop);
   }
+
+  if (pinsActiveTop) return drafts;
 
   drafts[0]!.top = Math.max(topBound, drafts[0]!.top);
   for (let index = 1; index < drafts.length; index += 1) {
@@ -327,7 +348,9 @@ function buildConnector(
 
 /**
  * Lay out Feedback annotations with one `O(c log c)` sort followed by linear
- * clustering, active-pivot packing, and connector construction.
+ * clustering, active-pivot packing, and connector construction. An explicitly
+ * pinned active card remains fixed while preceding nonactive cards absorb any
+ * top overflow; unpinned layouts retain the normal top-down bound pass.
  *
  * @throws {TypeError} When stable identities are malformed or duplicated.
  * @throws {RangeError} When any measured geometry is invalid or non-finite.

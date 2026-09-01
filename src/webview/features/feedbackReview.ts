@@ -20,7 +20,19 @@ import type {
   FeedbackRenderedRangeInputV1,
   FeedbackWebviewMessage,
 } from '../../shared/feedbackProtocol';
-import { FEEDBACK_ERROR_CODES } from '../../shared/feedbackProtocol';
+import {
+  FEEDBACK_ERROR_CODES,
+  FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION,
+  isFeedbackCellRectangleWithinExactLimit,
+} from '../../shared/feedbackProtocol';
+import {
+  FEEDBACK_MAX_TEXTUAL_EVIDENCE_BYTES_V2,
+  feedbackUtf8ByteLengthV2,
+  parseFeedbackRendererEvidenceV2,
+  sanitizeFeedbackLanguageV2,
+  type FeedbackRendererEvidenceV2,
+  type FeedbackRendererTargetV2,
+} from '../../shared/feedbackEvidenceV2';
 import { serializeBlockMarkdown } from '../utils/markdownSerialization';
 import {
   FEEDBACK_COMMENTS_PANEL_ID,
@@ -40,6 +52,15 @@ import {
   type FeedbackAnnotationController,
   type FeedbackAnnotationTarget,
 } from './feedbackAnnotations';
+import {
+  createFeedbackBlockActionTargetResolver,
+  createFeedbackBlockActionView,
+  createFeedbackBlockElementIndex,
+  type FeedbackBlockActionTargetResolver,
+  type FeedbackBlockActionView,
+  type FeedbackBlockElementIndex,
+  type FeedbackBlockElementTarget,
+} from './feedbackBlockAction';
 import { FEEDBACK_SESSION_ENDED_EVENT } from './feedbackCapture';
 import {
   createFeedbackDiscardDialog,
@@ -47,17 +68,64 @@ import {
 } from './feedbackDiscardDialog';
 import {
   feedbackFocusForBlockRange,
+  feedbackTopLevelOrdinalForDomNode,
   getFeedbackTargetFromDomRange,
   getFeedbackTargetFromProseMirrorSelection,
   resolveFeedbackRenderedRange,
 } from './feedbackRenderedRange';
-import { mapFeedbackSelection, resolveFeedbackCellTarget } from './feedbackSelectionMapping';
+import {
+  buildFeedbackTableCellEvidence,
+  fingerprintFeedbackTable,
+  isFeedbackCellTargetValid,
+  mapFeedbackSelection,
+  resolveFeedbackCellTarget,
+} from './feedbackSelectionMapping';
+import {
+  createFeedbackTargetPresentationView,
+  formatFeedbackTargetSourceLines,
+  getFeedbackTargetPresentation,
+  type FeedbackTargetPresentationReason,
+} from './feedbackTargetPresentation';
 
 type FeedbackMarkdownSerializer = {
   serialize?: (json: JSONContent) => string;
 };
 
 type FeedbackDraftBannerMode = 'saved' | 'active-owner' | 'active-peer';
+type FeedbackComposerSize = 'compact' | 'wide';
+
+const FEEDBACK_COMPOSER_INPUT_MIN_HEIGHT = 96;
+const FEEDBACK_COMPOSER_INPUT_MAX_HEIGHT = 420;
+const FEEDBACK_COMPOSER_INPUT_VIEWPORT_RATIO = 0.4;
+const FEEDBACK_COMPOSER_COMPACT_WIDTH = 320;
+const FEEDBACK_COMPOSER_WIDE_WIDTH = 480;
+
+/**
+ * Keeps feedback text fields readable without letting them consume the viewport.
+ * Returns whether annotation geometry can have changed.
+ */
+function resizeFeedbackInput(field: HTMLTextAreaElement): boolean {
+  const previousHeight = field.style.height;
+  const previousOverflow = field.style.overflowY;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+  const maximumHeight = Math.max(
+    FEEDBACK_COMPOSER_INPUT_MIN_HEIGHT,
+    Math.min(
+      FEEDBACK_COMPOSER_INPUT_MAX_HEIGHT,
+      Math.floor(viewportHeight * FEEDBACK_COMPOSER_INPUT_VIEWPORT_RATIO)
+    )
+  );
+  field.style.height = 'auto';
+  const contentHeight = field.scrollHeight || FEEDBACK_COMPOSER_INPUT_MIN_HEIGHT;
+  const nextHeight = `${Math.max(
+    FEEDBACK_COMPOSER_INPUT_MIN_HEIGHT,
+    Math.min(contentHeight, maximumHeight)
+  )}px`;
+  const nextOverflow = contentHeight > maximumHeight ? 'auto' : 'hidden';
+  field.style.height = nextHeight;
+  field.style.overflowY = nextOverflow;
+  return previousHeight !== nextHeight || previousOverflow !== nextOverflow;
+}
 
 interface FeedbackDraftBannerOptions {
   mode?: FeedbackDraftBannerMode;
@@ -92,6 +160,8 @@ export interface FeedbackAnchorView {
 
 export interface FeedbackSessionView {
   sessionId: string;
+  /** Runtime capture contract. Omitted only by legacy adapters and fixtures. */
+  evidenceVersion?: 2;
   source: string;
   sourceSha256: string;
   round: string;
@@ -107,13 +177,131 @@ export interface FeedbackTextTarget {
   startLine: number;
   endLine: number;
   renderedRange?: FeedbackRenderedRangeInputV1;
-  /** Draft-only structural metadata for a rectangular table-cell selection. */
+  /** Versioned rendered-table locator for a rectangular table-cell selection. */
   cellTarget?: {
     version: 1;
     tableOrdinal: number;
     rectangle: { top: number; left: number; bottom: number; right: number };
     tableFingerprint: string;
   };
+  /** Renderer-only reason used to explain honest whole-block fallbacks. */
+  presentationReason?: FeedbackTargetPresentationReason;
+}
+
+export interface FeedbackRendererCaptureV2 {
+  readonly target: FeedbackRendererTargetV2;
+  readonly evidence?: FeedbackRendererEvidenceV2;
+}
+
+function feedbackSemanticEvidenceV2(focus: string): FeedbackRendererEvidenceV2 | undefined {
+  if (feedbackUtf8ByteLengthV2(focus) > FEEDBACK_MAX_TEXTUAL_EVIDENCE_BYTES_V2) return undefined;
+  return (
+    parseFeedbackRendererEvidenceV2({
+      kind: 'semantic-text',
+      text: focus,
+      complete: true,
+    }) ?? undefined
+  );
+}
+
+/** Build the bounded renderer-only v2 intent at the explicit submit boundary. */
+export function buildFeedbackRendererCaptureV2(
+  editor: Editor,
+  target: FeedbackTextTarget
+): FeedbackRendererCaptureV2 {
+  if (target.cellTarget) {
+    const candidateEvidence = buildFeedbackTableCellEvidence(editor.state.doc, target.cellTarget);
+    const evidence = parseFeedbackRendererEvidenceV2(candidateEvidence);
+    if (evidence) {
+      return {
+        target: {
+          version: 2,
+          requestedScope: 'table-cells',
+          locator: { kind: 'table-cells', value: target.cellTarget },
+        },
+        evidence,
+      };
+    }
+    return {
+      target: {
+        version: 2,
+        requestedScope: 'table-cells',
+        constraint: { reason: 'irregular-table' },
+      },
+      ...(feedbackSemanticEvidenceV2(target.focus) === undefined
+        ? {}
+        : { evidence: feedbackSemanticEvidenceV2(target.focus) }),
+    };
+  }
+
+  if (target.renderedRange) {
+    const node =
+      target.startOrdinal === target.endOrdinal
+        ? editor.state.doc.maybeChild(target.startOrdinal)
+        : null;
+    const language =
+      node?.type.name === 'codeBlock'
+        ? sanitizeFeedbackLanguageV2(node.attrs?.language)
+        : undefined;
+    const evidence = parseFeedbackRendererEvidenceV2({
+      kind: 'rendered-text',
+      text: target.focus,
+      complete: true,
+      ...(language === undefined ? {} : { language }),
+    });
+    if (evidence) {
+      return {
+        target: {
+          version: 2,
+          requestedScope: 'rendered-text',
+          locator: { kind: 'rendered-range', value: target.renderedRange },
+        },
+        evidence,
+      };
+    }
+    return {
+      target: {
+        version: 2,
+        requestedScope: 'rendered-text',
+        constraint: { reason: 'unsupported-block' },
+      },
+    };
+  }
+
+  const rendererFallback = (
+    requestedScope: 'rendered-text' | 'table-cells' | 'visual-region',
+    reason:
+      | 'opaque-node'
+      | 'unmappable-range'
+      | 'merged-cells'
+      | 'irregular-table'
+      | 'item-cell-limit'
+      | 'session-cell-budget'
+  ): FeedbackRendererCaptureV2 => {
+    const evidence = feedbackSemanticEvidenceV2(target.focus);
+    return {
+      target: { version: 2, requestedScope, constraint: { reason } } as FeedbackRendererTargetV2,
+      ...(evidence === undefined ? {} : { evidence }),
+    };
+  };
+
+  switch (target.presentationReason) {
+    case 'opaque-node':
+      return rendererFallback('visual-region', 'opaque-node');
+    case 'unmappable-dom':
+    case 'unmappable-text-range':
+      return rendererFallback('rendered-text', 'unmappable-range');
+    case 'merged-table-cells':
+      return rendererFallback('table-cells', 'merged-cells');
+    case 'irregular-table':
+      return rendererFallback('table-cells', 'irregular-table');
+    case 'large-table-selection':
+      return rendererFallback('table-cells', 'item-cell-limit');
+    case 'session-cell-budget':
+      return rendererFallback('table-cells', 'session-cell-budget');
+    default:
+      return { target: { version: 2, requestedScope: 'blocks' } };
+  }
 }
 
 export type FeedbackDraftSurfaceKind =
@@ -149,11 +337,16 @@ export interface FeedbackDraftSurfaceGate {
  * Creates one session-scoped owner for all incomplete Feedback surfaces. A
  * blocked action focuses the current owner instead of replacing its draft.
  */
-export function createFeedbackDraftSurfaceGate(): FeedbackDraftSurfaceGate {
+export function createFeedbackDraftSurfaceGate(
+  onOwnerChange: (active: boolean) => void = () => undefined
+): FeedbackDraftSurfaceGate {
   let active: { token: symbol; surface: FeedbackDraftSurface } | null = null;
 
   const current = (): typeof active => {
-    if (active?.surface.element && !active.surface.element.isConnected) active = null;
+    if (active?.surface.element && !active.surface.element.isConnected) {
+      active = null;
+      onOwnerChange(false);
+    }
     return active;
   };
   const focusActive = (): boolean => {
@@ -168,6 +361,7 @@ export function createFeedbackDraftSurfaceGate(): FeedbackDraftSurfaceGate {
       if (focusActive()) return null;
       const token = Symbol(surface.kind);
       active = { token, surface };
+      onOwnerChange(true);
       let released = false;
       return {
         update(nextSurface) {
@@ -176,7 +370,10 @@ export function createFeedbackDraftSurfaceGate(): FeedbackDraftSurfaceGate {
         release() {
           if (released) return;
           released = true;
-          if (active?.token === token) active = null;
+          if (active?.token === token) {
+            active = null;
+            onOwnerChange(false);
+          }
         },
       };
     },
@@ -184,7 +381,9 @@ export function createFeedbackDraftSurfaceGate(): FeedbackDraftSurfaceGate {
     hasActive: () => current() !== null,
     activeKind: () => current()?.surface.kind ?? null,
     clear: () => {
+      const hadOwner = active !== null;
       active = null;
+      if (hadOwner) onOwnerChange(false);
     },
   };
 }
@@ -329,6 +528,12 @@ const FEEDBACK_INTERACTIVE_NODE_SELECTOR = [
   '.md4h-math-block',
 ].join(',');
 
+const FEEDBACK_REVIEW_ACTION_SELECTOR = [
+  '[data-feedback-action]',
+  '[data-feedback-selection-action]',
+  '[data-feedback-block-action]',
+].join(',');
+
 const FEEDBACK_NODE_VIEW_EVENTS = [
   'pointerdown',
   'click',
@@ -382,13 +587,17 @@ function normalizeFeedbackBlockKind(kind: string): string {
     case 'taskList':
       return 'list';
     case 'codeBlock':
-    case 'mermaid':
       return 'code';
+    case 'mermaid':
+      return 'mermaid';
     case 'mathBlock':
-      return 'paragraph';
+      return 'math';
     case 'blockquote':
-    case 'githubAlert':
       return 'blockquote';
+    case 'githubAlert':
+      return 'alert';
+    case 'horizontalRule':
+      return 'horizontal-rule';
     case 'table':
       return 'table';
     case 'image':
@@ -422,7 +631,8 @@ export function enumerateCanonicalFeedbackBlocks(editor: Editor): CanonicalFeedb
   const doc = editor.state.doc;
 
   for (let ordinal = 0; ordinal < doc.childCount; ordinal += 1) {
-    const node = doc.child(ordinal) as unknown as {
+    const frozenNode = doc.child(ordinal);
+    const node = frozenNode as unknown as {
       type: { name: string };
       content?: { size: number };
       nodeSize?: number;
@@ -433,14 +643,21 @@ export function enumerateCanonicalFeedbackBlocks(editor: Editor): CanonicalFeedb
     if (markdown === '') {
       continue;
     }
+    const kind = normalizeFeedbackBlockKind(node.type.name);
+    const tableFingerprint =
+      kind === 'table'
+        ? fingerprintFeedbackTable({ version: 1, tableOrdinal: ordinal, table: frozenNode })
+            .fingerprint
+        : undefined;
     blocks.push({
       ordinal,
-      kind: normalizeFeedbackBlockKind(node.type.name),
+      kind,
       markdown,
       contentSize:
         typeof node.content?.size === 'number'
           ? node.content.size
           : Math.max(0, (node.nodeSize ?? 2) - 2),
+      ...(tableFingerprint === undefined ? {} : { tableFingerprint }),
     });
   }
 
@@ -471,22 +688,50 @@ function compareFeedbackIds(left: string, right: string): number {
   return Number(left.slice(1)) - Number(right.slice(1));
 }
 
-function canonicalClusterKey(ids: readonly string[]): string {
-  return [...ids].sort(compareFeedbackIds).join(',');
+interface FeedbackExactCellBudgetAllocation {
+  readonly retainedIds: ReadonlySet<string>;
+  readonly usedCellCount: number;
+  readonly overflowed: boolean;
 }
 
-function topLevelOrdinalForNode(root: HTMLElement, node: Node | null): number | null {
-  let element =
-    node instanceof HTMLElement
-      ? node
-      : node?.parentElement instanceof HTMLElement
-        ? node.parentElement
-        : null;
-  while (element && element.parentElement !== root) {
-    element = element.parentElement;
+function feedbackCellRectangleArea(rectangle: {
+  top: number;
+  left: number;
+  bottom: number;
+  right: number;
+}): number | null {
+  if (!isFeedbackCellRectangleWithinExactLimit(rectangle)) return null;
+  return (rectangle.bottom - rectangle.top) * (rectangle.right - rectangle.left);
+}
+
+/**
+ * Retains a stable ID-ordered prefix of exact cell locators. Once a valid
+ * locator crosses the aggregate cap, that locator and all later IDs use their
+ * safe containing-table semantics instead of performing per-cell work.
+ */
+function allocateFeedbackExactCellBudget(
+  items: readonly FeedbackItemSummary[]
+): FeedbackExactCellBudgetAllocation {
+  const retainedIds = new Set<string>();
+  let usedCellCount = 0;
+  let overflowed = false;
+  const candidates = [...items].sort((left, right) => compareFeedbackIds(left.id, right.id));
+  for (const item of candidates) {
+    if (item.kind !== 'text' || !item.cellTarget) continue;
+    const cellCount = feedbackCellRectangleArea(item.cellTarget.rectangle);
+    if (cellCount === null) continue;
+    if (overflowed || usedCellCount > FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION - cellCount) {
+      overflowed = true;
+      continue;
+    }
+    retainedIds.add(item.id);
+    usedCellCount += cellCount;
   }
-  if (!element || element.parentElement !== root) return null;
-  return Array.prototype.indexOf.call(root.children, element) as number;
+  return { retainedIds, usedCellCount, overflowed };
+}
+
+function canonicalClusterKey(ids: readonly string[]): string {
+  return [...ids].sort(compareFeedbackIds).join(',');
 }
 
 function nativeSelectionHasConnectedEndpoints(selection: Selection | null): selection is Selection {
@@ -533,6 +778,7 @@ export function getFeedbackSelectionTarget(
   const hasNativeSelection = nativeSelectionInside && nativeSelectionHasText(nativeSelection);
   let renderedRange: FeedbackRenderedRangeInputV1 | undefined;
   let renderedFocus: string | undefined;
+  let presentationReason: FeedbackTargetPresentationReason | undefined;
 
   if (editor.state.selection instanceof CellSelection) {
     const structuralTarget = mapFeedbackSelection({
@@ -566,7 +812,7 @@ export function getFeedbackSelectionTarget(
               tableFingerprint: structuralTarget.tableFingerprint,
             },
           }
-        : {}),
+        : { presentationReason: structuralTarget.reason }),
     };
   }
 
@@ -589,9 +835,10 @@ export function getFeedbackSelectionTarget(
           mappedOrdinals.has(renderedTarget.startOrdinal) &&
           mappedOrdinals.has(renderedTarget.endOrdinal)
         ) {
-          renderedFocus = renderedTarget.focus;
           startOrdinal = renderedTarget.startOrdinal;
           endOrdinal = renderedTarget.endOrdinal;
+          renderedFocus = feedbackFocusForBlockRange(editor, startOrdinal, endOrdinal);
+          presentationReason = renderedTarget.reason;
         }
       } catch {
         // Legacy NodeViews and lightweight fixtures can expose a native
@@ -600,8 +847,8 @@ export function getFeedbackSelectionTarget(
       }
     }
     if (startOrdinal < 0) {
-      const anchorOrdinal = topLevelOrdinalForNode(editorDom, nativeSelection.anchorNode);
-      const focusOrdinal = topLevelOrdinalForNode(editorDom, nativeSelection.focusNode);
+      const anchorOrdinal = feedbackTopLevelOrdinalForDomNode(editor, nativeSelection.anchorNode);
+      const focusOrdinal = feedbackTopLevelOrdinalForDomNode(editor, nativeSelection.focusNode);
       if (
         anchorOrdinal !== null &&
         focusOrdinal !== null &&
@@ -610,6 +857,14 @@ export function getFeedbackSelectionTarget(
       ) {
         startOrdinal = Math.min(anchorOrdinal, focusOrdinal);
         endOrdinal = Math.max(anchorOrdinal, focusOrdinal);
+        presentationReason = 'unmappable-dom';
+        try {
+          const semanticFocus = feedbackFocusForBlockRange(editor, startOrdinal, endOrdinal);
+          if (semanticFocus.trim().length > 0) renderedFocus = semanticFocus;
+        } catch {
+          // Lightweight adapters may expose only DOM endpoints. The block
+          // scope remains explicit even when semantic Focus is unavailable.
+        }
       }
     }
   } else if (hasConnectedNativeEndpoints) {
@@ -623,6 +878,11 @@ export function getFeedbackSelectionTarget(
       if (renderedTarget?.kind === 'inline') {
         renderedRange = renderedTarget.range;
         renderedFocus = renderedTarget.focus;
+      } else if (renderedTarget?.kind === 'block') {
+        startOrdinal = renderedTarget.startOrdinal;
+        endOrdinal = renderedTarget.endOrdinal;
+        renderedFocus = feedbackFocusForBlockRange(editor, startOrdinal, endOrdinal);
+        presentationReason = renderedTarget.reason;
       }
     } catch {
       // Fall through to the existing containing-block mapping when a custom
@@ -656,6 +916,7 @@ export function getFeedbackSelectionTarget(
     startLine: startAnchor?.startLine ?? 0,
     endLine: endAnchor?.endLine ?? 0,
     ...(renderedRange ? { renderedRange } : {}),
+    ...(presentationReason ? { presentationReason } : {}),
   };
 }
 
@@ -668,7 +929,11 @@ export function createFeedbackReviewController(options: {
   const { editor, host, onReadOnlyChange } = options;
   const editorDom = editor.view.dom as HTMLElement;
   const editorContainer = editorDom.closest<HTMLElement>('#editor') ?? editorDom.parentElement;
-  const draftSurfaceGate = createFeedbackDraftSurfaceGate();
+  const formattingToolbar = document.querySelector<HTMLElement>('.formatting-toolbar');
+  let updateBlockActionForDraftSurface = (_active: boolean): void => undefined;
+  const draftSurfaceGate = createFeedbackDraftSurfaceGate(active =>
+    updateBlockActionForDraftSurface(active)
+  );
   let session: FeedbackSessionView | null = null;
   let invalidated = false;
   let commentsState: FeedbackCommentsState = 'collapsed';
@@ -692,8 +957,19 @@ export function createFeedbackReviewController(options: {
   let pendingButton: HTMLButtonElement | null = null;
   let pendingButtonTarget: FeedbackTextTarget | null = null;
   let pendingSelectionRange: Range | null = null;
+  let blockActionView: FeedbackBlockActionView | null = null;
+  let blockElementIndex: FeedbackBlockElementIndex | null = null;
+  let blockTargetResolver: FeedbackBlockActionTargetResolver | null = null;
+  let hoveredBlockTarget: FeedbackBlockElementTarget | null = null;
+  let visibleBlockOrdinal: number | null = null;
+  let pendingBlockHoverNode: Node | null = null;
+  let blockHoverFrame: number | null = null;
+  let blockLeaveTimer: number | null = null;
+  let blockPointerSelecting = false;
+  let blockActionPointerInside = false;
   let composer: HTMLElement | null = null;
   let composerTarget: FeedbackTextTarget | null = null;
+  let resizeComposerInputForViewport: (() => void) | null = null;
   let composerDraftSurface: FeedbackDraftSurfaceLease | null = null;
   let composerDiscardDialog: FeedbackDiscardDialogController | null = null;
   let editDraft: FeedbackEditDraft | null = null;
@@ -788,6 +1064,27 @@ export function createFeedbackReviewController(options: {
     });
   };
 
+  const constrainCellTargetToSessionBudget = (target: FeedbackTextTarget): FeedbackTextTarget => {
+    if (!session || !target.cellTarget) return target;
+    const allocation = allocateFeedbackExactCellBudget(session.items);
+    const cellCount = feedbackCellRectangleArea(target.cellTarget.rectangle);
+    if (
+      cellCount !== null &&
+      !allocation.overflowed &&
+      allocation.usedCellCount <= FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION - cellCount
+    ) {
+      return target;
+    }
+    return {
+      startOrdinal: target.startOrdinal,
+      endOrdinal: target.endOrdinal,
+      focus: '[table]',
+      startLine: target.startLine,
+      endLine: target.endLine,
+      presentationReason: 'session-cell-budget',
+    };
+  };
+
   const buildAnnotationTargets = (): FeedbackAnnotationTarget[] => {
     if (!session) {
       unresolvedRenderedRangeIds = new Set();
@@ -799,18 +1096,20 @@ export function createFeedbackReviewController(options: {
     const nextUnresolvedRenderedRangeIds = new Set<string>();
     const nextUnresolvedCellTargetIds = new Set<string>();
     const nextBlockFallbackBracketIds = new Set<string>();
+    const exactCellBudget = allocateFeedbackExactCellBudget(session.items);
     for (const item of session.items) {
       if (item.kind === 'text' && item.cellTarget) {
-        const resolved = resolveFeedbackCellTarget(editor.state.doc, item.cellTarget);
-        if (resolved.kind === 'cells') {
-          for (const cell of resolved.cells) {
-            targets.push({ id: item.id, kind: 'cell', from: cell.from, to: cell.to });
+        if (exactCellBudget.retainedIds.has(item.id)) {
+          const resolved = resolveFeedbackCellTarget(editor.state.doc, item.cellTarget);
+          if (resolved.kind === 'cells') {
+            for (const cell of resolved.cells) {
+              targets.push({ id: item.id, kind: 'cell', from: cell.from, to: cell.to });
+            }
+            continue;
           }
-          continue;
         }
         nextUnresolvedCellTargetIds.add(item.id);
-      }
-      if (item.kind === 'text' && item.renderedRange) {
+      } else if (item.kind === 'text' && item.renderedRange) {
         let resolved = null;
         try {
           resolved = resolveFeedbackRenderedRange(editor, item.renderedRange, item.focus);
@@ -834,7 +1133,19 @@ export function createFeedbackReviewController(options: {
         }
       }
     }
-    if (composerTarget?.renderedRange) {
+    if (composerTarget?.cellTarget) {
+      const pending = resolveFeedbackCellTarget(editor.state.doc, composerTarget.cellTarget);
+      if (pending.kind === 'cells') {
+        for (const cell of pending.cells) {
+          targets.push({
+            id: PENDING_FEEDBACK_ANNOTATION_ID,
+            kind: 'cell',
+            from: cell.from,
+            to: cell.to,
+          });
+        }
+      }
+    } else if (composerTarget?.renderedRange) {
       let pending = null;
       try {
         pending = resolveFeedbackRenderedRange(
@@ -858,6 +1169,41 @@ export function createFeedbackReviewController(options: {
     unresolvedCellTargetIds = nextUnresolvedCellTargetIds;
     blockFallbackBracketIds = nextBlockFallbackBracketIds;
     return targets;
+  };
+
+  /**
+   * Refreshes only the exact-locator degradation evidence needed by Finish.
+   * It deliberately does not allocate cell boundaries or mutate decorations.
+   */
+  const refreshUnresolvedLocatorValidity = (): void => {
+    if (!session) {
+      unresolvedRenderedRangeIds = new Set();
+      unresolvedCellTargetIds = new Set();
+      return;
+    }
+    const nextUnresolvedRenderedRangeIds = new Set<string>();
+    const nextUnresolvedCellTargetIds = new Set<string>();
+    const exactCellBudget = allocateFeedbackExactCellBudget(session.items);
+    for (const item of session.items) {
+      if (item.kind === 'text' && item.cellTarget) {
+        if (
+          !exactCellBudget.retainedIds.has(item.id) ||
+          !isFeedbackCellTargetValid(editor.state.doc, item.cellTarget)
+        ) {
+          nextUnresolvedCellTargetIds.add(item.id);
+        }
+      } else if (item.kind === 'text' && item.renderedRange) {
+        let resolved = null;
+        try {
+          resolved = resolveFeedbackRenderedRange(editor, item.renderedRange, item.focus);
+        } catch {
+          // The exact rendered locator is unavailable at the Finish boundary.
+        }
+        if (!resolved) nextUnresolvedRenderedRangeIds.add(item.id);
+      }
+    }
+    unresolvedRenderedRangeIds = nextUnresolvedRenderedRangeIds;
+    unresolvedCellTargetIds = nextUnresolvedCellTargetIds;
   };
 
   const syncAnnotationDecorations = (): void => {
@@ -1187,6 +1533,274 @@ export function createFeedbackReviewController(options: {
     pendingSelectionRange = null;
   };
 
+  const clearBlockLeaveTimer = (): void => {
+    if (blockLeaveTimer === null) return;
+    window.clearTimeout(blockLeaveTimer);
+    blockLeaveTimer = null;
+  };
+
+  const hideBlockAction = (clearHover = false): void => {
+    if (clearHover) hoveredBlockTarget = null;
+    visibleBlockOrdinal = null;
+    blockActionView?.hide();
+  };
+
+  const destroyBlockAction = (): void => {
+    clearBlockLeaveTimer();
+    if (blockHoverFrame !== null) {
+      if (blockHoverFrame >= 0) cancelAnimationFrame(blockHoverFrame);
+      blockHoverFrame = null;
+    }
+    pendingBlockHoverNode = null;
+    hoveredBlockTarget = null;
+    visibleBlockOrdinal = null;
+    blockPointerSelecting = false;
+    blockActionPointerInside = false;
+    blockActionView?.destroy();
+    blockActionView = null;
+    blockElementIndex = null;
+    blockTargetResolver = null;
+  };
+
+  /**
+   * Resolve a canonical top-level block without treating direct DOM children as
+   * document ordinals. The narrow fallback exists only before a session builds
+   * its index and for lightweight editor fixtures without EditorView.nodeDOM.
+   */
+  const feedbackBlockElementForOrdinal = (ordinal: number): HTMLElement | null => {
+    if (blockElementIndex) return blockElementIndex.elementForOrdinal(ordinal);
+    const element = editorDom.children.item(ordinal);
+    return element instanceof HTMLElement && element.parentElement === editorDom ? element : null;
+  };
+
+  const blockActionSelectionIsEligible = (): boolean => {
+    if (
+      !hasWritableSession() ||
+      !session ||
+      !blockActionView ||
+      draftSurfaceGate.hasActive() ||
+      composer ||
+      editDraft ||
+      blockSelector ||
+      completionDialog ||
+      captureState !== 'idle' ||
+      annotationsSuspended ||
+      blockPointerSelecting
+    ) {
+      return false;
+    }
+    const proseMirrorSelection = editor.state.selection;
+    if (proseMirrorSelection instanceof CellSelection || proseMirrorSelection.empty !== true) {
+      return false;
+    }
+    const nativeSelection = window.getSelection();
+    if (nativeSelection?.isCollapsed === false) return false;
+    const anchorConnected = Boolean(nativeSelection?.anchorNode?.isConnected);
+    const focusConnected = Boolean(nativeSelection?.focusNode?.isConnected);
+    if (anchorConnected !== focusConnected) return false;
+    if (
+      anchorConnected &&
+      (!nativeSelectionIsInsideEditor(nativeSelection, editorDom) ||
+        nativeSelection?.isCollapsed !== true)
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  const caretBlockTarget = (): FeedbackBlockElementTarget | null => {
+    if (!blockElementIndex || editor.state.selection.empty !== true) return null;
+    if (document.activeElement === blockActionView?.element && visibleBlockOrdinal !== null) {
+      const element = blockElementIndex.elementForOrdinal(visibleBlockOrdinal);
+      return element ? { ordinal: visibleBlockOrdinal, element } : null;
+    }
+    const nativeSelection = window.getSelection();
+    if (
+      nativeSelectionIsInsideEditor(nativeSelection, editorDom) &&
+      nativeSelection.isCollapsed === true
+    ) {
+      const nativeTarget = blockElementIndex.resolve(nativeSelection.anchorNode);
+      if (nativeTarget) return nativeTarget;
+    }
+    const activeElement = document.activeElement;
+    if (!(activeElement instanceof Element) || !editorDom.contains(activeElement)) return null;
+    const activeTarget = blockElementIndex.resolve(activeElement);
+    if (activeTarget) return activeTarget;
+    const position = editor.state.selection.from;
+    if (!Number.isInteger(position)) return null;
+    let low = 0;
+    let high = feedbackBlockPositions.length - 1;
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const range = feedbackBlockPositions[middle];
+      if (!range || position < range.from) high = middle - 1;
+      else if (position > range.to) low = middle + 1;
+      else {
+        const element = blockElementIndex.elementForOrdinal(middle);
+        return element ? { ordinal: middle, element } : null;
+      }
+    }
+    return null;
+  };
+
+  const showBlockActionFor = (block: FeedbackBlockElementTarget): void => {
+    if (!blockActionSelectionIsEligible() || !blockTargetResolver || !blockActionView) {
+      hideBlockAction();
+      return;
+    }
+    const indexedElement = blockElementIndex?.elementForOrdinal(block.ordinal);
+    const canonicalBlock = blockElementIndex?.resolve(block.element);
+    if (
+      indexedElement !== block.element ||
+      !block.element.isConnected ||
+      block.element.parentElement !== editorDom ||
+      canonicalBlock?.ordinal !== block.ordinal
+    ) {
+      hideBlockAction(true);
+      return;
+    }
+    const target = blockTargetResolver.resolve(block.ordinal);
+    const node = editor.state.doc.maybeChild(block.ordinal);
+    if (!target || !node) {
+      hideBlockAction(true);
+      return;
+    }
+    visibleBlockOrdinal = block.ordinal;
+    blockActionView.show({
+      target,
+      element: block.element,
+      isTable: node.type.name === 'table',
+    });
+  };
+
+  const refreshBlockAction = (): void => {
+    if (!blockActionSelectionIsEligible()) {
+      hideBlockAction();
+      return;
+    }
+    const target = hoveredBlockTarget ?? caretBlockTarget();
+    if (!target) {
+      hideBlockAction();
+      return;
+    }
+    showBlockActionFor(target);
+  };
+
+  updateBlockActionForDraftSurface = active => {
+    if (active) hideBlockAction();
+    else refreshBlockAction();
+  };
+
+  const scheduleBlockHover = (node: Node | null): void => {
+    pendingBlockHoverNode = node;
+    if (!hasWritableSession() || blockHoverFrame !== null) return;
+    blockHoverFrame = -1;
+    const frame = requestAnimationFrame(() => {
+      blockHoverFrame = null;
+      const pendingNode = pendingBlockHoverNode;
+      pendingBlockHoverNode = null;
+      hoveredBlockTarget = blockElementIndex?.resolve(pendingNode) ?? null;
+      if (hoveredBlockTarget) showBlockActionFor(hoveredBlockTarget);
+      else hideBlockAction();
+    });
+    if (blockHoverFrame === -1) blockHoverFrame = frame;
+  };
+
+  const handleBlockPointerOver = (event: PointerEvent): void => {
+    clearBlockLeaveTimer();
+    scheduleBlockHover(event.target instanceof Node ? event.target : null);
+  };
+
+  const handleBlockPointerDown = (event: PointerEvent): void => {
+    if (blockActionView?.contains(event.target instanceof Node ? event.target : null)) return;
+    blockPointerSelecting = true;
+    hideBlockAction();
+  };
+
+  const handleBlockPointerUp = (): void => {
+    if (!blockPointerSelecting) return;
+    blockPointerSelecting = false;
+    scheduleSelectionSample();
+  };
+
+  const scheduleBlockLeave = (): void => {
+    clearBlockLeaveTimer();
+    blockLeaveTimer = window.setTimeout(() => {
+      blockLeaveTimer = null;
+      if (blockActionPointerInside || document.activeElement === blockActionView?.element) return;
+      hoveredBlockTarget = null;
+      refreshBlockAction();
+    }, 80);
+  };
+
+  const handleBlockPointerLeave = (event: PointerEvent): void => {
+    if (
+      blockActionView?.contains(event.relatedTarget instanceof Node ? event.relatedTarget : null)
+    ) {
+      return;
+    }
+    scheduleBlockLeave();
+  };
+
+  const handleReviewResize = (): void => {
+    resizeComposerInputForViewport?.();
+    panel
+      ?.querySelectorAll<HTMLTextAreaElement>('[data-feedback-edit-input]')
+      .forEach(resizeFeedbackInput);
+    scheduleAnnotationLayout();
+    blockActionView?.reposition();
+  };
+
+  const createBlockAction = (): void => {
+    destroyBlockAction();
+    if (!session || !editorContainer || !rail) return;
+    const anchors = session.anchors ?? [];
+    const elementIndex = createFeedbackBlockElementIndex(editor, anchors);
+    blockElementIndex = elementIndex;
+    blockTargetResolver = createFeedbackBlockActionTargetResolver(editor, anchors, elementIndex);
+    blockActionView = createFeedbackBlockActionView({
+      container: editorContainer,
+      before: rail,
+      onActivate: candidate => {
+        const ordinal = candidate.startOrdinal;
+        const element = blockElementIndex?.elementForOrdinal(ordinal) ?? null;
+        const canonicalBlock = blockElementIndex?.resolve(element);
+        if (
+          visibleBlockOrdinal !== ordinal ||
+          !element?.isConnected ||
+          element.parentElement !== editorDom ||
+          canonicalBlock?.ordinal !== ordinal ||
+          !blockActionSelectionIsEligible()
+        ) {
+          hideBlockAction(true);
+          return;
+        }
+        const target = blockTargetResolver?.resolve(ordinal) ?? null;
+        if (!target) {
+          hideBlockAction(true);
+          return;
+        }
+        hideBlockAction();
+        controller.openTextComposer(target);
+      },
+    });
+    blockActionView.element.addEventListener('pointerenter', () => {
+      clearBlockLeaveTimer();
+      blockActionPointerInside = true;
+    });
+    blockActionView.element.addEventListener('pointerleave', () => {
+      blockActionPointerInside = false;
+      scheduleBlockLeave();
+    });
+    blockActionView.element.addEventListener('focusout', event => {
+      if (event.relatedTarget instanceof Node && blockActionView?.contains(event.relatedTarget)) {
+        return;
+      }
+      scheduleBlockLeave();
+    });
+    refreshBlockAction();
+  };
+
   const markActiveItems = (ids: string[]): void => {
     clearActiveTarget();
     annotationController?.setActiveIds(ids);
@@ -1208,8 +1822,8 @@ export function createFeedbackReviewController(options: {
       }
       if (hasExactRenderedTarget) continue;
       for (let ordinal = item.startOrdinal; ordinal <= item.endOrdinal; ordinal += 1) {
-        const element = editorDom.children.item(ordinal);
-        if (element instanceof HTMLElement) {
+        const element = feedbackBlockElementForOrdinal(ordinal);
+        if (element) {
           element.classList.add('feedback-active-target');
           activeTargetElements.push(element);
         }
@@ -1238,7 +1852,7 @@ export function createFeedbackReviewController(options: {
 
     const target = pendingButtonTarget;
     if (!target) return null;
-    const block = editorDom.children.item(target.endOrdinal) as HTMLElement | null;
+    const block = feedbackBlockElementForOrdinal(target.endOrdinal);
     return block?.getBoundingClientRect() ?? null;
   };
 
@@ -1369,6 +1983,7 @@ export function createFeedbackReviewController(options: {
     if (restoreFocus) {
       if (!focusElementWithoutScroll(returnFocus)) focusElementWithoutScroll(editorDom);
     }
+    refreshBlockAction();
   };
 
   const trapCompletionFocus = (
@@ -1457,6 +2072,7 @@ export function createFeedbackReviewController(options: {
 
   const openCompletionCheckpoint = (): void => {
     if (!session) return;
+    hideBlockAction();
     if (completionDialog?.isConnected) {
       focusElementWithoutScroll(
         completionDialog.querySelector<HTMLElement>('[data-feedback-completion-resume]') ??
@@ -1572,7 +2188,19 @@ export function createFeedbackReviewController(options: {
       status.textContent = 'Locking feedback and copying the agent handoff…';
       dialog.focus({ preventScroll: true });
       syncCommentsUi();
-      post({ type: 'feedback.finish', requestId, sessionId: session.sessionId });
+      // The checkpoint can remain open while NodeViews or editor state change.
+      // Refresh only exact-locator validity at the irreversible boundary. The
+      // visible decorations are already installed and must not be rebuilt here.
+      refreshUnresolvedLocatorValidity();
+      const degradedTargetIds = [
+        ...new Set([...unresolvedRenderedRangeIds, ...unresolvedCellTargetIds]),
+      ].sort(compareFeedbackIds);
+      post({
+        type: 'feedback.finish',
+        requestId,
+        sessionId: session.sessionId,
+        ...(degradedTargetIds.length > 0 ? { degradedTargetIds } : {}),
+      });
     });
     dialog.addEventListener('keydown', event => {
       trapCompletionFocus(dialog, event, resumeFeedback);
@@ -1731,7 +2359,9 @@ export function createFeedbackReviewController(options: {
   const markPendingTarget = (target: FeedbackTextTarget): void => {
     clearPendingTarget();
     clearActiveTarget();
-    if (target.renderedRange) {
+    if (target.cellTarget) {
+      if (resolveFeedbackCellTarget(editor.state.doc, target.cellTarget).kind === 'cells') return;
+    } else if (target.renderedRange) {
       try {
         if (resolveFeedbackRenderedRange(editor, target.renderedRange, target.focus)) return;
       } catch {
@@ -1739,8 +2369,8 @@ export function createFeedbackReviewController(options: {
       }
     }
     for (let ordinal = target.startOrdinal; ordinal <= target.endOrdinal; ordinal += 1) {
-      const element = editorDom.children.item(ordinal);
-      if (element instanceof HTMLElement) {
+      const element = feedbackBlockElementForOrdinal(ordinal);
+      if (element) {
         element.classList.add('feedback-pending-target');
         pendingTargetElements.push(element);
       }
@@ -1754,6 +2384,7 @@ export function createFeedbackReviewController(options: {
     if (composer) annotationResizeObserver?.unobserve(composer);
     composerDraftSurface?.release();
     composerDraftSurface = null;
+    resizeComposerInputForViewport = null;
     composer?.remove();
     composer = null;
     composerTarget = null;
@@ -1765,6 +2396,7 @@ export function createFeedbackReviewController(options: {
       restoreFocusTo.focus({ preventScroll: true });
     }
     restoreFocusTo = null;
+    refreshBlockAction();
   };
 
   function focusFeedbackEdit(id: string): void {
@@ -1792,10 +2424,12 @@ export function createFeedbackReviewController(options: {
         ?.querySelector<HTMLButtonElement>(`[data-feedback-edit-action="${id}"]`)
         ?.focus({ preventScroll: true });
     }
+    refreshBlockAction();
   }
 
   function openFeedbackEdit(item: FeedbackItemSummary): void {
     if (!hasWritableSession() || !session) return;
+    hideBlockAction();
     if (editDraft) {
       focusFeedbackEdit(editDraft.id);
       if (editDraft.id !== item.id) {
@@ -1892,32 +2526,36 @@ export function createFeedbackReviewController(options: {
     header.append(heading, collapse);
     panel.append(header);
 
-    const undoStack = createElement('div', 'feedback-undo-stack');
-    for (const deleted of deletedItems.values()) {
-      const undo = createElement('button', 'feedback-undo-delete', `Undo delete ${deleted.id}`);
-      undo.type = 'button';
-      undo.disabled = !hasWritableSession();
-      undo.setAttribute('data-feedback-undo-id', deleted.id);
-      undo.addEventListener('click', () => {
-        if (!hasWritableSession() || !session) return;
-        undo.disabled = true;
-        const requestId = nextRequestId();
-        pendingMutations.set(requestId, { kind: 'restore', id: deleted.id, button: undo });
-        post({
-          type: 'feedback.item.restore',
-          requestId,
-          sessionId: session.sessionId,
-          id: deleted.id,
+    if (!editDraft) {
+      const undoStack = createElement('div', 'feedback-undo-stack');
+      for (const deleted of deletedItems.values()) {
+        const undo = createElement('button', 'feedback-undo-delete', `Undo delete ${deleted.id}`);
+        undo.type = 'button';
+        undo.disabled = !hasWritableSession();
+        undo.setAttribute('data-feedback-undo-id', deleted.id);
+        undo.addEventListener('click', () => {
+          if (!hasWritableSession() || !session) return;
+          undo.disabled = true;
+          const requestId = nextRequestId();
+          pendingMutations.set(requestId, { kind: 'restore', id: deleted.id, button: undo });
+          post({
+            type: 'feedback.item.restore',
+            requestId,
+            sessionId: session.sessionId,
+            id: deleted.id,
+          });
         });
-      });
-      undoStack.append(undo);
+        undoStack.append(undo);
+      }
+      if (undoStack.childElementCount > 0) panel.append(undoStack);
     }
-    if (undoStack.childElementCount > 0) panel.append(undoStack);
 
-    const ordered = [...session.items].sort(
-      (left, right) =>
-        left.startOrdinal - right.startOrdinal || compareFeedbackIds(left.id, right.id)
-    );
+    const ordered = [...session.items]
+      .filter(item => !editDraft || item.id === editDraft.id)
+      .sort(
+        (left, right) =>
+          left.startOrdinal - right.startOrdinal || compareFeedbackIds(left.id, right.id)
+      );
     for (const item of ordered) {
       const card = createElement('article', 'feedback-comment-card');
       card.setAttribute('data-feedback-card', item.id);
@@ -1967,15 +2605,26 @@ export function createFeedbackReviewController(options: {
         'feedback-card-location',
         `${session.source}:${item.startLine}-${item.endLine}`
       );
-      const focusLabel =
+      const exactTargetUnavailable =
+        unresolvedRenderedRangeIds.has(item.id) || unresolvedCellTargetIds.has(item.id);
+      const targetContext =
         item.kind === 'text' && item.focus?.trim()
-          ? createElement('div', 'feedback-card-focus-label', 'Selected text')
+          ? createFeedbackTargetPresentationView({
+              ownerDocument: document,
+              presentation: getFeedbackTargetPresentation(
+                editor.state.doc,
+                exactTargetUnavailable
+                  ? {
+                      startOrdinal: item.startOrdinal,
+                      endOrdinal: item.endOrdinal,
+                      focus: item.focus,
+                      presentationReason: 'unmappable-dom',
+                    }
+                  : item
+              ),
+              focusAttribute: 'data-feedback-card-focus',
+            })
           : null;
-      const focus =
-        item.kind === 'text' && item.focus?.trim()
-          ? createElement('blockquote', 'feedback-card-focus', item.focus)
-          : null;
-      focus?.setAttribute('data-feedback-card-focus', '');
       const body = createElement('p', 'feedback-card-body', item.feedback ?? 'Feedback saved');
       const actions = createElement('div', 'feedback-card-actions');
       let capturePreview: HTMLElement | null = null;
@@ -2068,6 +2717,7 @@ export function createFeedbackReviewController(options: {
         field.addEventListener('input', () => {
           draft.value = field.value;
           refreshSaveState();
+          if (resizeFeedbackInput(field)) scheduleAnnotationLayout();
         });
         cancel.addEventListener('click', () => closeFeedbackEdit());
         form.addEventListener('keydown', event => {
@@ -2108,11 +2758,12 @@ export function createFeedbackReviewController(options: {
         editActions.append(cancel, save);
         form.append(label, field, editActions);
         card.append(title);
-        if (focusLabel && focus) card.append(focusLabel, focus);
+        if (targetContext) card.append(targetContext);
         card.append(location);
         if (capturePreview) card.append(capturePreview);
         card.append(form);
         panel.append(card);
+        resizeFeedbackInput(field);
         continue;
       }
       if (item.kind === 'screenshot') {
@@ -2131,9 +2782,7 @@ export function createFeedbackReviewController(options: {
       }
       actions.append(edit, remove);
       card.append(title);
-      if (focusLabel && focus) {
-        card.append(focusLabel, focus);
-      }
+      if (targetContext) card.append(targetContext);
       card.append(location);
       if (capturePreview) card.append(capturePreview);
       card.append(body, actions);
@@ -2155,6 +2804,8 @@ export function createFeedbackReviewController(options: {
     targetY: number;
     targetStart: number;
     targetEnd: number;
+    targetLeft: number;
+    targetRight: number;
     proseLeft: number;
   }
 
@@ -2353,8 +3004,8 @@ export function createFeedbackReviewController(options: {
     exactElements: readonly HTMLElement[] = []
   ): FeedbackGeometryMeasurement<MeasuredFeedbackTarget> => {
     const cached = lastValidTargetGeometry.get(item.id) ?? null;
-    const startBlock = editorDom.children.item(item.startOrdinal) as HTMLElement | null;
-    const endBlock = editorDom.children.item(item.endOrdinal) as HTMLElement | null;
+    const startBlock = feedbackBlockElementForOrdinal(item.startOrdinal);
+    const endBlock = feedbackBlockElementForOrdinal(item.endOrdinal);
     const blockElements = Array.from(
       new Set([startBlock, endBlock].filter(element => element !== null))
     );
@@ -2394,6 +3045,14 @@ export function createFeedbackReviewController(options: {
       targetStart + 1,
       ...measuredRects.map(rect => rect.bottom - containerBounds.top)
     );
+    const targetLeft = Math.max(
+      0,
+      Math.min(...measuredRects.map(rect => rect.left - containerBounds.left))
+    );
+    const targetRight = Math.min(
+      containerWidth,
+      Math.max(...measuredRects.map(rect => rect.right - containerBounds.left))
+    );
     const firstRect = measuredRects[0];
     const geometry = {
       targetX: Math.min(
@@ -2403,6 +3062,8 @@ export function createFeedbackReviewController(options: {
       targetY: targetStart + (targetEnd - targetStart) / 2,
       targetStart,
       targetEnd,
+      targetLeft,
+      targetRight: Math.max(targetLeft + 1, targetRight),
       proseLeft: Math.max(
         0,
         Math.min(...(blockRects ?? measuredRects).map(rect => rect.left)) - containerBounds.left
@@ -2465,6 +3126,18 @@ export function createFeedbackReviewController(options: {
     }
     const containerBounds = editorContainer.getBoundingClientRect();
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1024;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 768;
+    const viewportTop = Math.max(8, -containerBounds.top);
+    const viewportBottom = viewportHeight - containerBounds.top;
+    const toolbarBounds = formattingToolbar?.getBoundingClientRect();
+    const toolbarSafeTop =
+      toolbarBounds &&
+      toolbarBounds.height > 0 &&
+      toolbarBounds.bottom > 0 &&
+      toolbarBounds.top < viewportHeight
+        ? toolbarBounds.bottom - containerBounds.top + 12
+        : viewportTop + 12;
+    const minimumVisibleSurfaceTop = Math.max(viewportTop + 12, toolbarSafeTop);
     const containerWidth = containerBounds.width || viewportWidth;
     const narrow = containerWidth <= 840;
     const cardLeft = narrow ? 12 : Math.max(12, containerWidth - 364);
@@ -2509,7 +3182,11 @@ export function createFeedbackReviewController(options: {
 
       const card = cardsById.get(item.id);
       const isActive = activeItemId === item.id;
-      const wantsVisibleCard = !composer && commentsState === 'expanded' && (!narrow || isActive);
+      const wantsVisibleCard =
+        !composer &&
+        commentsState === 'expanded' &&
+        (!narrow || isActive) &&
+        (!editDraft || editDraft.id === item.id);
       let compactHeight = lastValidCardHeights.get(`${item.id}:compact`) ?? 1;
       let expandedHeight = lastValidCardHeights.get(`${item.id}:active`) ?? 1;
       let cardVisible = wantsVisibleCard;
@@ -2530,6 +3207,17 @@ export function createFeedbackReviewController(options: {
           }
         }
       }
+      const preferredCardTop =
+        editDraft?.id === item.id && isActive
+          ? Math.min(
+              Math.max(minimumVisibleSurfaceTop, viewportBottom - expandedHeight - 12),
+              Math.max(minimumVisibleSurfaceTop, geometry.targetY - expandedHeight / 2)
+            )
+          : narrow && isActive
+            ? geometry.targetEnd + 12
+            : undefined;
+      const pinPreferredCardTop =
+        editDraft?.id === item.id && isActive && preferredCardTop !== undefined;
       return {
         id: item.id,
         sourceOrder,
@@ -2537,7 +3225,8 @@ export function createFeedbackReviewController(options: {
         compactHeight,
         expandedHeight,
         cardVisible,
-        ...(narrow && isActive ? { preferredCardTop: geometry.targetEnd + 12 } : {}),
+        ...(preferredCardTop === undefined ? {} : { preferredCardTop }),
+        ...(pinPreferredCardTop ? { pinPreferredCardTop: true } : {}),
       };
     });
     const editorBounds = editorDom.getBoundingClientRect();
@@ -2568,13 +3257,25 @@ export function createFeedbackReviewController(options: {
     currentAnnotationLayout = result;
     renderFallbackBrackets(ordered, geometryById);
 
+    let editCardWidthChanged = false;
     for (const placement of result.placements) {
       const card = cardsById.get(placement.id);
       if (!card) continue;
+      const previousWidth = card.style.width;
       card.style.top = `${placement.top}px`;
       card.style.left = `${cardLeft}px`;
       card.style.right = 'auto';
       card.style.width = `${cardWidth}px`;
+      if (previousWidth !== card.style.width) {
+        const editInput = card.querySelector<HTMLTextAreaElement>('[data-feedback-edit-input]');
+        if (editInput) {
+          // The target summary or action chrome can wrap even when the
+          // textarea stays at its minimum height. Measure the complete card
+          // once more after the responsive width has reached the DOM.
+          editCardWidthChanged = true;
+          resizeFeedbackInput(editInput);
+        }
+      }
     }
     const panelHeader = panel.querySelector<HTMLElement>('.feedback-panel-header');
     if (panelHeader) {
@@ -2603,6 +3304,24 @@ export function createFeedbackReviewController(options: {
     let requiredBottom = result.requiredBottom;
 
     if (composer && composerTarget) {
+      const composerSize = composer.dataset.feedbackComposerSize as
+        FeedbackComposerSize | undefined;
+      const availableComposerWidth = Math.max(1, containerWidth - 56);
+      const composerWidth =
+        composerSize === 'wide'
+          ? narrow
+            ? availableComposerWidth
+            : Math.min(FEEDBACK_COMPOSER_WIDE_WIDTH, availableComposerWidth)
+          : Math.min(FEEDBACK_COMPOSER_COMPACT_WIDTH, availableComposerWidth);
+      const composerLeft = Math.max(12, containerWidth - composerWidth - 44);
+      composer.style.left = `${composerLeft}px`;
+      composer.style.right = 'auto';
+      const nextComposerWidth = `${composerWidth}px`;
+      if (composer.style.width !== nextComposerWidth) {
+        composer.style.width = nextComposerWidth;
+        const composerInput = composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]');
+        if (composerInput) resizeFeedbackInput(composerInput);
+      }
       const targetMeasurement = measureFeedbackTarget(
         {
           id: '__composer__',
@@ -2610,7 +3329,8 @@ export function createFeedbackReviewController(options: {
           endOrdinal: composerTarget.endOrdinal,
         },
         containerBounds,
-        containerWidth
+        containerWidth,
+        exactElementsById.get(PENDING_FEEDBACK_ANNOTATION_ID)
       );
       const geometry = targetMeasurement.value;
       if (!geometry) {
@@ -2622,12 +3342,50 @@ export function createFeedbackReviewController(options: {
           layoutIssues.set('__composer__', 'unavailable');
         } else {
           if (!composerHeight.fresh) layoutIssues.set('__composer__', 'stale');
-          const composerTop = Math.max(8, geometry.targetY - 24);
+          const measuredComposerHeight = composerHeight.value;
+          const horizontallyOverlapsTarget =
+            composerSize === 'wide' &&
+            composerLeft < geometry.targetRight &&
+            composerLeft + composerWidth > geometry.targetLeft;
+          const composerAboveTarget = geometry.targetStart - measuredComposerHeight - 12;
+          const composerBelowTarget = geometry.targetEnd + 12;
+          const collisionFreeComposerTop = horizontallyOverlapsTarget
+            ? composerAboveTarget >= 8
+              ? composerAboveTarget
+              : composerBelowTarget
+            : Math.max(8, geometry.targetY - 24);
+          const minimumVisibleComposerTop = minimumVisibleSurfaceTop;
+          const maximumVisibleComposerTop = Math.max(
+            minimumVisibleComposerTop,
+            viewportBottom - measuredComposerHeight - 12
+          );
+          const fitsVisibleViewport = (top: number): boolean =>
+            top >= minimumVisibleComposerTop && top + measuredComposerHeight <= viewportBottom - 12;
+          const targetIntersectsViewport =
+            geometry.targetEnd > viewportTop && geometry.targetStart < viewportBottom;
+          let composerTop = collisionFreeComposerTop;
+          if (!fitsVisibleViewport(composerTop)) {
+            if (horizontallyOverlapsTarget) {
+              const alternateCollisionFreeTop =
+                composerTop === composerAboveTarget ? composerBelowTarget : composerAboveTarget;
+              if (
+                alternateCollisionFreeTop >= 8 &&
+                fitsVisibleViewport(alternateCollisionFreeTop)
+              ) {
+                composerTop = alternateCollisionFreeTop;
+              }
+            }
+            if (!fitsVisibleViewport(composerTop) && targetIntersectsViewport) {
+              // Any active form remains reachable. Wide forms still prefer a
+              // collision-free target edge before this viewport clamp.
+              composerTop = Math.min(
+                maximumVisibleComposerTop,
+                Math.max(minimumVisibleComposerTop, composerTop)
+              );
+            }
+          }
           composer.style.top = `${composerTop}px`;
-          composer.style.left = `${cardLeft}px`;
-          composer.style.right = 'auto';
-          composer.style.width = `${cardWidth}px`;
-          requiredBottom = Math.max(requiredBottom, composerTop + composerHeight.value);
+          requiredBottom = Math.max(requiredBottom, composerTop + measuredComposerHeight);
         }
       }
     }
@@ -2635,6 +3393,7 @@ export function createFeedbackReviewController(options: {
     if (annotationSpacer) {
       annotationSpacer.style.height = `${Math.max(0, requiredBottom - documentBottom)}px`;
     }
+    if (editCardWidthChanged) scheduleAnnotationLayout();
     renderAnnotationLayoutAlert(layoutIssues);
     return result;
   };
@@ -2735,11 +3494,11 @@ export function createFeedbackReviewController(options: {
     const focusedUndoId = focusedElement
       ?.closest<HTMLElement>('[data-feedback-undo-id]')
       ?.getAttribute('data-feedback-undo-id');
-    renderCards();
     // Decoration transactions are synchronous. Install the exact rendered
-    // targets before measuring so the initial layout does not need a second
-    // full geometry pass merely to discover their DOM.
+    // targets and resolve any fallbacks before rendering cards or measuring.
+    // This keeps the card's target description aligned with the document.
     syncAnnotationDecorations();
+    renderCards();
     const layout = calculateAnnotationLayout();
     if (activeItemId) activeItemIds = clusterIdsForItem(activeItemId);
     const itemById = new Map(session.items.map(item => [item.id, item]));
@@ -2886,7 +3645,10 @@ export function createFeedbackReviewController(options: {
 
   const handleSelectionChange = (): void => {
     removePendingButton();
-    if (!hasWritableSession() || !session || composer) return;
+    if (!hasWritableSession() || !session || composer) {
+      hideBlockAction();
+      return;
+    }
     const nativeSelection = window.getSelection();
     const hasStructuralCellSelection = editor.state.selection instanceof CellSelection;
     if (
@@ -2894,10 +3656,13 @@ export function createFeedbackReviewController(options: {
       (!nativeSelectionIsInsideEditor(nativeSelection, editorDom) ||
         !nativeSelectionHasText(nativeSelection))
     ) {
+      refreshBlockAction();
       return;
     }
-    const target = getFeedbackSelectionTarget(editor, session.anchors ?? []);
-    if (!target) return;
+    hideBlockAction();
+    const selectedTarget = getFeedbackSelectionTarget(editor, session.anchors ?? []);
+    if (!selectedTarget) return;
+    const target = constrainCellTargetToSessionBudget(selectedTarget);
 
     if (!hasStructuralCellSelection && nativeSelection && nativeSelection.rangeCount > 0) {
       try {
@@ -2947,10 +3712,12 @@ export function createFeedbackReviewController(options: {
     if (restoreFocus && focusTarget?.isConnected) {
       focusTarget.focus({ preventScroll: true });
     }
+    refreshBlockAction();
   };
 
   const openTextBlockSelector = (): boolean => {
     if (!hasWritableSession() || !session?.anchors?.length) return false;
+    hideBlockAction();
     if (draftSurfaceGate.focusActive()) return true;
     if (blockSelector?.isConnected) {
       blockSelector.querySelector<HTMLElement>('select, button')?.focus({
@@ -3038,6 +3805,7 @@ export function createFeedbackReviewController(options: {
         focus,
         startLine: firstAnchor.startLine,
         endLine: lastAnchor.endLine,
+        presentationReason: 'manual-block-range',
       });
     });
     document.body.append(dialog);
@@ -3193,9 +3961,11 @@ export function createFeedbackReviewController(options: {
           annotationController.register();
         }
         createReviewChrome();
+        createBlockAction();
         editorDom.addEventListener('click', handleSavedAnnotationClick);
         renderMarkers();
         scheduleLayoutAfterFontsReady();
+        scheduleSelectionSample();
         annotationResizeObserver?.observe(editorDom);
         if (panel) annotationResizeObserver?.observe(panel);
         if (resumeHadFocus) {
@@ -3277,6 +4047,7 @@ export function createFeedbackReviewController(options: {
             ? { ...message.session, sessionId: message.oldSessionId }
             : previousSession,
       };
+      hideBlockAction(true);
       syncCommentsUi();
       return true;
     },
@@ -3298,6 +4069,7 @@ export function createFeedbackReviewController(options: {
       if (message.role === 'old-owner') {
         if (session?.sessionId !== message.oldSessionId) return false;
         pendingSessionTransfer = null;
+        refreshBlockAction();
         syncCommentsUi();
         return true;
       }
@@ -3333,6 +4105,7 @@ export function createFeedbackReviewController(options: {
       }
       if (session?.sessionId !== message.newSessionId) return false;
       pendingSessionTransfer = null;
+      refreshBlockAction();
       syncCommentsUi();
       return true;
     },
@@ -3346,6 +4119,7 @@ export function createFeedbackReviewController(options: {
         return;
       }
       if (!session && !readOnlyApplied) {
+        destroyBlockAction();
         removeCompletionDialog(false);
         pendingFinishRequestId = null;
         sealedCompletionSummary = null;
@@ -3361,7 +4135,7 @@ export function createFeedbackReviewController(options: {
         (rail?.contains(document.activeElement) ||
           blockSelector?.contains(document.activeElement) ||
           completionDialog?.contains(document.activeElement) ||
-          document.activeElement.matches('[data-feedback-action]'))
+          document.activeElement.matches(FEEDBACK_REVIEW_ACTION_SELECTOR))
       );
       for (const pending of pendingMutations.values()) {
         if (pending.kind === 'screenshot') {
@@ -3380,6 +4154,7 @@ export function createFeedbackReviewController(options: {
       requestedUndoFocusId = null;
       editorDom.removeEventListener('click', handleSavedAnnotationClick);
       removePendingButton();
+      destroyBlockAction();
       alertElement?.remove();
       alertElement = null;
       removeSyncRetryAlert();
@@ -3443,6 +4218,7 @@ export function createFeedbackReviewController(options: {
     invalidate(code) {
       if (!session) return;
       invalidated = true;
+      hideBlockAction(true);
       clearAnnotationAnchorAlert();
       clearAnnotationLayoutAlert();
       window.dispatchEvent(new CustomEvent('feedbackInvalidated', { detail: { code } }));
@@ -3553,6 +4329,10 @@ export function createFeedbackReviewController(options: {
 
     openTextComposer(target) {
       if (!hasWritableSession() || !session || !rail || !panel) return;
+      target = constrainCellTargetToSessionBudget(target);
+      const invokingElement =
+        document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      hideBlockAction();
       if (draftSurfaceGate.focusActive()) {
         announce('Finish or cancel the current feedback action before opening another.');
         return;
@@ -3565,17 +4345,19 @@ export function createFeedbackReviewController(options: {
         announce('Add or cancel the current feedback before choosing another target.');
         return;
       }
-      const invokingElement =
-        document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      const durableReturnTarget = invokingElement?.matches('[data-feedback-selection-action]')
+      const durableReturnTarget = invokingElement?.matches(
+        '[data-feedback-selection-action], [data-feedback-block-action]'
+      )
         ? editorDom
         : invokingElement;
       closeComposer(false);
+      hideBlockAction();
       lastValidTargetGeometry.delete('__composer__');
       lastValidCardHeights.delete('__composer__:active');
       composerTarget = target;
       markPendingTarget(target);
       restoreFocusTo = durableReturnTarget?.isConnected ? durableReturnTarget : editorDom;
+      const targetPresentation = getFeedbackTargetPresentation(editor.state.doc, target);
       const composerElement = createElement('form', 'feedback-composer');
       const field = createElement('textarea', 'feedback-composer-input') as HTMLTextAreaElement;
       const draftSurface = draftSurfaceGate.claim({
@@ -3595,22 +4377,56 @@ export function createFeedbackReviewController(options: {
       setCommentsState('expanded');
       composerElement.setAttribute('aria-label', 'Add feedback');
 
+      const headingRow = createElement('div', 'feedback-composer-heading');
       const heading = createElement('h2', 'feedback-composer-title', 'What should change?');
-      const focusLabel = createElement('div', 'feedback-composer-label', 'Exact visible focus');
-      const focus = createElement('blockquote', 'feedback-composer-focus', target.focus);
-      focus.setAttribute('data-feedback-focus', '');
+      const sizeToggle = createElement(
+        'button',
+        'feedback-secondary-button feedback-composer-size-toggle'
+      );
+      sizeToggle.type = 'button';
+      sizeToggle.setAttribute('data-feedback-composer-size-toggle', '');
+      let composerSize: FeedbackComposerSize = targetPresentation.preferredComposerSize;
+      const syncComposerSize = (): void => {
+        const wide = composerSize === 'wide';
+        composerElement.dataset.feedbackComposerSize = composerSize;
+        sizeToggle.textContent = wide ? 'Compact' : 'Expand';
+        sizeToggle.title = wide ? 'Use compact feedback composer' : 'Expand feedback composer';
+        sizeToggle.setAttribute('aria-label', sizeToggle.title);
+      };
+      sizeToggle.addEventListener('click', () => {
+        composerSize = composerSize === 'wide' ? 'compact' : 'wide';
+        syncComposerSize();
+        scheduleAnnotationLayout();
+        window.requestAnimationFrame(() => {
+          if (composer === composerElement && field.isConnected) resizeComposerInput();
+        });
+      });
+      syncComposerSize();
+      headingRow.append(heading, sizeToggle);
+      const targetContext = createFeedbackTargetPresentationView({
+        ownerDocument: document,
+        presentation: targetPresentation,
+        focusAttribute: 'data-feedback-focus',
+      });
       const lines = createElement(
         'div',
         'feedback-composer-lines',
-        target.startLine > 0
-          ? `Source lines ${target.startLine}-${target.endLine}`
-          : 'Source lines validated when saved'
+        formatFeedbackTargetSourceLines(
+          target.startLine,
+          target.endLine,
+          targetPresentation.lineContext
+        )
       );
       lines.setAttribute('data-feedback-lines', '');
       const label = createElement('label', 'feedback-composer-label', 'Feedback');
       field.required = true;
       field.rows = 5;
       field.setAttribute('data-feedback-input', '');
+      const resizeComposerInput = (): void => {
+        if (composer !== composerElement || !field.isConnected) return;
+        if (resizeFeedbackInput(field)) scheduleAnnotationLayout();
+      };
+      resizeComposerInputForViewport = resizeComposerInput;
       label.append(field);
       const actions = createElement('div', 'feedback-composer-actions');
       const cancel = createElement('button', 'feedback-secondary-button', 'Cancel');
@@ -3670,7 +4486,10 @@ export function createFeedbackReviewController(options: {
         });
       };
       cancel.addEventListener('click', requestComposerCancel);
-      field.addEventListener('input', refreshComposerActions);
+      field.addEventListener('input', () => {
+        refreshComposerActions();
+        resizeComposerInput();
+      });
       composerElement.addEventListener('keydown', event => {
         if (event.key !== 'Escape' || pendingRequestId !== null) return;
         event.preventDefault();
@@ -3709,23 +4528,38 @@ export function createFeedbackReviewController(options: {
             refreshComposerActions();
           },
         });
-        post({
-          type: 'feedback.text.add',
-          requestId,
-          sessionId: session.sessionId,
-          startOrdinal: target.startOrdinal,
-          endOrdinal: target.endOrdinal,
-          focus: target.focus,
-          feedback,
-          ...(target.renderedRange ? { renderedRange: target.renderedRange } : {}),
-          ...(target.cellTarget ? { cellTarget: target.cellTarget } : {}),
-        });
+        if (session.evidenceVersion === 2) {
+          const capture = buildFeedbackRendererCaptureV2(editor, target);
+          post({
+            type: 'feedback.text.add',
+            requestId,
+            sessionId: session.sessionId,
+            startOrdinal: target.startOrdinal,
+            endOrdinal: target.endOrdinal,
+            feedback,
+            target: capture.target,
+            ...(capture.evidence === undefined ? {} : { evidence: capture.evidence }),
+          });
+        } else {
+          post({
+            type: 'feedback.text.add',
+            requestId,
+            sessionId: session.sessionId,
+            startOrdinal: target.startOrdinal,
+            endOrdinal: target.endOrdinal,
+            focus: target.focus,
+            feedback,
+            ...(target.renderedRange ? { renderedRange: target.renderedRange } : {}),
+            ...(target.cellTarget ? { cellTarget: target.cellTarget } : {}),
+          });
+        }
       });
       actions.append(cancel, submit);
-      composerElement.append(heading, focusLabel, focus, lines, label, actions);
+      composerElement.append(headingRow, targetContext, lines, label, actions);
       refreshComposerActions();
       panel.replaceChildren(composerElement);
       annotationResizeObserver?.observe(composerElement);
+      resizeComposerInput();
       scheduleAnnotationLayout();
       // The composer is absolutely positioned on the next animation frame.
       // Native focus scrolling before that layout can treat it as a top-of-
@@ -3739,9 +4573,9 @@ export function createFeedbackReviewController(options: {
         announce('Select text in the Markdown document to add feedback.');
         return false;
       }
-      const target = getFeedbackSelectionTarget(editor, session.anchors ?? []);
-      if (!target) return openTextBlockSelector();
-      controller.openTextComposer(target);
+      const selectedTarget = getFeedbackSelectionTarget(editor, session.anchors ?? []);
+      if (!selectedTarget) return openTextBlockSelector();
+      controller.openTextComposer(constrainCellTargetToSessionBudget(selectedTarget));
       return true;
     },
 
@@ -3803,8 +4637,7 @@ export function createFeedbackReviewController(options: {
       const exactTarget = Array.from(
         editorDom.querySelectorAll<HTMLElement>('[data-feedback-ids]')
       ).find(element => element.dataset.feedbackIds?.split(',').includes(item.id));
-      const target =
-        exactTarget ?? (editorDom.children.item(item.startOrdinal) as HTMLElement | null);
+      const target = exactTarget ?? feedbackBlockElementForOrdinal(item.startOrdinal);
       target?.scrollIntoView({ behavior: 'auto', block: 'center' });
       panel
         ?.querySelector<HTMLElement>(`[data-feedback-card="${item.id}"]`)
@@ -3887,6 +4720,8 @@ export function createFeedbackReviewController(options: {
     setCaptureState(nextState) {
       if (captureState === nextState) return;
       captureState = nextState;
+      if (nextState === 'idle') refreshBlockAction();
+      else hideBlockAction();
       if (session) syncCommentsUi();
       if (nextState === 'armed') {
         announce('Capture area ready. Drag over the visible document. Press Escape to cancel.');
@@ -3896,6 +4731,8 @@ export function createFeedbackReviewController(options: {
     setAnnotationsSuspended(suspended) {
       if (!session || annotationsSuspended === suspended) return;
       annotationsSuspended = suspended;
+      if (suspended) hideBlockAction();
+      else refreshBlockAction();
       rail?.toggleAttribute('data-feedback-annotations-suspended', suspended);
       if (targetBracketLayer) {
         targetBracketLayer.hidden = suspended || commentsState === 'hidden';
@@ -4234,6 +5071,7 @@ export function createFeedbackReviewController(options: {
           if (session || message.requestId !== startRequestId) break;
           controller.activate({
             sessionId: message.sessionId,
+            ...(message.evidenceVersion === 2 ? { evidenceVersion: 2 as const } : {}),
             source: message.source,
             sourceSha256: message.sourceSha256,
             round: message.round,
@@ -4336,8 +5174,10 @@ export function createFeedbackReviewController(options: {
           restoreEditorFocusAfterClose = Boolean(
             document.activeElement instanceof HTMLElement &&
             (rail?.contains(document.activeElement) ||
-              document.activeElement.matches('[data-feedback-action]'))
+              document.activeElement.matches(FEEDBACK_REVIEW_ACTION_SELECTOR))
           );
+          removePendingButton();
+          hideBlockAction(true);
           pendingClose = {
             requestId: message.requestId,
             sessionId: message.sessionId,
@@ -4372,8 +5212,10 @@ export function createFeedbackReviewController(options: {
           restoreEditorFocusAfterClose = Boolean(
             document.activeElement instanceof HTMLElement &&
             (rail?.contains(document.activeElement) ||
-              document.activeElement.matches('[data-feedback-action]'))
+              document.activeElement.matches(FEEDBACK_REVIEW_ACTION_SELECTOR))
           );
+          removePendingButton();
+          hideBlockAction(true);
           pendingClose = {
             requestId: message.requestId,
             sessionId: message.sessionId,
@@ -4576,7 +5418,13 @@ export function createFeedbackReviewController(options: {
     reviewListenersBound = true;
     editor.on('selectionUpdate', scheduleSelectionSample);
     document.addEventListener('selectionchange', scheduleSelectionSample);
-    window.addEventListener('resize', scheduleAnnotationLayout);
+    editorDom.addEventListener('focusin', scheduleSelectionSample);
+    window.addEventListener('resize', handleReviewResize);
+    editorDom.addEventListener('pointerover', handleBlockPointerOver);
+    editorDom.addEventListener('pointerdown', handleBlockPointerDown, true);
+    editorDom.addEventListener('pointerleave', handleBlockPointerLeave);
+    document.addEventListener('pointerup', handleBlockPointerUp, true);
+    document.addEventListener('pointercancel', handleBlockPointerUp, true);
     editorDom.addEventListener('beforeinput', guardMutation, true);
     editorDom.addEventListener('cut', guardMutation, true);
     editorDom.addEventListener('paste', guardMutation, true);
@@ -4591,11 +5439,17 @@ export function createFeedbackReviewController(options: {
     reviewListenersBound = false;
     editor.off('selectionUpdate', scheduleSelectionSample);
     document.removeEventListener('selectionchange', scheduleSelectionSample);
+    editorDom.removeEventListener('focusin', scheduleSelectionSample);
     if (selectionSampleFrame !== null) {
       if (selectionSampleFrame >= 0) cancelAnimationFrame(selectionSampleFrame);
       selectionSampleFrame = null;
     }
-    window.removeEventListener('resize', scheduleAnnotationLayout);
+    window.removeEventListener('resize', handleReviewResize);
+    editorDom.removeEventListener('pointerover', handleBlockPointerOver);
+    editorDom.removeEventListener('pointerdown', handleBlockPointerDown, true);
+    editorDom.removeEventListener('pointerleave', handleBlockPointerLeave);
+    document.removeEventListener('pointerup', handleBlockPointerUp, true);
+    document.removeEventListener('pointercancel', handleBlockPointerUp, true);
     editorDom.removeEventListener('beforeinput', guardMutation, true);
     editorDom.removeEventListener('cut', guardMutation, true);
     editorDom.removeEventListener('paste', guardMutation, true);

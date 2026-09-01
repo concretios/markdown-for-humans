@@ -11,6 +11,7 @@ describe('VSIX package boundary', () => {
   it('ships third-party notices and excludes repository-local metadata', () => {
     expect(ignoreRules).toMatch(/^!THIRD_PARTY_LICENSES\.md$/m);
     expect(ignoreRules).toMatch(/^\.chetana\/\*\*$/m);
+    expect(ignoreRules).toMatch(/^\.concret\.io\/\*\*$/m);
     expect(ignoreRules).toMatch(/^\.gitmodules$/m);
   });
 });

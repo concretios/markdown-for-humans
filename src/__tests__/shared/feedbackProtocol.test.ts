@@ -38,6 +38,43 @@ describe('feedback protocol', () => {
     });
   });
 
+  it('accepts an optional canonical fingerprint only on a table block', () => {
+    const tableFingerprint = 'md4h-table/v1:0123456789abcdef';
+    const withFingerprint = {
+      type: 'feedback.start',
+      requestId: 'request-table-fingerprint',
+      blocks: [
+        {
+          ordinal: 0,
+          kind: 'table',
+          markdown: '| A |\n| - |\n| B |',
+          contentSize: 12,
+          tableFingerprint,
+        },
+      ],
+    };
+    const legacyWithoutFingerprint = {
+      type: 'feedback.start',
+      requestId: 'request-legacy-table',
+      blocks: [{ ordinal: 0, kind: 'table', markdown: '| A |', contentSize: 3 }],
+    };
+
+    expect(parseFeedbackWebviewMessage(withFingerprint)).toEqual(withFingerprint);
+    expect(parseFeedbackWebviewMessage(legacyWithoutFingerprint)).toEqual(legacyWithoutFingerprint);
+    expect(
+      parseFeedbackWebviewMessage({
+        ...withFingerprint,
+        blocks: [{ ...withFingerprint.blocks[0], kind: 'paragraph' }],
+      })
+    ).toBeNull();
+    expect(
+      parseFeedbackWebviewMessage({
+        ...withFingerprint,
+        blocks: [{ ...withFingerprint.blocks[0], tableFingerprint: 'md4h-table/v1:INVALID' }],
+      })
+    ).toBeNull();
+  });
+
   it('accepts blockless snapshot-capable start and resume requests', () => {
     expect(
       parseFeedbackWebviewMessage({ type: 'feedback.start', requestId: 'snapshot-start' })
@@ -369,6 +406,7 @@ describe('feedback protocol', () => {
       peerLockMessage: 'Feedback is active in another editor split.',
       session: {
         sessionId: 'session-new',
+        evidenceVersion: 2,
         source: 'docs/guide.md',
         sourceSha256: 'a'.repeat(64),
         round: '20260821T093000Z-k4p9',
@@ -602,6 +640,15 @@ describe('feedback protocol', () => {
       },
     ],
     [
+      'more than 256 exact cells',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 1, right: 257 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
       'a non-canonical fingerprint',
       {
         version: 1,
@@ -759,10 +806,37 @@ describe('feedback protocol', () => {
     expect(
       parseFeedbackWebviewMessage({
         type: 'feedback.finish',
+        requestId: 'legacy-r',
+        sessionId: 'legacy-s',
+      })
+    ).toEqual({
+      type: 'feedback.finish',
+      requestId: 'legacy-r',
+      sessionId: 'legacy-s',
+    });
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.finish',
         requestId: 'r',
         sessionId: 's',
+        degradedTargetIds: ['F1', 'F9'],
       })
-    ).toEqual({ type: 'feedback.finish', requestId: 'r', sessionId: 's' });
+    ).toEqual({
+      type: 'feedback.finish',
+      requestId: 'r',
+      sessionId: 's',
+      degradedTargetIds: ['F1', 'F9'],
+    });
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.finish',
+        requestId: 'r',
+        sessionId: 's',
+        degradedTargetIds: ['F1', 'F1'],
+      })
+    ).toBeNull();
 
     expect(
       parseFeedbackWebviewMessage({
@@ -950,6 +1024,7 @@ describe('feedback protocol', () => {
         type: 'feedback.started',
         requestId: 'start-1',
         sessionId: 'session-1',
+        evidenceVersion: 2,
         source: 'docs/guide.md',
         sourceSha256: 'a'.repeat(64),
         round: '20260821T093000Z-k4p9',

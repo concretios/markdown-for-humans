@@ -352,10 +352,12 @@ describe('modern-screenshot feedback rasterizer', () => {
       '<span class="validation-error-highlight">reviewed words</span>',
       '<span class="md4h-feedback-annotation md4h-feedback-annotation-inline is-feedback-active md4h-feedback-highlight md4h-feedback-highlight-active" data-feedback-ids="F1,F2" data-feedback-active-ids="F2">annotated words</span>',
       '<button class="code-block-copy-button">Copy</button>',
+      '<button class="feedback-block-action">Block feedback must not be captured</button>',
       '<span class="ProseMirror-gapcursor"></span>',
       '<aside class="feedback-annotation-layer">Comments must not be captured</aside>',
       '<div class="feedback-annotation-spacer">Spacer must not be captured</div>',
       '</p>',
+      '<div class="feedback-block-target-preview">Block target preview must not be captured</div>',
       '</div>',
     ].join('');
     const root = document.getElementById('root') as HTMLElement;
@@ -370,14 +372,18 @@ describe('modern-screenshot feedback rasterizer', () => {
       expect(stage.textContent).toContain('reviewed words');
       expect(stage.textContent).toContain('annotated words');
       expect(stage.textContent).not.toContain('Copy');
+      expect(stage.textContent).not.toContain('Block feedback must not be captured');
       expect(stage.textContent).not.toContain('Comments must not be captured');
       expect(stage.textContent).not.toContain('Spacer must not be captured');
+      expect(stage.textContent).not.toContain('Block target preview must not be captured');
       expect(stage.querySelector('.ProseMirror-gapcursor')).toBeNull();
       expect(stage.querySelector('.ProseMirror-selectednode')).toBeNull();
       expect(stage.querySelector('.highlighted')).toBeNull();
       expect(stage.querySelector('.search-match')).toBeNull();
       expect(stage.querySelector('.validation-error-highlight')).toBeNull();
       expect(stage.querySelector('.feedback-active-target')).toBeNull();
+      expect(stage.querySelector('.feedback-block-target-preview')).toBeNull();
+      expect(stage.querySelector('.feedback-block-action')).toBeNull();
       expect(stage.querySelector('.md4h-feedback-annotation')).toBeNull();
       expect(stage.querySelector('.md4h-feedback-highlight')).toBeNull();
       expect(stage.querySelector('[data-feedback-ids]')).toBeNull();

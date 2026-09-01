@@ -17,7 +17,7 @@ Keep `CustomTextEditorProvider` and TipTap. Neither is the root cause of the rep
 
 The implementation now has the main safety foundations: a per-document edit coordinator, versioned renderer edit identities and acknowledgements, strict snapshot parity, acknowledged Feedback delivery for several critical stages, transactional renderer setup, typed table selection, a capture reducer, generation-bound peer locks and releases, and bounded renderer state restoration with hidden-context retention disabled.
 
-The complete TipTap family is now exactly pinned at `3.30.3` and deduplicated through `@tiptap/pm@3.30.3`. Mermaid is installed at `11.17.2`, `image-size` and its redundant types are removed, and both production and full dependency audits currently report zero known vulnerabilities.
+The complete TipTap family is now exactly pinned at `3.30.5` and deduplicated through `@tiptap/pm@3.30.5`. Mermaid is installed at `11.17.2`, `image-size` and its redundant types are removed, and both production and full dependency audits currently report zero known vulnerabilities.
 
 This plan remains in progress. Active-session ownership transfer is now a strict generation-bound apply/commit/abort transaction, but the pure host and renderer lifecycle reducers are not yet the production lifecycle authority and initial host prepare/commit activation is not complete. The analysis service and worker, bounded diagnostics store, draft-discovery caching, provider decomposition, packaged real-webview fault tests, memory profiling, physical Windows profiling, and manual reading review also remain open.
 
@@ -35,7 +35,7 @@ This plan remains in progress. Active-session ownership transfer is now a strict
 - The 500 ms document-sync debounce now defers Markdown serialization itself. The renderer tracks dirty revisions, serializes once at a send boundary, and retains dirty state across serialization or send failures.
 - Renderer edits carry protocol version, edit ID, view generation, local revision, base document version, and application ACK state. Teardown can pipeline one final dependent revision before a non-retained webview is destroyed.
 - The package manifest and build policy now agree on VS Code `^1.98.0`, exact `@types/vscode@1.98.0`, Node 20 declarations, a Node 20 extension target, and a Chromium 132 webview target.
-- Every direct TipTap dependency is exactly `3.30.3`, including the directly imported paragraph extension. `npm ls` currently shows one deduplicated TipTap/ProseMirror graph through `@tiptap/pm@3.30.3`.
+- Every direct TipTap dependency is exactly `3.30.5`, including the directly imported paragraph extension. `npm ls` currently shows one deduplicated TipTap/ProseMirror graph through `@tiptap/pm@3.30.5`.
 
 ### Reported symptoms and verified failure classes
 
@@ -129,7 +129,7 @@ Official references:
 - Complete capture pointer lifecycle and bounded capture work.
 - Serialization, parsing, lookup, draft-discovery, and hidden-webview performance.
 - VS Code runtime/API compatibility policy and real Extension Host tests.
-- A controlled TipTap 3.30.3 upgrade and use of relevant stable improvements.
+- A controlled TipTap 3.30.5 upgrade and use of relevant stable improvements.
 - Targeted dependency security and maintenance upgrades.
 - Modular extraction from the two oversized files while preserving public behavior.
 
@@ -142,7 +142,7 @@ Official references:
 - Virtual scrolling. It would change DOM-to-source mapping, selection, capture, and reading behavior and is not justified before the measured hot paths are fixed.
 - A TypeScript 7, ESLint 10, lowlight 3, markdown-it 15, or KaTeX 0.18 migration in the same work.
 - A web-extension entry point for vscode.dev.
-- Changing the sealed Feedback bundle format unless a separately versioned migration is required. Existing sealed bundles remain readable and immutable.
+- Breaking or incompatible changes to the sealed Feedback bundle format. Backward-compatible optional locator evidence and writer-derived summaries may evolve within v1 only while existing sealed bundles remain readable and immutable.
 - External telemetry collection. Diagnostics remain local and content-free unless a separate privacy-reviewed feature is approved.
 
 ---
@@ -181,7 +181,7 @@ Official references:
 1. The user drag-selects a rectangular set of table cells.
 2. ProseMirror `CellSelection` and `TableMap` produce a stable rectangular target.
 3. The action appears near the visible selection and remains through transient native selection events.
-4. Feedback stores the containing table source-line anchor plus draft-only cell coordinates and a table fingerprint.
+4. Feedback stores the authoritative containing table source-line anchor plus a strict rendered-table locator containing cell coordinates, a table fingerprint, and the host-owned table-block hash. The locator remains in the sealed report as rendered evidence only if Finish-time frozen-document validation still proves it. A degraded locator is stripped instead of being represented as a raw Markdown cell mapping.
 5. If merged or irregular cells cannot be represented honestly in Markdown, the action falls back to the table block or explains the limitation.
 
 ### Flow 5: Capture area
@@ -590,30 +590,30 @@ Never record source text, selection text, Feedback text, screenshots, absolute p
 
 ## 8. Dependency Modernization Plan
 
-Versions were checked on 2026-08-26. Recheck before implementation and update this table if a security release supersedes the target.
+Versions were rechecked against the npm registry on 2026-08-31. Recheck before a later implementation slice and update this table if a security release supersedes the target.
 
-| Package group                 |                                         Installed | Target or decision                                    | Reason and gate                                                                                                          |
-| ----------------------------- | ------------------------------------------------: | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Tiptap family                 |                                    Exact `3.30.3` | Keep the complete family exactly synchronized         | Upgrade is complete and the graph is deduplicated. The full compatibility corpus and manual reading gate remain open.    |
-| ProseMirror                   |                  Through `@tiptap/pm@3.30.3` only | Keep upgrades through `@tiptap/pm`                    | `npm ls` currently shows one model, state, view, and tables graph. Production has no direct `prosemirror-*` imports.     |
-| `@tiptap/extension-paragraph` |                             Exact direct `3.30.3` | Keep declared directly                                | Production imports it directly.                                                                                          |
-| `@tiptap/markdown` parser     |                `3.30.3` with transitive Marked 17 | Keep; preserve the narrow Jest transform              | The harness transforms Marked's single ESM runtime entry instead of forcing an unsupported downgrade.                    |
-| `modern-screenshot`           |                                           `4.7.0` | Keep                                                  | Pointer lifecycle and clone scope are application concerns.                                                              |
-| Mermaid                       |                                         `11.17.2` | Keep and monitor advisories                           | Security upgrade is complete. Mermaid fixtures still belong in final verification.                                       |
-| `image-size`                  |                                           Removed | Keep removed                                          | Bounded dependency-free PNG, JPEG, GIF, and WebP header readers replaced the vulnerable package and `@types/image-size`. |
-| `highlight.js`                | `11.12.0` direct plus `11.8.0` through lowlight 2 | Keep direct patch; defer dedupe to lowlight migration | Do not force lowlight 3 into this task.                                                                                  |
-| lowlight                      |                                           `2.9.0` | Defer `3.3.0`                                         | Version 3 is ESM-only and changes construction and registration APIs.                                                    |
-| markdown-it                   |                                          `14.3.0` | Defer `15.0.0`                                        | The major affects equivalence, anchors, paste, entities, and linkification.                                              |
-| KaTeX                         |                                         `0.16.47` | Keep                                                  | Mermaid 11.17.2 still accepts this line. A direct 0.18 upgrade risks two copies and CSS/font divergence.                 |
-| esbuild                       |                                          `0.28.2` | Keep patch and explicit runtime targets               | Extension and webview builds target the chosen VS Code floor.                                                            |
-| Jest / ts-jest                |                  Jest `30.4.2`, ts-jest `29.4.12` | Keep with narrow Marked ESM handling                  | Current harness loads TipTap Markdown without widening all `node_modules` transforms.                                    |
-| TypeScript                    |                                           `5.9.3` | Keep                                                  | TypeScript 7 remains outside this task.                                                                                  |
-| `@types/vscode`               |                                    Exact `1.98.0` | Keep equal to the minimum VS Code floor               | Manifest, types, builds, and CI use the same floor.                                                                      |
-| `@types/node`                 |                                        `20.17.58` | Keep on Node 20 declarations                          | These declarations match the VS Code 1.98 extension-host runtime line.                                                   |
-| VS Code test stack            |  `@vscode/test-cli@0.0.15`, `test-electron@3.1.0` | Keep; expand beyond the current smoke boundary        | The harness is installed and CI-matrixed, but packaged real-webview message and fault tests remain open.                 |
-| Mermaid transitive DOMPurify  |                                          `3.4.14` | Keep patched compatible release                       | Current audits report zero known vulnerabilities.                                                                        |
-| docx transitive nanoid        |                                          `5.1.16` | Keep patched compatible release                       | DOCX behavior remains in final verification.                                                                             |
-| cheerio transitive undici     |                                          `7.29.0` | Keep patched compatible release                       | Export and URL behavior remain in final verification.                                                                    |
+| Package group                 |                                         Installed | Target or decision                                    | Reason and gate                                                                                                                                          |
+| ----------------------------- | ------------------------------------------------: | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tiptap family                 |                                    Exact `3.30.5` | Keep the complete family exactly synchronized         | Upgrade is complete, the graph is deduplicated, and the local automated compatibility corpus passes. The manual reading gate remains open.               |
+| ProseMirror                   |                  Through `@tiptap/pm@3.30.5` only | Keep upgrades through `@tiptap/pm`                    | `npm ls` currently shows one model, state, view, and tables graph. Production has no direct `prosemirror-*` imports.                                     |
+| `@tiptap/extension-paragraph` |                             Exact direct `3.30.5` | Keep declared directly                                | Production imports it directly.                                                                                                                          |
+| `@tiptap/markdown` parser     |                `3.30.5` with transitive Marked 17 | Keep; preserve the narrow Jest transform              | The harness transforms Marked's single ESM runtime entry instead of forcing an unsupported downgrade.                                                    |
+| `modern-screenshot`           |                                           `4.7.0` | Keep                                                  | Pointer lifecycle and clone scope are application concerns.                                                                                              |
+| Mermaid                       |                                         `11.17.2` | Keep and monitor advisories                           | Security upgrade is complete. Mermaid fixtures still belong in final verification.                                                                       |
+| `image-size`                  |                                           Removed | Keep removed                                          | Bounded dependency-free PNG, JPEG, GIF, and WebP header readers replaced the vulnerable package and `@types/image-size`.                                 |
+| `highlight.js`                | `11.12.0` direct plus `11.8.0` through lowlight 2 | Keep direct patch; defer dedupe to lowlight migration | Do not force lowlight 3 into this task.                                                                                                                  |
+| lowlight                      |                                           `2.9.0` | Defer `3.3.0`                                         | Version 3 is ESM-only and changes construction and registration APIs.                                                                                    |
+| markdown-it                   |                                          `14.3.0` | Defer `14.3.1` and `15.0.1`                           | Keep parser changes outside the selection-sensitive slice; the major also affects equivalence, anchors, paste, entities, and linkification.              |
+| KaTeX                         |                                         `0.16.47` | Keep                                                  | Mermaid 11.17.2 still accepts this line. A direct 0.18 upgrade risks two copies and CSS/font divergence.                                                 |
+| esbuild                       |                                          `0.28.2` | Keep patch and explicit runtime targets               | Extension and webview builds target the chosen VS Code floor.                                                                                            |
+| Jest / DOM runner / ts-jest   |                   `30.4.2` / `30.4.1` / `29.4.12` | Defer the Jest 30.5 patch                             | Current harness loads TipTap Markdown without widening all `node_modules` transforms; update the runner family together in a dedicated test-infra slice. |
+| TypeScript                    |                                           `5.9.3` | Keep                                                  | TypeScript 7 remains outside this task.                                                                                                                  |
+| `@types/vscode`               |                                    Exact `1.98.0` | Keep equal to the minimum VS Code floor               | Manifest, types, builds, and CI use the same floor.                                                                                                      |
+| `@types/node`                 |                                        `20.17.58` | Keep on Node 20 declarations                          | These declarations match the VS Code 1.98 extension-host runtime line.                                                                                   |
+| VS Code test stack            |  `@vscode/test-cli@0.0.15`, `test-electron@3.1.0` | Keep; expand beyond the current smoke boundary        | The harness is installed and CI-matrixed, but packaged real-webview message and fault tests remain open.                                                 |
+| Mermaid transitive DOMPurify  |                                          `3.4.14` | Keep patched compatible release                       | Current audits report zero known vulnerabilities.                                                                                                        |
+| docx transitive nanoid        |                                          `5.1.16` | Keep patched compatible release                       | DOCX behavior remains in final verification.                                                                                                             |
+| cheerio transitive undici     |                                          `7.29.0` | Keep patched compatible release                       | Export and URL behavior remain in final verification.                                                                                                    |
 
 ### Current audit result
 
@@ -636,9 +636,9 @@ Relevant advisories:
 7. Treat `@tiptap/markdown` as Beta. Maintain an explicit compatibility corpus and rollback point.
 8. Do not adopt the new Decorations API during the version bump. Evaluate it only after version parity is green.
 
-### TipTap 3.30.3 value
+### TipTap 3.30.5 value
 
-The releases between 3.12.1 and 3.30.3 include fixes directly relevant to this editor:
+The releases between 3.12.1 and 3.30.5 include fixes directly relevant to this editor:
 
 - Markdown blank-line, whitespace, escaping, empty content, overlapping mark, entity, list, table-cell, and HTML round trips.
 - Correct plain-text copy for table cell selections.
@@ -658,15 +658,15 @@ Official references:
 
 ### Upgrade implementation result
 
-The TipTap 3.30.3 upgrade is now present in the working tree:
+The TipTap 3.30.5 security upgrade is now present in the working tree:
 
-- Every direct `@tiptap/*` dependency is exactly `3.30.3`.
+- Every direct `@tiptap/*` dependency is exactly `3.30.5`.
 - Production imports ProseMirror APIs through `@tiptap/pm/*` only.
 - `npm ls` shows one deduplicated TipTap and ProseMirror family.
 - The Jest harness narrowly transforms Marked 17's ESM runtime entry, so the prior module-loading blocker is removed without a transitive downgrade.
 - The paragraph extension is a direct dependency and third-party license records have been updated.
 
-Focused compatibility tests and builds have been exercised during implementation. The complete Markdown compatibility corpus, packaged minimum/current host run, and manual long-form reading review remain final gates, so the dependency phase is not yet fully verified.
+The complete local automated compatibility corpus, release build, audit, and package boundary have passed. Packaged minimum/current host runs and the manual long-form reading review remain final gates, so the dependency phase is not yet fully verified.
 
 ---
 
@@ -758,13 +758,13 @@ Every phase follows RED, GREEN, REFACTOR, VERIFY. No implementation phase is com
 - [ ] REFACTOR: shrink lifecycle and snapshot responsibilities out of `MarkdownEditorProvider.ts` and `feedbackReview.ts`.
 - [ ] VERIFY: new session, resume, start-new, finish, discard, transfer, reload, owner disposal, external change, save failure, and restart.
 
-### Phase 5: Isolated TipTap 3.30.3 upgrade
+### Phase 5: Isolated TipTap 3.30.5 upgrade
 
 - [ ] RED: freeze the complete Markdown round-trip compatibility corpus and real-editor selection behavior.
 - [x] Update Jest/ts-jest configuration so Marked 17 ESM loads without an unsupported dependency override.
 - [x] Convert production ProseMirror imports to `@tiptap/pm/model`, `@tiptap/pm/state`, `@tiptap/pm/view`, and `@tiptap/pm/tables`.
 - [x] Declare every directly imported TipTap package.
-- [x] Pin every direct TipTap package to exact 3.30.3 in one package/lockfile slice.
+- [x] Pin every direct TipTap package to exact 3.30.5 in one package/lockfile slice.
 - [x] Assert one core, PM, model, state, view, and tables instance with `npm ls`.
 - [ ] Review every allowed Markdown-output change. No unexplained golden-file rewrite is accepted.
 - [ ] Run plugin teardown/leak, table copy/delete, multi-range, empty content, blank-line, nested-list, raw HTML, mark overlap, escape, entity, and table-cell cases.
@@ -971,7 +971,7 @@ At minimum, cover:
 - [x] Snapshot and anchor tests prove source, saved-byte, renderer-content, canonical-block, and table-fingerprint parity rather than block shape alone.
 - [x] Renderer edits are serialized and Markdown serialization occurs after debounce rather than on the typing hot path.
 - [x] Table `CellSelection` and capture pointer lifecycle pass focused real-editor and renderer tests.
-- [x] TipTap 3.30.3 is exactly pinned, deduplicated, and passes the automated compatibility corpus.
+- [x] TipTap 3.30.5 is exactly pinned, deduplicated, and passes the automated compatibility corpus.
 - [x] Mermaid, `image-size`, transitive production advisories, and current dependency audits are resolved.
 - [x] The VS Code/API/runtime floor is coherent and tested locally against VS Code 1.98 and stable.
 - [ ] Real VS Code integration tests run on Windows and Unix.
@@ -992,7 +992,7 @@ Implementation agents are finished. Final local automated results are recorded b
 
 - **Dependency security:** Policy tests drove Mermaid to `11.17.2`, compatible DOMPurify, nanoid, undici, brace-expansion, fast-uri, and js-yaml refreshes, plus removal of `image-size` and `@types/image-size`. Dependency-free PNG, JPEG, GIF, and WebP header readers are source/signature matched and bounded.
 - **Audit:** Both full and production-only npm audits currently report zero known vulnerabilities.
-- **TipTap:** The complete direct family is exact `3.30.3`, direct imports are declared, production ProseMirror imports use `@tiptap/pm/*`, and the installed graph is deduplicated. A narrow Babel transform loads Marked 17 in Jest.
+- **TipTap:** The complete direct family is exact `3.30.5`, direct imports are declared, production ProseMirror imports use `@tiptap/pm/*`, and the installed graph is deduplicated. A narrow Babel transform loads Marked 17 in Jest.
 - **Runtime:** VS Code 1.98 is the declared floor. API types, Node 20 declarations, Node 20/Chromium 132 build targets, workspace extension placement, and virtual/untrusted workspace declarations now agree.
 - **Tooling:** `@typescript-eslint` 8.68, `@eslint/js` 9.39.5, and concurrently 9.2.4 are installed. The VS Code test stack is pinned.
 
@@ -1020,7 +1020,7 @@ Implementation agents are finished. Final local automated results are recorded b
 
 ### 2026-08-26 - Selection, capture, performance, and integration
 
-- **Table selection:** production uses `CellSelection` and `TableMap` through `@tiptap/pm/tables`. One animation-frame sampler preserves structural authority across native selection races, returns typed targets or explicit fallbacks, and validates persisted cell rectangles with a table fingerprint.
+- **Table selection:** production uses `CellSelection` and `TableMap` through `@tiptap/pm/tables`. One animation-frame sampler preserves structural authority across native selection races, returns typed targets or explicit fallbacks, and validates persisted cell rectangles with a table fingerprint. Finish accepts a bounded ID-only degradation signal and retains locator evidence only while host and renderer validation still prove it.
 - **Capture:** `feedbackCaptureMachine.ts` is integrated with pointer ownership, terminal-event cleanup, viewport generations, abortable raster phases, bounded top-level discovery, row/cell/nested-list pruning, fixed geometry spacers, resource ceilings, and visible recovery errors.
 - **Resource boundary:** webviews can load local resources only from the extension and the exact containing workspace or document directory. Image URI resolution rejects paths outside those roots, and cancelled custom-editor resolution initializes no panel state.
 - **Performance:** deterministic fixtures contain exactly 3,000 reading words, 10,000 stress lines, 500 Feedback items, and 10,000 typing transactions. They gate serialization, timer, lookup, geometry-read, and reachability operation counts without treating shared-runner wall time as a hardware benchmark.

@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added Feedback-mode whole-block gutter targeting with an animated hover preview for paragraphs, headings, lists, blockquotes, and whole tables while preserving exact text and rectangular table-cell selection precedence.
+- Added target-aware Feedback context for prose, code, tables, selected cells, Mermaid, math, images, and multi-block targets. Complex targets use a wider composer, feedback input grows to a viewport cap, and users can switch between Compact and Expand layouts.
+- Added the strict `md4h-feedback/v2` evidence contract: complete source-addressable blocks retain hash-bound frozen-source evidence, embedding the authored slice when safe and within budget or recording an explicit omission; native drags retain exact rendered text, selected cells retain a typed matrix with derived escaped TSV, and visual sub-regions retain hash-bound screenshots.
+
 ### Fixed
 
 - Made Feedback split-view locks application-acknowledged and fail closed across delayed, duplicated, dropped, reloaded, and disposed renderer transitions.
@@ -22,19 +28,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Removed quadratic full-source line splitting from Feedback snapshot finalization.
 - Replaced repeated linear Feedback item-to-anchor scans with logarithmic indexed lookup.
 - Deferred screenshot body reads and hashing from automatic draft discovery to explicit Resume while retaining path, file-type, and quota checks.
+- Kept compact and wide Feedback composers plus tall saved-comment edit forms visible below the sticky toolbar and near viewport edges, remeasured wrapped inputs after responsive width changes, and isolated an active edit from offscreen cards and Undo controls until it closes.
+- Ignored retained GapCursor widgets when resolving opaque selections, refreshed exact locators at Finish without rebuilding decorations, bounded renderer selection evidence before traversal, and capped exact table-cell feedback at 256 cells per item and 4,096 cells per session before an explained whole-table fallback.
+- Aligned host and durable-store exact-cell accounting so restored degraded locators cannot pass host validation and then fail persistence.
 
 ### Changed
 
-- Upgraded the complete TipTap family to exact `3.30.3` on one deduplicated ProseMirror dependency graph.
+- Upgraded the complete TipTap family to exact `3.30.5` on one deduplicated ProseMirror dependency graph.
 - Upgraded Mermaid to `11.17.2` and esbuild to `0.28.2`.
 - Raised the supported runtime floor to VS Code `1.98.0`, with explicit Node 20 and Chromium 132 build targets.
 - Disabled retained hidden webview contexts and restored bounded selection and scroll state after renderer recreation.
+- Preserved strict rendered-text and table-cell locators beside human-readable Target summaries, while keeping whole-block source evidence distinct from rendered table coordinates and partial-selection evidence.
 - Moved Markdown serialization behind the 500 ms debounce and added minimal edits for documents of at least 32 KiB.
 
 ### Security
 
 - Replaced the vulnerable `image-size` dependency with bounded PNG, JPEG, GIF, and WebP header readers.
 - Refreshed vulnerable compatible transitive dependencies. Production and development audits now report zero known vulnerabilities.
+- Updated TipTap to `3.30.5`, which includes the upstream `mergeAttributes` prototype-pollution and Markdown attribute-parsing denial-of-service fixes that the npm audit feed did not surface.
 - Restricted webview local-file access to the exact extension/workspace or document roots, rejected out-of-root image requests, and honored cancelled editor resolution.
 
 ### Testing

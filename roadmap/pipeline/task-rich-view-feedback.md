@@ -6,7 +6,7 @@
 - **Slug:** rich-view-feedback
 - **Status:** in-progress
 - **Created:** 2026-08-21
-- **Last updated:** 2026-08-23
+- **Last updated:** 2026-08-31
 - **Shipped:** _(pending)_
 
 ---
@@ -195,7 +195,7 @@
 
 ### 2026-08-22 - Phase 6 RED, GREEN, REFACTOR implementation
 
-- **Rendered-range contract:** Added strict, versioned half-open block-relative ranges, host-owned block hashes, draft-only metadata, exact-key protocol parsing in both directions, legacy draft compatibility, sealed omission, and per-item block fallback with `MD4H-FB-ANCHOR-001` when otherwise valid exact metadata no longer resolves. Malformed metadata still rejects the draft. Provider/store/protocol boundary suites are green.
+- **Rendered-range contract:** Added strict, versioned half-open block-relative ranges, host-owned block hashes, exact-key protocol parsing in both directions, legacy draft compatibility, and per-item block fallback with `MD4H-FB-ANCHOR-001` when otherwise valid exact metadata no longer resolves. Phase 6 originally removed this metadata while sealing. Phase 12 supersedes that choice and retains the same strict locators as sealed rendered evidence only while Finish-time validation still proves them. Malformed metadata still rejects the report. Provider/store/protocol boundary suites are green.
 - **Selection and decorations:** Added exact native DOM and ProseMirror selection conversion, UTF-16 offsets, Focus validation, feedback-only overlap-swept inline decorations, opaque-node fallback, pending exact selection decoration, and teardown. The 31-case real selection matrix covers repeated text, Unicode, CRLF normalization, marks, links, lists, blockquotes, code, tables, images, Mermaid-like and math-like atoms, and boundary selections without fuzzy search.
 - **Same-scroll layout:** Replaced the fixed drawer and scroll listener with an absolute sibling layer under `#editor`. Added deterministic clustering, active-pivot card packing, connectors, exact target/card geometry indexes, EOF overflow, canonical cluster identity, narrow active-card visibility, and a warm 200-comment layout budget below 16 ms. A 10,000-line/500-comment stress fixture remains linear in comment count.
 - **Failure recovery:** Removed fabricated ordinal/card positions. Layout now retains only session-local last-valid measurements, reports stale or unavailable targets in an accessible Retry alert, preserves source-ordered Open actions, and restores positions without guessing. Narrow active cards prefer a position below the target.
@@ -396,7 +396,7 @@ Rules:
 
 ### 9.4 Exact rendered-range contract and migration
 
-Line ranges remain host-authoritative and agent-facing. Exact rich-view highlighting adds optional draft-only metadata:
+Line ranges remain host-authoritative and agent-facing. Exact rich-view highlighting adds optional versioned rendered-model metadata:
 
 ```ts
 interface FeedbackRenderedRangeV1 {
@@ -413,11 +413,11 @@ interface FeedbackRenderedRangeV1 {
 - Offsets are relative to the content start of their zero-based top-level ProseMirror blocks. They distinguish repeated identical text without depending on positions of preceding blocks.
 - The webview sends only the ordered block-relative offsets. The host validates safe integers, existing frozen ordinals, lexicographic `(startOrdinal, startOffset) < (endOrdinal, endOffset)`, and offsets within the block content sizes supplied by the frozen canonical map. The host adds canonical block SHA-256 values before persistence.
 - Creation canonicalizes endpoints that land exactly on block boundaries so the first and last ordinals both contain selected content. Resume validation never clamps an invalid endpoint.
-- New text comments store the range as a strict, canonical machine comment adjacent to the item in a draft, for example `<!-- md4h-rendered-range:{...} -->`. The metadata is removed while sealing, so the established agent-facing bundle remains unchanged.
+- New text comments store the range as a strict, canonical machine comment adjacent to the item, for example `<!-- md4h-rendered-range:{...} -->`. Draft reports retain it beside a bounded writer-derived `Target` summary. Sealed reports retain it only while Finish-time frozen-document validation still proves the exact locator. The source path, source hash, and containing lines remain authoritative, and source Markdown is not duplicated into the item.
 - Edit, delete, Undo, restore, atomic rewrite, and host restart preserve draft metadata. Screenshot items and keyboard block-range comments cannot claim an inline range.
 - Resume reconstructs current absolute ProseMirror positions only when the source hash, canonical block hashes, ordinal bounds, offsets, and exact visible Focus all validate. DOM Range text is used for visible-text validation where the NodeView exposes content. Only CRLF normalization is allowed.
 - Any mismatch produces the stable containing-block bracket plus a safe diagnostic. It never searches for `Focus`, chooses a nearest line, clamps a bad range, or silently re-anchors.
-- During Phase 7, existing development `md4h-feedback/v1` drafts without the optional comment remained valid and received block brackets. Phase 8 supersedes that temporary compatibility rule by replacing the unreleased v1 grammar in place. Malformed metadata is rejected as an invalid draft rather than ignored. Sealed bundles need no rendered metadata because sealed sessions are not resumable.
+- During Phase 7, existing development `md4h-feedback/v1` drafts without the optional comment remained valid and received block brackets. Phase 8 superseded that temporary compatibility rule by replacing the unreleased v1 grammar in place. Phase 12 retains backward compatibility for reports without locator comments while preserving new canonical locators after sealing. Malformed metadata is rejected as an invalid report rather than ignored.
 
 Protocol and model changes:
 
@@ -455,7 +455,7 @@ Complexity is one sort plus linear clustering/packing, `O(c log c)` for `c` comm
 ### 9.7 Module-level implementation map
 
 - `src/shared/feedbackProtocol.ts`: rendered-range types, exact-key parsing, limits, host summary union.
-- `src/editor/feedbackSessionStore.ts`: optional draft metadata rendering/parsing, preservation, sealed omission, legacy migration.
+- `src/editor/feedbackSessionStore.ts`: optional locator rendering/parsing, valid-only sealed preservation, visible Target summaries, second-guard rollback, and legacy plus pre-Target-guide compatibility.
 - `src/editor/MarkdownEditorProvider.ts`: canonical content sizes/hashes, host validation, active target state, resume reconstruction.
 - `src/webview/features/feedbackRenderedRange.ts` (new): native DOM Range to ProseMirror conversion with `posAtDOM`, top-level relative offsets, resolution, and exact Focus validation.
 - `src/webview/features/feedbackAnnotations.ts` (new): dynamically registered decoration plugin and overlap segmentation.
@@ -470,7 +470,7 @@ Complexity is one sort plus linear clustering/packing, `O(c log c)` for `c` comm
 Each slice starts by adding the stated failing tests and recording the expected RED failure in this task log. Implementation does not start until the new assertion fails for the intended reason.
 
 1. **Rendered-range contract and draft migration**
-   - RED: extend `feedbackProtocol.test.ts`, `feedbackSessionStore.test.ts`, and `feedbackProvider.test.ts` for valid half-open ranges; negative, collapsed, reversed, partial, unknown, and out-of-block data; exact draft round-trip; edit/delete/restore preservation; sealed omission and rollback; legacy resume; malformed metadata; repeated identical Focus; no fuzzy fallback.
+   - RED: extend `feedbackProtocol.test.ts`, `feedbackSessionStore.test.ts`, and `feedbackProvider.test.ts` for valid half-open ranges; negative, collapsed, reversed, partial, unknown, and out-of-block data; exact draft round-trip; edit/delete/restore preservation; sealed preservation and rollback; legacy resume; malformed metadata; repeated identical Focus; no fuzzy fallback.
    - GREEN: implement the strict protocol, host enrichment/validation, and optional draft metadata.
    - REFACTOR: centralize range validation and canonical encoding; keep storage writes serialized and atomic.
    - VERIFY: focused shared/editor suites, strict TypeScript, scoped lint, and diff check.
@@ -759,11 +759,168 @@ idle -> armed -> rasterizing -> annotation dialog
 
 - **Package boundary:** Added a regression contract for `.vscodeignore`. Release packages now include `THIRD_PARTY_LICENSES.md`, including the new `modern-screenshot` notice, while excluding repository-local `.chetana` profile metadata and the irrelevant `.gitmodules` file.
 - **Automated gate:** The final deterministic run passes 96 suites and 1,669 tests, with 1 suite skipped, 27 tests skipped, and 120 existing todos. Lint, strict TypeScript, coverage thresholds, the production release build, VSIX content inspection, both Electron fixtures, and `git diff --check` pass.
-- **Dependency review (2026-08-29):** `npm audit` and `npm audit --omit=dev` both report zero advisories. A separate upstream review found TipTap security fixes released in 3.30.4 and 3.30.5 while the repository remains pinned to 3.30.3; `npm audit` does not currently surface those advisories. Upgrade the complete direct `@tiptap/*` family to 3.30.5 in an isolated prerequisite change before further Feedback feature work rather than mixing unrelated dependency upgrades into this completed feature.
+- **Dependency review (2026-08-29):** `npm audit` and `npm audit --omit=dev` both report zero advisories. A separate upstream review found TipTap security fixes released in 3.30.4 and 3.30.5 that `npm audit` did not surface. The complete direct `@tiptap/*` family is now pinned to 3.30.5 in an isolated prerequisite change before further Feedback feature work.
 
 ---
 
-## 14. Follow-up & Future Work
+## 14. Locked Phase 11 Plan: Whole-Block Feedback Targeting
+
+### 14.1 Outcome and compatibility boundary
+
+- Feedback mode exposes one reusable left-gutter action for the hovered or keyboard-current mapped top-level block. A table is one block; lists and blockquotes remain top-level targets.
+- Existing exact-text and structural `CellSelection` actions remain authoritative and unchanged. Rows, columns, individual cells, nested list items, and quote children are out of scope.
+- Activation opens the existing text composer with `startOrdinal === endOrdinal`, semantic block Focus, and no `renderedRange` or `cellTarget`. The shared protocol, host validation, draft store, sealed report, and multi-block picker do not change.
+
+### 14.2 Locked precedence and lifecycle
+
+1. Invalid, non-writable, capture, transfer, completion, composer, edit, or picker state shows no targeting action.
+2. `CellSelection` shows only the existing selected-cells action.
+3. Non-empty native text inside the editor shows only the existing selected-text action.
+4. Outside, mixed, whitespace-only non-collapsed, `NodeSelection`, `AllSelection`, and ProseMirror-only non-empty selections suppress the block action.
+5. Only an empty ProseMirror selection with a safe collapsed/native-unavailable state permits whole-block targeting. Pointer hover outranks the caret target.
+
+Pointer-down hides the block action before a selection drag. The action remains reachable across the editor-to-gutter gap, retains its target while focused, and returns focus to the editor after empty composer cancellation. Hover paints a brief, theme-aware preview on the canonical whole block without creating document selection or annotation state; exact text and table-cell selection remain authoritative.
+
+### 14.3 Implementation and performance contract
+
+- A separate internal resolver/view owns the direct-child DOM-to-ordinal index, block target construction, one native button, positioning, and teardown. `feedbackReview.ts` remains the sole selection and lifecycle arbiter.
+- Build the sparse anchor allowlist and a complete canonical top-level ordinal-to-element index once per frozen session. Resolve hover by walking the event target to the direct editor child, including nested SVG nodes. Anchor gating remains separate. Coalesce pointer-over work, build first-hover Focus without another document traversal, and read geometry only when the ordinal changes.
+- Add no scroll listener, document-wide geometry fallback, new dependency, or ordinary editing-mode listener. Missing anchors, detached DOM, empty Focus, and stale session state fail closed.
+- Keep the 36px action inside the existing gutter, hide wholly offscreen targets, and clamp an intersecting tall table below the measured toolbar. Capture CSS and DOM-clone sanitization remove the action.
+
+### 14.4 Dependency prerequisite
+
+- Upgrade all eleven direct `@tiptap/*` exact pins from 3.30.3 to 3.30.5 in lockstep before feature delivery. The patch includes the upstream `mergeAttributes` and Markdown-attribute denial-of-service fixes that `npm audit` does not currently surface.
+- Keep unrelated Markdown parser, syntax highlighting, math, lint, test-runner, and TypeScript major upgrades outside this selection-sensitive feature.
+
+### 14.5 RED, GREEN, VERIFY
+
+- **RED:** Dependency policy first rejects 3.30.3. Block-action unit, controller, capture, style, real-editor table/caret, selection precedence, teardown, and 10,000-block performance tests fail before their production changes.
+- **GREEN:** Upgrade one deduplicated TipTap family, add the indexed resolver/view, then integrate the lower-priority action without modifying `getFeedbackSelectionTarget()` or `mapFeedbackSelection()` semantics.
+- **VERIFY:** Run dependency, Markdown round-trip, table, selection, review, capture, styling, real-editor, full Jest, coverage, lint, strict TypeScript, debug/release build, Electron fixtures, VSIX inspection, and `git diff --check` gates. Complete the 3,000-word light/dark reading pass and manually inspect wide tables, high contrast, reduced motion, narrow width, and 100/125/200% zoom.
+
+Implementation progress:
+
+- [x] Prior package-gate WIP committed separately at `7c1e950`; the worktree was verified clean before Phase 11 changes began.
+- [x] TipTap 3.30.5 RED/GREEN prerequisite and compatibility builds.
+- [x] Block resolver/view, capture exclusion, theme styling, controller precedence, and bounded-hover tests.
+- [x] Paint-only animated target preview with exact-selection precedence, high-contrast and reduced-motion fallbacks, capture exclusion, and real-editor mutation safety.
+- [x] Real-editor table/caret, GapCursor, atom Focus, and structural-selection regression pass.
+- [x] Fresh full Jest, coverage, lint, TypeScript, build, audit, and diff verification after the final canonical DOM mapping changes.
+- [x] Both Electron visual/stress fixtures pass after the final source changes.
+- [x] Fresh release VSIX builds, passes integrity inspection, and contains only intended runtime assets.
+- [ ] Complete the manual 3,000-word, 10-minute light/dark keyboard and pointer reading pass, including wide-table and high-contrast inspection.
+
+Final automated verification on 2026-08-29:
+
+- Jest passes 127 runnable suites and 2,199 tests; one suite and 27 tests remain skipped, with 120 existing todos. Coverage from the preceding complete gate passes at 86.46% statements, 83.70% branches, 92.90% functions, and 88.48% lines.
+- Repository lint, debug and release builds, build-content verification, `git diff --check`, the strict dependency-policy test, and the deduplicated TipTap/ProseMirror graph pass. Full and production-only npm audits each report zero vulnerabilities.
+- The annotation Electron gate passes 11 invariants, its 14-case visual/accessibility matrix, a 10,000-line/500-comment stress case, and the real-controller lifecycle case. The capture gate passes all nine light/dark/high-contrast cases at 100%, 125%, and 200% zoom with real Mermaid, KaTeX, local SVG, and table content.
+- The refreshed VSIX contains 72 files, is 2.96 MB, passes archive integrity checks, and has SHA-256 `0291fc3abe68f8160ad3887d74a38a3c20bb05810241aeb401967f9271ba9656`. It contains the manifest, runtime bundles, licenses, icon, and required fonts, with no source, tests, `node_modules`, source maps, lockfiles, scripts, roadmap, Git metadata, or environment files.
+- One ordinary full-Jest run was an anomalous timing outlier at 1,774 seconds. The immediately following full coverage run completed in 47.3 seconds, the focused cold-hover case remained bounded with zero per-block `nodeDOM` calls, and the Electron 10,000-line layout completed in 8.2 ms. Repeat wall-clock timing in CI before using the outlier as a product performance signal.
+
+### 14.6 Size and risk assessment
+
+- **Overall size:** Moderate, renderer-local feature work rather than a host or storage migration. The current implementation adds about 715 production TypeScript/CSS lines across five runtime files and about 1,600 focused test lines.
+- **Selection risk:** Medium-high regression sensitivity because the new action shares selection and focus events with existing feedback controls. Exact native text and rectangular `CellSelection` actions remain authoritative; whitespace, outside, mixed, node, all-document, and ProseMirror-only non-empty selections fail closed.
+- **DOM and performance risk:** Medium. ProseMirror can insert direct-child widgets such as GapCursor, so every ordinal-based visual target uses the canonical `nodeDOM` index. The index is built once at Feedback activation without geometry reads; hover resolution is bounded by ancestor depth, first-hover Focus is single-block work, and repeated hover reuses the result.
+- **Host, protocol, and persistence risk:** Low. Whole-block comments use the existing `feedback.text.add` path with one ordinal and omit `renderedRange` and `cellTarget`. No shared protocol, host validator, draft schema, sealed report, or storage code changes.
+- **Dependency risk:** Low-medium. The complete TipTap family moves together by two patch releases to 3.30.5, stays exactly pinned and deduplicated, and is covered by the existing Markdown, selection, table, build, audit, and package gates. No new library or license entry is introduced.
+
+## 15. Locked Phase 12 Plan: Target-Aware Feedback Context
+
+### 15.1 Outcome and UX contract
+
+- Keep the highlighted rich document as the canonical visual preview. Do not mount a second Markdown, Mermaid, KaTeX, image, or syntax-highlighting renderer inside the composer.
+- Replace the generic `Exact visible focus` dump with one target-aware summary used by both the active composer and expanded saved cards.
+- Preserve existing selection precedence and outbound `feedback.text.add` semantics. Renderer-only presentation provenance must never cross the host message boundary.
+- Use `Containing source lines` for exact text and structural cell selections. Use `Source lines` for whole-block and multi-block targets.
+- Keep all preview content bounded, text-only, and created with DOM `textContent`. The default state must not add a nested scrolling surface.
+- Size the composer adaptively with stable presets rather than continuously measuring text width. Complex targets open wide, ordinary prose remains compact, and one accessible Compact/Expand control lets the user override the preset. Grow the textarea with its content only up to a viewport-relative cap, then use its own scroll area. Re-measure after responsive width changes, and schedule annotation geometry only when input height or overflow actually changes. Prefer a visible collision-free edge for wide targets, then clamp every measured active composer below the sticky toolbar and inside the current viewport when its target is visible and the preferred placement would hide the form.
+- Apply the same bounded auto-height behavior while editing saved feedback, and clamp a tall saved-comment edit form below the sticky toolbar after deep scrolling. While an edit owns the draft surface, remove nonactive cards and pending Undo controls from layout and keyboard order, then restore them after Save or Cancel. When a wide composer would overlap a full-width target, place it fully above or below that target instead of obscuring the selected table, code block, or diagram.
+
+Target presentation matrix:
+
+| Target                        | Presentation                                                                                                                                                                                    |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Exact prose                   | `Selected text` plus a bounded plain-text quote                                                                                                                                                 |
+| Partial code                  | `Selected code`, language and line count, plus a literal whitespace-preserving `<pre><code>` excerpt                                                                                            |
+| Whole code block              | `Whole code block`, language and total line count, without duplicating the block                                                                                                                |
+| Rectangular `CellSelection`   | `Selected cells`, one-based row/column coordinates and count, plus a semantic mini-table capped independently of table size                                                                     |
+| Whole or fallback table       | `Whole table` plus table dimensions, without flattened tab/newline content                                                                                                                      |
+| Mermaid, math, or image       | A compact whole-block descriptor. An opaque partial selection additionally explains that rendered sub-elements cannot be anchored independently and points to Area Capture for visual sub-areas |
+| Exact multi-block text        | `Selected text` with a bounded excerpt and endpoint summary                                                                                                                                     |
+| Structural multi-block target | Block count and endpoint kinds, without duplicating all selected content                                                                                                                        |
+
+### 15.2 Renderer-only provenance and exact pending geometry
+
+- Add a renderer-local target reason for whole-block actions and honest selection fallbacks such as `opaque-node`, `unmappable-dom`, merged cells, and irregular tables. Keep this optional for compatibility with existing controller tests and never serialize it.
+- When an opaque DOM selection degrades to blocks, replace partial SVG or NodeView text with the semantic Focus for the complete containing block range. The stored Focus and painted target must describe the same scope.
+- Add a pure target-presentation module that derives block kinds and bounded previews from the frozen ProseMirror document and the existing target metadata. It must perform work only across the selected ordinals and fixed context budgets. Whole-block and aggregate selected-cell Focus are capped at 64 KiB before ProseMirror traversal, and individual cell previews are bounded before text extraction. Exact table-cell targeting is limited to 256 cells per item and a stable ID-ordered 4,096-cell session prefix; larger or later-overflow rectangles become visibly explained whole-table feedback before per-cell traversal, fingerprinting, preview, or annotation geometry. Persisted locators continue to count at the host and store until degradation is durably written.
+- Resolve native DOM endpoints through a canonical top-level block index that excludes retained ProseMirror widgets such as GapCursor. Ambiguous custom DOM fails closed instead of shifting an opaque Mermaid or table target to a neighboring ordinal.
+- Reuse existing validated cell-target resolution to decorate pending selected cells with `PENDING_FEEDBACK_ANNOTATION_ID`. Fall back visibly to the table block when validation fails.
+- Place the composer from pending exact inline or cell decoration geometry before containing-block geometry. Preserve the existing no-scroll focus path and annotation layout caches.
+
+### 15.3 Sealed locator and Markdown storage contract
+
+- Do not duplicate source Markdown in feedback items. The exact saved source path, source SHA-256, and containing source lines remain authoritative.
+- Preserve already-versioned, host-enriched `renderedRange` and `cellTarget` locator comments only when Finish-time frozen-document validation still proves them. Immediately before Finish, refresh locator validity without rebuilding visual decorations, then revalidate every stored locator against host-owned canonical blocks after pending mutations settle. Strip a degraded locator and its derived `Target` line atomically while retaining source lines and Focus. Valid locators remain frozen rich-model evidence, not raw Markdown columns or host-proven table syntax mapping.
+- Add one bounded visible `Target` line derived by the trusted writer when locator metadata exists. Table coordinates are one-based for people; encoded rectangles remain zero-based and end-exclusive. Exact-text offsets are labelled as rendered-block offsets.
+- Keep `md4h-feedback/v1` and make the parser backward-compatible with existing drafts and sealed reports that lack the optional locator, `Target` line, current guide sentence explaining `Target`, or current locator-specific Focus wording. Continue strict validation of locator field order, ordinal and coordinate bounds, fingerprints, and host-owned hashes. Degrade legacy cell locators beyond the 256-cell item or 4,096-cell session budgets instead of bricking the draft.
+- Change the public webview protocol only through an optional, bounded, unique `degradedTargetIds` list on `feedback.finish`. It carries item IDs only, never document content. The host rejects IDs that do not identify a current text item carrying exactly one locator, unions renderer-reported and host-detected degradation, and the store independently enforces raw length, uniqueness, item kind, locator count, and exact draft rollback before the guarded atomic seal.
+- Treat Focus as exact selected rendered text only with a retained rendered-range locator. With a retained cell locator it is a semantic row-major transcription using tabs and newlines. Without either locator, it is best-effort semantic context for containing blocks, including opaque source or a degraded former selection, and is never an instruction.
+- Do not copy source Markdown into the report, claim exact Markdown cell coordinates, or fuzzy-match repeated Focus text.
+
+### 15.4 Dependency decision
+
+- No dependency is required. TipTap 3.30.5, Mermaid 11.17.2, and `modern-screenshot` 4.7.0 are current and already cover the necessary model and rendering boundaries.
+- Keep the unrelated Jest 30.5 patch, Markdown-It 14.3.1 patch, and major-line KaTeX, lowlight, Markdown-It, Babel, ESLint, concurrently, and TypeScript upgrades outside this selection-sensitive slice.
+- Retain the intentional VS Code 1.98 and Node 20 type floors.
+
+### 15.5 RED, GREEN, REFACTOR, VERIFY
+
+1. **RED, presentation:** Add pure tests for exact prose, HTML-like text safety, deterministic truncation, partial and whole code, whole tables, bounded cell grids, Mermaid/math/image, fallback explanations, exact and structural multi-block targets, invalid ordinals, and large tables.
+2. **RED, controller:** Add composer and saved-card tests for dynamic labels, semantic code/table elements, containing-line wording, renderer-only provenance, unchanged add/update messages, bounded Finish degradation IDs, pending exact cells, cancellation cleanup, exact pending geometry, complex-target wide presets, Compact/Expand override, bounded textarea growth, viewport clamping, responsive remeasurement, and session-level exact-cell fallback.
+3. **RED, persistence:** Require sealed reports and in-memory items to retain valid canonical locator metadata and visible Target summaries, strip proven-degraded locators, and keep old reports accepted. Cover strict malformed metadata, ordinal bounds, second-guard rollback with exact locator restoration, pre-Target guide migration, resume, source mismatch, and provider-owned hashes.
+4. **GREEN:** Implement the pure descriptor/renderer, target reason propagation, semantic whole-block Focus fallback, pending cell decorations and exact geometry, then the backward-compatible sealed locator writer/parser.
+5. **REFACTOR:** Reuse one presentation renderer for composer and expanded cards, keep constants bounded, update JSDoc and architecture documentation, and verify no renderer or document-wide traversal entered interaction hot paths.
+6. **VERIFY:** Run focused Feedback, table, selection, storage, provider, protocol, style, and real-editor suites. Then run full Jest and coverage, lint, strict TypeScript, debug/release builds, build verification, dependency policy, both npm audits, Electron annotation/capture fixtures, VSIX inspection, and `git diff --check`.
+7. **VS Code Computer Use:** Exercise partial prose, partial and whole code, a whole table, a rectangular cell selection, text inside one cell, whole and attempted partial Mermaid selection, multi-block selection, cancel/submit focus restoration, light/dark/high-contrast themes, narrow layout, and sealed report inspection in an actual Extension Development Host.
+
+Implementation progress:
+
+- [x] Presentation RED tests
+- [x] Pending exact-target RED tests
+- [x] Sealed locator RED tests
+- [x] Renderer and storage GREEN implementation
+- [x] Focused and complete automated verification
+- [x] VS Code Computer Use verification
+
+Automated verification on 2026-08-31:
+
+- Focused Feedback verification passes 11 suites and 663 tests, including real partial code and opaque Mermaid selection, GapCursor-safe native fallback, adaptive new/edit inputs, sticky-toolbar-aware viewport placement, responsive full-card remeasurement, crowded-card and Undo isolation during saved edits, bounded 4 by 4 and oversized-cell previews, the 256-cell per-item and 4,096-cell per-session exact-target caps, bounded whole-block and selected-cell Focus, aligned restored-locator accounting, decoration-free Finish validation, invalid degradation rejection, migration, and second-guard rollback.
+- Full Jest and coverage each pass 128 runnable suites and 2,273 tests. Coverage is 86.73% statements, 84.02% branches, 93.18% functions, and 88.69% lines. One suite and 27 tests remain intentionally skipped, with 120 existing todos.
+- Repository lint, strict TypeScript, debug and production builds, build-content verification, dependency policy, deduplicated TipTap/ProseMirror inspection, both npm audits, VSIX packaging, and `git diff --check` pass.
+- The annotation Electron gate passes its 11 invariants, 14 theme/zoom/reduced-motion cases, 10,000-line/500-comment stress case, and real-controller lifecycle case. The capture gate passes all nine light/dark/high-contrast cases at 100%, 125%, and 200% zoom with real Mermaid, KaTeX, local SVG, and table content.
+- The release VSIX contains 72 intended files, is 2.96 MB, and has SHA-256 `ec200481bc565938b7e02e5ad41ef381a7f5f878353958e604eaf9a3df902c41`.
+
+Live VS Code verification on 2026-08-31:
+
+- Computer Use in the actual Extension Development Host verified the animated whole-table hover/action, exact text inside one cell, a native 2 by 2 rectangular cell selection with semantic mini-table preview, a two-block heading-to-paragraph selection, partial and whole TypeScript blocks, and whole Mermaid targeting. Attempted SVG subtext selection was not exposed as a native selectable range, so the diagram retained the honest whole-Mermaid fallback instead of claiming an exact sub-element.
+- The same pass verified compact and wide presets, the accessible Compact/Expand override, bounded textarea growth, increased VS Code zoom, empty-composer cancellation, Escape focus restoration after saved-comment editing, Finish-and-copy, and a sealed `md4h-feedback/v1` report. The pass exposed a tall saved-edit card clipping above the sticky toolbar after deep scrolling; RED regressions reproduced that path plus responsive wrapping, dense card packing, and tall Undo-stack pressure. The final layout pins and remeasures the active edit, removes nonactive cards and Undo controls from layout and keyboard order until the edit closes, and restores them after Save or Cancel.
+- The live sealed report at `.md4h/feedback/ai-layer-architecture-session copy.md--20260831T014636Z-401b/feedback.md` retained `state: sealed`, the authoritative source path and SHA-256, source lines 18-24, semantic whole-table Focus, and the written feedback without duplicating raw source Markdown or inventing a rendered-table locator.
+- The actual host used the 1,830-word light-theme architecture fixture. Dark, high-contrast, narrow, reduced-motion, and 100%, 125%, and 200% combinations remain covered by the deterministic Electron matrices. The separate Phase 11 requirement for a 3,000-word, 10-minute light/dark reading session therefore remains open and is not claimed here.
+- A final read-only performance, security, selection, layout, and accessibility audit found no remaining actionable P0-P2 issues after the saved-edit hardening.
+
+### 15.6 Size and risk assessment
+
+- **Overall size:** Moderate. Most work is renderer-local, plus a small but contract-sensitive storage grammar change.
+- **Selection risk:** Medium-high. The presentation must consume existing target semantics without changing exact text, `CellSelection`, or whole-block precedence.
+- **Persistence risk:** Medium. Existing locator JSON is already strict and versioned, but valid-only sealing, pre-Target guide compatibility, and second-guard rollback must remain deterministic.
+- **Performance risk:** Low-medium. Presentation work is bounded by selected ordinals, excerpt limits, and a fixed mini-grid cap. No Markdown serialization, Mermaid execution, document scan, or scroll listener is allowed.
+- **Dependency risk:** None. No package change belongs to this phase.
+
+## 16. Follow-up & Future Work
 
 - Optional arrow, label, redaction, and editable vector-layer tools.
 - Multi-document review bundles and collaborative reply threads if real usage requires them.

@@ -92,7 +92,7 @@ predecessor succeeds and its resulting document version is still current.
 
 **Failure:** Mixed TipTap versions can duplicate ProseMirror packages, break `instanceof` and selection semantics, and increase the bundle.
 
-**Use instead:** Keep every direct `@tiptap/*` package exactly aligned at 3.30.3 and import ProseMirror APIs from `@tiptap/pm/*`. Upgrade the family as one reviewed change and run serialization, NodeView, table, selection and bundle checks.
+**Use instead:** Keep every direct `@tiptap/*` package exactly aligned at 3.30.5 and import ProseMirror APIs from `@tiptap/pm/*`. Upgrade the family as one reviewed change and run serialization, NodeView, table, selection and bundle checks.
 
 ## 11. Treating Table Cells as Generic Text Ranges
 

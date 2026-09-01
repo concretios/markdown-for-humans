@@ -23,8 +23,26 @@ import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePol
 import {
   FeedbackSessionError,
   FeedbackSessionStore,
+  type FeedbackItem,
   type ScreenshotFeedbackItem,
 } from './feedbackSessionStore';
+import { projectFeedbackTextItemSummaryV2 } from './feedbackItemSummaryV2';
+import {
+  createFeedbackSourceIndex,
+  projectFeedbackSourceEvidence,
+  type FeedbackSourceEvidenceFormat,
+  type FeedbackSourceIndex,
+} from './feedbackSourceEvidence';
+import {
+  degradeFeedbackItemV2ForStaleLocator,
+  migrateFeedbackItemV1ToV2,
+  type FeedbackMigrationItemV1,
+} from './feedbackMigrationV2';
+import {
+  normalizeFeedbackBlockKindV2,
+  resolveFeedbackTargetEvidenceV2,
+  type FeedbackCanonicalEndpointStateV2,
+} from './feedbackTargetEvidenceV2';
 import { renderFeedbackHandoffPrompt } from './feedbackHandoffPrompt';
 import {
   buildFeedbackAnchorMap,
@@ -34,6 +52,8 @@ import {
 } from './feedbackAnchors';
 import {
   FEEDBACK_ERROR_CODES,
+  FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION,
+  isFeedbackCellRectangleWithinExactLimit,
   parseFeedbackWebviewMessage,
   type CanonicalFeedbackBlock,
   type FeedbackDraftSummary,
@@ -45,6 +65,16 @@ import {
   type FeedbackRenderedRangeV1,
   type FeedbackWebviewMessage,
 } from '../shared/feedbackProtocol';
+import {
+  FEEDBACK_MAX_EXACT_CELLS_PER_SESSION_V2,
+  feedbackEmbeddedSourceBytesV2,
+  type FeedbackEvidenceEnvelopeV2,
+  type FeedbackItemV2,
+  type FeedbackScreenshotItemV2,
+  type FeedbackTargetV2,
+  type FeedbackTextItemV2,
+  type FeedbackVisualSourceReferenceV2,
+} from '../shared/feedbackEvidenceV2';
 import { DocumentEditCoordinator } from './documentEditCoordinator';
 import {
   FeedbackSnapshotService,
@@ -100,6 +130,8 @@ interface FeedbackCanonicalBlockState {
   kind: string;
   contentSize: number;
   sha256: string;
+  /** Frozen renderer-computed structural identity for canonical table blocks only. */
+  tableFingerprint?: string;
 }
 
 type FeedbackStartedApplicationResult = { readonly messageType: 'feedback.started' };
@@ -275,6 +307,10 @@ interface ActiveFeedbackSession {
   /** Fresh runtime token. It is intentionally distinct from the resumable bundle round. */
   sessionId: string;
   store: FeedbackSessionStore;
+  /** Exact saved bytes retained for host-only source classification and migration. */
+  sourceBytes: Buffer;
+  /** Reusable logical-line index bound to {@link sourceBytes}. */
+  sourceIndex: FeedbackSourceIndex;
   anchorMap: FeedbackAnchorMap;
   canonicalBlocks: Map<number, FeedbackCanonicalBlockState>;
   targets: Map<string, { startOrdinal: number; endOrdinal: number }>;
@@ -286,6 +322,8 @@ interface ActiveFeedbackSession {
   degradedCellTargetIds: Set<string>;
   phase: 'active' | 'resuming' | 'finishing' | 'discarding';
   pendingMutationCount: number;
+  /** Serializes host-side migration and budget planning before store mutations. */
+  mutationPlanningQueue: Promise<void>;
   mutationIdleWaiters: Set<() => void>;
   /** Durable Finish/Discard work that must settle before controller demotion. */
   closeOperation?: Promise<void>;
@@ -1035,8 +1073,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       this.context.subscriptions
     );
 
-    // Track active panel
-    setActiveWebviewPanel(webviewPanel, document);
+    // A background/restored split may resolve without becoming the active editor.
+    // Do not let it steal command routing from the panel the user is already using.
+    if (webviewPanel.active) setActiveWebviewPanel(webviewPanel, document);
 
     // Send initial content to webview
     this.updateWebview(document, panelWebview);
@@ -2363,6 +2402,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     const snapshot = session.store.snapshot;
     return {
       sessionId: session.sessionId,
+      evidenceVersion: 2,
       source: snapshot.source,
       sourceSha256: snapshot.sourceSha256,
       round: snapshot.round,
@@ -3435,16 +3475,25 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         feedback: item.feedback,
       };
       if (item.kind === 'text') {
+        const projection =
+          'target' in item
+            ? projectFeedbackTextItemSummaryV2(item)
+            : {
+                focus: item.focus,
+                ...(item.renderedRange === undefined ? {} : { renderedRange: item.renderedRange }),
+                ...(item.cellTarget === undefined ? {} : { cellTarget: item.cellTarget }),
+              };
         return {
           ...summary,
           kind: 'text' as const,
-          focus: item.focus,
-          ...(item.renderedRange === undefined || session.degradedRenderedRangeIds.has(item.id)
+          focus: projection.focus,
+          ...(projection.renderedRange === undefined ||
+          session.degradedRenderedRangeIds.has(item.id)
             ? {}
-            : { renderedRange: item.renderedRange }),
-          ...(item.cellTarget === undefined || session.degradedCellTargetIds.has(item.id)
+            : { renderedRange: projection.renderedRange }),
+          ...(projection.cellTarget === undefined || session.degradedCellTargetIds.has(item.id)
             ? {}
-            : { cellTarget: item.cellTarget }),
+            : { cellTarget: projection.cellTarget }),
         };
       }
       return {
@@ -3458,7 +3507,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   /** Resolve one exact store-owned screenshot to a webview-scoped preview URI. */
   private feedbackScreenshotPreviewUri(
     session: ActiveFeedbackSession,
-    item: ScreenshotFeedbackItem,
+    item: ScreenshotFeedbackItem | FeedbackScreenshotItemV2,
     webview: vscode.Webview
   ): string {
     const expectedRelativePath = `assets/${item.id}.png`;
@@ -3961,6 +4010,356 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return result.range;
   }
 
+  /** Resolve one trusted canonical endpoint or fail without searching content. */
+  private feedbackCanonicalEndpointV2(
+    session: ActiveFeedbackSession,
+    ordinal: number
+  ): FeedbackCanonicalEndpointStateV2 {
+    const block = session.canonicalBlocks.get(ordinal);
+    if (block === undefined) {
+      session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+      throw Object.assign(new Error('The Feedback target endpoint is no longer available.'), {
+        code: FEEDBACK_ERROR_CODES.targetDoesNotMap,
+      });
+    }
+    return { ordinal, ...block };
+  }
+
+  /**
+   * Bind one persisted v2 span to the exact canonical endpoints selected by
+   * its retained source lines. The report is untrusted input on Resume, so a
+   * stale or forged ordinal, normalized kind, or block hash must fail closed
+   * instead of being repaired from the line map.
+   */
+  private assertPersistedFeedbackBlockSpanV2(
+    session: ActiveFeedbackSession,
+    itemId: string,
+    target: { startOrdinal: number; endOrdinal: number },
+    blockSpan: FeedbackTargetV2['blockSpan']
+  ): void {
+    const startBlock = this.feedbackCanonicalEndpointV2(session, target.startOrdinal);
+    const endBlock = this.feedbackCanonicalEndpointV2(session, target.endOrdinal);
+    const startKind = normalizeFeedbackBlockKindV2(startBlock.kind);
+    const endKind = normalizeFeedbackBlockKindV2(endBlock.kind);
+    const matchesCanonicalSpan =
+      startKind !== null &&
+      endKind !== null &&
+      blockSpan.startOrdinal === target.startOrdinal &&
+      blockSpan.endOrdinal === target.endOrdinal &&
+      blockSpan.startKind === startKind &&
+      blockSpan.endKind === endKind &&
+      blockSpan.startBlockSha256 === startBlock.sha256 &&
+      blockSpan.endBlockSha256 === endBlock.sha256;
+    if (matchesCanonicalSpan) return;
+
+    session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+    throw Object.assign(
+      new Error(
+        `Feedback item ${itemId} block span does not match its frozen Markdown block identity.`
+      ),
+      { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+    );
+  }
+
+  /** Classify authored source without accepting a renderer-supplied format. */
+  private feedbackSourceFormatV2(
+    session: ActiveFeedbackSession,
+    target: { startOrdinal: number; endOrdinal: number; startLine: number }
+  ): FeedbackSourceEvidenceFormat {
+    const formats = new Set<FeedbackSourceEvidenceFormat>();
+    for (let ordinal = target.startOrdinal; ordinal <= target.endOrdinal; ordinal += 1) {
+      const block = this.feedbackCanonicalEndpointV2(session, ordinal);
+      const kind = normalizeFeedbackBlockKindV2(block.kind);
+      if (kind === null || kind === 'other') {
+        formats.add('text');
+        continue;
+      }
+      if (kind === 'html') {
+        formats.add('html');
+        continue;
+      }
+      const anchor = session.anchorMap.blocks.find(candidate => candidate.ordinal === ordinal);
+      const firstLine =
+        anchor === undefined ? undefined : session.sourceIndex.lines[anchor.startLine - 1];
+      if (firstLine !== undefined && kind === 'table') {
+        const prefix = session.sourceBytes
+          .subarray(firstLine.startByteOffset, firstLine.endByteOffset)
+          .toString('utf8')
+          .trimStart();
+        if (/^<(?:table|thead|tbody|tfoot|tr|th|td)\b/i.test(prefix)) {
+          formats.add('html');
+          continue;
+        }
+      }
+      formats.add('markdown');
+    }
+    if (formats.size === 1) return formats.values().next().value ?? 'text';
+    return 'text';
+  }
+
+  /** Recompute stable v2 aggregate budgets from durable items only. */
+  private feedbackV2BudgetState(items: readonly FeedbackItemV2[]): {
+    embeddedSourceBytes: number;
+    exactCellCount: number;
+  } {
+    const embeddedSourceBytes = feedbackEmbeddedSourceBytesV2(items.map(item => item.evidence));
+    const exactCellCount = items.reduce((total, item) => {
+      if (
+        item.kind !== 'text' ||
+        item.target.resolution !== 'exact' ||
+        item.target.locator?.kind !== 'table-cells'
+      ) {
+        return total;
+      }
+      const rectangle = item.target.locator.value.rectangle;
+      return total + (rectangle.bottom - rectangle.top) * (rectangle.right - rectangle.left);
+    }, 0);
+    if (exactCellCount > FEEDBACK_MAX_EXACT_CELLS_PER_SESSION_V2) {
+      throw Object.assign(new Error('The exact Feedback cell budget is inconsistent.'), {
+        code: FEEDBACK_ERROR_CODES.targetDoesNotMap,
+      });
+    }
+    return { embeddedSourceBytes, exactCellCount };
+  }
+
+  /** Resolve an untrusted renderer v2 request against frozen host state. */
+  private resolveFeedbackTextTargetV2(
+    session: ActiveFeedbackSession,
+    target: { startOrdinal: number; endOrdinal: number; startLine: number; endLine: number },
+    rendererTarget: unknown,
+    rendererEvidence: unknown,
+    budgetItems: readonly FeedbackItemV2[]
+  ): { target: FeedbackTextItemV2['target']; evidence: FeedbackEvidenceEnvelopeV2 } {
+    const budget = this.feedbackV2BudgetState(budgetItems);
+    try {
+      const resolved = resolveFeedbackTargetEvidenceV2({
+        sourceIndex: session.sourceIndex,
+        sourceLines: { startLine: target.startLine, endLine: target.endLine },
+        startBlock: this.feedbackCanonicalEndpointV2(session, target.startOrdinal),
+        endBlock: this.feedbackCanonicalEndpointV2(session, target.endOrdinal),
+        rendererTarget,
+        ...(rendererEvidence === undefined ? {} : { rendererEvidence }),
+        sourceFormat: this.feedbackSourceFormatV2(session, target),
+        currentAggregateEmbeddedSourceBytes: budget.embeddedSourceBytes,
+        currentExactCellCount: budget.exactCellCount,
+      });
+      if (resolved.sourceBytesSha256 !== session.store.snapshot.sourceSha256) {
+        throw new Error('The retained source index does not match the active Feedback round.');
+      }
+      return { target: resolved.target, evidence: resolved.evidence };
+    } catch (error) {
+      session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+      throw Object.assign(
+        new Error(
+          error instanceof Error
+            ? error.message
+            : 'The Feedback target could not be resolved against the frozen source.'
+        ),
+        { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+      );
+    }
+  }
+
+  /** Derive an exact visual target and containing-source reference for a PNG. */
+  private resolveFeedbackVisualTargetV2(
+    session: ActiveFeedbackSession,
+    target: { startOrdinal: number; endOrdinal: number; startLine: number; endLine: number }
+  ): { target: FeedbackTargetV2; sourceReference: FeedbackVisualSourceReferenceV2 } {
+    const startBlock = this.feedbackCanonicalEndpointV2(session, target.startOrdinal);
+    const endBlock = this.feedbackCanonicalEndpointV2(session, target.endOrdinal);
+    const startKind = normalizeFeedbackBlockKindV2(startBlock.kind);
+    const endKind = normalizeFeedbackBlockKindV2(endBlock.kind);
+    if (startKind === null || endKind === null) {
+      throw Object.assign(new Error('The visual Feedback block kind is unsupported.'), {
+        code: FEEDBACK_ERROR_CODES.targetDoesNotMap,
+      });
+    }
+    const format = this.feedbackSourceFormatV2(session, target);
+    const source = projectFeedbackSourceEvidence(session.sourceIndex, {
+      startLine: target.startLine,
+      endLine: target.endLine,
+      relationship: 'containing-blocks',
+      format,
+      itemUtf8Budget: 0,
+      remainingAggregateUtf8Budget: 0,
+    });
+    return {
+      target: {
+        version: 2,
+        requestedScope: 'visual-region',
+        effectiveScope: 'visual-region',
+        resolution: 'exact',
+        blockSpan: {
+          startOrdinal: startBlock.ordinal,
+          endOrdinal: endBlock.ordinal,
+          startKind,
+          endKind,
+          startBlockSha256: startBlock.sha256,
+          endBlockSha256: endBlock.sha256,
+        },
+      },
+      sourceReference: {
+        relationship: 'containing-blocks',
+        format,
+        normalization: 'lf',
+        sourceSliceSha256: source.sourceSliceSha256,
+      },
+    };
+  }
+
+  /** Return a fully v2 item set or fail on mixed in-memory schema state. */
+  private feedbackItemsV2(session: ActiveFeedbackSession): FeedbackItemV2[] {
+    const items = session.store.items;
+    if (items.some(item => !('target' in item) || !('evidence' in item))) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-STORE-001',
+        'The Feedback draft has not been migrated to evidence v2.'
+      );
+    }
+    return items as FeedbackItemV2[];
+  }
+
+  /**
+   * Resolve every v1 item in stable ID order without rewriting the draft.
+   * The store validates this one-to-one set and combines it with the triggering
+   * mutation or seal in one guarded atomic report replacement.
+   */
+  private async feedbackMigrationItemsV2(
+    session: ActiveFeedbackSession
+  ): Promise<FeedbackItemV2[] | undefined> {
+    if (session.store.schemaVersion === 2) return undefined;
+    const migrated: FeedbackItemV2[] = [];
+    let embeddedSourceBytes = 0;
+    let exactCellCount = 0;
+    const legacyItems = session.store.items as readonly FeedbackItem[];
+    for (const item of [...legacyItems].sort((left, right) => left.sequence - right.sequence)) {
+      const target =
+        session.targets.get(item.id) ??
+        findFeedbackOrdinalsForLines(session.anchorMap, item.startLine, item.endLine);
+      if (target === undefined || target === null) {
+        throw Object.assign(
+          new Error(`Feedback item ${item.id} no longer maps to the frozen Markdown blocks.`),
+          { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+        );
+      }
+      const migrationItem: FeedbackMigrationItemV1 = { ...item };
+      const screenshotDimensions =
+        item.kind === 'screenshot'
+          ? await session.store.getValidatedScreenshotMetadata(item.id)
+          : undefined;
+      const result = migrateFeedbackItemV1ToV2({
+        sourceIndex: session.sourceIndex,
+        sourceLines: { startLine: item.startLine, endLine: item.endLine },
+        startBlock: this.feedbackCanonicalEndpointV2(session, target.startOrdinal),
+        endBlock: this.feedbackCanonicalEndpointV2(session, target.endOrdinal),
+        item: migrationItem,
+        locatorValidity: {
+          renderedRange:
+            item.kind === 'text' &&
+            item.renderedRange !== undefined &&
+            !session.degradedRenderedRangeIds.has(item.id) &&
+            this.validatePersistedFeedbackRenderedRange(session, target, item.renderedRange),
+          cellTarget:
+            item.kind === 'text' &&
+            item.cellTarget !== undefined &&
+            !session.degradedCellTargetIds.has(item.id) &&
+            this.validatePersistedFeedbackCellTarget(session, target, item.cellTarget),
+        },
+        sourceFormat: this.feedbackSourceFormatV2(session, {
+          ...target,
+          startLine: item.startLine,
+        }),
+        ...(screenshotDimensions === undefined ? {} : { screenshotDimensions }),
+        currentAggregateEmbeddedSourceBytes: embeddedSourceBytes,
+        currentExactCellCount: exactCellCount,
+      });
+      migrated.push(result.item);
+      embeddedSourceBytes += result.aggregateEmbeddedSourceBytesConsumed;
+      exactCellCount += result.exactCellCountConsumed;
+    }
+    return migrated;
+  }
+
+  /** Convert one legacy renderer add request without reclassifying its Focus. */
+  private resolveLegacyFeedbackTextTargetV2(
+    session: ActiveFeedbackSession,
+    target: { startOrdinal: number; endOrdinal: number; startLine: number; endLine: number },
+    input: {
+      focus: string;
+      feedback: string;
+      renderedRange?: FeedbackRenderedRangeInputV1;
+      cellTarget?: FeedbackCellTargetInputV1;
+    },
+    budgetItems: readonly FeedbackItemV2[]
+  ): { target: FeedbackTargetV2; evidence: FeedbackEvidenceEnvelopeV2 } {
+    if (input.renderedRange === undefined || input.cellTarget !== undefined) {
+      session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+      throw Object.assign(
+        new Error(
+          'This Feedback selection predates structured evidence. Reload the rich editor and select it again.'
+        ),
+        { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+      );
+    }
+    return this.resolveFeedbackTextTargetV2(
+      session,
+      target,
+      {
+        version: 2,
+        requestedScope: 'rendered-text',
+        locator: { kind: 'rendered-range', value: input.renderedRange },
+      },
+      { kind: 'rendered-text', text: input.focus, complete: true },
+      budgetItems
+    );
+  }
+
+  /** Rebuild only stale v2 locator items for the irreversible seal boundary. */
+  private feedbackItemsResolvedForSealV2(session: ActiveFeedbackSession): FeedbackItemV2[] {
+    const resolved: FeedbackItemV2[] = [];
+    let embeddedSourceBytes = 0;
+    let exactCellCount = 0;
+    for (const item of [...this.feedbackItemsV2(session)].sort(
+      (left, right) => left.sequence - right.sequence
+    )) {
+      const isStale =
+        session.degradedRenderedRangeIds.has(item.id) || session.degradedCellTargetIds.has(item.id);
+      if (!isStale) {
+        resolved.push(item);
+        const itemBudget = this.feedbackV2BudgetState([item]);
+        embeddedSourceBytes += itemBudget.embeddedSourceBytes;
+        exactCellCount += itemBudget.exactCellCount;
+        continue;
+      }
+      const target =
+        session.targets.get(item.id) ??
+        findFeedbackOrdinalsForLines(session.anchorMap, item.startLine, item.endLine);
+      if (target === undefined || target === null) {
+        throw Object.assign(
+          new Error(`Feedback item ${item.id} no longer maps to the frozen Markdown blocks.`),
+          { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+        );
+      }
+      const result = degradeFeedbackItemV2ForStaleLocator({
+        sourceIndex: session.sourceIndex,
+        sourceLines: { startLine: item.startLine, endLine: item.endLine },
+        startBlock: this.feedbackCanonicalEndpointV2(session, target.startOrdinal),
+        endBlock: this.feedbackCanonicalEndpointV2(session, target.endOrdinal),
+        item,
+        sourceFormat: this.feedbackSourceFormatV2(session, {
+          ...target,
+          startLine: item.startLine,
+        }),
+        currentAggregateEmbeddedSourceBytes: embeddedSourceBytes,
+        currentExactCellCount: exactCellCount,
+      });
+      resolved.push(result.item);
+      embeddedSourceBytes += result.aggregateEmbeddedSourceBytesConsumed;
+      exactCellCount += result.exactCellCountConsumed;
+    }
+    return resolved;
+  }
+
   /** Build immutable host-owned metadata for strict block-relative rendered ranges. */
   private buildFeedbackCanonicalBlocks(
     blocks: readonly CanonicalFeedbackBlock[]
@@ -3972,6 +4371,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           kind: block.kind,
           contentSize: block.contentSize,
           sha256: crypto.createHash('sha256').update(block.markdown, 'utf8').digest('hex'),
+          ...(block.tableFingerprint === undefined
+            ? {}
+            : { tableFingerprint: block.tableFingerprint }),
         },
       ])
     );
@@ -3993,6 +4395,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       target.startOrdinal !== target.endOrdinal ||
       input.tableOrdinal !== target.startOrdinal ||
       tableBlock?.kind !== 'table' ||
+      tableBlock.tableFingerprint === undefined ||
+      input.tableFingerprint !== tableBlock.tableFingerprint ||
       !Number.isSafeInteger(rectangle.top) ||
       !Number.isSafeInteger(rectangle.left) ||
       !Number.isSafeInteger(rectangle.bottom) ||
@@ -4000,7 +4404,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       rectangle.top < 0 ||
       rectangle.left < 0 ||
       rectangle.bottom <= rectangle.top ||
-      rectangle.right <= rectangle.left
+      rectangle.right <= rectangle.left ||
+      !isFeedbackCellRectangleWithinExactLimit(rectangle)
     ) {
       session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
       throw Object.assign(
@@ -4087,7 +4492,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return true;
   }
 
-  /** Revalidate the host-owned containing-table identity on draft restoration. */
+  /** Revalidate the host-owned containing-table identity for a persisted locator. */
   private validatePersistedFeedbackCellTarget(
     session: ActiveFeedbackSession,
     target: { startOrdinal: number; endOrdinal: number },
@@ -4105,6 +4510,65 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       return false;
     }
     return true;
+  }
+
+  /**
+   * Revalidates every persisted exact locator against the frozen host snapshot
+   * at the final mutation boundary. Renderer resolution is useful evidence,
+   * but only the extension host can verify canonical block hashes and bounds.
+   */
+  private revalidateFeedbackLocatorsForSeal(session: ActiveFeedbackSession): void {
+    let retainedExactCellCount = 0;
+    for (const item of session.store.items) {
+      if (item.kind !== 'text') continue;
+      const renderedRange =
+        'target' in item && item.target.resolution === 'exact'
+          ? item.target.locator?.kind === 'rendered-range'
+            ? item.target.locator.value
+            : undefined
+          : 'renderedRange' in item
+            ? item.renderedRange
+            : undefined;
+      const cellTarget =
+        'target' in item && item.target.resolution === 'exact'
+          ? item.target.locator?.kind === 'table-cells'
+            ? item.target.locator.value
+            : undefined
+          : 'cellTarget' in item
+            ? item.cellTarget
+            : undefined;
+      if (renderedRange === undefined && cellTarget === undefined) continue;
+      const target = findFeedbackOrdinalsForLines(session.anchorMap, item.startLine, item.endLine);
+      if (!target) {
+        session.lastErrorCode = FEEDBACK_ERROR_CODES.targetDoesNotMap;
+        throw Object.assign(
+          new Error(`Feedback item ${item.id} no longer maps to the frozen Markdown blocks.`),
+          { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+        );
+      }
+      session.targets.set(item.id, target);
+      if (
+        renderedRange !== undefined &&
+        !this.validatePersistedFeedbackRenderedRange(session, target, renderedRange)
+      ) {
+        session.degradedRenderedRangeIds.add(item.id);
+      }
+      if (cellTarget !== undefined) {
+        const rectangle = cellTarget.rectangle;
+        const exactCellCount =
+          (rectangle.bottom - rectangle.top) * (rectangle.right - rectangle.left);
+        const locatorValid = this.validatePersistedFeedbackCellTarget(session, target, cellTarget);
+        if (
+          !locatorValid ||
+          session.degradedCellTargetIds.has(item.id) ||
+          retainedExactCellCount + exactCellCount > FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION
+        ) {
+          session.degradedCellTargetIds.add(item.id);
+        } else {
+          retainedExactCellCount += exactCellCount;
+        }
+      }
+    }
   }
 
   /**
@@ -4179,6 +4643,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     webview: vscode.Webview
   ): Promise<void> {
     let trackedMutationSession: ActiveFeedbackSession | undefined;
+    let releaseMutationPlanning: (() => void) | undefined;
     let requestSession: ActiveFeedbackSession | undefined;
     let closeOperation:
       | {
@@ -4398,14 +4863,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       const session = this.requireFeedbackSession(message, document, webview);
       requestSession = session;
-      if (message.type === 'feedback.finish' || message.type === 'feedback.discard') {
-        let resolveCloseOperation = (): void => undefined;
-        const promise = new Promise<void>(resolve => {
-          resolveCloseOperation = resolve;
-        });
-        session.closeOperation = promise;
-        closeOperation = { session, promise, resolve: resolveCloseOperation };
-      }
       if (message.type === 'feedback.close.retry') {
         if (
           session.pendingClose?.requestId !== message.requestId ||
@@ -4541,10 +4998,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         );
         return;
       }
-      if (session.phase !== 'active') {
+      if (session.phase !== 'active' || session.closeOperation !== undefined) {
+        const closeState = session.phase === 'active' ? 'closing' : session.phase;
         throw new FeedbackSessionError(
           'MD4H-FB-STORE-001',
-          `This feedback session is already ${session.phase}. Wait for that operation to finish.`
+          `This feedback session is already ${closeState}. Wait for that operation to finish.`
         );
       }
       if (
@@ -4559,9 +5017,23 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           'The source changed. The draft is preserved, but new feedback and finishing are disabled.'
         );
       }
+      if (message.type === 'feedback.finish' || message.type === 'feedback.discard') {
+        let resolveCloseOperation = (): void => undefined;
+        const promise = new Promise<void>(resolve => {
+          resolveCloseOperation = resolve;
+        });
+        // A rejected duplicate must never replace the reservation that reload recovery awaits.
+        session.closeOperation = promise;
+        closeOperation = { session, promise, resolve: resolveCloseOperation };
+      }
       if (FEEDBACK_DURABLE_MUTATION_MESSAGES.has(message.type)) {
         this.beginFeedbackMutation(session);
         trackedMutationSession = session;
+        const previousPlanning = session.mutationPlanningQueue;
+        session.mutationPlanningQueue = new Promise<void>(resolve => {
+          releaseMutationPlanning = resolve;
+        });
+        await previousPlanning;
       }
 
       switch (message.type) {
@@ -4571,24 +5043,42 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
         case 'feedback.text.add': {
           const target = this.mapFeedbackTarget(session, message.startOrdinal, message.endOrdinal);
-          const renderedRange =
-            message.renderedRange === undefined
-              ? undefined
-              : this.enrichFeedbackRenderedRange(session, target, message.renderedRange);
-          const cellTarget =
-            message.cellTarget === undefined
-              ? undefined
-              : this.enrichFeedbackCellTarget(session, target, message.cellTarget);
-          const item = await session.store.addTextFeedback(
+          const migrationItems = await this.feedbackMigrationItemsV2(session);
+          const budgetItems = migrationItems ?? this.feedbackItemsV2(session);
+          const resolved =
+            'target' in message
+              ? this.resolveFeedbackTextTargetV2(
+                  session,
+                  target,
+                  message.target,
+                  message.evidence,
+                  budgetItems
+                )
+              : this.resolveLegacyFeedbackTextTargetV2(
+                  session,
+                  target,
+                  {
+                    focus: message.focus,
+                    feedback: message.feedback,
+                    ...(message.renderedRange === undefined
+                      ? {}
+                      : { renderedRange: message.renderedRange }),
+                    ...(message.cellTarget === undefined ? {} : { cellTarget: message.cellTarget }),
+                  },
+                  budgetItems
+                );
+          const item = await session.store.addTextFeedbackV2(
             {
               startLine: target.startLine,
               endLine: target.endLine,
-              focus: message.focus,
               feedback: message.feedback,
-              ...(renderedRange === undefined ? {} : { renderedRange }),
-              ...(cellTarget === undefined ? {} : { cellTarget }),
+              target: resolved.target,
+              evidence: resolved.evidence,
             },
-            this.feedbackCommitGuard(session, document)
+            {
+              beforeCommit: this.feedbackCommitGuard(session, document),
+              ...(migrationItems === undefined ? {} : { migrationItems }),
+            }
           );
           session.targets.set(item.id, {
             startOrdinal: target.startOrdinal,
@@ -4605,14 +5095,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
         case 'feedback.screenshot.add': {
           const target = this.mapFeedbackTarget(session, message.startOrdinal, message.endOrdinal);
-          const item = await session.store.addScreenshotFeedback(
+          const migrationItems = await this.feedbackMigrationItemsV2(session);
+          const item = await session.store.addScreenshotFeedbackV2(
             {
               startLine: target.startLine,
               endLine: target.endLine,
               feedback: message.feedback,
               pngData: message.imageDataUrl,
+              ...this.resolveFeedbackVisualTargetV2(session, target),
             },
-            this.feedbackCommitGuard(session, document)
+            {
+              beforeCommit: this.feedbackCommitGuard(session, document),
+              ...(migrationItems === undefined ? {} : { migrationItems }),
+            }
           );
           session.targets.set(item.id, {
             startOrdinal: target.startOrdinal,
@@ -4630,15 +5125,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
         case 'feedback.screenshot.replace': {
           const target = this.mapFeedbackTarget(session, message.startOrdinal, message.endOrdinal);
-          await session.store.replaceScreenshotFeedback(
+          const migrationItems = await this.feedbackMigrationItemsV2(session);
+          await session.store.replaceScreenshotFeedbackV2(
             message.id,
             {
               startLine: target.startLine,
               endLine: target.endLine,
               feedback: message.feedback,
               pngData: message.imageDataUrl,
+              ...this.resolveFeedbackVisualTargetV2(session, target),
             },
-            this.feedbackCommitGuard(session, document)
+            {
+              beforeCommit: this.feedbackCommitGuard(session, document),
+              ...(migrationItems === undefined ? {} : { migrationItems }),
+            }
           );
           session.targets.set(message.id, {
             startOrdinal: target.startOrdinal,
@@ -4657,24 +5157,33 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           return;
         }
 
-        case 'feedback.item.edit':
-          await session.store.updateFeedback(
-            message.id,
-            message.feedback,
-            this.feedbackCommitGuard(session, document)
-          );
+        case 'feedback.item.edit': {
+          const migrationItems = await this.feedbackMigrationItemsV2(session);
+          await session.store.updateFeedbackV2(message.id, message.feedback, {
+            beforeCommit: this.feedbackCommitGuard(session, document),
+            ...(migrationItems === undefined ? {} : { migrationItems }),
+          });
           break;
-        case 'feedback.item.delete':
-          await session.store.deleteFeedback(
-            message.id,
-            this.feedbackCommitGuard(session, document)
-          );
+        }
+        case 'feedback.item.delete': {
+          const migrationItems = await this.feedbackMigrationItemsV2(session);
+          await session.store.deleteFeedbackV2(message.id, {
+            beforeCommit: this.feedbackCommitGuard(session, document),
+            ...(migrationItems === undefined ? {} : { migrationItems }),
+          });
           break;
+        }
         case 'feedback.item.restore':
-          await session.store.restoreFeedback(
-            message.id,
-            this.feedbackCommitGuard(session, document)
-          );
+          if (session.store.schemaVersion === 2) {
+            await session.store.restoreFeedbackV2(message.id, {
+              beforeCommit: this.feedbackCommitGuard(session, document),
+            });
+          } else {
+            await session.store.restoreFeedback(
+              message.id,
+              this.feedbackCommitGuard(session, document)
+            );
+          }
           break;
 
         case 'feedback.finish': {
@@ -4682,12 +5191,52 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
             session.phase = 'finishing';
             session.pendingClose = undefined;
             await this.waitForFeedbackMutations(session);
+            this.revalidateFeedbackLocatorsForSeal(session);
             const bytes = await readFile(document.uri.fsPath);
-            const result = await session.store.seal(
-              bytes,
-              new Date(),
-              this.feedbackCommitGuard(session, document)
+            const locatorIds = new Set(
+              session.store.items
+                .filter(
+                  item =>
+                    item.kind === 'text' &&
+                    ('target' in item
+                      ? item.target.resolution === 'exact' && item.target.locator !== undefined
+                      : item.renderedRange !== undefined || item.cellTarget !== undefined)
+                )
+                .map(item => item.id)
             );
+            for (const id of message.degradedTargetIds ?? []) {
+              if (!locatorIds.has(id)) {
+                throw Object.assign(
+                  new Error(
+                    `Feedback item ${id} cannot be degraded because it has no exact locator.`
+                  ),
+                  { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
+                );
+              }
+              const item = session.store.items.find(candidate => candidate.id === id);
+              const locatorKind =
+                item?.kind === 'text' && 'target' in item
+                  ? item.target.resolution === 'exact'
+                    ? item.target.locator?.kind
+                    : undefined
+                  : item?.kind === 'text' && item.renderedRange !== undefined
+                    ? 'rendered-range'
+                    : item?.kind === 'text' && item.cellTarget !== undefined
+                      ? 'table-cells'
+                      : undefined;
+              if (locatorKind === 'rendered-range') session.degradedRenderedRangeIds.add(id);
+              if (locatorKind === 'table-cells') session.degradedCellTargetIds.add(id);
+            }
+            const migrationItems = await this.feedbackMigrationItemsV2(session);
+            const resolvedItemsV2 =
+              migrationItems === undefined
+                ? this.feedbackItemsResolvedForSealV2(session)
+                : undefined;
+            const result = await session.store.seal(bytes, new Date(), {
+              beforeCommit: this.feedbackCommitGuard(session, document),
+              ...(migrationItems === undefined ? {} : { migrationItems }),
+              ...(resolvedItemsV2 === undefined ? {} : { resolvedItemsV2 }),
+            });
             const configuredPromptTemplate = vscode.workspace
               .getConfiguration('markdownForHumans.feedback', document.uri)
               .get<unknown>('handoffPromptTemplate');
@@ -4907,6 +5456,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         recoverable: true,
       });
     } finally {
+      releaseMutationPlanning?.();
       if (trackedMutationSession) {
         this.endFeedbackMutation(trackedMutationSession);
       }
@@ -5086,6 +5636,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         workspaceRoot,
         sourcePath: document.uri.fsPath,
         sourceBytes,
+        schemaVersion: 2,
       });
       this.assertFeedbackTransition(documentKey, transitionToken);
       await this.assertFeedbackSourceSha256(document, store.snapshot.sourceSha256);
@@ -5094,6 +5645,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         ownerWebview: webview,
         sessionId: crypto.randomBytes(16).toString('hex'),
         store,
+        sourceBytes: Buffer.from(sourceBytes),
+        sourceIndex: createFeedbackSourceIndex(sourceBytes),
         anchorMap,
         canonicalBlocks: this.buildFeedbackCanonicalBlocks(canonicalBlocks),
         targets: new Map(),
@@ -5103,6 +5656,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         degradedCellTargetIds: new Set(),
         phase: 'active',
         pendingMutationCount: 0,
+        mutationPlanningQueue: Promise.resolve(),
         mutationIdleWaiters: new Set(),
         invalidated: false,
       };
@@ -6297,6 +6851,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         ownerWebview: webview,
         sessionId: crypto.randomBytes(16).toString('hex'),
         store,
+        sourceBytes: Buffer.from(sourceBytes),
+        sourceIndex: createFeedbackSourceIndex(sourceBytes),
         anchorMap,
         canonicalBlocks,
         targets,
@@ -6310,6 +6866,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         degradedCellTargetIds: new Set(),
         phase: 'active',
         pendingMutationCount: 0,
+        mutationPlanningQueue: Promise.resolve(),
         mutationIdleWaiters: new Set(),
         invalidated: false,
       };
@@ -6452,6 +7009,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         ...current,
         ownerWebview: webview,
         sessionId: crypto.randomBytes(16).toString('hex'),
+        sourceBytes: Buffer.from(sourceBytes),
+        sourceIndex: createFeedbackSourceIndex(sourceBytes),
         anchorMap: nextAnchorMap,
         canonicalBlocks: nextCanonicalBlocks,
         targets: new Map(),
@@ -6465,6 +7024,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         degradedCellTargetIds: new Set(),
         phase: 'resuming',
         pendingMutationCount: 0,
+        mutationPlanningQueue: Promise.resolve(),
         mutationIdleWaiters: new Set(),
         pendingClose: undefined,
         lastErrorCode: undefined,
@@ -6542,6 +7102,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /** Restore exact item-to-block targets from persisted inclusive source lines. */
   private restoreFeedbackTargets(session: ActiveFeedbackSession): void {
+    let retainedExactCellCount = 0;
     for (const item of session.store.items) {
       const target = findFeedbackOrdinalsForLines(session.anchorMap, item.startLine, item.endLine);
       if (!target) {
@@ -6550,19 +7111,43 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           { code: FEEDBACK_ERROR_CODES.targetDoesNotMap }
         );
       }
+      if ('target' in item) {
+        this.assertPersistedFeedbackBlockSpanV2(session, item.id, target, item.target.blockSpan);
+      }
+      const renderedRange =
+        item.kind === 'text' && 'target' in item && item.target.resolution === 'exact'
+          ? item.target.locator?.kind === 'rendered-range'
+            ? item.target.locator.value
+            : undefined
+          : item.kind === 'text' && 'renderedRange' in item
+            ? item.renderedRange
+            : undefined;
+      const cellTarget =
+        item.kind === 'text' && 'target' in item && item.target.resolution === 'exact'
+          ? item.target.locator?.kind === 'table-cells'
+            ? item.target.locator.value
+            : undefined
+          : item.kind === 'text' && 'cellTarget' in item
+            ? item.cellTarget
+            : undefined;
       if (
-        item.kind === 'text' &&
-        item.renderedRange !== undefined &&
-        !this.validatePersistedFeedbackRenderedRange(session, target, item.renderedRange)
+        renderedRange !== undefined &&
+        !this.validatePersistedFeedbackRenderedRange(session, target, renderedRange)
       ) {
         session.degradedRenderedRangeIds.add(item.id);
       }
-      if (
-        item.kind === 'text' &&
-        item.cellTarget !== undefined &&
-        !this.validatePersistedFeedbackCellTarget(session, target, item.cellTarget)
-      ) {
-        session.degradedCellTargetIds.add(item.id);
+      if (cellTarget !== undefined) {
+        const rectangle = cellTarget.rectangle;
+        const exactCellCount =
+          (rectangle.bottom - rectangle.top) * (rectangle.right - rectangle.left);
+        if (
+          !this.validatePersistedFeedbackCellTarget(session, target, cellTarget) ||
+          retainedExactCellCount + exactCellCount > FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION
+        ) {
+          session.degradedCellTargetIds.add(item.id);
+        } else {
+          retainedExactCellCount += exactCellCount;
+        }
       }
       session.targets.set(item.id, target);
     }
@@ -6602,6 +7187,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       type: 'feedback.started',
       requestId,
       sessionId: session.sessionId,
+      evidenceVersion: 2,
       source: snapshot.source,
       sourceSha256: snapshot.sourceSha256,
       round: snapshot.round,

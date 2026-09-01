@@ -78,6 +78,7 @@ Desktop.ini
 .cursor/**
 .agent/**
 .chetana/**
+.concret.io/**
 
 # Include only essential files for marketplace
 !README.md

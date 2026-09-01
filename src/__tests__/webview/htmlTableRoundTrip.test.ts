@@ -20,6 +20,9 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { isMarkdownStructurallyEquivalent } from '../../editor/markdownAstEquivalence';
 import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTable';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
 import { BlankLinePreservation } from '../../webview/extensions/blankLinePreservation';
@@ -216,6 +219,26 @@ describe('HTML table load from markdown', () => {
     }
   });
 
+  it('preserves merged-cell spans when serializing an HTML-origin table', () => {
+    const editor = createEditor();
+    try {
+      const source = [
+        '<table>',
+        '  <tr><th rowspan="2">State</th><th colspan="2">Actions</th></tr>',
+        '  <tr><td>Review</td><td>Approve</td></tr>',
+        '</table>',
+      ].join('\n');
+      editor.commands.setContent(source, { contentType: 'markdown' });
+
+      const serialized = getEditorMarkdownForSync(editor, 'strip');
+      expect(serialized).toContain('<th rowspan="2">State</th>');
+      expect(serialized).toContain('<th colspan="2">Actions</th>');
+      expect(isMarkdownStructurallyEquivalent(serialized, source)).toBe(true);
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('leaves GFM pipe tables as pipe tables', () => {
     const editor = createEditor();
     try {
@@ -228,6 +251,24 @@ describe('HTML table load from markdown', () => {
       expect(serialized).toMatch(/\|\s*A\s*\|\s*B\s*\|/);
       expect(serialized).toMatch(/\|\s*-+\s*\|/);
       expect(serialized).not.toContain('<table');
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('keeps the Feedback v2 golden source structurally equivalent after serialization', () => {
+    const editor = createEditor();
+    const source = readFileSync(
+      resolve(__dirname, '../fixtures/feedback-evidence-v2/source.md'),
+      'utf8'
+    );
+    try {
+      editor.commands.setContent(source, { contentType: 'markdown' });
+
+      const serialized = getEditorMarkdownForSync(editor, 'strip');
+      expect(serialized).toContain('Password \\| reset');
+      expect(serialized).toContain('<th colspan="2">Actions</th>');
+      expect(isMarkdownStructurallyEquivalent(serialized, source)).toBe(true);
     } finally {
       editor.destroy();
     }

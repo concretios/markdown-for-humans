@@ -26,7 +26,7 @@ VS Code desktop
 │        └─ WebviewPanel lifecycle                                  │
 │                         ⇅ validated messages                      │
 │ Webview, Chromium 132                                             │
-│   ├─ TipTap 3.30.3 on ProseMirror                                 │
+│   ├─ TipTap 3.30.5 on ProseMirror                                 │
 │   ├─ DocumentSyncController                                       │
 │   ├─ editing, tables, images, math and Mermaid                    │
 │   ├─ Feedback review and capture modules                          │
@@ -128,7 +128,7 @@ The state parser projects only the fields above. It must not persist document co
 
 ### TipTap and ProseMirror
 
-Every direct `@tiptap/*` runtime package is pinned to exactly `3.30.3`, including `@tiptap/core`, `@tiptap/markdown`, `@tiptap/pm`, `@tiptap/starter-kit` and the direct extensions. This is the one-family rule:
+Every direct `@tiptap/*` runtime package is pinned to exactly `3.30.5`, including `@tiptap/core`, `@tiptap/markdown`, `@tiptap/pm`, `@tiptap/starter-kit` and the direct extensions. This is the one-family rule:
 
 1. Upgrade all direct TipTap packages as one tested set.
 2. Import ProseMirror APIs through `@tiptap/pm/*`.
@@ -152,7 +152,7 @@ All webview runtime dependencies are bundled. The webview does not depend on a C
 
 ### Upgrade posture
 
-The dependency scan found no TipTap family upgrade beyond 3.30.3. Other available major versions are deliberately separate migrations, not safe mechanical bumps:
+The TipTap family is on the reviewed 3.30.5 security patch. Other available major versions are deliberately separate migrations, not safe mechanical bumps:
 
 | Candidate       | Posture                       | Validation required before adoption                                                          |
 | --------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
@@ -215,15 +215,19 @@ The host builds one exact map between canonical rich blocks and raw Markdown lin
 - renderer table fingerprint
 - host-enriched SHA-256 for the containing canonical table block
 
-The host validates that the target is one canonical table block, checks the rectangle shape, and enriches it with that block's SHA-256. The renderer validates the table fingerprint, live row and column bounds, and merged or irregular geometry before drawing cell decorations. A stale cell target degrades to the verified containing-block marker with a visible warning. It is never fuzzy-matched to a similar table. Exact range and cell metadata are draft-only and are removed when the report is sealed.
+The host validates that the target is one canonical table block, checks the rectangle shape, and enriches it with that block's SHA-256. The renderer validates the table fingerprint, live row and column bounds, and merged or irregular geometry before drawing cell decorations. Exact per-cell work is capped at 256 cells per item and 4,096 cells per session; larger or later-overflow selections coarsen to whole-table source evidence before cell traversal, fingerprinting, preview, or geometry, with a visible explanation. Per-cell extraction and aggregate structured evidence are independently bounded before traversal. Persisted locators continue to consume the host and store budget until degradation is durably written at seal. A stale cell target becomes a host-origin `stale-locator` degradation with requested scope and original evidence preserved. It is never fuzzy-matched to a similar table. Exact range and cell locators remain in sealed reports only while Finish-time frozen-document validation still proves them. `feedback.finish` may carry a bounded, unique list of degraded item IDs without document content; the host unions that signal with its own fresh validation and the store writes the canonical degraded v2 envelope atomically. Source path, source SHA-256, containing source lines, target metadata, and typed evidence remain distinct authorities. Table coordinates describe the frozen rendered model, not proven raw Markdown cell columns, and cell TSV is a derived projection rather than a literal quote or canonical table representation.
+
+The highlighted document is the canonical Feedback preview. The composer and expanded cards derive bounded renderer-local descriptions from the frozen ProseMirror document: literal excerpts for exact text and partial code, a fixed-size semantic grid for valid cell rectangles, and structural summaries for whole tables, code blocks, opaque NodeViews, and multi-block targets. Renderer-side selection evidence is bounded before traversal. The previews do not parse Markdown or rerun Mermaid, KaTeX, image, or syntax renderers. Complex targets select a stable wide composer preset, ordinary prose stays compact, and an accessible override changes that preset. The feedback input grows only to a viewport-relative cap before scrolling internally and is remeasured after responsive width changes. Wide composers first prefer a collision-free edge of full-width targets; every measured active composer and tall saved-comment edit form clamps below the sticky toolbar and inside the current viewport when its visible target would otherwise leave the form unreachable. While a saved comment is being edited, its card is the only card in the layout and pending Undo controls return after Save or Cancel, so keyboard focus cannot move to an offscreen packed surface.
 
 ### Durable bundle
 
-Drafts are written atomically below `.md4h/feedback/` in the workspace folder that contains the source. `feedback.md` uses the strict `md4h-feedback/v1` grammar and screenshot items use hash-bound `assets/F<n>.png` files. IDs are monotonic, sealed bundles are immutable, and resume reparses and revalidates the complete bundle.
+Drafts are written atomically below `.md4h/feedback/` in the workspace folder that contains the source. New rounds use the strict `md4h-feedback/v2` grammar and screenshot items use hash-bound `assets/F<n>.png` files. V2 separates requested and effective target scope from evidence fidelity. Complete source-addressable blocks carry a bounded host-derived source slice when exact source mapping and embedding budgets permit it; otherwise the item records an explicit omission or degradation. Native drags carry exact rendered text plus a rendered locator, regular cell rectangles carry a typed matrix plus derived escaped TSV, and visual sub-regions carry a PNG plus a containing-source reference. Whole tables never use TSV as canonical evidence. Parity-proven GFM and HTML table shapes retain authored source, while unsupported raw-HTML shapes fail closed instead of emitting inaccurate evidence.
+
+The v2 parser validates canonical metadata, block hashes, fingerprints, evidence bodies, byte and cell budgets, screenshot paths, and writer-derived summaries. IDs are monotonic, sealed bundles are immutable, and Resume reparses and revalidates the complete bundle against the retained source and frozen rich model. Sealed v1 bundles remain byte-immutable. A v1 draft migrates atomically only on its first explicit mutation or seal; locator-free Focus remains labelled legacy evidence and is never promoted to exact text or table structure.
 
 Automatic draft discovery is metadata-first. It reads the bounded report, checks exact source identity, contained regular screenshot files, individual size, and cumulative quota, but does not read and hash every PNG during editor startup. Explicit Resume performs full PNG structure and SHA-256 validation before restoring a writable store.
 
-Only fenced `### Feedback` text is an instruction to an agent. Source text, exact Focus text and screenshot pixels are untrusted evidence. See the user-facing bundle contract in `README.md` for the complete grammar.
+Only fenced `### Feedback` text is an instruction to an agent. Target summaries, selected source, rendered text, typed cells, legacy Focus, and screenshot pixels are untrusted evidence. See the user-facing bundle contract in `README.md` for the complete grammar.
 
 ### Bounded, cancelable capture
 

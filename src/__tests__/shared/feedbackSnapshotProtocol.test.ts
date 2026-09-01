@@ -90,6 +90,48 @@ describe('feedback snapshot protocol', () => {
     expect(parseFeedbackSnapshotReport(message)).toEqual(message);
   });
 
+  it('accepts a bounded table fingerprint but preserves legacy fingerprint-free tables', () => {
+    const report = {
+      type: 'feedback.snapshot.report',
+      ...identity,
+      stage: 'applied',
+      viewGeneration: 'view-generation-table',
+      localRevision: 13,
+      dirty: false,
+      content: '| A |\n| - |\n| B |\n',
+      canonicalDescriptorRevision: 4,
+      blocks: [
+        {
+          ordinal: 0,
+          kind: 'table',
+          markdown: '| A |\n| - |\n| B |',
+          contentSize: 12,
+          tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+        },
+      ],
+    };
+
+    expect(parseFeedbackSnapshotReport(report)).toEqual(report);
+    expect(
+      parseFeedbackSnapshotReport({
+        ...report,
+        blocks: [{ ordinal: 0, kind: 'table', markdown: '| A |', contentSize: 3 }],
+      })
+    ).not.toBeNull();
+    expect(
+      parseFeedbackSnapshotReport({
+        ...report,
+        blocks: [{ ...report.blocks[0], kind: 'paragraph' }],
+      })
+    ).toBeNull();
+    expect(
+      parseFeedbackSnapshotReport({
+        ...report,
+        blocks: [{ ...report.blocks[0], tableFingerprint: 'md4h-table/v1:bad' }],
+      })
+    ).toBeNull();
+  });
+
   it('accepts an applied peer report without paying the descriptor cost', () => {
     const message = {
       type: 'feedback.snapshot.report',

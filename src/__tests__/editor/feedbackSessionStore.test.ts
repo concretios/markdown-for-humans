@@ -51,6 +51,14 @@ const FIRST_TABLE_CELL_TARGET = {
   tableFingerprint: 'md4h-table/v1:0123456789abcdef',
   tableBlockSha256: createHash('sha256').update('| A | B |\n| - | - |\n| 1 | 2 |').digest('hex'),
 };
+const TARGET_AGENT_INSTRUCTION_LINE =
+  '- Optional `Target` is a writer-derived summary of strict rendered-model evidence. Text offsets are zero-based and half-open within rich-editor blocks; table coordinates describe the rendered table, not raw Markdown cells.';
+const FOCUS_AGENT_INSTRUCTION_LINE =
+  '- For text feedback, `Focus` is selected rendered text only with an `Exact rendered text` Target. With a `Rendered table` Target, it is a semantic row-major transcription of the selected cells using tabs and newlines. Without either locator, treat `Focus` as best-effort semantic context for the containing blocks, including opaque block source or a degraded former selection, not as an exact quote.';
+const LOCATOR_GENERAL_FOCUS_AGENT_INSTRUCTION_LINE =
+  '- For text feedback, `Focus` is selected rendered text only while an exact `Target` locator is present. Without one, treat `Focus` as best-effort semantic context for the containing blocks, including opaque block source or a degraded former selection, not as an exact quote.';
+const PRECISE_FOCUS_AGENT_INSTRUCTION_LINE =
+  '- For text feedback, `Focus` is the exact text visible in the rich editor. It may omit Markdown syntax present in the source.';
 const AI_AGENT_INSTRUCTION_LINES = [
   '# Instructions for AI coding agents',
   '',
@@ -67,7 +75,8 @@ const AI_AGENT_INSTRUCTION_LINES = [
   '',
   '- Every `F<n>` section is one independent feedback item.',
   '- `Source lines` is the 1-based, inclusive containing range in the frontmatter `source` file.',
-  '- For text feedback, `Focus` is the exact text visible in the rich editor. It may omit Markdown syntax present in the source.',
+  TARGET_AGENT_INSTRUCTION_LINE,
+  FOCUS_AGENT_INSTRUCTION_LINE,
   '- For screenshot feedback, `Evidence` links to `assets/F<n>.png` relative to this file.',
   '- Screenshot PNGs are flattened. Pen strokes, rectangles, and ellipses identify the visual area being discussed and are not separate editable objects.',
   "- A screenshot's source range identifies the Markdown blocks represented by the capture. Use the image and written feedback together.",
@@ -271,6 +280,10 @@ describe('feedbackSessionStore helpers', () => {
         '',
         '**Source lines:** 3-4',
         '',
+        `<!-- md4h-rendered-range:${JSON.stringify(FIRST_PARAGRAPH_RENDERED_RANGE)} -->`,
+        '',
+        '**Target:** Exact rendered text · block 2 offsets 0-16',
+        '',
         '**Focus:**',
         '',
         '````text',
@@ -302,12 +315,12 @@ describe('feedbackSessionStore helpers', () => {
       ].join('\n')
     );
     expect(report.match(/docs\/guide\.md/g)).toHaveLength(1);
-    expect(report).not.toContain('**Target:**');
+    expect(report).toContain('**Target:** Exact rendered text');
     expect(report).not.toContain('**Nearby source:**');
-    expect(report).not.toContain('md4h-rendered-range');
+    expect(report).toContain('md4h-rendered-range');
   });
 
-  it('renders exact machine metadata only in drafts using a canonical encoding', () => {
+  it('renders exact machine metadata and a bounded human locator using a canonical encoding', () => {
     const report = renderFeedbackReport(
       {
         schema: 'md4h-feedback/v1',
@@ -334,9 +347,10 @@ describe('feedbackSessionStore helpers', () => {
     expect(report).toContain(
       `<!-- md4h-rendered-range:${JSON.stringify(FIRST_PARAGRAPH_RENDERED_RANGE)} -->`
     );
+    expect(report).toContain('**Target:** Exact rendered text · block 2 offsets 0-16');
   });
 
-  it('renders canonical table-cell metadata only in draft reports', () => {
+  it('renders canonical table-cell metadata and coordinates in draft and sealed reports', () => {
     const item = {
       id: 'F1',
       sequence: 1,
@@ -372,7 +386,11 @@ describe('feedbackSessionStore helpers', () => {
     );
 
     expect(draft).toContain(`<!-- md4h-cell-target:${JSON.stringify(FIRST_TABLE_CELL_TARGET)} -->`);
-    expect(sealed).not.toContain('md4h-cell-target');
+    expect(draft).toContain('**Target:** Rendered table block 3 · rows 1-4 · columns 1-4');
+    expect(sealed).toContain(
+      `<!-- md4h-cell-target:${JSON.stringify(FIRST_TABLE_CELL_TARGET)} -->`
+    );
+    expect(sealed).toContain('**Target:** Rendered table block 3 · rows 1-4 · columns 1-4');
   });
 
   it('rejects rendered text metadata attached to a screenshot item', () => {
@@ -561,10 +579,11 @@ describe('FeedbackSessionStore', () => {
 
     const sealed = await createStore('d002');
     await sealed.addTextFeedback({
-      startLine: 1,
-      endLine: 1,
-      focus: 'Guide',
+      startLine: 3,
+      endLine: 3,
+      focus: 'First paragraph.',
       feedback: 'Sealed feedback.',
+      renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
     });
     await sealed.seal(SOURCE_BYTES, NOW);
 
@@ -723,6 +742,66 @@ describe('FeedbackSessionStore', () => {
     const migratedReport = await readFile(original.feedbackFilePath, 'utf8');
     expect(migratedReport).toContain('# Instructions for AI coding agents');
     expect(migratedReport).not.toContain('# Feedback handoff');
+  });
+
+  it('resumes the previous exact-Focus wording and migrates it on the next draft write', async () => {
+    const original = await createStore('r021');
+    await original.addTextFeedback({
+      startLine: 3,
+      endLine: 3,
+      focus: 'First paragraph.',
+      feedback: 'Clarify this.',
+    });
+    const currentReport = await readFile(original.feedbackFilePath, 'utf8');
+    expect(currentReport).toContain(FOCUS_AGENT_INSTRUCTION_LINE);
+    const previousReport = currentReport.replace(
+      FOCUS_AGENT_INSTRUCTION_LINE,
+      PRECISE_FOCUS_AGENT_INSTRUCTION_LINE
+    );
+    expect(previousReport).not.toBe(currentReport);
+    await writeFile(original.feedbackFilePath, previousReport);
+
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: original.snapshot.round,
+    });
+    expect(resumed.items).toEqual(original.items);
+
+    await resumed.updateFeedback('F1', 'Make the opening more specific.');
+    const migratedReport = await readFile(original.feedbackFilePath, 'utf8');
+    expect(migratedReport).toContain(FOCUS_AGENT_INSTRUCTION_LINE);
+    expect(migratedReport).not.toContain(PRECISE_FOCUS_AGENT_INSTRUCTION_LINE);
+  });
+
+  it('resumes the previous locator-general Focus wording and migrates it on write', async () => {
+    const original = await createStore('r022');
+    await original.addTextFeedback({
+      startLine: 3,
+      endLine: 3,
+      focus: 'First paragraph.',
+      feedback: 'Clarify this.',
+    });
+    const currentReport = await readFile(original.feedbackFilePath, 'utf8');
+    const previousReport = currentReport.replace(
+      FOCUS_AGENT_INSTRUCTION_LINE,
+      LOCATOR_GENERAL_FOCUS_AGENT_INSTRUCTION_LINE
+    );
+    expect(previousReport).not.toBe(currentReport);
+    await writeFile(original.feedbackFilePath, previousReport);
+
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: original.snapshot.round,
+    });
+    await resumed.updateFeedback('F1', 'Make the opening more specific.');
+
+    const migratedReport = await readFile(original.feedbackFilePath, 'utf8');
+    expect(migratedReport).toContain(FOCUS_AGENT_INSTRUCTION_LINE);
+    expect(migratedReport).not.toContain(LOCATOR_GENERAL_FOCUS_AGENT_INSTRUCTION_LINE);
   });
 
   it('rejects a near-match of the previous guide wording', async () => {
@@ -957,7 +1036,76 @@ describe('FeedbackSessionStore', () => {
     ]);
   });
 
-  it('round-trips and defensively clones draft-only table-cell metadata', async () => {
+  it('resumes a pre-Target locator report and adds the derived summary on its next write', async () => {
+    const original = await createStore('r007');
+    await original.addTextFeedback({
+      startLine: 3,
+      endLine: 3,
+      focus: 'First paragraph.',
+      feedback: 'Clarify this.',
+      renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
+    });
+    const currentReport = await readFile(original.feedbackFilePath, 'utf8');
+    await writeFile(
+      original.feedbackFilePath,
+      currentReport
+        .replace(`${TARGET_AGENT_INSTRUCTION_LINE}\n`, '')
+        .replace('**Target:** Exact rendered text · block 2 offsets 0-16\n\n', '')
+    );
+
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: original.snapshot.round,
+    });
+    expect(resumed.items[0]).toMatchObject({
+      renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
+    });
+
+    await resumed.updateFeedback('F1', 'Clarify this precisely.');
+    await expect(readFile(resumed.feedbackFilePath, 'utf8')).resolves.toContain(
+      '**Target:** Exact rendered text · block 2 offsets 0-16'
+    );
+    await expect(readFile(resumed.feedbackFilePath, 'utf8')).resolves.toContain(
+      TARGET_AGENT_INSTRUCTION_LINE
+    );
+  });
+
+  it('bounds rendered block ordinals at 99,999', async () => {
+    const maximumOrdinalRange = {
+      ...FIRST_PARAGRAPH_RENDERED_RANGE,
+      startOrdinal: 99_999,
+      endOrdinal: 99_999,
+      endOffset: 1,
+    };
+    const accepted = await createStore('r012');
+    await expect(
+      accepted.addTextFeedback({
+        startLine: 3,
+        endLine: 3,
+        focus: 'F',
+        feedback: 'Keep the boundary valid.',
+        renderedRange: maximumOrdinalRange,
+      })
+    ).resolves.toMatchObject({ renderedRange: maximumOrdinalRange });
+
+    const rejected = await createStore('r013');
+    await expect(
+      rejected.addTextFeedback({
+        startLine: 3,
+        endLine: 3,
+        focus: 'F',
+        feedback: 'Reject the unbounded ordinal.',
+        renderedRange: {
+          ...maximumOrdinalRange,
+          endOrdinal: 100_000,
+        },
+      })
+    ).rejects.toThrow(/rendered feedback range metadata/i);
+  });
+
+  it('round-trips and defensively clones rendered table-cell locator metadata', async () => {
     const original = await createStore('c001');
     const added = await original.addTextFeedback({
       startLine: 7,
@@ -992,6 +1140,116 @@ describe('FeedbackSessionStore', () => {
     ]);
   });
 
+  it('bounds aggregate exact table-cell geometry across one bundle', async () => {
+    const store = await createStore('c005');
+    const maximumItemTarget = {
+      ...FIRST_TABLE_CELL_TARGET,
+      rectangle: { top: 0, left: 0, bottom: 16, right: 16 },
+    };
+    for (let index = 0; index < 16; index += 1) {
+      await store.addTextFeedback({
+        startLine: 7,
+        endLine: 12,
+        focus: `Cell selection ${index + 1}`,
+        feedback: 'Keep this exact target.',
+        cellTarget: maximumItemTarget,
+      });
+    }
+
+    await expect(
+      store.addTextFeedback({
+        startLine: 7,
+        endLine: 12,
+        focus: 'One cell beyond the session budget',
+        feedback: 'This exact target must be rejected.',
+        cellTarget: {
+          ...FIRST_TABLE_CELL_TARGET,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+        },
+      })
+    ).rejects.toThrow(/4,096 table cells|exact geometry/i);
+    expect(store.items).toHaveLength(16);
+  });
+
+  it('keeps an exact-cell restore atomic when the persisted bundle is already at the cap', async () => {
+    const store = await createStore('c007');
+    const maximumItemTarget = {
+      ...FIRST_TABLE_CELL_TARGET,
+      rectangle: { top: 0, left: 0, bottom: 16, right: 16 },
+    };
+    for (let index = 0; index < 16; index += 1) {
+      await store.addTextFeedback({
+        startLine: 7,
+        endLine: 12,
+        focus: `Cell selection ${index + 1}`,
+        feedback: 'Keep this exact target.',
+        cellTarget: maximumItemTarget,
+      });
+    }
+    await store.deleteFeedback('F1');
+    await store.addTextFeedback({
+      startLine: 7,
+      endLine: 12,
+      focus: 'Replacement exact target',
+      feedback: 'This target fills the released capacity.',
+      cellTarget: maximumItemTarget,
+    });
+    const reportAtCap = await readFile(store.feedbackFilePath);
+
+    await expect(store.restoreFeedback('F1')).rejects.toThrow(/4,096 table cells|exact geometry/i);
+
+    expect(store.items.map(item => item.id)).toEqual([
+      ...Array.from({ length: 15 }, (_, index) => `F${index + 2}`),
+      'F17',
+    ]);
+    await expect(readFile(store.feedbackFilePath)).resolves.toEqual(reportAtCap);
+
+    await store.deleteFeedback('F17');
+    await expect(store.restoreFeedback('F1')).resolves.toMatchObject({
+      id: 'F1',
+      cellTarget: maximumItemTarget,
+    });
+    expect(store.items.map(item => item.id)).toEqual(
+      Array.from({ length: 16 }, (_, index) => `F${index + 1}`)
+    );
+  });
+
+  it('resumes legacy over-limit cell metadata as block-level context', async () => {
+    const original = await createStore('c006');
+    await original.addTextFeedback({
+      startLine: 7,
+      endLine: 12,
+      focus: 'Legacy selected cells',
+      feedback: 'Preserve this feedback.',
+      cellTarget: FIRST_TABLE_CELL_TARGET,
+    });
+    const currentReport = await readFile(original.feedbackFilePath, 'utf8');
+    const oversizedReport = currentReport
+      .replace(
+        '"rectangle":{"top":0,"left":0,"bottom":4,"right":4}',
+        '"rectangle":{"top":0,"left":0,"bottom":1,"right":257}'
+      )
+      .replace('rows 1-4 · columns 1-4', 'rows 1-1 · columns 1-257');
+    expect(oversizedReport).not.toBe(currentReport);
+    await writeFile(original.feedbackFilePath, oversizedReport);
+
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: original.snapshot.round,
+    });
+    expect(resumed.items).toEqual([
+      expect.objectContaining({ id: 'F1', focus: 'Legacy selected cells' }),
+    ]);
+    expect(resumed.items[0]).not.toHaveProperty('cellTarget');
+
+    await resumed.updateFeedback('F1', 'Preserve this feedback precisely.');
+    const migratedReport = await readFile(original.feedbackFilePath, 'utf8');
+    expect(migratedReport).not.toContain('md4h-cell-target');
+    expect(migratedReport).not.toContain('**Target:**');
+  });
+
   it.each([
     ['an unbounded table ordinal', { ...FIRST_TABLE_CELL_TARGET, tableOrdinal: 100_000 }],
     [
@@ -999,6 +1257,13 @@ describe('FeedbackSessionStore', () => {
       {
         ...FIRST_TABLE_CELL_TARGET,
         rectangle: { top: 2, left: 0, bottom: 2, right: 4 },
+      },
+    ],
+    [
+      'more than 256 exact cells',
+      {
+        ...FIRST_TABLE_CELL_TARGET,
+        rectangle: { top: 0, left: 0, bottom: 1, right: 257 },
       },
     ],
     [
@@ -1093,6 +1358,34 @@ describe('FeedbackSessionStore', () => {
         round: original.snapshot.round,
       })
     ).rejects.toThrow(/rendered range|metadata|invalid/i);
+  });
+
+  it('rejects a human target summary that disagrees with its canonical locator', async () => {
+    const original = await createStore('m002');
+    await original.addTextFeedback({
+      startLine: 3,
+      endLine: 3,
+      focus: 'First paragraph.',
+      feedback: 'Clarify this.',
+      renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
+    });
+    const report = await readFile(original.feedbackFilePath, 'utf8');
+    await writeFile(
+      original.feedbackFilePath,
+      report.replace(
+        '**Target:** Exact rendered text · block 2 offsets 0-16',
+        '**Target:** Exact rendered text · block 99 offsets 0-16'
+      )
+    );
+
+    await expect(
+      FeedbackSessionStore.resume({
+        workspaceRoot,
+        sourcePath,
+        sourceBytes: SOURCE_BYTES,
+        round: original.snapshot.round,
+      })
+    ).rejects.toThrow(/Target.*locator|locator.*Target/i);
   });
 
   it('revalidates screenshot assets and report structure when resuming', async () => {
@@ -1780,8 +2073,11 @@ describe('FeedbackSessionStore', () => {
     });
     const sealedReport = await readFile(store.feedbackFilePath, 'utf8');
     expect(sealedReport).toContain('state: sealed');
-    expect(sealedReport).not.toContain('md4h-rendered-range');
-    expect(store.items[0]).not.toHaveProperty('renderedRange');
+    expect(sealedReport).toContain(
+      `<!-- md4h-rendered-range:${JSON.stringify(FIRST_PARAGRAPH_RENDERED_RANGE)} -->`
+    );
+    expect(sealedReport).toContain('**Target:** Exact rendered text · block 2 offsets 0-16');
+    expect(store.items[0]).toMatchObject({ renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE });
 
     await expect(
       store.addTextFeedback({
@@ -1806,7 +2102,7 @@ describe('FeedbackSessionStore', () => {
     expect(() => store.finalizeDiscard()).toThrow('sealed');
   });
 
-  it('strips table-cell metadata from the sealed report and in-memory item', async () => {
+  it('retains table-cell evidence in the sealed report and in-memory item', async () => {
     const store = await createStore('c003');
     await store.addTextFeedback({
       startLine: 7,
@@ -1818,9 +2114,94 @@ describe('FeedbackSessionStore', () => {
 
     await store.seal(SOURCE_BYTES, NOW);
 
-    expect(await readFile(store.feedbackFilePath, 'utf8')).not.toContain('md4h-cell-target');
-    expect(store.items[0]).not.toHaveProperty('cellTarget');
+    const sealedReport = await readFile(store.feedbackFilePath, 'utf8');
+    expect(sealedReport).toContain(
+      `<!-- md4h-cell-target:${JSON.stringify(FIRST_TABLE_CELL_TARGET)} -->`
+    );
+    expect(sealedReport).toContain('**Target:** Rendered table block 3 · rows 1-4 · columns 1-4');
+    expect(store.items[0]).toMatchObject({ cellTarget: FIRST_TABLE_CELL_TARGET });
   });
+
+  it('drops only locators already degraded by frozen-document validation when sealing', async () => {
+    const store = await createStore('c004');
+    await store.addTextFeedback({
+      startLine: 3,
+      endLine: 3,
+      focus: 'First paragraph.',
+      feedback: 'This locator is stale.',
+      renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
+    });
+    await store.addTextFeedback({
+      startLine: 7,
+      endLine: 12,
+      focus: 'A\tB\n1\t2',
+      feedback: 'This locator remains valid.',
+      cellTarget: FIRST_TABLE_CELL_TARGET,
+    });
+
+    await store.seal(SOURCE_BYTES, NOW, {
+      degradedTargetIds: ['F1'],
+    });
+
+    const sealedReport = await readFile(store.feedbackFilePath, 'utf8');
+    expect(sealedReport).not.toContain('md4h-rendered-range');
+    expect(sealedReport).not.toContain('**Target:** Exact rendered text');
+    expect(sealedReport).toContain('md4h-cell-target');
+    expect(sealedReport).toContain('**Target:** Rendered table block 3 · rows 1-4 · columns 1-4');
+    expect(store.items[0]).not.toHaveProperty('renderedRange');
+    expect(store.items[1]).toMatchObject({ cellTarget: FIRST_TABLE_CELL_TARGET });
+  });
+
+  it.each([
+    ['duplicate raw IDs', ['F1', 'F1'], 'v001', /unique/i],
+    ['a nonexistent ID', ['F99'], 'v002', /current feedback item/i],
+    ['a screenshot ID', ['F2'], 'v003', /text feedback item/i],
+    ['a text item without an exact locator', ['F3'], 'v004', /exactly one exact locator/i],
+    [
+      'more raw IDs than the bundle limit',
+      Array.from({ length: 2_001 }, () => 'F1'),
+      'v005',
+      /too many/i,
+    ],
+  ])(
+    'rejects degraded target IDs containing %s without changing the draft',
+    async (_caseName, degradedTargetIds, roundSuffix, expectedMessage) => {
+      const store = await createStore(roundSuffix);
+      await store.addTextFeedback({
+        startLine: 3,
+        endLine: 3,
+        focus: 'First paragraph.',
+        feedback: 'This item has an exact locator.',
+        renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
+      });
+      await store.addScreenshotFeedback({
+        startLine: 3,
+        endLine: 3,
+        feedback: 'This item is a screenshot.',
+        pngData: ONE_PIXEL_PNG_BASE64,
+      });
+      await store.addTextFeedback({
+        startLine: 5,
+        endLine: 5,
+        focus: 'Second paragraph.',
+        feedback: 'This item has no exact locator.',
+      });
+      const snapshotBefore = store.snapshot;
+      const itemsBefore = store.items;
+      const reportBefore = await readFile(store.feedbackFilePath);
+
+      const sealResult = store.seal(SOURCE_BYTES, NOW, { degradedTargetIds });
+
+      expect(sealResult).toBeInstanceOf(Promise);
+      await expect(sealResult).rejects.toMatchObject({
+        code: 'MD4H-FB-STORE-001',
+        message: expect.stringMatching(expectedMessage),
+      });
+      expect(store.snapshot).toEqual(snapshotBefore);
+      expect(store.items).toEqual(itemsBefore);
+      await expect(readFile(store.feedbackFilePath)).resolves.toEqual(reportBefore);
+    }
+  );
 
   it('rolls a seal back to the exact draft when its host guard invalidates after write', async () => {
     const store = await createStore();
@@ -1852,6 +2233,46 @@ describe('FeedbackSessionStore', () => {
     await expect(readFile(store.feedbackFilePath)).resolves.toEqual(reportBefore);
     await expect(readFile(store.feedbackFilePath, 'utf8')).resolves.toContain(
       'md4h-rendered-range'
+    );
+    await expect(stat(`${store.feedbackFilePath}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('restores degraded locator evidence when the second seal guard rejects', async () => {
+    const store = await createStore('c005');
+    await store.addTextFeedback({
+      startLine: 3,
+      endLine: 3,
+      focus: 'First paragraph.',
+      feedback: 'Clarify this.',
+      renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE,
+    });
+    const reportBefore = await readFile(store.feedbackFilePath);
+    const snapshotBefore = store.snapshot;
+    const itemsBefore = store.items;
+    let guardCalls = 0;
+
+    await expect(
+      store.seal(SOURCE_BYTES, NOW, {
+        degradedTargetIds: ['F1'],
+        beforeCommit: () => {
+          guardCalls += 1;
+          if (guardCalls === 2) {
+            throw new FeedbackSessionError(
+              'MD4H-FB-SNAPSHOT-001',
+              'The source changed during sealing.'
+            );
+          }
+        },
+      })
+    ).rejects.toMatchObject({ code: 'MD4H-FB-SNAPSHOT-001' });
+
+    expect(guardCalls).toBe(2);
+    expect(store.snapshot).toEqual(snapshotBefore);
+    expect(store.items).toEqual(itemsBefore);
+    expect(store.items[0]).toMatchObject({ renderedRange: FIRST_PARAGRAPH_RENDERED_RANGE });
+    await expect(readFile(store.feedbackFilePath)).resolves.toEqual(reportBefore);
+    await expect(readFile(store.feedbackFilePath, 'utf8')).resolves.toContain(
+      `<!-- md4h-rendered-range:${JSON.stringify(FIRST_PARAGRAPH_RENDERED_RANGE)} -->`
     );
     await expect(stat(`${store.feedbackFilePath}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
   });

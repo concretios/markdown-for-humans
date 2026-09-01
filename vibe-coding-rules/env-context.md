@@ -9,11 +9,11 @@
 | VS Code floor  | `^1.98.0`                                 |
 | Extension host | Node.js 20 target                         |
 | Webview        | Chromium 132 target                       |
-| Editor         | TipTap 3.30.3 on ProseMirror              |
+| Editor         | TipTap 3.30.5 on ProseMirror              |
 | Diagrams       | Mermaid 11.17.2 or compatible 11.x update |
 | Capture        | `modern-screenshot@4.7.0`                 |
 
-All direct `@tiptap/*` packages are pinned to exactly `3.30.3`. Upgrade them as one family, import ProseMirror through `@tiptap/pm/*`, and reject mixed TipTap or direct ProseMirror version families.
+All direct `@tiptap/*` packages are pinned to exactly `3.30.5`. Upgrade them as one family, import ProseMirror through `@tiptap/pm/*`, and reject mixed TipTap or direct ProseMirror version families.
 
 ## Architecture
 
@@ -74,7 +74,7 @@ schema version + document version + selection + scrollTop
 - Pure host and renderer lifecycle reducers reject stale stages in deterministic tests. Production still routes lifecycle effects through provider and renderer adapters, so do not treat those reducers as the sole authority until that migration is completed. Durable drafts, not webview state, are the recovery authority after reload.
 - Any later source change invalidates the frozen round, preserves the draft, and blocks new writes and sealing.
 
-Text anchors use exact block-relative ranges. Table selections use typed rectangular cell targets bound to a table fingerprint and host-enriched canonical table-block SHA-256. Invalid restored cell metadata degrades to the containing block with a visible warning and never fuzzy-matches.
+Text anchors use exact block-relative ranges. Table selections use typed rectangular cell targets bound to a table fingerprint and host-enriched canonical table-block SHA-256. Exact table geometry is capped at 256 cells per item and 4,096 cells per session. Invalid or over-budget restored cell metadata degrades to the containing block and never fuzzy-matches.
 
 ## Feedback Capture Limits
 

@@ -40,6 +40,8 @@ const CAPTURE_CHROME_SELECTOR = [
   '.feedback-connectors',
   '.feedback-annotation-spacer',
   '.feedback-selection-action',
+  '.feedback-block-action',
+  '.feedback-block-target-preview',
   '.feedback-comment-rail',
   '.feedback-frame-label',
   '.feedback-invalidated-alert',

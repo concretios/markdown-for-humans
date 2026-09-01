@@ -15,6 +15,7 @@ const MAX_IDENTIFIER_LENGTH = 256;
 const MAX_SOURCE_LENGTH = 64 * 1024 * 1024;
 const MAX_BLOCKS = 100_000;
 const MAX_BLOCK_KIND_LENGTH = 128;
+const TABLE_FINGERPRINT_PATTERN = /^md4h-table\/v1:[a-f0-9]{16}$/;
 
 interface FeedbackSnapshotIdentity {
   readonly protocolVersion: typeof FEEDBACK_SNAPSHOT_PROTOCOL_VERSION;
@@ -108,16 +109,28 @@ function parseBlocks(value: unknown): readonly CanonicalFeedbackBlock[] | null {
   let totalMarkdownLength = 0;
   const blocks: CanonicalFeedbackBlock[] = [];
   for (const candidate of value) {
+    const hasTableFingerprint =
+      isRecord(candidate) && Object.prototype.hasOwnProperty.call(candidate, 'tableFingerprint');
     if (
       !isRecord(candidate) ||
-      !hasExactKeys(candidate, ['ordinal', 'kind', 'markdown', 'contentSize']) ||
+      !hasExactKeys(candidate, [
+        'ordinal',
+        'kind',
+        'markdown',
+        'contentSize',
+        ...(hasTableFingerprint ? ['tableFingerprint'] : []),
+      ]) ||
       !isRevision(candidate.ordinal) ||
       candidate.ordinal <= previousOrdinal ||
       typeof candidate.kind !== 'string' ||
       candidate.kind.length === 0 ||
       candidate.kind.length > MAX_BLOCK_KIND_LENGTH ||
       typeof candidate.markdown !== 'string' ||
-      !isRevision(candidate.contentSize)
+      !isRevision(candidate.contentSize) ||
+      (hasTableFingerprint &&
+        (candidate.kind !== 'table' ||
+          typeof candidate.tableFingerprint !== 'string' ||
+          !TABLE_FINGERPRINT_PATTERN.test(candidate.tableFingerprint)))
     ) {
       return null;
     }
@@ -129,6 +142,7 @@ function parseBlocks(value: unknown): readonly CanonicalFeedbackBlock[] | null {
       kind: candidate.kind,
       markdown: candidate.markdown,
       contentSize: candidate.contentSize,
+      ...(hasTableFingerprint ? { tableFingerprint: candidate.tableFingerprint as string } : {}),
     });
   }
   return blocks;

@@ -11,7 +11,7 @@ interface PackageManifest {
 }
 
 interface PackageLock {
-  packages?: Record<string, { version?: string }>;
+  packages?: Record<string, { version?: string; dependencies?: Record<string, string> }>;
 }
 
 const readJson = <T>(relativePath: string): T =>
@@ -35,7 +35,7 @@ const isAtLeast = (actual: string, minimum: string): boolean => {
 };
 
 describe('dependency security policy', () => {
-  const reviewedTiptapVersion = '3.30.3';
+  const reviewedTiptapVersion = '3.30.5';
   const manifest = readJson<PackageManifest>('package.json');
   const lock = readJson<PackageLock>('package-lock.json');
 
@@ -69,6 +69,24 @@ describe('dependency security policy', () => {
     expect(manifest.dependencies?.['@tiptap/extension-paragraph']).toBe(reviewedTiptapVersion);
     for (const [, declaredVersion] of directTiptapDependencies) {
       expect(declaredVersion).toBe(reviewedTiptapVersion);
+    }
+  });
+
+  it('keeps the root lock declarations and every installed TipTap package synchronized', () => {
+    const directTiptapDependencies = Object.entries(manifest.dependencies ?? {}).filter(
+      ([packageName]) => packageName.startsWith('@tiptap/')
+    );
+    const rootLockDependencies = lock.packages?.['']?.dependencies ?? {};
+    for (const [packageName, declaredVersion] of directTiptapDependencies) {
+      expect(rootLockDependencies[packageName]).toBe(declaredVersion);
+    }
+
+    const installedTiptapEntries = Object.entries(lock.packages ?? {}).filter(([packagePath]) =>
+      packagePath.includes('node_modules/@tiptap/')
+    );
+    expect(installedTiptapEntries.length).toBeGreaterThan(0);
+    for (const [, packageEntry] of installedTiptapEntries) {
+      expect(packageEntry.version).toBe(reviewedTiptapVersion);
     }
   });
 

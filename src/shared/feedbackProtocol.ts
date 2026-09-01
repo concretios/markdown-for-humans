@@ -8,6 +8,14 @@
  * dispatch so unknown fields and malformed payloads never reach file operations.
  */
 
+import {
+  isFeedbackRendererTargetEvidenceCompatibleV2,
+  parseFeedbackRendererEvidenceV2,
+  parseFeedbackRendererTargetV2,
+  type FeedbackRendererEvidenceV2,
+  type FeedbackRendererTargetV2,
+} from './feedbackEvidenceV2';
+
 export const FEEDBACK_ERROR_CODES = {
   targetDoesNotMap: 'MD4H-FB-ANCHOR-001',
   blockMismatch: 'MD4H-FB-ANCHOR-002',
@@ -18,12 +26,47 @@ export const FEEDBACK_ERROR_CODES = {
 
 export type FeedbackErrorCode = (typeof FEEDBACK_ERROR_CODES)[keyof typeof FEEDBACK_ERROR_CODES];
 
+/** Maximum number of cells represented by one exact table-cell locator. */
+export const FEEDBACK_MAX_EXACT_CELL_COUNT = 256;
+
+/** Maximum aggregate exact table-cell geometry retained by one Feedback session. */
+export const FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION = 4_096;
+
+/**
+ * Validate an exact cell rectangle with an overflow-safe area bound.
+ * Coordinates remain zero-based with exclusive bottom and right edges.
+ */
+export function isFeedbackCellRectangleWithinExactLimit(rectangle: {
+  readonly top: number;
+  readonly left: number;
+  readonly bottom: number;
+  readonly right: number;
+}): boolean {
+  if (
+    !Number.isSafeInteger(rectangle.top) ||
+    !Number.isSafeInteger(rectangle.left) ||
+    !Number.isSafeInteger(rectangle.bottom) ||
+    !Number.isSafeInteger(rectangle.right) ||
+    rectangle.top < 0 ||
+    rectangle.left < 0 ||
+    rectangle.bottom <= rectangle.top ||
+    rectangle.right <= rectangle.left
+  ) {
+    return false;
+  }
+  const rows = rectangle.bottom - rectangle.top;
+  const columns = rectangle.right - rectangle.left;
+  return rows <= Math.floor(FEEDBACK_MAX_EXACT_CELL_COUNT / columns);
+}
+
 export interface CanonicalFeedbackBlock {
   ordinal: number;
   kind: string;
   markdown: string;
   /** ProseMirror node.content.size for strict block-relative range bounds. */
   contentSize: number;
+  /** Frozen structural identity available only for canonical table blocks. */
+  tableFingerprint?: string;
 }
 
 /** Untrusted block-relative half-open range sent by the frozen rich view. */
@@ -35,7 +78,7 @@ export interface FeedbackRenderedRangeInputV1 {
   endOffset: number;
 }
 
-/** Host-enriched exact range persisted only while a feedback round is a draft. */
+/** Host-enriched frozen rendered-text locator persisted with the feedback item. */
 export interface FeedbackRenderedRangeV1 extends FeedbackRenderedRangeInputV1 {
   startBlockSha256: string;
   endBlockSha256: string;
@@ -58,7 +101,7 @@ export interface FeedbackCellTargetInputV1 {
   tableFingerprint: string;
 }
 
-/** Host-enriched cell target persisted only while a feedback round is a draft. */
+/** Host-enriched rendered-table locator persisted with the feedback item. */
 export interface FeedbackCellTargetV1 extends FeedbackCellTargetInputV1 {
   tableBlockSha256: string;
 }
@@ -105,6 +148,7 @@ export interface FeedbackDraftSummary {
 /** Complete active-session state staged during an acknowledged split handoff. */
 export interface FeedbackTransferSession {
   sessionId: string;
+  evidenceVersion?: 2;
   source: string;
   sourceSha256: string;
   round: string;
@@ -161,6 +205,14 @@ export type FeedbackWebviewMessage =
       cellTarget?: FeedbackCellTargetInputV1;
     })
   | (FeedbackSessionRequestBase & {
+      type: 'feedback.text.add';
+      startOrdinal: number;
+      endOrdinal: number;
+      feedback: string;
+      target: FeedbackRendererTargetV2;
+      evidence?: FeedbackRendererEvidenceV2;
+    })
+  | (FeedbackSessionRequestBase & {
       type: 'feedback.screenshot.add';
       startOrdinal: number;
       endOrdinal: number;
@@ -189,8 +241,12 @@ export type FeedbackWebviewMessage =
       code: FeedbackErrorCode;
     })
   | (FeedbackSessionRequestBase & {
+      type: 'feedback.finish';
+      /** Renderer-known exact locators that must seal as safe block targets. */
+      degradedTargetIds?: string[];
+    })
+  | (FeedbackSessionRequestBase & {
       type:
-        | 'feedback.finish'
         | 'feedback.discard'
         | 'feedback.reveal'
         | 'feedback.copyDiagnostics'
@@ -312,6 +368,7 @@ export type FeedbackHostMessage =
       type: 'feedback.started';
       requestId: string;
       sessionId: string;
+      evidenceVersion?: 2;
       source: string;
       sourceSha256: string;
       round: string;
@@ -467,6 +524,7 @@ const MAX_PNG_DATA_URL_LENGTH = 14 * 1024 * 1024;
 const MAX_PATH_LENGTH = 32_768;
 const MAX_WEBVIEW_URI_LENGTH = 1024 * 1024;
 const MAX_TABLE_COORDINATE = 100_000;
+const MAX_FEEDBACK_ITEMS = 2_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -513,6 +571,18 @@ function isRoundId(value: unknown): value is string {
 
 function isFeedbackId(value: unknown): value is string {
   return typeof value === 'string' && /^F[1-9]\d{0,8}$/.test(value);
+}
+
+function parseUniqueFeedbackIds(value: unknown): string[] | null {
+  if (!Array.isArray(value) || value.length > MAX_FEEDBACK_ITEMS) return null;
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value) {
+    if (!isFeedbackId(candidate) || seen.has(candidate)) return null;
+    seen.add(candidate);
+    ids.push(candidate);
+  }
+  return ids;
 }
 
 function isFeedbackErrorCode(value: unknown): value is FeedbackErrorCode {
@@ -586,7 +656,13 @@ function parseCellRectangle(value: unknown): FeedbackCellTargetInputV1['rectangl
     value.top >= value.bottom ||
     value.left >= value.right ||
     value.bottom > MAX_TABLE_COORDINATE ||
-    value.right > MAX_TABLE_COORDINATE
+    value.right > MAX_TABLE_COORDINATE ||
+    !isFeedbackCellRectangleWithinExactLimit({
+      top: value.top,
+      left: value.left,
+      bottom: value.bottom,
+      right: value.right,
+    })
   ) {
     return null;
   }
@@ -642,14 +718,24 @@ function parseBlocks(value: unknown): CanonicalFeedbackBlock[] | null {
   let previousOrdinal = -1;
   for (let index = 0; index < value.length; index += 1) {
     const candidate = value[index];
+    const hasTableFingerprint =
+      isRecord(candidate) && Object.prototype.hasOwnProperty.call(candidate, 'tableFingerprint');
     if (
       !isRecord(candidate) ||
-      !hasExactKeys(candidate, ['ordinal', 'kind', 'markdown', 'contentSize']) ||
+      !hasExactKeys(candidate, [
+        'ordinal',
+        'kind',
+        'markdown',
+        'contentSize',
+        ...(hasTableFingerprint ? ['tableFingerprint'] : []),
+      ]) ||
       !isOrdinal(candidate.ordinal) ||
       candidate.ordinal <= previousOrdinal ||
       !isBoundedString(candidate.kind, 80) ||
       !isBoundedString(candidate.markdown, MAX_CANONICAL_MARKDOWN_LENGTH, true) ||
-      !isContentSize(candidate.contentSize)
+      !isContentSize(candidate.contentSize) ||
+      (hasTableFingerprint &&
+        (candidate.kind !== 'table' || !isTableFingerprint(candidate.tableFingerprint)))
     ) {
       return null;
     }
@@ -665,6 +751,7 @@ function parseBlocks(value: unknown): CanonicalFeedbackBlock[] | null {
       kind: candidate.kind,
       markdown: candidate.markdown,
       contentSize: candidate.contentSize,
+      ...(hasTableFingerprint ? { tableFingerprint: candidate.tableFingerprint as string } : {}),
     });
   }
 
@@ -864,6 +951,43 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
   const base = { requestId: value.requestId, sessionId: value.sessionId };
   switch (value.type) {
     case 'feedback.text.add': {
+      if (hasOwn(value, 'target')) {
+        const hasEvidence = hasOwn(value, 'evidence');
+        if (
+          !hasExactKeys(value, [
+            'type',
+            'requestId',
+            'sessionId',
+            'startOrdinal',
+            'endOrdinal',
+            'feedback',
+            'target',
+            ...(hasEvidence ? ['evidence'] : []),
+          ]) ||
+          !isRange(value) ||
+          !isBoundedString(value.feedback, MAX_FEEDBACK_LENGTH)
+        ) {
+          return null;
+        }
+        const target = parseFeedbackRendererTargetV2(value.target);
+        const evidence = hasEvidence ? parseFeedbackRendererEvidenceV2(value.evidence) : undefined;
+        if (
+          target === null ||
+          (hasEvidence && evidence === null) ||
+          !isFeedbackRendererTargetEvidenceCompatibleV2(target, evidence ?? undefined)
+        ) {
+          return null;
+        }
+        return {
+          type: value.type,
+          ...base,
+          startOrdinal: value.startOrdinal as number,
+          endOrdinal: value.endOrdinal as number,
+          feedback: value.feedback,
+          target,
+          ...(evidence === undefined || evidence === null ? {} : { evidence }),
+        };
+      }
       if (
         !hasExactKeys(value, [
           'type',
@@ -988,7 +1112,17 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
         ? { type: value.type, ...base, code: value.code }
         : null;
 
-    case 'feedback.finish':
+    case 'feedback.finish': {
+      if (hasExactKeys(value, ['type', 'requestId', 'sessionId'])) {
+        return { type: value.type, ...base };
+      }
+      if (!hasExactKeys(value, ['type', 'requestId', 'sessionId', 'degradedTargetIds'])) {
+        return null;
+      }
+      const degradedTargetIds = parseUniqueFeedbackIds(value.degradedTargetIds);
+      return degradedTargetIds === null ? null : { type: value.type, ...base, degradedTargetIds };
+    }
+
     case 'feedback.discard':
     case 'feedback.reveal':
     case 'feedback.copyDiagnostics':
@@ -1261,10 +1395,12 @@ function parseFeedbackAnchors(
 }
 
 function parseFeedbackTransferSession(value: unknown): FeedbackTransferSession | null {
+  const hasEvidenceVersion = isRecord(value) && hasOwn(value, 'evidenceVersion');
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
       'sessionId',
+      ...(hasEvidenceVersion ? ['evidenceVersion'] : []),
       'source',
       'sourceSha256',
       'round',
@@ -1273,6 +1409,7 @@ function parseFeedbackTransferSession(value: unknown): FeedbackTransferSession |
       'items',
     ]) ||
     !isSessionId(value.sessionId) ||
+    (hasEvidenceVersion && value.evidenceVersion !== 2) ||
     !isBoundedString(value.source, MAX_PATH_LENGTH) ||
     !isSha256(value.sourceSha256) ||
     !isRoundId(value.round) ||
@@ -1286,6 +1423,7 @@ function parseFeedbackTransferSession(value: unknown): FeedbackTransferSession |
     ? null
     : {
         sessionId: value.sessionId,
+        ...(hasEvidenceVersion ? { evidenceVersion: 2 as const } : {}),
         source: value.source,
         sourceSha256: value.sourceSha256,
         round: value.round,
@@ -1398,11 +1536,13 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
     }
 
     case 'feedback.started': {
+      const hasEvidenceVersion = hasOwn(value, 'evidenceVersion');
       if (
         !hasExactKeys(value, [
           'type',
           'requestId',
           'sessionId',
+          ...(hasEvidenceVersion ? ['evidenceVersion'] : []),
           'source',
           'sourceSha256',
           'round',
@@ -1412,6 +1552,7 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
         ]) ||
         !isRequestId(value.requestId) ||
         !isSessionId(value.sessionId) ||
+        (hasEvidenceVersion && value.evidenceVersion !== 2) ||
         !isBoundedString(value.source, MAX_PATH_LENGTH) ||
         !isSha256(value.sourceSha256) ||
         !isRoundId(value.round) ||
@@ -1427,6 +1568,7 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
             type: value.type,
             requestId: value.requestId,
             sessionId: value.sessionId,
+            ...(hasEvidenceVersion ? { evidenceVersion: 2 as const } : {}),
             source: value.source,
             sourceSha256: value.sourceSha256,
             round: value.round,

@@ -4003,6 +4003,37 @@ body.vscode-high-contrast-light.feedback-completion-open {
   box-shadow: inset 3px 0 0 var(--md4h-feedback-highlight-edge);
 }
 
+/* Preview the canonical whole-block target in a paint-only overlay outside
+   ProseMirror. This leaves document DOM, selection, and layout untouched. */
+.feedback-review-active .markdown-editor ~ .feedback-block-target-preview {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  pointer-events: none;
+  background: var(--md4h-feedback-highlight-saved);
+  box-shadow: inset 0 0 0 1px var(--md4h-feedback-highlight-edge);
+  border-radius: 4px;
+  animation: feedback-block-target-preview-in 150ms ease-out;
+}
+
+.feedback-review-active .feedback-block-target-preview.alternate {
+  animation-name: feedback-block-target-preview-in-alternate;
+}
+
+@keyframes feedback-block-target-preview-in {
+  from {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
+@keyframes feedback-block-target-preview-in-alternate {
+  from {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px transparent;
+  }
+}
+
 .feedback-review-active .markdown-editor .code-block-wrapper,
 .feedback-review-active .markdown-editor .code-block-wrapper pre,
 .feedback-review-active .markdown-editor .code-block-wrapper code,
@@ -4145,7 +4176,8 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   outline-offset: 2px;
 }
 
-.feedback-selection-action {
+.feedback-selection-action,
+.feedback-block-action {
   position: absolute;
   z-index: 220;
   display: grid;
@@ -4161,24 +4193,32 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   cursor: pointer;
 }
 
-.feedback-selection-action:hover {
+.feedback-selection-action:hover,
+.feedback-block-action:hover {
   background: var(--md4h-feedback-action-hover);
 }
 
-.feedback-selection-action:focus-visible {
+.feedback-selection-action:focus-visible,
+.feedback-block-action:focus-visible {
   outline: 2px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
 
 .feedback-primary-button:focus-visible,
+.feedback-secondary-button:focus-visible,
 .feedback-toolbar-button:focus-visible,
 .feedback-start-button:focus-visible {
   outline: 2px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
 
-.feedback-selection-action .codicon {
+.feedback-selection-action .codicon,
+.feedback-block-action .codicon {
   font-size: 18px;
+}
+
+.feedback-block-action[hidden] {
+  display: none;
 }
 
 .feedback-comments-panel {
@@ -4208,7 +4248,22 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
 }
 
 .feedback-composer-title {
+  margin-bottom: 0;
+}
+
+.feedback-composer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 12px;
+}
+
+.feedback-composer-size-toggle {
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 2px 7px;
+  font: 11px/1.35 var(--vscode-font-family);
 }
 
 .feedback-panel-collapse {
@@ -4386,22 +4441,124 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   font: 11px/1.4 var(--vscode-font-family);
 }
 
-.feedback-composer-focus {
-  max-height: 110px;
-  margin: 4px 0;
-  overflow: auto;
-  padding: 7px 9px;
+.feedback-target-context {
+  margin: 4px 0 7px;
+  padding: 8px 9px;
   color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
   background: var(--vscode-textBlockQuote-background, transparent);
   border-left: 2px solid var(--md4h-feedback-highlight-edge);
-  font: 12px/1.45 var(--vscode-editor-font-family, monospace);
+  border-radius: 0 5px 5px 0;
+}
+
+.feedback-target-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 7px;
+}
+
+.feedback-target-label {
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  font: 600 12px/1.4 var(--vscode-font-family);
+}
+
+.feedback-target-detail {
+  min-width: 0;
+  color: var(--vscode-descriptionForeground);
+  font: 11px/1.4 var(--vscode-font-family);
+  overflow-wrap: anywhere;
+}
+
+.feedback-target-explanation,
+.feedback-target-truncation,
+.feedback-target-cell-preview figcaption {
+  margin: 6px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font: 11px/1.4 var(--vscode-font-family);
+}
+
+.feedback-target-expanded {
+  max-height: min(320px, 40vh);
+  overflow: auto;
+}
+
+.feedback-target-preview,
+.feedback-target-expanded {
+  box-sizing: border-box;
+  max-width: 100%;
+  margin: 7px 0 0;
+  padding: 6px 7px;
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: color-mix(in srgb, var(--vscode-editor-background) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--md4h-feedback-highlight-edge) 42%, transparent);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+.feedback-target-quote {
+  font: 12px/1.45 var(--vscode-font-family);
   white-space: pre-wrap;
+}
+
+.feedback-target-code {
+  font: 12px/1.45 var(--vscode-editor-font-family, monospace);
+  tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-wrap: normal;
+}
+
+.feedback-target-disclosure {
+  margin-top: 6px;
+  color: var(--vscode-descriptionForeground);
+  font: 11px/1.4 var(--vscode-font-family);
+}
+
+.feedback-target-disclosure summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.feedback-target-disclosure summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.feedback-target-cell-preview {
+  margin-inline: 0;
+  overflow: hidden;
+}
+
+.feedback-target-cell-preview table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font: 11px/1.35 var(--vscode-font-family);
+}
+
+.feedback-target-cell-preview th,
+.feedback-target-cell-preview td {
+  min-width: 0;
+  padding: 4px 5px;
+  overflow: hidden;
+  border: 1px solid var(--vscode-editorWidget-border);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feedback-target-cell-preview th {
+  font-weight: 600;
+  background: var(--vscode-keybindingTable-headerBackground, transparent);
 }
 
 .feedback-composer-input {
   box-sizing: border-box;
   width: 100%;
-  resize: vertical;
+  min-height: 96px;
+  max-height: min(420px, 40vh);
+  overflow-y: hidden;
+  resize: none;
   padding: 7px 8px;
   color: var(--vscode-input-foreground);
   background: var(--vscode-input-background);
@@ -4703,6 +4860,13 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   box-shadow: inset 0 0 0 2px var(--md4h-feedback-highlight-edge);
 }
 
+.feedback-review-active
+  .markdown-editor
+  .md4h-feedback-annotation-cell[data-feedback-ids*='__pending__'] {
+  background: var(--md4h-feedback-highlight-active);
+  box-shadow: inset 0 0 0 2px var(--md4h-feedback-highlight-edge);
+}
+
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-highlight,
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-highlight-active,
 body[data-feedback-comments-state='hidden'] .markdown-editor .md4h-feedback-annotation-inline {
@@ -4744,6 +4908,7 @@ body[data-feedback-comments-state='hidden'] .feedback-target-bracket-layer {
 .feedback-capture-active .feedback-comment-rail,
 .feedback-capture-active .feedback-annotation-layer,
 .feedback-capture-active .feedback-selection-action,
+.feedback-capture-active .feedback-block-action,
 .feedback-capture-active .feedback-frame-label,
 .feedback-capture-active .feedback-invalidated-alert,
 .feedback-capture-active .drag-block-handle,
@@ -4759,6 +4924,13 @@ body[data-feedback-comments-state='hidden'] .feedback-target-bracket-layer {
 .feedback-capture-active .search-overlay,
 .feedback-capture-active .find-widget {
   visibility: hidden !important;
+}
+
+.feedback-capture-active .feedback-block-target-preview {
+  background: transparent !important;
+  box-shadow: none !important;
+  visibility: hidden !important;
+  animation: none !important;
 }
 
 /* Keep the toolbar reachable while the first click has armed capture. Once
@@ -5332,6 +5504,14 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
   }
 }
 
+.vscode-high-contrast .feedback-block-action,
+.vscode-high-contrast-light .feedback-block-action {
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
+  backdrop-filter: none;
+}
+
 .vscode-high-contrast .feedback-comment-rail,
 .vscode-high-contrast-light .feedback-comment-rail,
 .vscode-high-contrast .feedback-selection-action,
@@ -5346,8 +5526,16 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
 .vscode-high-contrast-light .feedback-frame-label,
 .vscode-high-contrast .feedback-comment-card,
 .vscode-high-contrast-light .feedback-comment-card,
+.vscode-high-contrast .feedback-composer,
+.vscode-high-contrast-light .feedback-composer,
 .vscode-high-contrast .feedback-card-capture,
-.vscode-high-contrast-light .feedback-card-capture {
+.vscode-high-contrast-light .feedback-card-capture,
+.vscode-high-contrast .feedback-target-context,
+.vscode-high-contrast-light .feedback-target-context,
+.vscode-high-contrast .feedback-target-preview,
+.vscode-high-contrast-light .feedback-target-preview,
+.vscode-high-contrast .feedback-target-expanded,
+.vscode-high-contrast-light .feedback-target-expanded {
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   border-width: 2px;
   backdrop-filter: none;
@@ -5443,6 +5631,19 @@ body.vscode-high-contrast-light.feedback-review-active .markdown-editor::after {
   outline: 2px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
   outline-offset: 1px;
   box-shadow: none;
+}
+
+.vscode-high-contrast .feedback-review-active .markdown-editor ~ .feedback-block-target-preview,
+.vscode-high-contrast-light
+  .feedback-review-active
+  .markdown-editor
+  ~ .feedback-block-target-preview,
+body.vscode-high-contrast.feedback-review-active .markdown-editor ~ .feedback-block-target-preview,
+body.vscode-high-contrast-light.feedback-review-active
+  .markdown-editor
+  ~ .feedback-block-target-preview {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
 }
 
 .vscode-high-contrast .feedback-review-active .markdown-editor ::selection,
@@ -5638,9 +5839,11 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
   .md4h-feedback-annotation-node,
   .md4h-feedback-annotation-cell,
   .md4h-feedback-block-target,
+  .feedback-block-target-preview,
   .feedback-target-bracket,
   .feedback-marker,
   .feedback-selection-action,
+  .feedback-block-action,
   .feedback-start-button,
   .feedback-toolbar-button,
   .feedback-frame-label,

@@ -1,0 +1,659 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "whole-gfm-table",
+      "expected": "expected/whole-gfm-table.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F1",
+        "sequence": 1,
+        "kind": "text",
+        "startLine": 5,
+        "endLine": 8,
+        "focus": "Situation\nAssistant action\nHuman involvement\nPassword | reset\nDraft\nAgent approves\nBilling dispute\nDraft an answer\nBilling specialist approves",
+        "feedback": "Clarify the decision rules.",
+        "target": {
+          "version": 2,
+          "requestedScope": "blocks",
+          "effectiveScope": "blocks",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 2,
+            "endOrdinal": 2,
+            "startKind": "table",
+            "endKind": "table",
+            "startBlockSha256": "388d05d2db08cb91cb1c8acb175d6e95b85928d47e56a76553ff50eed6a26d9a",
+            "endBlockSha256": "388d05d2db08cb91cb1c8acb175d6e95b85928d47e56a76553ff50eed6a26d9a"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "selected-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "3b024449508df0dfa97e0cdf3cef79ccf233110b03e8623e3f538714199a5a10",
+            "availability": "embedded",
+            "text": "| Situation | Assistant action | Human involvement |\n| :--- | :---: | ---: |\n| Password \\| reset | [Draft](./draft.md) | Agent approves |\n| Billing dispute | Draft an answer | Billing specialist approves |",
+            "utf8Bytes": 205
+          }
+        }
+      }
+    },
+    {
+      "name": "selected-table-cells",
+      "expected": "expected/selected-table-cells.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F2",
+        "sequence": 2,
+        "kind": "text",
+        "startLine": 29,
+        "endLine": 31,
+        "focus": "Name\tNotes\nA\\B\tClose -->",
+        "feedback": "Keep these cells unambiguous.",
+        "target": {
+          "version": 2,
+          "requestedScope": "table-cells",
+          "effectiveScope": "table-cells",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 8,
+            "endOrdinal": 8,
+            "startKind": "table",
+            "endKind": "table",
+            "startBlockSha256": "32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486",
+            "endBlockSha256": "32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486"
+          },
+          "locator": {
+            "kind": "table-cells",
+            "value": {
+              "version": 1,
+              "tableOrdinal": 8,
+              "rectangle": {
+                "top": 0,
+                "left": 0,
+                "bottom": 2,
+                "right": 2
+              },
+              "tableFingerprint": "md4h-table/v1:760f144c16594872",
+              "tableBlockSha256": "32a0f4ab1b0149e3c14f56dc23e6a89499f4b029ee5e1ac1c0c61480b71fa486"
+            }
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "table-cells",
+            "fidelity": "structured-semantic",
+            "complete": true,
+            "rows": [
+              [
+                { "role": "header", "text": "Name", "complete": true },
+                { "role": "header", "text": "Notes", "complete": true }
+              ],
+              [
+                { "role": "data", "text": "A\\B", "complete": true },
+                {
+                  "role": "data",
+                  "text": "Close -->",
+                  "complete": true
+                }
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "partial-code",
+      "expected": "expected/partial-code.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F3",
+        "sequence": 3,
+        "kind": "text",
+        "startLine": 12,
+        "endLine": 18,
+        "focus": "if (role) {\n  grant(role);",
+        "feedback": "Explain why this grant is safe.",
+        "target": {
+          "version": 2,
+          "requestedScope": "rendered-text",
+          "effectiveScope": "rendered-text",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 4,
+            "endOrdinal": 4,
+            "startKind": "code",
+            "endKind": "code",
+            "startBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb",
+            "endBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb"
+          },
+          "locator": {
+            "kind": "rendered-range",
+            "value": {
+              "version": 1,
+              "startOrdinal": 4,
+                "startOffset": 23,
+                "endOrdinal": 4,
+                "endOffset": 49,
+                "startBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb",
+                "endBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb"
+            }
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "rendered-text",
+            "fidelity": "rendered-exact",
+            "text": "if (role) {\n  grant(role);",
+            "complete": true,
+            "language": "typescript"
+          }
+        }
+      }
+    },
+    {
+      "name": "degraded-merged-table",
+      "expected": "expected/degraded-merged-table.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F4",
+        "sequence": 4,
+        "kind": "text",
+        "startLine": 22,
+        "endLine": 25,
+        "focus": "State\nActions\nOpen\nReview",
+        "feedback": "Make the selected area easier to compare.",
+        "target": {
+          "version": 2,
+          "requestedScope": "table-cells",
+          "effectiveScope": "blocks",
+          "resolution": "degraded",
+          "coarsening": { "reason": "merged-cells", "origin": "renderer" },
+          "blockSpan": {
+            "startOrdinal": 6,
+            "endOrdinal": 6,
+            "startKind": "table",
+            "endKind": "table",
+            "startBlockSha256": "4c9e358e9fdda49cf788d47c7ad22eeff60b2e706af26d73c89b8250a2ed07c3",
+            "endBlockSha256": "4c9e358e9fdda49cf788d47c7ad22eeff60b2e706af26d73c89b8250a2ed07c3"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "containing-blocks",
+            "format": "html",
+            "normalization": "lf",
+            "sourceSliceSha256": "4c9e358e9fdda49cf788d47c7ad22eeff60b2e706af26d73c89b8250a2ed07c3",
+            "availability": "embedded",
+            "text": "<table>\n  <tr><th>State</th><th colspan=\"2\">Actions</th></tr>\n  <tr><td>Open</td><td>Review</td><td>Approve</td></tr>\n</table>",
+            "utf8Bytes": 126
+          },
+          "original": {
+            "kind": "semantic-text",
+            "fidelity": "semantic-context",
+            "text": "State\nActions\nOpen\nReview",
+            "complete": true,
+            "provenance": "renderer-fallback"
+          }
+        }
+      }
+    },
+    {
+      "name": "source-over-budget",
+      "expected": "expected/source-over-budget.md",
+      "source": { "kind": "generated-oversized-code", "character": "λ", "repetitions": 100000 },
+      "item": {
+        "id": "F5",
+        "sequence": 5,
+        "kind": "text",
+        "startLine": 1,
+        "endLine": 3,
+        "focus": "Complete code block source omitted by the v2 evidence budget.",
+        "feedback": "Review this whole generated block.",
+        "target": {
+          "version": 2,
+          "requestedScope": "blocks",
+          "effectiveScope": "blocks",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 0,
+            "endOrdinal": 0,
+            "startKind": "code",
+            "endKind": "code",
+            "startBlockSha256": "633fbdab6904de856e845a1c3cb4012948de1171c8b4861bb36af11b592dd8a2",
+            "endBlockSha256": "633fbdab6904de856e845a1c3cb4012948de1171c8b4861bb36af11b592dd8a2"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-reference",
+            "relationship": "selected-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "633fbdab6904de856e845a1c3cb4012948de1171c8b4861bb36af11b592dd8a2",
+            "availability": "omitted",
+            "omittedReason": "evidence-budget",
+            "omittedUtf8Bytes": 200012
+          }
+        }
+      }
+    },
+    {
+      "name": "partial-formatted-link",
+      "expected": "expected/partial-formatted-link.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F6",
+        "sequence": 6,
+        "kind": "text",
+        "startLine": 35,
+        "endLine": 35,
+        "focus": "the safer option",
+        "feedback": "Make the linked recommendation more specific.",
+        "target": {
+          "version": 2,
+          "requestedScope": "rendered-text",
+          "effectiveScope": "rendered-text",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 10,
+            "endOrdinal": 10,
+            "startKind": "paragraph",
+            "endKind": "paragraph",
+            "startBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6",
+            "endBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6"
+          },
+          "locator": {
+            "kind": "rendered-range",
+            "value": {
+              "version": 1,
+              "startOrdinal": 10,
+              "startOffset": 7,
+              "endOrdinal": 10,
+              "endOffset": 23,
+              "startBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6",
+              "endBlockSha256": "362d55e103748b78d8fcb0896f99cdfe135b971e4c93be9fd00e7c0dfd35c9c6"
+            }
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "rendered-text",
+            "fidelity": "rendered-exact",
+            "text": "the safer option",
+            "complete": true
+          }
+        }
+      }
+    },
+    {
+      "name": "whole-authored-fence",
+      "expected": "expected/whole-authored-fence.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F7",
+        "sequence": 7,
+        "kind": "text",
+        "startLine": 39,
+        "endLine": 42,
+        "focus": "const fence = \"```\";\nconsole.log(fence);",
+        "feedback": "Keep the authored fence while improving this example.",
+        "target": {
+          "version": 2,
+          "requestedScope": "blocks",
+          "effectiveScope": "blocks",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 12,
+            "endOrdinal": 12,
+            "startKind": "code",
+            "endKind": "code",
+            "startBlockSha256": "8a21c08a0f9c3e6de45edffc38f4fa2d2c6748b7e0acd84e696bdbb6c66a8506",
+            "endBlockSha256": "8a21c08a0f9c3e6de45edffc38f4fa2d2c6748b7e0acd84e696bdbb6c66a8506"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "selected-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "25cb98ec0711fea59a065b8888cc051216e54233d369e259681ddfd3c438b0de",
+            "availability": "embedded",
+            "text": "~~~~JavaScript\nconst fence = \"```\";\nconsole.log(fence);\n~~~~",
+            "utf8Bytes": 60
+          }
+        }
+      }
+    },
+    {
+      "name": "structural-multi-block",
+      "expected": "expected/structural-multi-block.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F8",
+        "sequence": 8,
+        "kind": "text",
+        "startLine": 53,
+        "endLine": 55,
+        "focus": "First formatted paragraph.\nSecond linked paragraph.",
+        "feedback": "Rework these two paragraphs as one argument.",
+        "target": {
+          "version": 2,
+          "requestedScope": "blocks",
+          "effectiveScope": "blocks",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 16,
+            "endOrdinal": 17,
+            "startKind": "paragraph",
+            "endKind": "paragraph",
+            "startBlockSha256": "48e60123d505c53f804fc244edf5c259dbeb03684118a9635d83ae09835f9e9f",
+            "endBlockSha256": "ee943e81f94d1adabaa8e79b0cfca877317b40c5a8f081828e6616f2b39fe0d7"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "selected-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "b83231ee03237a002278eba6a0a7c72d727043b65a3eb0c96f016425c76513b4",
+            "availability": "embedded",
+            "text": "First *formatted* paragraph.\n\nSecond [linked](./next.md) paragraph.",
+            "utf8Bytes": 67
+          }
+        }
+      }
+    },
+    {
+      "name": "cross-block-rendered",
+      "expected": "expected/cross-block-rendered.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F9",
+        "sequence": 9,
+        "kind": "text",
+        "startLine": 53,
+        "endLine": 55,
+        "focus": "formatted paragraph.\nSecond linked",
+        "feedback": "Tighten this transition without changing the links.",
+        "target": {
+          "version": 2,
+          "requestedScope": "rendered-text",
+          "effectiveScope": "rendered-text",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 16,
+            "endOrdinal": 17,
+            "startKind": "paragraph",
+            "endKind": "paragraph",
+            "startBlockSha256": "48e60123d505c53f804fc244edf5c259dbeb03684118a9635d83ae09835f9e9f",
+            "endBlockSha256": "ee943e81f94d1adabaa8e79b0cfca877317b40c5a8f081828e6616f2b39fe0d7"
+          },
+          "locator": {
+            "kind": "rendered-range",
+            "value": {
+              "version": 1,
+              "startOrdinal": 16,
+              "startOffset": 6,
+              "endOrdinal": 17,
+              "endOffset": 13,
+              "startBlockSha256": "48e60123d505c53f804fc244edf5c259dbeb03684118a9635d83ae09835f9e9f",
+              "endBlockSha256": "ee943e81f94d1adabaa8e79b0cfca877317b40c5a8f081828e6616f2b39fe0d7"
+            }
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "rendered-text",
+            "fidelity": "rendered-exact",
+            "text": "formatted paragraph.\nSecond linked",
+            "complete": true
+          }
+        }
+      }
+    },
+    {
+      "name": "whole-mermaid",
+      "expected": "expected/whole-mermaid.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F10",
+        "sequence": 10,
+        "kind": "text",
+        "startLine": 46,
+        "endLine": 49,
+        "focus": "flowchart LR\n  Start --> Finish",
+        "feedback": "Add the missing failure path.",
+        "target": {
+          "version": 2,
+          "requestedScope": "blocks",
+          "effectiveScope": "blocks",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 14,
+            "endOrdinal": 14,
+            "startKind": "mermaid",
+            "endKind": "mermaid",
+            "startBlockSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17",
+            "endBlockSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "selected-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17",
+            "availability": "embedded",
+            "text": "```mermaid\nflowchart LR\n  Start --> Finish\n```",
+            "utf8Bytes": 46
+          }
+        }
+      }
+    },
+    {
+      "name": "degraded-visual-mermaid",
+      "expected": "expected/degraded-visual-mermaid.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F11",
+        "sequence": 11,
+        "kind": "text",
+        "startLine": 46,
+        "endLine": 49,
+        "focus": "Region near Finish",
+        "feedback": "Make this region visually distinct.",
+        "target": {
+          "version": 2,
+          "requestedScope": "visual-region",
+          "effectiveScope": "blocks",
+          "resolution": "degraded",
+          "coarsening": { "reason": "opaque-node", "origin": "renderer" },
+          "blockSpan": {
+            "startOrdinal": 14,
+            "endOrdinal": 14,
+            "startKind": "mermaid",
+            "endKind": "mermaid",
+            "startBlockSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17",
+            "endBlockSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "containing-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17",
+            "availability": "embedded",
+            "text": "```mermaid\nflowchart LR\n  Start --> Finish\n```",
+            "utf8Bytes": 46
+          },
+          "original": {
+            "kind": "semantic-text",
+            "fidelity": "semantic-context",
+            "text": "Region near Finish",
+            "complete": true,
+            "provenance": "renderer-fallback"
+          }
+        }
+      }
+    },
+    {
+      "name": "stale-locator-degradation",
+      "expected": "expected/stale-locator-degradation.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F12",
+        "sequence": 12,
+        "kind": "text",
+        "startLine": 12,
+        "endLine": 18,
+        "focus": "if (role) {\n  grant(role);",
+        "feedback": "Recheck this selection after restoring the draft.",
+        "target": {
+          "version": 2,
+          "requestedScope": "rendered-text",
+          "effectiveScope": "blocks",
+          "resolution": "degraded",
+          "coarsening": { "reason": "stale-locator", "origin": "host" },
+          "blockSpan": {
+            "startOrdinal": 4,
+            "endOrdinal": 4,
+            "startKind": "code",
+            "endKind": "code",
+            "startBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb",
+            "endBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "containing-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb",
+            "availability": "embedded",
+            "text": "```typescript\nconst role = \"admin\";\n\nif (role) {\n  grant(role);\n}\n```",
+            "utf8Bytes": 69
+          },
+          "original": {
+            "kind": "rendered-text",
+            "fidelity": "rendered-exact",
+            "text": "if (role) {\n  grant(role);",
+            "complete": true,
+            "language": "typescript"
+          }
+        }
+      }
+    },
+    {
+      "name": "legacy-no-locator",
+      "expected": "expected/legacy-no-locator.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F13",
+        "sequence": 13,
+        "kind": "text",
+        "startLine": 12,
+        "endLine": 18,
+        "focus": "if (role) { grant(role); }",
+        "feedback": "Preserve this old note without overstating its target.",
+        "target": {
+          "version": 2,
+          "effectiveScope": "blocks",
+          "resolution": "legacy-unknown",
+          "legacyOrigin": "v1-no-locator",
+          "blockSpan": {
+            "startOrdinal": 4,
+            "endOrdinal": 4,
+            "startKind": "code",
+            "endKind": "code",
+            "startBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb",
+            "endBlockSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "source",
+            "fidelity": "source-exact",
+            "relationship": "containing-blocks",
+            "format": "markdown",
+            "normalization": "lf",
+            "sourceSliceSha256": "1fb0861cf58fdea0eb6d5a02362667678af2156555ecdbf96b0f6103e7a6cabb",
+            "availability": "embedded",
+            "text": "```typescript\nconst role = \"admin\";\n\nif (role) {\n  grant(role);\n}\n```",
+            "utf8Bytes": 69
+          },
+          "original": {
+            "kind": "legacy-focus",
+            "fidelity": "legacy-unclassified",
+            "text": "if (role) { grant(role); }"
+          }
+        }
+      }
+    },
+    {
+      "name": "screenshot-region",
+      "expected": "expected/screenshot-region.md",
+      "source": { "kind": "fixture", "file": "source.md" },
+      "item": {
+        "id": "F14",
+        "sequence": 14,
+        "kind": "screenshot",
+        "startLine": 46,
+        "endLine": 49,
+        "feedback": "Clarify the annotated branch.",
+        "assetRelativePath": "assets/F14.png",
+        "assetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "width": 640,
+        "height": 360,
+        "target": {
+          "version": 2,
+          "requestedScope": "visual-region",
+          "effectiveScope": "visual-region",
+          "resolution": "exact",
+          "blockSpan": {
+            "startOrdinal": 14,
+            "endOrdinal": 14,
+            "startKind": "mermaid",
+            "endKind": "mermaid",
+            "startBlockSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17",
+            "endBlockSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17"
+          }
+        },
+        "evidence": {
+          "effective": {
+            "kind": "visual",
+            "fidelity": "visual-exact",
+            "assetRelativePath": "assets/F14.png",
+            "assetSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "width": 640,
+            "height": 360,
+            "sourceReference": {
+              "relationship": "containing-blocks",
+              "format": "markdown",
+              "normalization": "lf",
+              "sourceSliceSha256": "6e9c509ce20dbf8dc53ea4729ffc27595f57d7fb1c86bea4894de3adaa9c7c17"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

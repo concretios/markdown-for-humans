@@ -10,8 +10,16 @@
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { AllSelection, NodeSelection, type Selection } from '@tiptap/pm/state';
 import { CellSelection, TableMap } from '@tiptap/pm/tables';
-import type { FeedbackRenderedRangeInputV1 } from '../../shared/feedbackProtocol';
+import {
+  isFeedbackCellRectangleWithinExactLimit,
+  type FeedbackRenderedRangeInputV1,
+} from '../../shared/feedbackProtocol';
 import { blockRelativeRangeFromPositions } from './feedbackRenderedRange';
+
+export {
+  FEEDBACK_MAX_EXACT_CELL_COUNT,
+  isFeedbackCellRectangleWithinExactLimit,
+} from '../../shared/feedbackProtocol';
 
 export interface FeedbackBlockRange {
   readonly fromOrdinal: number;
@@ -31,7 +39,8 @@ export type FeedbackBlockFallbackReason =
   | 'structural-block-selection'
   | 'unmappable-text-range'
   | 'merged-table-cells'
-  | 'irregular-table';
+  | 'irregular-table'
+  | 'large-table-selection';
 
 export interface FeedbackBlockSelectionTarget {
   readonly kind: 'blocks';
@@ -121,6 +130,20 @@ export interface FeedbackPersistedCellTarget {
   readonly tableFingerprint: string;
 }
 
+/** One bounded semantic cell sent by the renderer for a v2 cell target. */
+export interface FeedbackTableCellEvidenceCellV2 {
+  readonly role: 'header' | 'data';
+  readonly text: string;
+  readonly complete: boolean;
+}
+
+/** Renderer-owned semantic matrix. Its independently validated locator remains authoritative. */
+export interface FeedbackTableCellEvidenceInputV2 {
+  readonly kind: 'table-cells';
+  readonly complete: boolean;
+  readonly rows: readonly (readonly FeedbackTableCellEvidenceCellV2[])[];
+}
+
 export interface FeedbackResolvedCellNode {
   /** Absolute ProseMirror node boundary. */
   readonly from: number;
@@ -131,8 +154,40 @@ export type FeedbackCellTargetResolution =
   | { readonly kind: 'cells'; readonly cells: readonly FeedbackResolvedCellNode[] }
   | { readonly kind: 'fallback' };
 
+// Exact cell rectangles contain at most 256 cells. A 240-character per-cell
+// ceiling, including its sentinel, keeps every cell represented while leaving
+// the aggregate Focus safely below 64 KiB after row and column separators.
+const FEEDBACK_SELECTED_CELL_FOCUS_MAX_LENGTH = 64 * 1024;
+const FEEDBACK_SELECTED_CELL_TEXT_MAX_LENGTH = 240;
+const FEEDBACK_TEXTUAL_EVIDENCE_MAX_UTF8_BYTES = 64 * 1024;
+const FEEDBACK_SELECTED_CELL_TRUNCATION_SENTINEL = '… [truncated]';
+const FEEDBACK_SELECTED_CELL_AGGREGATE_TRUNCATION_SENTINEL = '\n[Selected cell Focus truncated]';
+const FEEDBACK_TABLE_FOCUS_TRUNCATION_SENTINEL = '\n[Table Focus truncated]';
+
 function failure(reason: FeedbackSelectionFailureReason): FeedbackSelectionFailure {
   return { kind: 'failure', reason };
+}
+
+function textWithTruncationSentinel(
+  value: string,
+  maximumLength: number,
+  sentinel: string
+): string {
+  const boundedSentinel = sentinel.slice(0, maximumLength);
+  const prefixLength = Math.max(0, maximumLength - boundedSentinel.length);
+  return `${value.slice(0, prefixLength)}${boundedSentinel}`;
+}
+
+function boundedSemanticText(
+  node: ProseMirrorNode,
+  maximumLength: number,
+  sentinel: string
+): string {
+  const traversalEnd = Math.min(node.content.size, maximumLength);
+  const value = node.textBetween(0, traversalEnd, '\n', '\n').replace(/\r\n/g, '\n');
+  return traversalEnd < node.content.size || value.length > maximumLength
+    ? textWithTruncationSentinel(value, maximumLength, sentinel)
+    : value;
 }
 
 function canonicalJson(value: unknown): string {
@@ -174,6 +229,57 @@ function fnv1a64(value: string): string {
 }
 
 const tableFingerprintCache = new WeakMap<ProseMirrorNode, string>();
+const topLevelOffsetsByDocument = new WeakMap<ProseMirrorNode, readonly number[]>();
+
+interface FeedbackTableValidationShape {
+  readonly map: TableMap;
+  readonly unitCellPositions: ReadonlySet<number>;
+}
+
+const tableValidationShapeCache = new WeakMap<
+  ProseMirrorNode,
+  FeedbackTableValidationShape | null
+>();
+
+function topLevelOffsets(doc: ProseMirrorNode): readonly number[] {
+  const cached = topLevelOffsetsByDocument.get(doc);
+  if (cached) return cached;
+  const offsets: number[] = [];
+  doc.forEach((_node, offset, ordinal) => {
+    offsets[ordinal] = offset;
+  });
+  const immutable = Object.freeze(offsets);
+  topLevelOffsetsByDocument.set(doc, immutable);
+  return immutable;
+}
+
+function feedbackTableValidationShape(table: ProseMirrorNode): FeedbackTableValidationShape | null {
+  if (tableValidationShapeCache.has(table)) {
+    return tableValidationShapeCache.get(table) ?? null;
+  }
+  let map: TableMap;
+  try {
+    map = TableMap.get(table);
+  } catch {
+    tableValidationShapeCache.set(table, null);
+    return null;
+  }
+  if (map.problems?.length) {
+    tableValidationShapeCache.set(table, null);
+    return null;
+  }
+  const positionCounts = new Map<number, number>();
+  for (const position of map.map) {
+    positionCounts.set(position, (positionCounts.get(position) ?? 0) + 1);
+  }
+  const unitCellPositions = new Set<number>();
+  for (const [position, count] of positionCounts) {
+    if (count === 1) unitCellPositions.add(position);
+  }
+  const shape = { map, unitCellPositions };
+  tableValidationShapeCache.set(table, shape);
+  return shape;
+}
 
 /**
  * Fingerprints canonical ProseMirror table JSON. Identical node JSON produces
@@ -195,6 +301,159 @@ export function fingerprintFeedbackTable(
   };
 }
 
+interface ValidFeedbackCellTarget {
+  readonly table: ProseMirrorNode;
+  readonly map: TableMap;
+  readonly rectangle: FeedbackCellRectangle;
+}
+
+/**
+ * Validates exact cell metadata without allocating absolute cell geometry.
+ * This is used at the irreversible Finish boundary, where only locator
+ * validity is needed and rebuilding thousands of decorations would be wasteful.
+ */
+function validateFeedbackCellTarget(
+  doc: ProseMirrorNode,
+  target: FeedbackPersistedCellTarget
+): ValidFeedbackCellTarget | null {
+  if (
+    target.version !== 1 ||
+    !Number.isSafeInteger(target.tableOrdinal) ||
+    target.tableOrdinal < 0 ||
+    target.tableOrdinal >= doc.childCount ||
+    !isFeedbackCellRectangleWithinExactLimit(target.rectangle)
+  ) {
+    return null;
+  }
+  const table = doc.maybeChild(target.tableOrdinal);
+  if (!table || table.type.spec.tableRole !== 'table') return null;
+  if (
+    fingerprintFeedbackTable({ version: 1, tableOrdinal: target.tableOrdinal, table })
+      .fingerprint !== target.tableFingerprint
+  ) {
+    return null;
+  }
+
+  const shape = feedbackTableValidationShape(table);
+  if (!shape) return null;
+  const { map, unitCellPositions } = shape;
+  const rectangle = target.rectangle;
+  if (rectangle.bottom > map.height || rectangle.right > map.width) {
+    return null;
+  }
+
+  const seen = new Set<number>();
+  for (let row = rectangle.top; row < rectangle.bottom; row += 1) {
+    for (let column = rectangle.left; column < rectangle.right; column += 1) {
+      const relativePosition = map.map[row * map.width + column];
+      if (seen.has(relativePosition) || !unitCellPositions.has(relativePosition)) return null;
+      seen.add(relativePosition);
+    }
+  }
+  return { table, map, rectangle };
+}
+
+function hasUnsafeEvidenceControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 8 || (code >= 11 && code <= 12) || (code >= 14 && code <= 31) || code === 127) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function utf8CodePointBytes(codePoint: number): number {
+  if (codePoint <= 0x7f) return 1;
+  if (codePoint <= 0x7ff) return 2;
+  if (codePoint <= 0xffff) return 3;
+  return 4;
+}
+
+function boundedUnicodePrefix(
+  value: string,
+  maximumCharacters: number,
+  maximumUtf8Bytes: number
+): { readonly text: string; readonly complete: boolean; readonly utf8Bytes: number } {
+  let characters = 0;
+  let codeUnits = 0;
+  let utf8Bytes = 0;
+  for (const character of value) {
+    const characterBytes = utf8CodePointBytes(character.codePointAt(0) ?? 0);
+    if (characters >= maximumCharacters || utf8Bytes > maximumUtf8Bytes - characterBytes) break;
+    characters += 1;
+    codeUnits += character.length;
+    utf8Bytes += characterBytes;
+  }
+  return {
+    text: value.slice(0, codeUnits),
+    complete: codeUnits === value.length,
+    utf8Bytes,
+  };
+}
+
+/**
+ * Build a complete rectangular semantic matrix only at the add boundary.
+ *
+ * Every cell remains present even when its bounded text is incomplete. The
+ * exact table locator is validated first, and the shared 64 KiB UTF-8 budget
+ * is allocated in deterministic row-major order without splitting Unicode.
+ */
+export function buildFeedbackTableCellEvidence(
+  doc: ProseMirrorNode,
+  target: FeedbackPersistedCellTarget
+): FeedbackTableCellEvidenceInputV2 | null {
+  const validated = validateFeedbackCellTarget(doc, target);
+  if (!validated) return null;
+  const { table, map, rectangle } = validated;
+  const rows: FeedbackTableCellEvidenceCellV2[][] = [];
+  let remainingUtf8Bytes = FEEDBACK_TEXTUAL_EVIDENCE_MAX_UTF8_BYTES;
+  let matrixComplete = true;
+
+  for (let row = rectangle.top; row < rectangle.bottom; row += 1) {
+    const values: FeedbackTableCellEvidenceCellV2[] = [];
+    for (let column = rectangle.left; column < rectangle.right; column += 1) {
+      const relativePosition = map.map[row * map.width + column];
+      const cell = table.nodeAt(relativePosition);
+      if (
+        !cell ||
+        (cell.type.spec.tableRole !== 'cell' && cell.type.spec.tableRole !== 'header_cell')
+      ) {
+        return null;
+      }
+      // Reading 512 document positions is enough to determine the 240-character
+      // prefix while keeping pathological nested cell content bounded.
+      const traversalEnd = Math.min(cell.content.size, 512);
+      const semanticText = cell.textBetween(0, traversalEnd, '\n', '\n').replace(/\r\n?/g, '\n');
+      if (hasUnsafeEvidenceControl(semanticText)) return null;
+      const bounded = boundedUnicodePrefix(
+        semanticText,
+        FEEDBACK_SELECTED_CELL_TEXT_MAX_LENGTH,
+        remainingUtf8Bytes
+      );
+      const complete = bounded.complete && traversalEnd === cell.content.size;
+      matrixComplete &&= complete;
+      remainingUtf8Bytes -= bounded.utf8Bytes;
+      values.push({
+        role: cell.type.spec.tableRole === 'header_cell' ? 'header' : 'data',
+        text: bounded.text,
+        complete,
+      });
+    }
+    rows.push(values);
+  }
+
+  return { kind: 'table-cells', complete: matrixComplete, rows };
+}
+
+/** Returns fresh locator validity without expanding per-cell geometry. */
+export function isFeedbackCellTargetValid(
+  doc: ProseMirrorNode,
+  target: FeedbackPersistedCellTarget
+): boolean {
+  return validateFeedbackCellTarget(doc, target) !== null;
+}
+
 /**
  * Revalidate persisted structural metadata against the current frozen editor
  * document before resolving any table-cell geometry. Invalid, stale, merged,
@@ -204,51 +463,11 @@ export function resolveFeedbackCellTarget(
   doc: ProseMirrorNode,
   target: FeedbackPersistedCellTarget
 ): FeedbackCellTargetResolution {
-  if (
-    target.version !== 1 ||
-    !Number.isSafeInteger(target.tableOrdinal) ||
-    target.tableOrdinal < 0 ||
-    target.tableOrdinal >= doc.childCount
-  ) {
-    return { kind: 'fallback' };
-  }
-  const table = doc.maybeChild(target.tableOrdinal);
-  if (!table || table.type.spec.tableRole !== 'table') return { kind: 'fallback' };
-  if (
-    fingerprintFeedbackTable({ version: 1, tableOrdinal: target.tableOrdinal, table })
-      .fingerprint !== target.tableFingerprint
-  ) {
-    return { kind: 'fallback' };
-  }
-
-  let map: TableMap;
-  try {
-    map = TableMap.get(table);
-  } catch {
-    return { kind: 'fallback' };
-  }
-  const rectangle = target.rectangle;
-  if (
-    map.problems?.length ||
-    !Number.isSafeInteger(rectangle.top) ||
-    !Number.isSafeInteger(rectangle.left) ||
-    !Number.isSafeInteger(rectangle.bottom) ||
-    !Number.isSafeInteger(rectangle.right) ||
-    rectangle.top < 0 ||
-    rectangle.left < 0 ||
-    rectangle.bottom <= rectangle.top ||
-    rectangle.right <= rectangle.left ||
-    rectangle.bottom > map.height ||
-    rectangle.right > map.width
-  ) {
-    return { kind: 'fallback' };
-  }
-
-  let tableOffset = -1;
-  doc.forEach((_node, offset, ordinal) => {
-    if (ordinal === target.tableOrdinal) tableOffset = offset;
-  });
-  if (tableOffset < 0) return { kind: 'fallback' };
+  const validated = validateFeedbackCellTarget(doc, target);
+  if (!validated) return { kind: 'fallback' };
+  const { table, map, rectangle } = validated;
+  const tableOffset = topLevelOffsets(doc)[target.tableOrdinal];
+  if (tableOffset === undefined) return { kind: 'fallback' };
 
   const seen = new Set<number>();
   const cells: FeedbackResolvedCellNode[] = [];
@@ -428,13 +647,23 @@ function cellSelectionContext(
 
 function tableBlockFallback(
   context: CellSelectionContext,
-  reason: Extract<FeedbackBlockFallbackReason, 'merged-table-cells' | 'irregular-table'>
+  reason: Extract<
+    FeedbackBlockFallbackReason,
+    'merged-table-cells' | 'irregular-table' | 'large-table-selection'
+  >
 ): FeedbackBlockSelectionTarget {
   const blockRange = {
     fromOrdinal: context.tableOrdinal,
     toOrdinal: context.tableOrdinal,
   };
-  const tableText = context.table.textBetween(0, context.table.content.size, '\n', '\n');
+  const tableText =
+    reason === 'large-table-selection'
+      ? ''
+      : boundedSemanticText(
+          context.table,
+          FEEDBACK_SELECTED_CELL_FOCUS_MAX_LENGTH,
+          FEEDBACK_TABLE_FOCUS_TRUNCATION_SENTINEL
+        );
   return {
     kind: 'blocks',
     authority: 'prosemirror-structural',
@@ -461,20 +690,34 @@ function selectedCellsAreMerged(context: CellSelectionContext): boolean {
   return false;
 }
 
+/** Build row-major selected-cell Focus without materializing unbounded cell text or joins. */
 function selectedCellFocus(context: CellSelectionContext): string | null {
   const { map, rectangle, table } = context;
-  const rows: string[] = [];
+  let focus = '';
   for (let row = rectangle.top; row < rectangle.bottom; row += 1) {
-    const cells: string[] = [];
     for (let column = rectangle.left; column < rectangle.right; column += 1) {
       const position = map.map[row * map.width + column];
       const cell = table.nodeAt(position);
       if (!cell) return null;
-      cells.push(cell.textBetween(0, cell.content.size, '\n', '\n').replace(/\r\n/g, '\n'));
+      const separator = column > rectangle.left ? '\t' : row > rectangle.top ? '\n' : '';
+      const remainingLength =
+        FEEDBACK_SELECTED_CELL_FOCUS_MAX_LENGTH - focus.length - separator.length;
+      if (remainingLength <= FEEDBACK_SELECTED_CELL_AGGREGATE_TRUNCATION_SENTINEL.length) {
+        return textWithTruncationSentinel(
+          focus,
+          FEEDBACK_SELECTED_CELL_FOCUS_MAX_LENGTH,
+          FEEDBACK_SELECTED_CELL_AGGREGATE_TRUNCATION_SENTINEL
+        );
+      }
+      const cellText = boundedSemanticText(
+        cell,
+        Math.min(FEEDBACK_SELECTED_CELL_TEXT_MAX_LENGTH, remainingLength),
+        FEEDBACK_SELECTED_CELL_TRUNCATION_SENTINEL
+      );
+      focus += separator + cellText;
     }
-    rows.push(cells.join('\t'));
   }
-  return rows.join('\n');
+  return focus;
 }
 
 function cellTarget(
@@ -489,6 +732,9 @@ function cellTarget(
     toOrdinal: context.tableOrdinal,
   };
   if (!allOrdinalsMapped(blockRange, mapped)) return failure('unmapped-block');
+  if (!isFeedbackCellRectangleWithinExactLimit(context.rectangle)) {
+    return tableBlockFallback(context, 'large-table-selection');
+  }
   if (context.map.problems && context.map.problems.length > 0) {
     return tableBlockFallback(context, 'irregular-table');
   }

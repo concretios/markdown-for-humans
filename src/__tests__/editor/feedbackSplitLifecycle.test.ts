@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { getActiveWebviewPanel, setActiveWebviewPanel } from '../../activeWebview';
 import { DocumentEditCoordinator } from '../../editor/documentEditCoordinator';
 import { MarkdownEditorProvider } from '../../editor/MarkdownEditorProvider';
 import { DOCUMENT_SYNC_PROTOCOL_VERSION } from '../../shared/documentSyncProtocol';
@@ -196,6 +197,36 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     else mutableWorkspace.onDidChangeConfiguration = restoreConfigurationListener;
 
     await rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it('does not let an inactive background split replace the active command target', async () => {
+    setActiveWebviewPanel(undefined);
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, () => ORIGINAL_SOURCE);
+    const activeView = createRichView({ active: true });
+    const backgroundView = createRichView({ active: false });
+
+    try {
+      await provider.resolveCustomTextEditor(
+        document as unknown as vscode.TextDocument,
+        activeView.panel,
+        {} as vscode.CancellationToken
+      );
+      expect(getActiveWebviewPanel()).toBe(activeView.panel);
+
+      await provider.resolveCustomTextEditor(
+        document as unknown as vscode.TextDocument,
+        backgroundView.panel,
+        {} as vscode.CancellationToken
+      );
+
+      expect(getActiveWebviewPanel()).toBe(activeView.panel);
+    } finally {
+      backgroundView.dispose();
+      activeView.dispose();
+      provider.dispose();
+      setActiveWebviewPanel(undefined);
+    }
   });
 
   it('keeps the owner flush, pending marker, and autosave timer when a peer split closes', async () => {
@@ -1261,7 +1292,7 @@ function createDocument(
 }
 
 function createRichView(
-  options: { invalidateWebviewGetterOnDispose?: boolean } = {}
+  options: { active?: boolean; invalidateWebviewGetterOnDispose?: boolean } = {}
 ): MockRichView {
   let receiveMessage: ((message: FeedbackMessage) => void) | undefined;
   let disposePanel: (() => void) | undefined;
@@ -1284,7 +1315,7 @@ function createRichView(
       }
       return webview;
     },
-    active: true,
+    active: options.active ?? true,
     onDidChangeViewState: jest.fn(() => ({ dispose: jest.fn() })),
     onDidDispose: jest.fn((listener: () => void) => {
       disposePanel = listener;

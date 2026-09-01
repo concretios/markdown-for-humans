@@ -3,6 +3,8 @@
  */
 
 import type { Editor } from '@tiptap/core';
+import { Schema, type Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { CellSelection } from '@tiptap/pm/tables';
 import {
   createFeedbackDraftSurfaceGate,
   createFeedbackReviewController,
@@ -15,12 +17,54 @@ import {
   captureSelectedFeedbackBlocks,
   startFeedbackAreaCapture,
 } from '../../webview/features/feedbackCaptureWorkflow';
+import {
+  FEEDBACK_MAX_EXACT_CELL_COUNT,
+  fingerprintFeedbackTable,
+} from '../../webview/features/feedbackSelectionMapping';
 import type {
   FeedbackHostMessage,
   FeedbackItemSummary,
   FeedbackWebviewMessage,
 } from '../../shared/feedbackProtocol';
-import { FEEDBACK_ERROR_CODES } from '../../shared/feedbackProtocol';
+import {
+  FEEDBACK_ERROR_CODES,
+  FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION,
+} from '../../shared/feedbackProtocol';
+
+const feedbackTableSchema = new Schema({
+  nodes: {
+    doc: { content: 'block+' },
+    text: { group: 'inline' },
+    paragraph: { content: 'inline*', group: 'block' },
+    table: {
+      content: 'tableRow+',
+      group: 'block',
+      tableRole: 'table',
+      isolating: true,
+    },
+    tableRow: { content: '(tableHeader | tableCell)+', tableRole: 'row' },
+    tableHeader: {
+      content: 'paragraph+',
+      tableRole: 'header_cell',
+      isolating: true,
+      attrs: {
+        colspan: { default: 1 },
+        rowspan: { default: 1 },
+        colwidth: { default: null },
+      },
+    },
+    tableCell: {
+      content: 'paragraph+',
+      tableRole: 'cell',
+      isolating: true,
+      attrs: {
+        colspan: { default: 1 },
+        rowspan: { default: 1 },
+        colwidth: { default: null },
+      },
+    },
+  },
+});
 
 function omitTransferSession<T extends { session: unknown }>(message: T): Omit<T, 'session'> {
   const { session, ...identity } = message;
@@ -142,6 +186,77 @@ function createEditorFixture(): Editor {
     };
   });
   return fixture as unknown as Editor;
+}
+
+function tableFixtureCellText(rows: number, columns: number, row: number, column: number): string {
+  const defaultValues = [
+    ['Role', 'Primary concern'],
+    ['Product lead', 'Response quality'],
+  ];
+  return rows === 2 && columns === 2 ? defaultValues[row][column] : `R${row + 1}C${column + 1}`;
+}
+
+function createRectangularTableEditorFixture(rows: number, columns: number): Editor {
+  const editor = createEditorFixture();
+  const cell = (type: 'tableHeader' | 'tableCell', text: string): ProseMirrorNode =>
+    feedbackTableSchema.nodes[type].create(
+      { colspan: 1, rowspan: 1, colwidth: null },
+      feedbackTableSchema.nodes.paragraph.create(null, feedbackTableSchema.text(text))
+    );
+  const table = feedbackTableSchema.nodes.table.create(
+    null,
+    Array.from({ length: rows }, (_, row) =>
+      feedbackTableSchema.nodes.tableRow.create(
+        null,
+        Array.from({ length: columns }, (_, column) =>
+          cell(
+            row === 0 ? 'tableHeader' : 'tableCell',
+            tableFixtureCellText(rows, columns, row, column)
+          )
+        )
+      )
+    )
+  );
+  const doc = feedbackTableSchema.nodes.doc.create(null, table);
+  (editor.state as unknown as { doc: ProseMirrorNode }).doc = doc;
+  editor.view.dom.innerHTML = `<table><tbody>${Array.from({ length: rows }, (_, row) => {
+    return `<tr>${Array.from({ length: columns }, (_, column) => {
+      const value = tableFixtureCellText(rows, columns, row, column);
+      return `<${row === 0 ? 'th' : 'td'}>${value}</${row === 0 ? 'th' : 'td'}>`;
+    }).join('')}</tr>`;
+  }).join('')}</tbody></table>`;
+  const tableElement = editor.view.dom.firstElementChild as HTMLElement;
+  tableElement.getBoundingClientRect = () =>
+    ({
+      top: 24,
+      bottom: 184,
+      left: 32,
+      right: 720,
+      width: 688,
+      height: 160,
+      x: 32,
+      y: 24,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return editor;
+}
+
+function createTableEditorFixture(): Editor {
+  return createRectangularTableEditorFixture(2, 2);
+}
+
+function dispatchFeedbackBlockHover(target: Element): void {
+  target.dispatchEvent(
+    new MouseEvent('pointerover', {
+      bubbles: true,
+      clientX: 96,
+      clientY: 96,
+    })
+  );
+}
+
+async function waitForFeedbackFrame(): Promise<void> {
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 }
 
 function createSavedFeedbackItems(count: number): FeedbackItemSummary[] {
@@ -272,7 +387,7 @@ describe('Feedback review controller', () => {
     selectionSpy.mockRestore();
   });
 
-  it('maps a native read-only DOM selection when ProseMirror selection state is empty', () => {
+  it('maps an incomplete native read-only selection to its semantic blocks', () => {
     const editor = createEditorFixture();
     const firstText = editor.view.dom.children[0].firstChild!;
     const secondText = editor.view.dom.children[1].firstChild!;
@@ -290,9 +405,10 @@ describe('Feedback review controller', () => {
     ).toEqual({
       startOrdinal: 0,
       endOrdinal: 1,
-      focus: 'Title\nAlpha',
+      focus: 'Title\nAlpha beta',
       startLine: 1,
       endLine: 3,
+      presentationReason: 'unmappable-dom',
     });
     selectionSpy.mockRestore();
   });
@@ -315,7 +431,7 @@ describe('Feedback review controller', () => {
     selectionSpy.mockRestore();
   });
 
-  it('prefers a live native code selection over a stale ProseMirror selection', () => {
+  it('does not reuse stale ProseMirror state when native code endpoints lack a DOM Range', () => {
     document.body.innerHTML = `
       <div class="tiptap">
         <p>Alpha beta</p>
@@ -360,6 +476,7 @@ describe('Feedback review controller', () => {
       focus: 'answer = 42',
       startLine: 3,
       endLine: 5,
+      presentationReason: 'unmappable-dom',
     });
     selectionSpy.mockRestore();
   });
@@ -1086,6 +1203,530 @@ describe('Feedback review controller', () => {
         feedback: 'Make this more specific.',
       })
     );
+  });
+
+  it('renders exact text as literal target context and labels containing source lines', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    const focus = '<img src=x onerror=alert(1)> **literal Markdown**';
+
+    controller.openTextComposer({
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus,
+      startLine: 3,
+      endLine: 3,
+      renderedRange: {
+        version: 1,
+        startOrdinal: 1,
+        startOffset: 0,
+        endOrdinal: 1,
+        endOffset: 10,
+      },
+    });
+
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe(
+      'Selected text'
+    );
+    expect(document.querySelector('[data-feedback-target-preview]')?.textContent).toContain(focus);
+    expect(document.querySelector('[data-feedback-target-preview] img')).toBeNull();
+    expect(document.querySelector('[data-feedback-lines]')?.textContent).toBe(
+      'Containing source line 3'
+    );
+    expect(document.querySelector('.feedback-composer-focus')).toBeNull();
+  });
+
+  it('uses a stable compact or wide composer preset with an accessible user override', async () => {
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    let containerWidth = 1_200;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 720,
+        left: 0,
+        right: containerWidth,
+        width: containerWidth,
+        height: 720,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+
+    controller.openTextComposer({
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus: 'Alpha',
+      startLine: 3,
+      endLine: 3,
+      renderedRange: {
+        version: 1,
+        startOrdinal: 1,
+        startOffset: 0,
+        endOrdinal: 1,
+        endOffset: 5,
+      },
+    });
+
+    const compactComposer = document.querySelector<HTMLElement>('.feedback-composer')!;
+    compactComposer.getBoundingClientRect = () =>
+      ({
+        top: 24,
+        bottom: 284,
+        left: 0,
+        right: 320,
+        width: 320,
+        height: 260,
+        x: 0,
+        y: 24,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const sizeToggle = compactComposer.querySelector<HTMLButtonElement>(
+      '[data-feedback-composer-size-toggle]'
+    )!;
+    Object.defineProperty(compactComposer.querySelector('[data-feedback-input]'), 'scrollHeight', {
+      configurable: true,
+      get: () => (compactComposer.dataset.feedbackComposerSize === 'wide' ? 140 : 220),
+    });
+    await waitForFeedbackFrame();
+    expect(compactComposer.dataset.feedbackComposerSize).toBe('compact');
+    expect(compactComposer.style.width).toBe('320px');
+    expect(sizeToggle.textContent).toBe('Expand');
+    expect(sizeToggle.getAttribute('aria-label')).toBe('Expand feedback composer');
+    expect(sizeToggle.hasAttribute('aria-pressed')).toBe(false);
+
+    sizeToggle.click();
+    await waitForFeedbackFrame();
+    expect(compactComposer.dataset.feedbackComposerSize).toBe('wide');
+    expect(compactComposer.style.width).toBe('480px');
+    expect(sizeToggle.textContent).toBe('Compact');
+    expect(sizeToggle.getAttribute('aria-label')).toBe('Use compact feedback composer');
+    expect(sizeToggle.hasAttribute('aria-pressed')).toBe(false);
+    expect(
+      compactComposer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')?.style.height
+    ).toBe('140px');
+
+    sizeToggle.click();
+    await waitForFeedbackFrame();
+    expect(compactComposer.dataset.feedbackComposerSize).toBe('compact');
+    expect(compactComposer.style.width).toBe('320px');
+    expect(
+      compactComposer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')?.style.height
+    ).toBe('220px');
+    compactComposer
+      .querySelector<HTMLButtonElement>('.feedback-composer-actions .feedback-secondary-button')
+      ?.click();
+
+    controller.openTextComposer({
+      startOrdinal: 0,
+      endOrdinal: 1,
+      focus: 'Title\nAlpha beta',
+      startLine: 1,
+      endLine: 3,
+      presentationReason: 'manual-block-range',
+    });
+    const complexComposer = document.querySelector<HTMLElement>('.feedback-composer')!;
+    complexComposer.getBoundingClientRect = compactComposer.getBoundingClientRect;
+    await waitForFeedbackFrame();
+    expect(complexComposer.dataset.feedbackComposerSize).toBe('wide');
+    expect(complexComposer.style.width).toBe('480px');
+    expect(complexComposer.querySelector('[data-feedback-composer-size-toggle]')?.textContent).toBe(
+      'Compact'
+    );
+    const targetBottom = Math.max(
+      editor.view.dom.children[0].getBoundingClientRect().bottom,
+      editor.view.dom.children[1].getBoundingClientRect().bottom
+    );
+    expect(Number.parseFloat(complexComposer.style.top)).toBeGreaterThanOrEqual(targetBottom + 12);
+
+    containerWidth = 800;
+    window.dispatchEvent(new Event('resize'));
+    await waitForFeedbackFrame();
+    expect(complexComposer.style.width).toBe('744px');
+    complexComposer
+      .querySelector<HTMLButtonElement>('[data-feedback-composer-size-toggle]')
+      ?.click();
+    await waitForFeedbackFrame();
+    expect(complexComposer.style.width).toBe('320px');
+  });
+
+  it('keeps a wide composer in view when a tall target intersects the current viewport', async () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    document.querySelector<HTMLElement>('.formatting-toolbar')!.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 64,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 64,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: -1_000,
+        bottom: 2_000,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 3_000,
+        x: 0,
+        y: -1_000,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    (editor.view.dom.children[0] as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: -500,
+        bottom: -460,
+        left: 32,
+        right: 1_120,
+        width: 1_088,
+        height: 40,
+        x: 32,
+        y: -500,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    (editor.view.dom.children[1] as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: 460,
+        bottom: 500,
+        left: 32,
+        right: 1_120,
+        width: 1_088,
+        height: 40,
+        x: 32,
+        y: 460,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+
+    try {
+      controller.openTextComposer({
+        startOrdinal: 0,
+        endOrdinal: 1,
+        focus: 'Title\nAlpha beta',
+        startLine: 1,
+        endLine: 3,
+        presentationReason: 'manual-block-range',
+      });
+      const composer = document.querySelector<HTMLElement>('.feedback-composer')!;
+      composer.getBoundingClientRect = () =>
+        ({
+          top: 0,
+          bottom: 260,
+          left: 0,
+          right: 480,
+          width: 480,
+          height: 260,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      await waitForFeedbackFrame();
+
+      const viewportTop = 1_000;
+      const viewportBottom = viewportTop + 600;
+      const composerTop = Number.parseFloat(composer.style.top);
+      expect(composer.dataset.feedbackComposerSize).toBe('wide');
+      expect(composerTop).toBeGreaterThanOrEqual(viewportTop + 64 + 12);
+      expect(composerTop + 260).toBeLessThanOrEqual(viewportBottom - 12);
+    } finally {
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('keeps a compact composer reachable near the bottom of the visible viewport', async () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 1_200,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 1_200,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    (editor.view.dom.children[1] as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: 520,
+        bottom: 560,
+        left: 32,
+        right: 1_120,
+        width: 1_088,
+        height: 40,
+        x: 32,
+        y: 520,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+
+    try {
+      controller.openTextComposer({
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Alpha beta',
+        startLine: 3,
+        endLine: 3,
+      });
+      const composer = document.querySelector<HTMLElement>('.feedback-composer')!;
+      composer.getBoundingClientRect = () =>
+        ({
+          top: 0,
+          bottom: 260,
+          left: 0,
+          right: 320,
+          width: 320,
+          height: 260,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      await waitForFeedbackFrame();
+
+      const composerTop = Number.parseFloat(composer.style.top);
+      expect(composer.dataset.feedbackComposerSize).toBe('compact');
+      expect(composerTop).toBeGreaterThanOrEqual(12);
+      expect(composerTop + 260).toBeLessThanOrEqual(600 - 12);
+    } finally {
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('remeasures wrapped feedback after a responsive composer width change', async () => {
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    let containerWidth = 800;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 720,
+        left: 0,
+        right: containerWidth,
+        width: containerWidth,
+        height: 720,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    controller.openTextComposer({
+      startOrdinal: 0,
+      endOrdinal: 1,
+      focus: 'Title\nAlpha beta',
+      startLine: 1,
+      endLine: 3,
+      presentationReason: 'manual-block-range',
+    });
+    const composer = document.querySelector<HTMLElement>('.feedback-composer')!;
+    const field = composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+    composer.getBoundingClientRect = () =>
+      ({
+        top: 24,
+        bottom: 284,
+        left: 0,
+        right: 480,
+        width: 480,
+        height: 260,
+        x: 0,
+        y: 24,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    Object.defineProperty(field, 'scrollHeight', {
+      configurable: true,
+      get: () => (composer.style.width === '480px' ? 260 : 140),
+    });
+    await waitForFeedbackFrame();
+    field.value = 'Feedback that wraps more after the composer becomes narrower.';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(composer.style.width).toBe('744px');
+    expect(field.style.height).toBe('140px');
+
+    containerWidth = 1_200;
+    window.dispatchEvent(new Event('resize'));
+    await waitForFeedbackFrame();
+    expect(composer.style.width).toBe('480px');
+    expect(field.style.height).toBe('260px');
+  });
+
+  it('grows the feedback input to a viewport cap and then uses its own overflow', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    controller.openTextComposer({
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus: 'Alpha beta',
+      startLine: 3,
+      endLine: 3,
+    });
+    const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+    const originalInnerHeight = window.innerHeight;
+    let contentHeight = 1_000;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    Object.defineProperty(field, 'scrollHeight', {
+      configurable: true,
+      get: () => contentHeight,
+    });
+
+    try {
+      field.value = 'A long feedback draft';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(field.style.height).toBe('240px');
+      expect(field.style.overflowY).toBe('auto');
+
+      contentHeight = 140;
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(field.style.height).toBe('140px');
+      expect(field.style.overflowY).toBe('hidden');
+    } finally {
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('does not schedule annotation layout when textarea geometry is unchanged', () => {
+    const queuedFrames: FrameRequestCallback[] = [];
+    const requestFrame = jest
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation(callback => {
+        queuedFrames.push(callback);
+        return queuedFrames.length;
+      });
+    const flushFrames = (): void => {
+      while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
+    };
+    try {
+      const editor = createEditorFixture();
+      const controller = createFeedbackReviewController({ editor, host });
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'b'.repeat(64),
+        round: 'round-1',
+        items: [],
+      });
+      controller.openTextComposer({
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Alpha beta',
+        startLine: 3,
+        endLine: 3,
+      });
+      flushFrames();
+      const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+      Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 140 });
+
+      field.value = 'First draft';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(field.style.height).toBe('140px');
+      flushFrames();
+      const callsAfterGeometryChange = requestFrame.mock.calls.length;
+
+      field.value = 'Different text with the same measured height';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+
+      expect(requestFrame).toHaveBeenCalledTimes(callsAfterGeometryChange);
+      controller.deactivate();
+    } finally {
+      requestFrame.mockRestore();
+    }
+  });
+
+  it('keeps presentation provenance renderer-local when feedback is submitted', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    controller.openTextComposer({
+      startOrdinal: 3,
+      endOrdinal: 3,
+      focus: 'Quote',
+      startLine: 7,
+      endLine: 9,
+      presentationReason: 'opaque-node',
+    });
+    const field = document.querySelector('[data-feedback-input]') as HTMLTextAreaElement;
+    field.value = 'Change the complete rendered block.';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    field.form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+    const message = (host.postMessage as jest.Mock).mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(message).toMatchObject({
+      type: 'feedback.text.add',
+      focus: 'Quote',
+      startOrdinal: 3,
+      endOrdinal: 3,
+    });
+    expect(message).not.toHaveProperty('presentationReason');
   });
 
   it('preserves deep document scroll while focusing a composer opened from a code selection', () => {
@@ -2352,7 +2993,9 @@ describe('Feedback review controller', () => {
     });
     const composer = document.querySelector<HTMLFormElement>('.feedback-composer')!;
     const field = composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
-    const cancel = composer.querySelector<HTMLButtonElement>('.feedback-secondary-button')!;
+    const cancel = composer.querySelector<HTMLButtonElement>(
+      '.feedback-composer-actions .feedback-secondary-button'
+    )!;
     field.value = 'Keep this unfinished note';
     field.dispatchEvent(new Event('input', { bubbles: true }));
 
@@ -3285,7 +3928,13 @@ describe('Feedback review controller', () => {
     expect(picker).not.toBeNull();
     picker?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
 
-    expect(document.querySelector('[data-feedback-focus]')?.textContent).toBe('Title\nAlpha beta');
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe(
+      'Selected blocks'
+    );
+    expect(document.querySelector('[data-feedback-target-detail]')?.textContent).toBe(
+      '2 blocks · heading to paragraph'
+    );
+    expect(document.querySelector('[data-feedback-focus]')).toBeNull();
     expect(document.querySelector('[data-feedback-lines]')?.textContent).toContain('1-3');
   });
 
@@ -4545,6 +5194,176 @@ describe('Feedback review controller', () => {
     });
   }, 10_000);
 
+  it('keeps repeated whole-block hover bounded in a 10,000-block document', () => {
+    const originalRequestAnimationFrame = window.requestAnimationFrame;
+    const queuedFrames: FrameRequestCallback[] = [];
+    const requestFrame = jest.fn((callback: FrameRequestCallback) => {
+      queuedFrames.push(callback);
+      return queuedFrames.length;
+    });
+    Object.defineProperty(window, 'requestAnimationFrame', {
+      configurable: true,
+      writable: true,
+      value: requestFrame,
+    });
+    const blockCount = 10_000;
+    const targetOrdinal = 7_654;
+    document.body.innerHTML = `
+      <div class="formatting-toolbar"></div>
+      <div id="editor"><div class="tiptap markdown-editor">${Array.from(
+        { length: blockCount },
+        (_, index) =>
+          `<p class="hover-stress-block" data-hover-index="${index}"><span>Line ${index + 1}</span></p>`
+      ).join('')}</div></div>
+    `;
+    const editorDom = document.querySelector('.tiptap') as HTMLElement;
+    let targetFocusReads = 0;
+    const nodes = Array.from({ length: blockCount }, (_, index) => ({
+      type: { name: 'paragraph' },
+      nodeSize: 12,
+      isAtom: false,
+      content: { size: 10 },
+      textBetween: () => {
+        if (index === targetOrdinal) targetFocusReads += 1;
+        return `Line ${index + 1}`;
+      },
+    }));
+    const forEachBlock = jest.fn(
+      (callback: (node: (typeof nodes)[number], offset: number, ordinal: number) => void): void =>
+        nodes.forEach((node, ordinal) => callback(node, ordinal * node.nodeSize, ordinal))
+    );
+    const nodeDOM = jest.fn(() => null);
+    const editor = {
+      state: {
+        doc: {
+          childCount: nodes.length,
+          maybeChild: (ordinal: number) => nodes[ordinal] ?? null,
+          forEach: forEachBlock,
+        },
+        selection: { from: 1, to: 1, empty: true },
+      },
+      view: { dom: editorDom, nodeDOM },
+      storage: {},
+      isEditable: true,
+      setEditable: jest.fn(),
+      on: jest.fn(),
+      off: jest.fn(),
+    } as unknown as Editor;
+    const target = editorDom.children[targetOrdinal] as HTMLElement;
+    const nestedTarget = target.firstElementChild as HTMLElement;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: null,
+      focusNode: null,
+      anchorOffset: 0,
+      focusOffset: 0,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+    let targetReads = 0;
+    let otherBlockReads = 0;
+    const rect = jest
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains('hover-stress-block')) {
+          const ordinal = Number(this.dataset.hoverIndex);
+          if (ordinal === targetOrdinal) targetReads += 1;
+          else otherBlockReads += 1;
+          const top = ordinal === targetOrdinal ? 120 : ordinal * 24;
+          return {
+            top,
+            bottom: top + 24,
+            left: 40,
+            right: 820,
+            width: 780,
+            height: 24,
+            x: 40,
+            y: top,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        if (this.id === 'editor') {
+          return {
+            top: 0,
+            bottom: blockCount * 24,
+            left: 0,
+            right: 1200,
+            width: 1200,
+            height: blockCount * 24,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        return {
+          top: 0,
+          bottom: 0,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: 0,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    const controller = createFeedbackReviewController({ editor, host });
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/large.md',
+        sourceSha256: 'c'.repeat(64),
+        round: 'round-1',
+        anchors: [
+          {
+            ordinal: targetOrdinal,
+            startLine: targetOrdinal + 1,
+            endLine: targetOrdinal + 1,
+          },
+        ],
+        items: [],
+      });
+      while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
+      expect(nodeDOM).not.toHaveBeenCalled();
+      forEachBlock.mockClear();
+      requestFrame.mockClear();
+      targetReads = 0;
+      otherBlockReads = 0;
+      targetFocusReads = 0;
+
+      for (let index = 0; index < 25; index += 1) {
+        dispatchFeedbackBlockHover(nestedTarget);
+        while (queuedFrames.length > 0) queuedFrames.shift()?.(index);
+      }
+      expect(nodeDOM).not.toHaveBeenCalled();
+
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      expect(action).not.toBeNull();
+      expect(action?.hidden).toBe(false);
+      expect(document.querySelectorAll('[data-feedback-block-action]')).toHaveLength(1);
+      expect(targetReads).toBeLessThanOrEqual(1);
+      expect(otherBlockReads).toBe(0);
+      expect(targetFocusReads).toBeLessThanOrEqual(1);
+      expect(forEachBlock).not.toHaveBeenCalled();
+
+      const readsBeforeScroll = targetReads;
+      requestFrame.mockClear();
+      window.dispatchEvent(new Event('scroll'));
+      expect(targetReads).toBe(readsBeforeScroll);
+      expect(requestFrame).not.toHaveBeenCalled();
+    } finally {
+      controller.deactivate();
+      selectionSpy.mockRestore();
+      rect.mockRestore();
+      Object.defineProperty(window, 'requestAnimationFrame', {
+        configurable: true,
+        writable: true,
+        value: originalRequestAnimationFrame,
+      });
+    }
+  }, 10_000);
+
   it('renders source-ordered compact cards and expands only the active comment', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
@@ -4880,6 +5699,366 @@ describe('Feedback review controller', () => {
     ).toBe('Make this more specific.');
     expect(document.activeElement?.textContent).toBe('Edit');
     prompt.mockRestore();
+  });
+
+  it('grows a saved-comment edit field to the same viewport cap as a new comment', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startLine: 3,
+          endLine: 3,
+          focus: 'Alpha beta',
+          feedback: 'Clarify this.',
+        },
+      ],
+    });
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+    document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F1"]')?.click();
+    const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-edit-input="F1"]')!;
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 1_000 });
+
+    try {
+      field.value = 'A long saved-comment revision';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(field.style.height).toBe('240px');
+      expect(field.style.overflowY).toBe('auto');
+    } finally {
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('remeasures a saved-comment edit card after its responsive width changes', () => {
+    const queuedFrames: FrameRequestCallback[] = [];
+    const requestFrame = jest
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation(callback => {
+        queuedFrames.push(callback);
+        return queuedFrames.length;
+      });
+    const flushFrames = (): void => {
+      while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
+    };
+    let containerWidth = 800;
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 720,
+        left: 0,
+        right: containerWidth,
+        width: containerWidth,
+        height: 720,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startLine: 3,
+          endLine: 3,
+          focus: 'Alpha beta',
+          feedback: 'A saved comment with target context that can wrap independently.',
+        },
+      ],
+    });
+
+    try {
+      flushFrames();
+      document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+      document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F1"]')?.click();
+      const card = document.querySelector<HTMLElement>('[data-feedback-card="F1"]')!;
+      const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-edit-input="F1"]')!;
+      Object.defineProperty(field, 'scrollHeight', { configurable: true, value: 96 });
+      const measuredWidths: string[] = [];
+      card.getBoundingClientRect = () => {
+        measuredWidths.push(card.style.width);
+        const height = card.style.width === '320px' ? 300 : 180;
+        return {
+          top: 0,
+          bottom: height,
+          left: 0,
+          right: Number.parseFloat(card.style.width) || 744,
+          width: Number.parseFloat(card.style.width) || 744,
+          height,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      };
+      flushFrames();
+      expect(card.style.width).toBe('744px');
+      measuredWidths.length = 0;
+
+      containerWidth = 1_200;
+      window.dispatchEvent(new Event('resize'));
+      const firstPassFrames = queuedFrames.splice(0);
+      expect(firstPassFrames.length).toBeGreaterThan(0);
+      firstPassFrames.forEach(callback => callback(0));
+
+      expect(card.style.width).toBe('320px');
+      const followUpFrames = queuedFrames.splice(0);
+      expect(followUpFrames.length).toBeGreaterThan(0);
+      followUpFrames.forEach(callback => callback(0));
+      expect(measuredWidths).toContain('320px');
+    } finally {
+      controller.deactivate();
+      requestFrame.mockRestore();
+    }
+  });
+
+  it('keeps a tall saved-comment edit form below the sticky toolbar after deep scrolling', async () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: -1_000,
+        bottom: 1_000,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 2_000,
+        x: 0,
+        y: -1_000,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    document.querySelector<HTMLElement>('.formatting-toolbar')!.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 64,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 64,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    (editor.view.dom.children[1] as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: -900,
+        bottom: -860,
+        left: 32,
+        right: 1_120,
+        width: 1_088,
+        height: 40,
+        x: 32,
+        y: -900,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startLine: 3,
+          endLine: 3,
+          focus: 'Alpha beta',
+          feedback: 'Clarify this.',
+        },
+      ],
+    });
+
+    try {
+      document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+      document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F1"]')?.click();
+      const card = document.querySelector<HTMLElement>('[data-feedback-card="F1"]')!;
+      card.getBoundingClientRect = () =>
+        ({
+          top: 0,
+          bottom: 300,
+          left: 0,
+          right: 320,
+          width: 320,
+          height: 300,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      await waitForFeedbackFrame();
+
+      const cardTop = Number.parseFloat(card.style.top);
+      expect(cardTop).toBeGreaterThanOrEqual(1_000 + 64 + 12);
+      expect(cardTop + 300).toBeLessThanOrEqual(1_000 + 600 - 12);
+    } finally {
+      controller.deactivate();
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('pins a tall saved-comment edit form inside the viewport when earlier cards are crowded', async () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: -1_000,
+        bottom: 1_000,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 2_000,
+        x: 0,
+        y: -1_000,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    document.querySelector<HTMLElement>('.formatting-toolbar')!.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 64,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 64,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    (editor.view.dom.children[1] as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: -900,
+        bottom: -860,
+        left: 32,
+        right: 1_120,
+        width: 1_088,
+        height: 40,
+        x: 32,
+        y: -900,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: createSavedFeedbackItems(40),
+    });
+    const stubCardHeights = (): void => {
+      document.querySelectorAll<HTMLElement>('[data-feedback-card]').forEach(card => {
+        card.getBoundingClientRect = () => {
+          const height = card.querySelector('[data-feedback-edit-input]') ? 300 : 60;
+          return {
+            top: 0,
+            bottom: height,
+            left: 0,
+            right: 320,
+            width: 320,
+            height,
+            x: 0,
+            y: 0,
+            toJSON: () => ({}),
+          } as DOMRect;
+        };
+      });
+    };
+
+    try {
+      document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+      expect(document.querySelectorAll('[data-feedback-card]')).toHaveLength(40);
+      stubCardHeights();
+      document.querySelector<HTMLElement>('[data-feedback-card="F40"]')?.click();
+      stubCardHeights();
+      const edit = document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F40"]');
+      expect(edit).not.toBeNull();
+      edit?.click();
+      expect(document.querySelector('[data-feedback-edit-input="F40"]')).not.toBeNull();
+      expect(document.querySelectorAll('[data-feedback-card]')).toHaveLength(1);
+      expect(document.querySelector('[data-feedback-card="F40"]')).not.toBeNull();
+      stubCardHeights();
+      await waitForFeedbackFrame();
+
+      const card = document.querySelector<HTMLElement>('[data-feedback-card="F40"]')!;
+      const cardTop = Number.parseFloat(card.style.top);
+      expect(cardTop).toBeGreaterThanOrEqual(1_000 + 64 + 12);
+      expect(cardTop + 300).toBeLessThanOrEqual(1_000 + 600 - 12);
+    } finally {
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('hides deleted-item Undo controls until the active saved-comment edit closes', () => {
+    const editor = createEditorFixture();
+    const items = createSavedFeedbackItems(2);
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items,
+    });
+    const firstMarker = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-marker]')
+    ).find(marker => marker.dataset.feedbackIds?.split(',').includes('F1'))!;
+    firstMarker.click();
+    const remove = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+    ).find(button => button.textContent === 'Delete')!;
+    remove.click();
+    const request = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.item.delete');
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId: request.requestId,
+      sessionId: 'session-1',
+      items: [items[1]!],
+    });
+    expect(document.querySelector('[data-feedback-undo-id="F1"]')).not.toBeNull();
+
+    const secondMarker = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-marker]')
+    ).find(marker => marker.dataset.feedbackIds?.split(',').includes('F2'))!;
+    secondMarker.click();
+    document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F2"]')?.click();
+
+    expect(document.querySelector('[data-feedback-edit-input="F2"]')).not.toBeNull();
+    expect(document.querySelector('[data-feedback-undo-id="F1"]')).toBeNull();
+    document.querySelector<HTMLButtonElement>('[data-feedback-edit-cancel="F2"]')?.click();
+    expect(document.querySelector('[data-feedback-undo-id="F1"]')).not.toBeNull();
+    controller.deactivate();
   });
 
   it('retains a failed inline edit for retry and lets Cancel restore the Edit control', () => {
@@ -5470,7 +6649,7 @@ describe('Feedback review controller', () => {
     expect(editor.view.dom.children[2].classList).not.toContain('feedback-active-target');
   });
 
-  it('shows the exact saved focus and activates its rendered blocks', () => {
+  it('summarizes a structural saved target and activates its rendered blocks', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
     controller.activate({
@@ -5494,9 +6673,13 @@ describe('Feedback review controller', () => {
 
     (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
 
-    expect(document.querySelector('[data-feedback-card-focus]')?.textContent).toBe(
-      'Title\nAlpha beta'
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe(
+      'Selected blocks'
     );
+    expect(document.querySelector('[data-feedback-target-detail]')?.textContent).toBe(
+      '2 blocks · heading to paragraph'
+    );
+    expect(document.querySelector('[data-feedback-card-focus]')).toBeNull();
     expect(document.querySelector('[data-feedback-card="F1"]')?.textContent).toContain(
       'docs/guide.md:1-3'
     );
@@ -5558,7 +6741,7 @@ describe('Feedback review controller', () => {
     expect(document.querySelector('.feedback-comment-rail')?.classList).toContain('expanded');
   });
 
-  it('reports each new runtime exact-target alert once without document text', () => {
+  it('reports runtime exact-target degradation once and includes only its ID at Finish', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
     const sensitiveFocus = 'Alpha beta private quoted focus';
@@ -5603,7 +6786,340 @@ describe('Feedback review controller', () => {
     });
     expect(JSON.stringify(reports[0])).not.toContain(sensitiveFocus);
     expect(document.querySelector('[data-feedback-anchor-alert]')).not.toBeNull();
+
+    document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+    expect(
+      document
+        .querySelector('[data-feedback-target-kind]')
+        ?.getAttribute('data-feedback-target-kind')
+    ).toBe('whole-block');
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe(
+      'Whole paragraph'
+    );
+    expect(document.querySelector('[data-feedback-target-explanation]')?.textContent).toContain(
+      'complete containing block'
+    );
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).not.toBe(
+      'Selected text'
+    );
+
+    controller.finish();
+    document.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')?.click();
+    const finish = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.finish');
+    expect(finish).toEqual(
+      expect.objectContaining({
+        type: 'feedback.finish',
+        sessionId: 'session-1',
+        degradedTargetIds: ['F1'],
+      })
+    );
+    expect(JSON.stringify(finish)).not.toContain(sensitiveFocus);
     controller.deactivate();
+  });
+
+  it('refreshes exact locator resolution when Finish is confirmed', () => {
+    const editor = createTableEditorFixture();
+    const table = editor.state.doc.maybeChild(0)!;
+    const controller = createFeedbackReviewController({ editor, host });
+    const item = {
+      id: 'F1',
+      kind: 'text' as const,
+      startOrdinal: 0,
+      endOrdinal: 0,
+      startLine: 1,
+      endLine: 4,
+      focus: 'Role',
+      feedback: 'Clarify this cell.',
+      cellTarget: {
+        version: 1 as const,
+        tableOrdinal: 0,
+        rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+        tableFingerprint: fingerprintFeedbackTable({
+          version: 1,
+          tableOrdinal: 0,
+          table,
+        }).fingerprint,
+        tableBlockSha256: '1'.repeat(64),
+      },
+    };
+
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/table.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [item],
+    });
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.some(
+        call => call[0].type === 'feedback.capture.error'
+      )
+    ).toBe(false);
+
+    controller.finish();
+    expect(document.querySelector('[data-feedback-completion-dialog]')).not.toBeNull();
+
+    const replacement = feedbackTableSchema.nodes.paragraph.create(
+      null,
+      feedbackTableSchema.text('The table is no longer resolvable.')
+    );
+    (editor.state as unknown as { doc: ProseMirrorNode }).doc =
+      feedbackTableSchema.nodes.doc.create(null, replacement);
+
+    document.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')?.click();
+
+    const finish = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.finish');
+    expect(finish).toEqual(
+      expect.objectContaining({
+        type: 'feedback.finish',
+        sessionId: 'session-1',
+        degradedTargetIds: ['F1'],
+      })
+    );
+    controller.deactivate();
+  });
+
+  it('caps exact cell expansion across a session and degrades later IDs deterministically', () => {
+    const rows = 16;
+    const columns = 16;
+    const cellsPerLocator = rows * columns;
+    const exactLocatorCount = FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION / cellsPerLocator;
+    expect(exactLocatorCount).toBe(16);
+    const editor = createRectangularTableEditorFixture(rows, columns);
+    const table = editor.state.doc.child(0);
+    const tableFingerprint = fingerprintFeedbackTable({
+      version: 1,
+      tableOrdinal: 0,
+      table,
+    }).fingerprint;
+    const nodeAt = jest.spyOn(table, 'nodeAt');
+    const items: FeedbackItemSummary[] = Array.from(
+      { length: exactLocatorCount + 1 },
+      (_, index) => ({
+        id: `F${index + 1}`,
+        kind: 'text' as const,
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: rows + 2,
+        focus: 'Selected table cells',
+        feedback: `Review rectangle ${index + 1}.`,
+        cellTarget: {
+          version: 1 as const,
+          tableOrdinal: 0,
+          rectangle: { top: 0, left: 0, bottom: rows, right: columns },
+          tableFingerprint,
+          tableBlockSha256: '1'.repeat(64),
+        },
+      })
+    ).reverse();
+    const controller = createFeedbackReviewController({ editor, host });
+
+    controller.activate({
+      sessionId: 'session-cell-budget',
+      source: 'docs/table.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      anchors: [{ ordinal: 0, startLine: 1, endLine: rows + 2 }],
+      items,
+    });
+
+    expect(nodeAt).toHaveBeenCalledTimes(FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION);
+    controller.finish();
+    const callsBeforeConfirm = nodeAt.mock.calls.length;
+    document.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')?.click();
+
+    expect(nodeAt).toHaveBeenCalledTimes(callsBeforeConfirm);
+    const finish = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.finish');
+    expect(finish).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-cell-budget',
+        degradedTargetIds: [`F${exactLocatorCount + 1}`],
+      })
+    );
+    controller.deactivate();
+  });
+
+  it('submits a new cell selection as whole-table feedback after the session cap is reached', () => {
+    const editor = createTableEditorFixture();
+    const table = editor.state.doc.child(0);
+    const tableFingerprint = fingerprintFeedbackTable({
+      version: 1,
+      tableOrdinal: 0,
+      table,
+    }).fingerprint;
+    const fullBudgetItems: FeedbackItemSummary[] = Array.from({ length: 16 }, (_, index) => ({
+      id: `F${index + 1}`,
+      kind: 'text' as const,
+      startOrdinal: 0,
+      endOrdinal: 0,
+      startLine: 1,
+      endLine: 4,
+      focus: 'Previous table selection',
+      feedback: `Review prior rectangle ${index + 1}.`,
+      cellTarget: {
+        version: 1 as const,
+        tableOrdinal: 0,
+        // Well-shaped metadata consumes the defensive budget even if a stale
+        // renderer cannot resolve it against the current table dimensions.
+        rectangle: { top: 0, left: 0, bottom: 16, right: 16 },
+        tableFingerprint,
+        tableBlockSha256: '1'.repeat(64),
+      },
+    }));
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-cell-budget',
+      source: 'docs/table.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      anchors: [{ ordinal: 0, startLine: 1, endLine: 4 }],
+      items: fullBudgetItems,
+    });
+
+    controller.openTextComposer({
+      startOrdinal: 0,
+      endOrdinal: 0,
+      focus: 'Role',
+      startLine: 1,
+      endLine: 4,
+      cellTarget: {
+        version: 1,
+        tableOrdinal: 0,
+        rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+        tableFingerprint,
+      },
+    });
+
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe('Whole table');
+    expect(document.querySelector('[data-feedback-target-explanation]')?.textContent).toContain(
+      'session has reached its exact cell detail limit'
+    );
+    const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+    field.value = 'Review this table as a whole.';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    document.querySelector<HTMLButtonElement>('[data-feedback-submit]')?.click();
+    const add = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.text.add');
+    expect(add).toEqual(
+      expect.objectContaining({
+        type: 'feedback.text.add',
+        focus: '[table]',
+        feedback: 'Review this table as a whole.',
+      })
+    );
+    expect(add).not.toHaveProperty('cellTarget');
+    controller.deactivate();
+  });
+
+  it('keeps cold oversized cell capture on the bounded whole-table path', () => {
+    const rows = 17;
+    const columns = 16;
+    expect(rows * columns).toBeGreaterThan(FEEDBACK_MAX_EXACT_CELL_COUNT);
+    const editor = createRectangularTableEditorFixture(rows, columns);
+    const cells: number[] = [];
+    editor.state.doc.descendants((node, position) => {
+      if (node.type.spec.tableRole === 'cell' || node.type.spec.tableRole === 'header_cell') {
+        cells.push(position);
+      }
+    });
+    const selection = CellSelection.create(editor.state.doc, cells[0], cells[cells.length - 1]);
+    (editor.state as unknown as { selection: CellSelection }).selection = selection;
+    const table = editor.state.doc.child(0);
+    const nodeAt = jest.spyOn(table, 'nodeAt');
+    const toJSON = jest.spyOn(table, 'toJSON');
+    const controller = createFeedbackReviewController({ editor, host });
+
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/table.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      anchors: [{ ordinal: 0, startLine: 1, endLine: rows + 2 }],
+      items: [],
+    });
+
+    expect(controller.commentOnSelection()).toBe(true);
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe('Whole table');
+    expect(document.querySelector('[data-feedback-target-detail]')?.textContent).toBe(
+      `${rows} rows × ${columns} columns`
+    );
+    expect(document.querySelector('[data-feedback-target-explanation]')?.textContent).toContain(
+      'too large to anchor cell by cell'
+    );
+
+    const field = document.querySelector('[data-feedback-input]') as HTMLTextAreaElement;
+    field.value = 'Summarize the whole table.';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    (document.querySelector('[data-feedback-submit]') as HTMLButtonElement).click();
+
+    const message = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .find(candidate => candidate.type === 'feedback.text.add');
+    expect(message).toEqual(
+      expect.objectContaining({
+        type: 'feedback.text.add',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: '[table]',
+        feedback: 'Summarize the whole table.',
+      })
+    );
+    expect(message).not.toHaveProperty('cellTarget');
+    expect(nodeAt).not.toHaveBeenCalled();
+    expect(toJSON).not.toHaveBeenCalled();
+    controller.deactivate();
+  });
+
+  it('describes an unresolved saved cell target as a whole-table fallback', () => {
+    const editor = createTableEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/table.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 0,
+          endOrdinal: 0,
+          startLine: 1,
+          endLine: 4,
+          focus: 'Role\tPrimary concern',
+          feedback: 'Clarify these cells.',
+          cellTarget: {
+            version: 1,
+            tableOrdinal: 0,
+            rectangle: { top: 0, left: 0, bottom: 1, right: 2 },
+            tableFingerprint: `md4h-table/v1:${'0'.repeat(16)}`,
+            tableBlockSha256: '0'.repeat(64),
+          },
+        },
+      ],
+    });
+
+    document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+
+    const target = document.querySelector<HTMLElement>('[data-feedback-target-kind]');
+    expect(target?.dataset.feedbackTargetKind).toBe('whole-table');
+    expect(target?.querySelector('[data-feedback-target-label]')?.textContent).toBe('Whole table');
+    expect(target?.querySelector('[data-feedback-target-detail]')?.textContent).toBe(
+      '2 rows × 2 columns'
+    );
+    expect(target?.querySelector('[data-feedback-target-preview]')).toBeNull();
+    expect(target?.querySelector('[data-feedback-target-explanation]')?.textContent).toContain(
+      'complete containing block'
+    );
+    expect(target?.textContent).not.toContain('Selected cells');
   });
 
   it('invalidates without discarding the draft and restores editing only when ended', () => {
@@ -5679,6 +7195,609 @@ describe('Feedback review controller', () => {
     }
   });
 
+  it('reuses one mapped block action and submits a plain whole-block target', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [
+        { ordinal: 0, startLine: 1, endLine: 1 },
+        { ordinal: 1, startLine: 3, endLine: 3 },
+        { ordinal: 3, startLine: 8, endLine: 9 },
+      ],
+      items: [],
+    });
+    const quote = editor.view.dom.children[3] as HTMLElement;
+    const quoteParagraph = quote.querySelector('p') as HTMLParagraphElement;
+    const quoteText = quoteParagraph.firstChild;
+    const diagram = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const diagramPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    diagram.append(diagramPath);
+    quoteParagraph.append(diagram);
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: quoteText,
+      focusNode: quoteText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+
+    try {
+      dispatchFeedbackBlockHover(diagramPath);
+      await waitForFeedbackFrame();
+
+      const firstAction = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      expect(firstAction).not.toBeNull();
+      if (!firstAction) throw new Error('Missing whole-block Feedback action');
+      expect(firstAction.hidden).toBe(false);
+      expect(firstAction.getAttribute('aria-label')).toBe('Add feedback to this block');
+
+      dispatchFeedbackBlockHover(editor.view.dom.children[0]);
+      await waitForFeedbackFrame();
+      const headingAction = document.querySelector<HTMLButtonElement>(
+        '[data-feedback-block-action]'
+      );
+      expect(headingAction).toBe(firstAction);
+      expect(headingAction?.hidden).toBe(false);
+
+      dispatchFeedbackBlockHover(diagramPath);
+      await waitForFeedbackFrame();
+      const quoteAction = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      expect(quoteAction).toBe(firstAction);
+      quoteAction?.click();
+
+      expect(document.querySelector('[data-feedback-focus]')?.textContent).toBe('Quote');
+      const actionWhileComposing = document.querySelector<HTMLButtonElement>(
+        '[data-feedback-block-action]'
+      );
+      expect(actionWhileComposing === null || actionWhileComposing.hidden).toBe(true);
+      const field = document.querySelector('[data-feedback-input]') as HTMLTextAreaElement;
+      field.value = 'Clarify this quotation.';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      (document.querySelector('[data-feedback-submit]') as HTMLButtonElement).click();
+
+      const message = (host.postMessage as jest.Mock).mock.calls
+        .map(call => call[0] as FeedbackWebviewMessage)
+        .find(candidate => candidate.type === 'feedback.text.add');
+      expect(message).toEqual(
+        expect.objectContaining({
+          type: 'feedback.text.add',
+          sessionId: 'session-1',
+          startOrdinal: 3,
+          endOrdinal: 3,
+          focus: 'Quote',
+          feedback: 'Clarify this quotation.',
+        })
+      );
+      expect(message).not.toHaveProperty('renderedRange');
+      expect(message).not.toHaveProperty('cellTarget');
+    } finally {
+      selectionSpy.mockRestore();
+      controller.deactivate();
+    }
+  });
+
+  it('keeps the exact-text action authoritative over a visible block action', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [
+        { ordinal: 0, startLine: 1, endLine: 1 },
+        { ordinal: 1, startLine: 3, endLine: 3 },
+      ],
+      items: [],
+    });
+    const titleText = editor.view.dom.children[0].firstChild;
+    const paragraphText = editor.view.dom.children[1].firstChild;
+    const selectionRect = {
+      left: 180,
+      right: 300,
+      top: 220,
+      bottom: 242,
+      width: 120,
+      height: 22,
+      x: 180,
+      y: 220,
+      toJSON: () => ({}),
+    } as DOMRect;
+    let currentSelection = {
+      anchorNode: titleText,
+      focusNode: titleText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection;
+    const selectionSpy = jest
+      .spyOn(window, 'getSelection')
+      .mockImplementation(() => currentSelection);
+
+    try {
+      dispatchFeedbackBlockHover(editor.view.dom.children[0]);
+      await waitForFeedbackFrame();
+      const blockAction = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      expect(blockAction).not.toBeNull();
+      expect(blockAction?.hidden).toBe(false);
+      expect(
+        document.querySelector<HTMLElement>('[data-feedback-block-target-preview]')?.hidden
+      ).toBe(false);
+
+      currentSelection = {
+        anchorNode: titleText,
+        focusNode: paragraphText,
+        anchorOffset: 0,
+        focusOffset: 5,
+        isCollapsed: false,
+        rangeCount: 1,
+        getRangeAt: () =>
+          ({
+            getClientRects: () => [selectionRect],
+            getBoundingClientRect: () => selectionRect,
+          }) as unknown as Range,
+        toString: () => 'Title\nAlpha',
+      } as unknown as Selection;
+      document.dispatchEvent(new Event('selectionchange'));
+      await waitForFeedbackFrame();
+
+      expect(blockAction?.hidden).toBe(true);
+      expect(
+        document.querySelector<HTMLElement>('[data-feedback-block-target-preview]')?.hidden
+      ).toBe(true);
+      const selectionAction = document.querySelector<HTMLButtonElement>(
+        '[data-feedback-selection-action]'
+      );
+      expect(selectionAction).not.toBeNull();
+      expect(selectionAction?.getAttribute('aria-label')).toBe('Add feedback to selected text');
+
+      dispatchFeedbackBlockHover(editor.view.dom.children[1]);
+      await waitForFeedbackFrame();
+      expect(blockAction?.hidden).toBe(true);
+      expect(document.querySelectorAll('[data-feedback-block-action]')).toHaveLength(1);
+      expect(document.querySelector('[data-feedback-selection-action]')).toBe(selectionAction);
+    } finally {
+      selectionSpy.mockRestore();
+      controller.deactivate();
+    }
+  });
+
+  it('suppresses block feedback for whitespace selection and a connected outside-editor caret', async () => {
+    const editor = createEditorFixture();
+    const title = editor.view.dom.children[0] as HTMLElement;
+    const titleText = title.firstChild;
+    const whitespace = document.createTextNode('   ');
+    title.append(whitespace);
+    let currentSelection: Selection = {
+      anchorNode: titleText,
+      focusNode: titleText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection;
+    const selectionSpy = jest
+      .spyOn(window, 'getSelection')
+      .mockImplementation(() => currentSelection);
+    const controller = createFeedbackReviewController({ editor, host });
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 1 }],
+        items: [],
+      });
+      dispatchFeedbackBlockHover(title);
+      await waitForFeedbackFrame();
+
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      expect(action).not.toBeNull();
+      expect(action?.hidden).toBe(false);
+
+      title.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+      expect(action?.hidden).toBe(true);
+
+      currentSelection = {
+        anchorNode: whitespace,
+        focusNode: whitespace,
+        anchorOffset: 0,
+        focusOffset: 3,
+        isCollapsed: false,
+        rangeCount: 1,
+        getRangeAt: () => document.createRange(),
+        toString: () => '   ',
+      } as unknown as Selection;
+      document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+      document.dispatchEvent(new Event('selectionchange'));
+      await waitForFeedbackFrame();
+
+      expect(action?.hidden).toBe(true);
+      expect(document.querySelector('[data-feedback-selection-action]')).toBeNull();
+
+      const outsideText = document.createTextNode('Feedback toolbar');
+      document.querySelector('.formatting-toolbar')?.append(outsideText);
+      currentSelection = {
+        anchorNode: outsideText,
+        focusNode: outsideText,
+        anchorOffset: 2,
+        focusOffset: 2,
+        isCollapsed: true,
+        rangeCount: 0,
+        toString: () => '',
+      } as unknown as Selection;
+      dispatchFeedbackBlockHover(title);
+      await waitForFeedbackFrame();
+
+      expect(action?.hidden).toBe(true);
+      expect(document.querySelector('[data-feedback-selection-action]')).toBeNull();
+    } finally {
+      controller.deactivate();
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('hides the block action while the keyboard capture picker owns the draft gate', async () => {
+    const editor = createEditorFixture();
+    const title = editor.view.dom.children[0] as HTMLElement;
+    const titleText = title.firstChild;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: titleText,
+      focusNode: titleText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+    const controller = createFeedbackReviewController({ editor, host });
+
+    try {
+      editor.view.dom.focus();
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [
+          { ordinal: 0, startLine: 1, endLine: 1 },
+          { ordinal: 1, startLine: 3, endLine: 3 },
+        ],
+        items: [],
+      });
+      dispatchFeedbackBlockHover(title);
+      await waitForFeedbackFrame();
+
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      if (!action) throw new Error('Missing whole-block Feedback action');
+      expect(action.hidden).toBe(false);
+
+      captureSelectedFeedbackBlocks({ editor, review: controller, rasterize: jest.fn() });
+      const picker = document.querySelector<HTMLFormElement>('.feedback-block-selector');
+      if (!picker) throw new Error('Missing keyboard capture block selector');
+      const hiddenWhilePickerOwnsGate = action.hidden;
+
+      action.click();
+      const clickStayedInert =
+        document.querySelector('.feedback-composer') === null && picker.isConnected;
+      const cancel = Array.from(picker.querySelectorAll<HTMLButtonElement>('button')).find(
+        button => button.textContent === 'Cancel'
+      );
+      if (!cancel) throw new Error('Missing keyboard capture cancel button');
+      cancel.click();
+
+      expect({
+        hiddenWhilePickerOwnsGate,
+        clickStayedInert,
+        pickerClosed: !picker.isConnected,
+        actionRestored: !action.hidden,
+      }).toEqual({
+        hiddenWhilePickerOwnsGate: true,
+        clickStayedInert: true,
+        pickerClosed: true,
+        actionRestored: true,
+      });
+    } finally {
+      controller.deactivate();
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('keeps focus through the block-action handoff and restores the editor after cancel', async () => {
+    const editor = createEditorFixture();
+    const paragraph = editor.view.dom.children[1] as HTMLElement;
+    const paragraphText = paragraph.firstChild;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: paragraphText,
+      focusNode: paragraphText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+    const controller = createFeedbackReviewController({ editor, host });
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 1, startLine: 3, endLine: 3 }],
+        items: [],
+      });
+      dispatchFeedbackBlockHover(paragraph);
+      await waitForFeedbackFrame();
+
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      if (!action) throw new Error('Missing whole-block Feedback action');
+      expect(action.hidden).toBe(false);
+      action.focus();
+      expect(document.activeElement).toBe(action);
+
+      jest.useFakeTimers();
+      editor.view.dom.dispatchEvent(new MouseEvent('pointerleave', { relatedTarget: action }));
+      jest.advanceTimersByTime(100);
+      expect(action.hidden).toBe(false);
+      expect(document.activeElement).toBe(action);
+
+      action.click();
+      const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-input]');
+      expect(field).not.toBeNull();
+      expect(document.activeElement).toBe(field);
+      expect(action.hidden).toBe(true);
+      document.querySelector<HTMLButtonElement>('.feedback-composer-actions button')?.click();
+
+      expect(document.querySelector('.feedback-composer')).toBeNull();
+      expect(document.activeElement).toBe(editor.view.dom);
+      expect(action.hidden).toBe(false);
+    } finally {
+      controller.deactivate();
+      jest.useRealTimers();
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('clears stale gutter hover after an outside leave and after a focused action blurs', async () => {
+    const editor = createEditorFixture();
+    const paragraph = editor.view.dom.children[1] as HTMLElement;
+    const outside = document.createElement('button');
+    outside.textContent = 'Outside feedback gutter';
+    document.body.append(outside);
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: null,
+      focusNode: null,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+    const controller = createFeedbackReviewController({ editor, host });
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 1, startLine: 3, endLine: 3 }],
+        items: [],
+      });
+      dispatchFeedbackBlockHover(paragraph);
+      await waitForFeedbackFrame();
+
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      if (!action) throw new Error('Missing whole-block Feedback action');
+      expect(action.hidden).toBe(false);
+
+      jest.useFakeTimers();
+      editor.view.dom.dispatchEvent(new MouseEvent('pointerleave', { relatedTarget: outside }));
+      jest.advanceTimersByTime(79);
+      const stableBeforeOutsideDelay = !action.hidden;
+      jest.advanceTimersByTime(1);
+      const clearedAfterOutsideLeave = action.hidden;
+      jest.useRealTimers();
+
+      dispatchFeedbackBlockHover(paragraph);
+      await waitForFeedbackFrame();
+      action.focus();
+      jest.useFakeTimers();
+      editor.view.dom.dispatchEvent(new MouseEvent('pointerleave', { relatedTarget: action }));
+      jest.advanceTimersByTime(100);
+      const stableDuringFocusedHandoff = !action.hidden && document.activeElement === action;
+
+      outside.focus();
+      jest.advanceTimersByTime(100);
+
+      expect({
+        stableBeforeOutsideDelay,
+        clearedAfterOutsideLeave,
+        stableDuringFocusedHandoff,
+        clearedAfterFocusout: action.hidden,
+      }).toEqual({
+        stableBeforeOutsideDelay: true,
+        clearedAfterOutsideLeave: true,
+        stableDuringFocusedHandoff: true,
+        clearedAfterFocusout: true,
+      });
+    } finally {
+      controller.deactivate();
+      jest.useRealTimers();
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('restores editor focus when a focused block action is removed by deactivation', async () => {
+    const editor = createEditorFixture();
+    const paragraph = editor.view.dom.children[1] as HTMLElement;
+    const paragraphText = paragraph.firstChild;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: paragraphText,
+      focusNode: paragraphText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+    const controller = createFeedbackReviewController({ editor, host });
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 1, startLine: 3, endLine: 3 }],
+        items: [],
+      });
+      dispatchFeedbackBlockHover(paragraph);
+      await waitForFeedbackFrame();
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      if (!action) throw new Error('Missing whole-block Feedback action');
+      action.focus();
+
+      controller.deactivate();
+
+      expect(action.isConnected).toBe(false);
+      expect(document.activeElement).toBe(editor.view.dom);
+    } finally {
+      controller.deactivate();
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('hides a focused block action when discard close becomes pending and restores editor focus', async () => {
+    const editor = createEditorFixture();
+    const paragraph = editor.view.dom.children[1] as HTMLElement;
+    const paragraphText = paragraph.firstChild;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: paragraphText,
+      focusNode: paragraphText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+    const controller = createFeedbackReviewController({ editor, host });
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 1, startLine: 3, endLine: 3 }],
+        items: [],
+      });
+      dispatchFeedbackBlockHover(paragraph);
+      await waitForFeedbackFrame();
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      if (!action) throw new Error('Missing whole-block Feedback action');
+      action.focus();
+
+      controller.handleHostMessage({
+        type: 'feedback.discarded',
+        requestId: 'discard-current',
+        sessionId: 'session-1',
+      });
+      const hiddenWhenCloseBecamePending = action.hidden;
+      const applied = controller.applyCloseSync(
+        {
+          type: 'feedback.close.sync',
+          requestId: 'discard-current',
+          sessionId: 'session-1',
+          revision: 1,
+          content: '# Authoritative source\n',
+        },
+        () => true
+      );
+      controller.handleHostMessage({
+        type: 'feedback.close.release',
+        requestId: 'discard-current',
+        sessionId: 'session-1',
+        revision: 1,
+      });
+      const completed = controller.completeClose('session-1');
+
+      expect({
+        hiddenWhenCloseBecamePending,
+        applied,
+        completed,
+        editorFocused: document.activeElement === editor.view.dom,
+      }).toEqual({
+        hiddenWhenCloseBecamePending: true,
+        applied: true,
+        completed: true,
+        editorFocused: true,
+      });
+    } finally {
+      controller.deactivate();
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it('fails block hover closed and removes its action across invalidation and teardown', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [{ ordinal: 1, startLine: 3, endLine: 3 }],
+      items: [],
+    });
+    const paragraphText = editor.view.dom.children[1].firstChild;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: paragraphText,
+      focusNode: paragraphText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+
+    try {
+      dispatchFeedbackBlockHover(editor.view.dom.children[1]);
+      await waitForFeedbackFrame();
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      expect(action).not.toBeNull();
+      expect(action?.hidden).toBe(false);
+
+      dispatchFeedbackBlockHover(editor.view.dom.children[2]);
+      await waitForFeedbackFrame();
+      expect(action?.hidden).toBe(true);
+
+      dispatchFeedbackBlockHover(editor.view.dom.children[1]);
+      await waitForFeedbackFrame();
+      expect(action?.hidden).toBe(false);
+
+      controller.invalidate('MD4H-FB-SNAPSHOT-001');
+      expect(action?.hidden).toBe(true);
+
+      controller.deactivate();
+      expect(action?.isConnected).toBe(false);
+      expect(document.querySelector('[data-feedback-block-action]')).toBeNull();
+    } finally {
+      selectionSpy.mockRestore();
+      controller.deactivate();
+    }
+  });
+
   it('places a selection-local Add feedback action outside the comments rail', async () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
@@ -5733,7 +7852,13 @@ describe('Feedback review controller', () => {
     const pointerDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
     expect(action.dispatchEvent(pointerDown)).toBe(false);
     action.click();
-    expect(document.querySelector('[data-feedback-focus]')?.textContent).toBe('Title\nAlpha');
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe(
+      'Selected blocks'
+    );
+    expect(document.querySelector('[data-feedback-target-detail]')?.textContent).toBe(
+      '2 blocks · heading to paragraph'
+    );
+    expect(document.querySelector('[data-feedback-focus]')).toBeNull();
     selectionSpy.mockRestore();
   });
 

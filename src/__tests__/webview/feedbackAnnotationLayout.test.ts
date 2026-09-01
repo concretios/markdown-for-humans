@@ -174,6 +174,41 @@ describe('layoutFeedbackAnnotations', () => {
     expect(result.placements[0]!.top).toBeGreaterThan(result.placements[0]!.targetY);
   });
 
+  it('keeps a pinned active edit at its viewport-safe top and overflows preceding cards upward', () => {
+    const crowded = [
+      item('F1', 1, 100),
+      item('F2', 2, 101),
+      item('F3', 3, 102),
+      item('F4', 4, 103),
+      {
+        ...item('F5', 5, 104, { expandedHeight: 96, preferredCardTop: 100 }),
+        pinPreferredCardTop: true,
+      } as FeedbackAnnotationLayoutItem,
+      item('F6', 6, 105),
+    ];
+
+    const unpinned = layout(
+      crowded.map(candidate =>
+        candidate.id === 'F5' ? { ...candidate, pinPreferredCardTop: undefined } : candidate
+      ),
+      { activeId: 'F5', topBound: 40 }
+    );
+    const pinned = layout(crowded, { activeId: 'F5', topBound: 40 });
+    const activeUnpinned = unpinned.placements.find(placement => placement.id === 'F5');
+    const activePinned = pinned.placements.find(placement => placement.id === 'F5');
+
+    expect(activeUnpinned?.top).toBeGreaterThan(100);
+    expect(activePinned).toEqual(
+      expect.objectContaining({ preferredTop: 100, top: 100, bottom: 196, displacement: 0 })
+    );
+    expect(pinned.placements[0]!.top).toBeLessThan(40);
+    for (let index = 1; index < pinned.placements.length; index += 1) {
+      expect(
+        pinned.placements[index]!.top - pinned.placements[index - 1]!.bottom
+      ).toBeGreaterThanOrEqual(8);
+    }
+  });
+
   it('repacks both sides of an active pivot when its expanded height changes', () => {
     const items = [
       item('F1', 1, 100, { compactHeight: 30 }),
@@ -284,6 +319,20 @@ describe('layoutFeedbackAnnotations', () => {
     ['duplicate Feedback ID', [item('F1', 1, 10), item('F1', 2, 20)]],
   ])('rejects invalid identity: %s', (_label, items) => {
     expect(() => layout(items)).toThrow(TypeError);
+  });
+
+  it('rejects a preferred-top pin without a preferred top or active ownership', () => {
+    const missingTop = {
+      ...item('F1', 1, 100),
+      pinPreferredCardTop: true,
+    } as FeedbackAnnotationLayoutItem;
+    const inactivePin = {
+      ...item('F1', 1, 100, { preferredCardTop: 80 }),
+      pinPreferredCardTop: true,
+    } as FeedbackAnnotationLayoutItem;
+
+    expect(() => layout([missingTop], { activeId: 'F1' })).toThrow(TypeError);
+    expect(() => layout([inactivePin, item('F2', 2, 200)], { activeId: 'F2' })).toThrow(TypeError);
   });
 
   it.each([

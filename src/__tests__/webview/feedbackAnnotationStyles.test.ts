@@ -118,6 +118,9 @@ describe('Feedback annotation styles', () => {
     const pending = ruleFor(
       ".feedback-review-active .markdown-editor .md4h-feedback-annotation-inline[data-feedback-ids*='__pending__']"
     );
+    const pendingCell = ruleFor(
+      ".feedback-review-active .markdown-editor .md4h-feedback-annotation-cell[data-feedback-ids*='__pending__']"
+    );
     const fallbackPending = ruleFor(
       '.feedback-review-active .markdown-editor .feedback-pending-target'
     );
@@ -130,6 +133,9 @@ describe('Feedback annotation styles', () => {
     expect(active).toContain('var(--md4h-feedback-highlight-edge)');
     expect(pending).toContain('var(--md4h-feedback-highlight-active)');
     expect(pending).toContain('var(--md4h-feedback-highlight-edge)');
+    expect(pendingCell).toContain('var(--md4h-feedback-highlight-active)');
+    expect(pendingCell).toContain('var(--md4h-feedback-highlight-edge)');
+    expect(pendingCell).toMatch(/box-shadow:\s*inset/);
     expect(fallbackPending).toContain('var(--md4h-feedback-highlight-saved)');
     expect(fallbackActive).toContain('var(--md4h-feedback-highlight-active)');
     expect(fallbackActive).toContain('var(--md4h-feedback-highlight-edge)');
@@ -139,6 +145,7 @@ describe('Feedback annotation styles', () => {
     const marker = ruleFor('.feedback-marker');
     const activeMarker = ruleFor('.feedback-marker.active');
     const selectionAction = ruleFor('.feedback-selection-action');
+    const blockAction = ruleFor('.feedback-block-action');
     const activeCard = ruleFor(".feedback-comment-card[data-feedback-card-state='active']");
 
     expect(marker).toContain('var(--md4h-feedback-accent)');
@@ -146,9 +153,11 @@ describe('Feedback annotation styles', () => {
     expect(activeMarker).toContain('var(--md4h-feedback-on-accent)');
     expect(selectionAction).toContain('var(--md4h-feedback-accent)');
     expect(selectionAction).toContain('var(--md4h-feedback-on-accent)');
+    expect(blockAction).toContain('var(--md4h-feedback-accent)');
+    expect(blockAction).toContain('var(--md4h-feedback-on-accent)');
     expect(activeCard).toContain('var(--md4h-feedback-highlight-edge)');
 
-    for (const rule of [marker, activeMarker, selectionAction, activeCard]) {
+    for (const rule of [marker, activeMarker, selectionAction, blockAction, activeCard]) {
       expect(rule).not.toContain('--vscode-button-background');
     }
   });
@@ -297,6 +306,7 @@ describe('Feedback annotation styles', () => {
     for (const selector of [
       '.feedback-marker:focus-visible',
       '.feedback-selection-action:focus-visible',
+      '.feedback-block-action:focus-visible',
       '.feedback-primary-button:focus-visible',
       '.feedback-toolbar-button:focus-visible',
       '.feedback-start-button:focus-visible',
@@ -306,6 +316,43 @@ describe('Feedback annotation styles', () => {
       expect(rule).not.toContain('--md4h-feedback-accent');
       expect(rule).not.toContain('--md4h-feedback-highlight-edge');
     }
+  });
+
+  it('hides the whole-block action during capture and gives it a high-contrast boundary', () => {
+    expect(ruleFor('.feedback-capture-active .feedback-block-action')).toMatch(
+      /visibility:\s*hidden\s*!important/
+    );
+    for (const selector of [
+      '.vscode-high-contrast .feedback-block-action',
+      '.vscode-high-contrast-light .feedback-block-action',
+    ]) {
+      expect(ruleFor(selector)).toMatch(/border:\s*2px\s+solid/);
+    }
+  });
+
+  it('previews the hovered whole block with paint-only theme styling and motion fallbacks', () => {
+    const preview = ruleFor(
+      '.feedback-review-active .markdown-editor ~ .feedback-block-target-preview'
+    );
+    const highContrast = ruleFor(
+      'body.vscode-high-contrast.feedback-review-active .markdown-editor ~ .feedback-block-target-preview'
+    );
+
+    expect(preview).toMatch(/position:\s*absolute/);
+    expect(preview).toMatch(/pointer-events:\s*none/);
+    expect(preview).toContain('var(--md4h-feedback-highlight-saved)');
+    expect(preview).toContain('var(--md4h-feedback-highlight-edge)');
+    expect(preview).toMatch(/box-shadow:\s*inset/);
+    expect(preview).toMatch(/animation:\s*feedback-block-target-preview-in\s+1(?:2|5|6)0ms/);
+    expect(preview).not.toMatch(/(?:margin|padding|border(?:-width)?|transform):/);
+    expect(highContrast).toMatch(/box-shadow:\s*inset\s+0\s+0\s+0\s+2px/);
+    expect(highContrast).toMatch(/background:\s*transparent/);
+    expect(css).toMatch(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.feedback-block-target-preview[\s\S]*?animation:\s*none\s*!important/
+    );
+    expect(ruleFor('.feedback-capture-active .feedback-block-target-preview')).toMatch(
+      /animation:\s*none\s*!important/
+    );
   });
 
   it('lets high-contrast button colors override the yellow primary-action fill', () => {
@@ -512,6 +559,31 @@ describe('Feedback annotation styles', () => {
     expect(editForm).toContain('var(--md4h-feedback-highlight-edge)');
     expect(editForm).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
     expect(ruleFor('.feedback-card-edit-form .feedback-composer-actions')).toContain('margin-top:');
+  });
+
+  it('bounds adaptive composer input growth without introducing a second default scrollbar', () => {
+    const heading = ruleFor('.feedback-composer-heading');
+    const sizeToggle = ruleFor('.feedback-composer-size-toggle');
+    const input = ruleFor('.feedback-composer-input');
+
+    expect(heading).toContain('display: flex');
+    expect(heading).toContain('justify-content: space-between');
+    expect(sizeToggle).toContain('var(--vscode-font-family)');
+    expect(sizeToggle).not.toMatch(/#[0-9a-f]{3,8}|rgba?\(/i);
+    expect(input).toMatch(/min-height:\s*96px/);
+    expect(input).toMatch(/max-height:\s*min\(420px, 40vh\)/);
+    expect(input).toMatch(/overflow-y:\s*hidden/);
+    expect(input).toMatch(/resize:\s*none/);
+  });
+
+  it('contains long literal code and opt-in expanded target previews', () => {
+    const code = ruleFor('.feedback-target-code');
+    const expanded = ruleFor('.feedback-target-expanded');
+
+    expect(code).toMatch(/white-space:\s*pre/);
+    expect(code).toMatch(/overflow-x:\s*auto/);
+    expect(expanded).toMatch(/max-height:\s*min\(320px, 40vh\)/);
+    expect(expanded).toMatch(/overflow:\s*auto/);
   });
 
   it('keeps saved highlights fully hidden in high-contrast themes', () => {

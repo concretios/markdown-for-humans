@@ -45,6 +45,17 @@ interface TopLevelBlockPosition {
 
 const topLevelBlockCache = new WeakMap<ProseMirrorNode, readonly TopLevelBlockPosition[]>();
 
+// Keep hover and whole-block target creation responsive well below the shared
+// protocol boundary. The sentinel is included in this 64 KiB limit so a huge
+// block cannot create a multi-megabyte intermediate Focus value.
+const FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH = 64 * 1024;
+const FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL = '\n[Focus truncated]';
+
+interface BoundedWholeBlockFocus {
+  focus: string;
+  truncated: boolean;
+}
+
 function topLevelBlocks(doc: ProseMirrorNode): readonly TopLevelBlockPosition[] {
   const cached = topLevelBlockCache.get(doc);
   if (cached) return cached;
@@ -151,6 +162,28 @@ function normalizedVisibleText(value: string): string {
   return value.replace(/\r\n/g, '\n');
 }
 
+function focusWithTruncationSentinel(value: string, maximumLength: number): string {
+  const prefixLength = Math.max(
+    0,
+    maximumLength - FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL.length
+  );
+  return `${value.slice(0, prefixLength)}${FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL}`;
+}
+
+function boundedWholeBlockFocus(
+  value: string,
+  maximumLength = FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH,
+  forceTruncation = false
+): BoundedWholeBlockFocus {
+  if (!forceTruncation && value.length <= maximumLength) {
+    return { focus: value, truncated: false };
+  }
+  return {
+    focus: focusWithTruncationSentinel(value, maximumLength),
+    truncated: true,
+  };
+}
+
 function domRangeForPositions(editor: Editor, from: number, to: number): Range | null {
   try {
     const start = editor.view.domAtPos(from);
@@ -240,14 +273,84 @@ export function resolveFeedbackRenderedRange(
   return { ...positions, focus, range: { ...range } };
 }
 
-function topLevelOrdinalForDomNode(root: HTMLElement, node: Node | null): number | null {
+interface TopLevelDomIndex {
+  root: HTMLElement;
+  ordinalsByElement: WeakMap<HTMLElement, number>;
+  elementsByOrdinal: Array<HTMLElement | null>;
+}
+
+const topLevelDomCache = new WeakMap<ProseMirrorNode, TopLevelDomIndex>();
+
+function isProseMirrorWidget(element: HTMLElement): boolean {
+  return (
+    element.classList.contains('ProseMirror-widget') ||
+    element.classList.contains('ProseMirror-gapcursor')
+  );
+}
+
+function createTopLevelDomIndex(editor: Editor): TopLevelDomIndex {
+  const doc = editor.state.doc;
+  const root = editor.view.dom as HTMLElement;
+  const ordinalsByElement = new WeakMap<HTMLElement, number>();
+  const elementsByOrdinal: Array<HTMLElement | null> = [];
+  const directBlocks = Array.from(root.children).filter(
+    (element): element is HTMLElement =>
+      element instanceof HTMLElement && !isProseMirrorWidget(element)
+  );
+  const expectedBlockCount = Number.isSafeInteger(doc.childCount) ? doc.childCount : undefined;
+
+  const remember = (ordinal: number, nodeDom: Node | null): void => {
+    const element = nodeDom instanceof HTMLElement ? nodeDom : null;
+    if (!element || element.parentElement !== root) return;
+    ordinalsByElement.set(element, ordinal);
+    elementsByOrdinal[ordinal] = element;
+  };
+
+  if (expectedBlockCount === undefined || directBlocks.length === expectedBlockCount) {
+    directBlocks.forEach((element, ordinal) => remember(ordinal, element));
+  } else if (typeof editor.view.nodeDOM === 'function') {
+    try {
+      doc.forEach((_node, offset, ordinal) => remember(ordinal, editor.view.nodeDOM(offset)));
+    } catch {
+      // Ambiguous custom DOM without a stable position map stays unmapped. A
+      // caller can then omit exact targeting instead of borrowing a neighbour.
+    }
+  }
+
+  const index = { root, ordinalsByElement, elementsByOrdinal };
+  topLevelDomCache.set(doc, index);
+  return index;
+}
+
+function topLevelDomIndex(editor: Editor, forceRefresh = false): TopLevelDomIndex {
+  const cached = topLevelDomCache.get(editor.state.doc);
+  if (!forceRefresh && cached?.root === editor.view.dom) return cached;
+  return createTopLevelDomIndex(editor);
+}
+
+function directChildElement(root: HTMLElement, node: Node | null): HTMLElement | null {
   let current = node instanceof HTMLElement ? node : node?.parentElement;
   while (current && current.parentElement !== root) {
     current = current.parentElement;
   }
-  if (!current || current.parentElement !== root) return null;
-  const ordinal = Array.prototype.indexOf.call(root.children, current) as number;
-  return ordinal >= 0 ? ordinal : null;
+  return current?.parentElement === root ? current : null;
+}
+
+/** Resolve a DOM endpoint through canonical document blocks, excluding direct widgets. */
+export function feedbackTopLevelOrdinalForDomNode(
+  editor: Editor,
+  node: Node | null
+): number | null {
+  const root = editor.view.dom as HTMLElement;
+  const element = directChildElement(root, node);
+  if (!element) return null;
+  let index = topLevelDomIndex(editor);
+  let ordinal = index.ordinalsByElement.get(element);
+  if (ordinal === undefined && element.parentElement === root && !isProseMirrorWidget(element)) {
+    index = topLevelDomIndex(editor, true);
+    ordinal = index.ordinalsByElement.get(element);
+  }
+  return ordinal ?? null;
 }
 
 function rangeIntersectsNode(range: Range, node: Node): boolean {
@@ -258,17 +361,27 @@ function rangeIntersectsNode(range: Range, node: Node): boolean {
   }
 }
 
-function domOrdinalsForRange(root: HTMLElement, range: Range): number[] {
+function domOrdinalsForRange(editor: Editor, range: Range): number[] {
+  const root = editor.view.dom as HTMLElement;
+  const index = topLevelDomIndex(editor);
   const ordinalForEndpoint = (
     container: Node,
     offset: number,
     endpoint: 'start' | 'end'
   ): number | null => {
-    const nestedOrdinal = topLevelOrdinalForDomNode(root, container);
+    const nestedOrdinal = feedbackTopLevelOrdinalForDomNode(editor, container);
     if (nestedOrdinal !== null) return nestedOrdinal;
-    if (container !== root || root.children.length === 0) return null;
-    const boundaryOrdinal = endpoint === 'end' ? offset - 1 : offset;
-    return Math.min(root.children.length - 1, Math.max(0, boundaryOrdinal));
+    if (container !== root || root.childNodes.length === 0) return null;
+    const step = endpoint === 'end' ? -1 : 1;
+    let childIndex = endpoint === 'end' ? offset - 1 : offset;
+    while (childIndex >= 0 && childIndex < root.childNodes.length) {
+      const child = root.childNodes.item(childIndex);
+      const element = child instanceof HTMLElement ? child : null;
+      const ordinal = element ? index.ordinalsByElement.get(element) : undefined;
+      if (ordinal !== undefined) return ordinal;
+      childIndex += step;
+    }
+    return null;
   };
 
   const start = ordinalForEndpoint(range.startContainer, range.startOffset, 'start');
@@ -285,10 +398,15 @@ function hasOpaqueContent(
   nativeRange?: Range
 ): boolean {
   const root = editor.view.dom as HTMLElement;
+  let index = topLevelDomIndex(editor);
   return ordinals.some(ordinal => {
     const node = editor.state.doc.maybeChild(ordinal);
     if (!node || node.isAtom || (node.isLeaf && !node.isText)) return true;
-    const block = root.children.item(ordinal);
+    let block = index.elementsByOrdinal[ordinal];
+    if (!block || block.parentElement !== root) {
+      index = topLevelDomIndex(editor, true);
+      block = index.elementsByOrdinal[ordinal];
+    }
     if (!(block instanceof HTMLElement)) return true;
     if (block.getAttribute('contenteditable') === 'false') return true;
     if (!nativeRange) return false;
@@ -326,11 +444,12 @@ function blockFallback(
 ): FeedbackRenderedTarget | null {
   const valid = ordinals.filter(ordinal => Boolean(editor.state.doc.maybeChild(ordinal)));
   if (valid.length === 0) return null;
+  const boundedFocus = boundedWholeBlockFocus(normalizedVisibleText(focus));
   return {
     kind: 'block',
     startOrdinal: Math.min(...valid),
     endOrdinal: Math.max(...valid),
-    focus: normalizedVisibleText(focus),
+    focus: boundedFocus.focus,
     reason,
   };
 }
@@ -357,12 +476,62 @@ function chromeFreeRenderedText(block: HTMLElement): string {
   return typeof clone.innerText === 'string' ? clone.innerText : (clone.textContent ?? '');
 }
 
+function focusForTopLevelBlock(
+  node: ProseMirrorNode,
+  renderedBlock: HTMLElement | null,
+  maximumLength = FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH
+): BoundedWholeBlockFocus {
+  if (!node.isAtom && node.content.size > 0) {
+    // Bound the ProseMirror walk itself. Calling textBetween across the full
+    // node would first materialize an invalid multi-megabyte string and only
+    // then give the caller a chance to reject it.
+    const traversalEnd = Math.min(node.content.size, maximumLength);
+    const semanticText = node.textBetween(0, traversalEnd, '\n', '\n');
+    const bounded = boundedWholeBlockFocus(
+      semanticText,
+      maximumLength,
+      traversalEnd < node.content.size
+    );
+    if (semanticText.trim().length > 0 || bounded.truncated) return bounded;
+  }
+
+  const semanticLabel = semanticLabelForNode(node);
+  if (semanticLabel !== undefined) return boundedWholeBlockFocus(semanticLabel, maximumLength);
+
+  if (renderedBlock) {
+    const renderedText = chromeFreeRenderedText(renderedBlock);
+    if (renderedText.trim().length > 0) {
+      return boundedWholeBlockFocus(renderedText, maximumLength);
+    }
+  }
+  return boundedWholeBlockFocus(`[${node.type.name}]`, maximumLength);
+}
+
+/**
+ * Return Focus for one already-indexed top-level block without traversing the
+ * document. The caller supplies the canonical mapped DOM element so direct
+ * ProseMirror widgets cannot shift opaque-node rendering to a neighbour.
+ * Focus is capped at 64 KiB with an explicit truncation sentinel.
+ */
+export function feedbackFocusForMappedBlock(
+  editor: Editor,
+  ordinal: number,
+  element: HTMLElement | null
+): string {
+  const node = editor.state.doc.maybeChild(ordinal);
+  if (!node) return '';
+  const root = editor.view.dom as HTMLElement;
+  const renderedBlock = element?.parentElement === root ? element : null;
+  return focusForTopLevelBlock(node, renderedBlock).focus;
+}
+
 /**
  * Returns the visible semantic Focus for a top-level block range without
  * leaking transient NodeView controls such as copy buttons or status labels.
  * ProseMirror content is authoritative for editable nodes so code indentation
  * and hard breaks are preserved. Opaque nodes use semantic attributes before a
- * chrome-stripped rendered fallback.
+ * chrome-stripped rendered fallback. Aggregate Focus is capped at 64 KiB with
+ * an explicit truncation sentinel.
  */
 export function feedbackFocusForBlockRange(
   editor: Editor,
@@ -370,29 +539,42 @@ export function feedbackFocusForBlockRange(
   endOrdinal: number
 ): string {
   const root = editor.view.dom as HTMLElement;
+  const blocks = topLevelBlocks(editor.state.doc);
+  let domIndex = topLevelDomIndex(editor);
   const ordinals = Array.from(
     { length: Math.max(0, endOrdinal - startOrdinal + 1) },
     (_, index) => startOrdinal + index
   );
-  return ordinals
-    .map(ordinal => {
-      const node = editor.state.doc.maybeChild(ordinal);
-      const block = root.children.item(ordinal);
-      if (!node || !(block instanceof HTMLElement)) return '';
-      if (!node.isAtom && node.content.size > 0) {
-        const semanticText = node.textBetween(0, node.content.size, '\n', '\n');
-        if (semanticText.trim().length > 0) return semanticText;
-      }
+  let focus = '';
+  let hasIncludedBlock = false;
+  for (const ordinal of ordinals) {
+    const blockPosition = blocks[ordinal];
+    const node = blockPosition?.node;
+    if (!node) continue;
 
-      const semanticLabel = semanticLabelForNode(node);
-      if (semanticLabel !== undefined) return semanticLabel;
+    // Reuse the canonical widget-filtered map. If custom DOM is ambiguous
+    // and nodeDOM is unavailable, omit rendered text instead of borrowing a
+    // neighbouring block's content.
+    let renderedBlock = domIndex.elementsByOrdinal[ordinal];
+    if (!renderedBlock || renderedBlock.parentElement !== root) {
+      domIndex = topLevelDomIndex(editor, true);
+      renderedBlock = domIndex.elementsByOrdinal[ordinal];
+    }
 
-      const renderedText = chromeFreeRenderedText(block);
-      if (renderedText.trim().length > 0) return renderedText;
-      return `[${node.type.name}]`;
-    })
-    .filter(value => value.length > 0)
-    .join('\n');
+    const separatorLength = hasIncludedBlock ? 1 : 0;
+    const remainingLength = FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH - focus.length - separatorLength;
+    if (remainingLength <= FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL.length) {
+      return focusWithTruncationSentinel(focus, FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH);
+    }
+
+    const blockFocus = focusForTopLevelBlock(node, renderedBlock, remainingLength);
+    if (blockFocus.focus.length === 0) continue;
+    if (hasIncludedBlock) focus += '\n';
+    focus += blockFocus.focus;
+    hasIncludedBlock = true;
+    if (blockFocus.truncated) return focus;
+  }
+  return focus;
 }
 
 /** Convert one ordered native DOM Range into an exact or honest block target. */
@@ -409,7 +591,7 @@ export function getFeedbackTargetFromDomRange(
     return null;
   }
 
-  const ordinals = domOrdinalsForRange(root, nativeRange);
+  const ordinals = domOrdinalsForRange(editor, nativeRange);
   const nativeFocus = normalizedVisibleText(nativeRange.toString());
   if (hasOpaqueContent(editor, ordinals, nativeRange)) {
     return blockFallback(editor, ordinals, nativeFocus, 'opaque-node');
