@@ -3691,7 +3691,16 @@ export function createFeedbackReviewController(options: {
     pendingButton.addEventListener('pointerdown', preserveSelection);
     pendingButton.addEventListener('mousedown', preserveSelection);
     pendingButton.addEventListener('click', () => {
-      controller.openTextComposer(target);
+      // Selection sampling is animation-frame coalesced. Re-read the live
+      // target so a fast selection change cannot activate the prior button's
+      // stale range before the next frame replaces it.
+      const liveTarget = session ? getFeedbackSelectionTarget(editor, session.anchors ?? []) : null;
+      if (!liveTarget) {
+        removePendingButton();
+        refreshBlockAction();
+        return;
+      }
+      controller.openTextComposer(constrainCellTargetToSessionBudget(liveTarget));
     });
     editorContainer?.append(pendingButton);
     positionPendingButton();

@@ -7862,6 +7862,67 @@ describe('Feedback review controller', () => {
     selectionSpy.mockRestore();
   });
 
+  it('revalidates the live selection before opening a composer from a stale action', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [
+        { ordinal: 0, startLine: 1, endLine: 1 },
+        { ordinal: 1, startLine: 3, endLine: 3 },
+      ],
+      items: [],
+    });
+    const titleText = editor.view.dom.children[0].firstChild;
+    const paragraphText = editor.view.dom.children[1].firstChild;
+    let currentSelection = {
+      anchorNode: titleText,
+      focusNode: paragraphText,
+      anchorOffset: 0,
+      focusOffset: 5,
+      isCollapsed: false,
+      rangeCount: 0,
+      toString: () => 'Title\nAlpha',
+    } as unknown as Selection;
+    const selectionSpy = jest
+      .spyOn(window, 'getSelection')
+      .mockImplementation(() => currentSelection);
+
+    try {
+      document.dispatchEvent(new Event('selectionchange'));
+      await waitForFeedbackFrame();
+      const staleAction = document.querySelector<HTMLButtonElement>(
+        '[data-feedback-selection-action]'
+      );
+      expect(staleAction).not.toBeNull();
+
+      currentSelection = {
+        anchorNode: paragraphText,
+        focusNode: paragraphText,
+        anchorOffset: 0,
+        focusOffset: 5,
+        isCollapsed: false,
+        rangeCount: 0,
+        toString: () => 'Alpha',
+      } as unknown as Selection;
+      staleAction?.click();
+
+      expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe(
+        'Whole paragraph'
+      );
+      expect(document.querySelector('[data-feedback-target-detail]')?.textContent).toBe(
+        'paragraph'
+      );
+      expect(document.querySelector('[data-feedback-focus]')?.textContent).toBe('Alpha beta');
+    } finally {
+      selectionSpy.mockRestore();
+      controller.deactivate();
+    }
+  });
+
   it('removes the selection action when the live browser range is cleared', async () => {
     const editor = createEditorFixture();
     (

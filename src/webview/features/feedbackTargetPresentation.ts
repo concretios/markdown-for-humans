@@ -484,13 +484,13 @@ function appendTextPreview(
   element.className = `feedback-target-preview feedback-target-${preview.kind}`;
   element.setAttribute('data-feedback-target-preview', '');
   if (focusAttribute) element.setAttribute(focusAttribute, '');
+  let textOwner: HTMLElement = element;
   if (preview.kind === 'code') {
     const code = ownerDocument.createElement('code');
-    code.textContent = preview.collapsedText;
     element.append(code);
-  } else {
-    element.textContent = preview.collapsedText;
+    textOwner = code;
   }
+  textOwner.textContent = preview.collapsedText;
   container.append(element);
 
   if (!preview.hasMore && !preview.truncated) return;
@@ -498,16 +498,14 @@ function appendTextPreview(
   disclosure.className = 'feedback-target-disclosure';
   const summary = ownerDocument.createElement('summary');
   summary.textContent = 'Show more selected content';
-  const expanded = ownerDocument.createElement(preview.kind === 'code' ? 'pre' : 'blockquote');
-  expanded.className = `feedback-target-expanded feedback-target-${preview.kind}`;
-  if (preview.kind === 'code') {
-    const code = ownerDocument.createElement('code');
-    code.textContent = preview.text;
-    expanded.append(code);
-  } else {
-    expanded.textContent = preview.text;
-  }
-  disclosure.append(summary, expanded);
+  disclosure.append(summary);
+  disclosure.addEventListener('toggle', () => {
+    textOwner.textContent = disclosure.open ? preview.text : preview.collapsedText;
+    summary.textContent = disclosure.open
+      ? 'Show less selected content'
+      : 'Show more selected content';
+    element.classList.toggle('feedback-target-preview-expanded', disclosure.open);
+  });
   if (preview.truncated) {
     const note = ownerDocument.createElement('p');
     note.className = 'feedback-target-truncation';

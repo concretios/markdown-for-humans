@@ -449,6 +449,48 @@ describe('Feedback target presentation', () => {
     });
   });
 
+  it('expands clipped selected text in place without rendering a duplicate preview', async () => {
+    const focus = Array.from({ length: 12 }, (_, index) => `Paragraph ${index + 1}`).join('\n');
+    const doc = documentWith(textBlock('paragraph', focus));
+    const presentation = getFeedbackTargetPresentation(doc, {
+      startOrdinal: 0,
+      endOrdinal: 0,
+      focus,
+      renderedRange: {
+        version: 1,
+        startOrdinal: 0,
+        startOffset: 0,
+        endOrdinal: 0,
+        endOffset: focus.length,
+      },
+    });
+    const view = createFeedbackTargetPresentationView({ ownerDocument: document, presentation });
+    const preview = view.querySelector<HTMLElement>('[data-feedback-target-preview]');
+    const disclosure = view.querySelector<HTMLDetailsElement>('.feedback-target-disclosure');
+    const summary = disclosure?.querySelector('summary');
+
+    expect(preview?.textContent).toBe(
+      presentation.preview?.kind === 'quote' ? presentation.preview.collapsedText : undefined
+    );
+    expect(view.querySelectorAll('[data-feedback-target-preview]')).toHaveLength(1);
+    expect(view.querySelector('.feedback-target-expanded')).toBeNull();
+
+    summary?.click();
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    expect(disclosure?.open).toBe(true);
+    expect(preview?.textContent).toBe(focus);
+    expect(summary?.textContent).toBe('Show less selected content');
+    expect(view.querySelectorAll('[data-feedback-target-preview]')).toHaveLength(1);
+
+    summary?.click();
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    expect(disclosure?.open).toBe(false);
+    expect(preview?.textContent).toBe(
+      presentation.preview?.kind === 'quote' ? presentation.preview.collapsedText : undefined
+    );
+    expect(summary?.textContent).toBe('Show more selected content');
+  });
+
   it('fails closed when target ordinals no longer exist', () => {
     const doc = documentWith(textBlock('paragraph', 'Alpha'));
 

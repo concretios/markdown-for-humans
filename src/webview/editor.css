@@ -4477,13 +4477,12 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   font: 11px/1.4 var(--vscode-font-family);
 }
 
-.feedback-target-expanded {
+.feedback-target-preview-expanded {
   max-height: min(320px, 40vh);
   overflow: auto;
 }
 
-.feedback-target-preview,
-.feedback-target-expanded {
+.feedback-target-preview {
   box-sizing: border-box;
   max-width: 100%;
   margin: 7px 0 0;
@@ -5534,8 +5533,8 @@ body[data-feedback-capture-state='rasterizing'] .formatting-toolbar {
 .vscode-high-contrast-light .feedback-target-context,
 .vscode-high-contrast .feedback-target-preview,
 .vscode-high-contrast-light .feedback-target-preview,
-.vscode-high-contrast .feedback-target-expanded,
-.vscode-high-contrast-light .feedback-target-expanded {
+.vscode-high-contrast .feedback-target-preview-expanded,
+.vscode-high-contrast-light .feedback-target-preview-expanded {
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
   border-width: 2px;
   backdrop-filter: none;

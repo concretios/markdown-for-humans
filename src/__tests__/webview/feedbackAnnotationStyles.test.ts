@@ -578,7 +578,7 @@ describe('Feedback annotation styles', () => {
 
   it('contains long literal code and opt-in expanded target previews', () => {
     const code = ruleFor('.feedback-target-code');
-    const expanded = ruleFor('.feedback-target-expanded');
+    const expanded = ruleFor('.feedback-target-preview-expanded');
 
     expect(code).toMatch(/white-space:\s*pre/);
     expect(code).toMatch(/overflow-x:\s*auto/);
