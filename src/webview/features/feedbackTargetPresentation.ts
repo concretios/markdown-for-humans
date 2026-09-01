@@ -115,9 +115,13 @@ function collapsePreviewText(value: string): string {
   return truncateText(lineBounded, FEEDBACK_COLLAPSED_PREVIEW_CHARACTER_LIMIT).text;
 }
 
-function textPreview(kind: 'quote' | 'code', value: string): FeedbackTextTargetPreview {
+function textPreview(
+  kind: 'quote' | 'code',
+  value: string,
+  forceTruncation = false
+): FeedbackTextTargetPreview {
   const normalized = normalizeText(value);
-  const bounded = truncateText(normalized, FEEDBACK_TEXT_PREVIEW_LIMIT);
+  const bounded = truncateText(normalized, FEEDBACK_TEXT_PREVIEW_LIMIT, forceTruncation);
   const collapsedText = collapsePreviewText(bounded.text);
   return {
     kind,
@@ -126,6 +130,19 @@ function textPreview(kind: 'quote' | 'code', value: string): FeedbackTextTargetP
     hasMore: collapsedText !== bounded.text,
     truncated: bounded.truncated,
   };
+}
+
+/**
+ * Builds a human-facing preview from the frozen rich node, not the persisted
+ * feedback Focus. Whole-block Focus is durable source evidence after saving,
+ * so rendering it here would expose Markdown syntax in reopened cards.
+ */
+function wholeBlockTextPreview(node: ProseMirrorNode): FeedbackTextTargetPreview | null {
+  if (node.isAtom || node.content.size === 0) return null;
+  const traversalEnd = Math.min(node.content.size, FEEDBACK_TEXT_PREVIEW_LIMIT);
+  const semanticText = normalizeText(node.textBetween(0, traversalEnd, '\n', '\n'));
+  if (semanticText.trim().length === 0) return null;
+  return textPreview('quote', semanticText, traversalEnd < node.content.size);
 }
 
 function lineCount(value: string): number {
@@ -459,10 +476,7 @@ export function getFeedbackTargetPresentation(
     };
   }
 
-  const focus =
-    target.focus.trim().length > 0 && !/^\[[^\]]+\]$/.test(target.focus)
-      ? textPreview('quote', target.focus)
-      : null;
+  const focus = wholeBlockTextPreview(first);
   return {
     kind: 'whole-block',
     label: `Whole ${readableBlockKind(first)}`,

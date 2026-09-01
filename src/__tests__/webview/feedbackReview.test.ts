@@ -5409,6 +5409,39 @@ describe('Feedback review controller', () => {
     expect(cards[1].closest('[data-feedback-card-layer]')).not.toBeNull();
   });
 
+  it('reopens a whole-block card with frozen rich text instead of its saved Markdown evidence', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 0,
+          endOrdinal: 0,
+          startLine: 1,
+          endLine: 1,
+          focus: '# **Title**',
+          feedback: 'Make the heading more specific.',
+        },
+      ],
+    });
+
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+
+    expect(document.querySelector('[data-feedback-target-label]')?.textContent).toBe(
+      'Whole heading'
+    );
+    expect(document.querySelector('[data-feedback-card-focus]')?.textContent).toBe('Title');
+    expect(document.querySelector('[data-feedback-card-focus]')?.textContent).not.toContain('**');
+    expect(document.querySelector('[data-feedback-card-focus]')?.textContent).not.toContain('](');
+    expect(document.querySelector('[data-feedback-card-focus]')?.textContent).not.toContain('`');
+  });
+
   it('uses roving focus for document-ordered feedback markers', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });

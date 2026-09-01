@@ -16,6 +16,8 @@ const schema = new Schema({
     doc: { content: 'block+' },
     text: { group: 'inline' },
     paragraph: { content: 'inline*', group: 'block' },
+    bulletList: { content: 'listItem+', group: 'block' },
+    listItem: { content: 'paragraph+' },
     heading: {
       content: 'inline*',
       group: 'block',
@@ -89,6 +91,18 @@ function codeBlock(text: string, language: string | null = 'typescript'): ProseM
   );
 }
 
+function bulletList(items: readonly string[]): ProseMirrorNode {
+  return schema.nodes.bulletList.create(
+    null,
+    items.map(item =>
+      schema.nodes.listItem.create(
+        null,
+        schema.nodes.paragraph.create(null, item.length > 0 ? schema.text(item) : undefined)
+      )
+    )
+  );
+}
+
 function table(rows: number, columns: number): ProseMirrorNode {
   return schema.nodes.table.create(
     null,
@@ -112,6 +126,84 @@ function documentWith(...blocks: ProseMirrorNode[]): ProseMirrorNode {
 }
 
 describe('Feedback target presentation', () => {
+  it.each([
+    {
+      name: 'a formatted paragraph',
+      block: textBlock('paragraph', 'Bold point with a link and inline code'),
+      visibleText: 'Bold point with a link and inline code',
+      sourceFocus: '**Bold point** with [a link](https://example.test) and `inline code`',
+    },
+    {
+      name: 'a formatted heading',
+      block: textBlock('heading', 'Plan with a link and inline code'),
+      visibleText: 'Plan with a link and inline code',
+      sourceFocus: '## **Plan** with [a link](https://example.test) and `inline code`',
+    },
+  ])(
+    'keeps the saved whole-block preview semantic for $name',
+    ({ block, visibleText, sourceFocus }) => {
+      const doc = documentWith(block);
+      const initial = getFeedbackTargetPresentation(doc, {
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: visibleText,
+        presentationReason: 'whole-block-action',
+      });
+      const reopened = getFeedbackTargetPresentation(doc, {
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: sourceFocus,
+        presentationReason: 'whole-block-action',
+      });
+
+      expect(initial.preview).toEqual(
+        expect.objectContaining({ kind: 'quote', text: visibleText })
+      );
+      expect(reopened.preview).toEqual(initial.preview);
+      expect(JSON.stringify(reopened.preview)).not.toContain('**');
+      expect(JSON.stringify(reopened.preview)).not.toContain('](');
+      expect(JSON.stringify(reopened.preview)).not.toContain('`');
+    }
+  );
+
+  it('keeps a reopened formatted bullet-list card aligned with its initial composer preview', () => {
+    const visibleItems = [
+      'Persistent formatting bar — See your options',
+      'Floating shortcuts — Actions appear where you need them (Cmd+K)',
+      'No command palette overload — Actions are visible, not buried in /commands',
+      'No context switching — Everything you need is right there',
+    ];
+    const doc = documentWith(bulletList(visibleItems));
+    const sourceFocus = [
+      '- **Persistent formatting bar** — See your options',
+      '- **Floating shortcuts** — Actions appear where you need them (`Cmd+K`)',
+      '- **No command palette overload** — Actions are visible, not buried in [/commands](https://example.test)',
+      '- **No context switching** — Everything you need is right there',
+    ].join('\n');
+    const initial = getFeedbackTargetPresentation(doc, {
+      startOrdinal: 0,
+      endOrdinal: 0,
+      focus: visibleItems.join('\n'),
+      presentationReason: 'whole-block-action',
+    });
+    const reopened = getFeedbackTargetPresentation(doc, {
+      startOrdinal: 0,
+      endOrdinal: 0,
+      focus: sourceFocus,
+      presentationReason: 'whole-block-action',
+    });
+
+    expect(initial).toMatchObject({
+      kind: 'whole-block',
+      label: 'Whole bullet list',
+      preview: { kind: 'quote', text: visibleItems.join('\n') },
+    });
+    expect(reopened.preview).toEqual(initial.preview);
+    expect(JSON.stringify(reopened.preview)).not.toContain('- **');
+    expect(JSON.stringify(reopened.preview)).not.toContain('](');
+    expect(JSON.stringify(reopened.preview)).not.toContain('`');
+  });
+
   it('describes exact prose as bounded literal text without interpreting HTML-like content', () => {
     const focus = '<img src=x onerror=alert(1)> **literal Markdown**';
     const doc = documentWith(textBlock('paragraph', focus));

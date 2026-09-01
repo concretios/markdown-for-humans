@@ -827,3 +827,15 @@ intended missing-v2 reason and the existing v1 suites remain green.
   Dark+, then restored Light+. The editor remained clean with no unsaved edits.
 - **Handoff:** The plan stays in `roadmap/pipeline/` with status pending user
   review. Nothing was committed or pushed.
+
+### 2026-09-01: Whole-block saved-card preview correction
+
+- **Presentation:** V2 reports continue to persist exact Markdown source for
+  whole blocks. Reopened human-facing cards now derive their bounded quote from
+  the frozen ProseMirror block instead of reusing that source evidence, so rich
+  paragraphs, headings, and formatted lists do not expose Markdown markers.
+- **Coverage:** Added red-green presentation cases for formatted paragraphs,
+  headings, and bullet lists, plus a card-level reopening regression test.
+- **Live verification:** In an isolated Extension Development Host fixture, a
+  formatted list first opened with semantic text, its draft retained exact
+  source Markdown, and the reopened card again showed semantic text.
