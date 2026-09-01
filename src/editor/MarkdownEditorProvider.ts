@@ -604,6 +604,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   private static readonly URL_CHECK_TIMEOUT_MS = 2000;
   private static readonly MAX_FILE_SEARCH_RESULTS = 2000;
 
+  // One cache key per extension-host lifetime. Recreated panels share their
+  // assets, while a rebuilt or reloaded host cannot reuse an older bundle.
+  private readonly webviewAssetRevision = crypto.randomBytes(8).toString('hex');
+
   // Track pending edits to avoid feedback loops
   // Key: document URI, Value: timestamp of last edit from webview
   private pendingEdits = new Map<string, number>();
@@ -10964,13 +10968,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
    * Generate HTML for webview
    */
   private getHtmlForWebview(webview: vscode.Webview): string {
-    const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.js')
-    );
-
-    const styleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'dist', 'webview.css')
-    );
+    // The development host can recreate its extension host while Chromium
+    // retains a webview's prior asset cache. A stale renderer can otherwise
+    // speak the current snapshot protocol with an older serializer. The
+    // extension-host cache key keeps every panel on this exact bundle while a
+    // rebuilt host receives a new asset URL.
+    const scriptUri = this.getVersionedWebviewAssetUri(webview, 'webview.js');
+    const styleUri = this.getVersionedWebviewAssetUri(webview, 'webview.css');
 
     // Use a nonce for security
     const nonce = getNonce();
@@ -10998,6 +11002,21 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       </body>
       </html>
     `;
+  }
+
+  /**
+   * Creates a cache-busted resource URL without depending on `Uri.with()`.
+   *
+   * The webview resource loader ignores the query while Chromium uses it as a
+   * cache key. Keeping this as a string also preserves compatibility with
+   * URI-like objects returned by test doubles.
+   */
+  private getVersionedWebviewAssetUri(webview: vscode.Webview, assetName: string): string {
+    const resourceUri = webview
+      .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'dist', assetName))
+      .toString();
+    const separator = resourceUri.includes('?') ? '&' : '?';
+    return `${resourceUri}${separator}md4h-webview=${this.webviewAssetRevision}`;
   }
 }
 

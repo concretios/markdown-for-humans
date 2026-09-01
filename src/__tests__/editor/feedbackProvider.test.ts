@@ -33,6 +33,7 @@ interface FeedbackMessage {
 }
 
 interface ProviderInternals {
+  getHtmlForWebview: (webview: vscode.Webview) => string;
   handleWebviewMessage: (
     message: FeedbackMessage,
     document: vscode.TextDocument,
@@ -241,6 +242,44 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     delete (vscode.workspace as unknown as { fs?: unknown }).fs;
     delete (vscode.env as unknown as { clipboard?: unknown }).clipboard;
     await rm(workspaceRoot, { recursive: true, force: true });
+  });
+
+  it('refreshes webview assets after a host rebuild while reusing them within one host', () => {
+    const provider = createProvider(workspaceRoot);
+    const rebuiltProvider = createProvider(workspaceRoot);
+    const uriApi = vscode.Uri as unknown as {
+      joinPath?: (base: vscode.Uri, ...segments: string[]) => vscode.Uri;
+    };
+    const originalJoinPath = uriApi.joinPath;
+    uriApi.joinPath = (base, ...segments) => fileUri(path.join(base.fsPath, ...segments));
+    const asWebviewUri = jest.fn((uri: vscode.Uri) => {
+      const basename = path.basename(uri.fsPath);
+      const base = `vscode-webview://feedback/${basename}`;
+      return {
+        toString: () => base,
+      };
+    });
+    const webview = {
+      cspSource: 'vscode-webview://feedback',
+      asWebviewUri,
+    } as unknown as vscode.Webview;
+
+    try {
+      const firstHtml = internals(provider).getHtmlForWebview(webview);
+      const sameHostHtml = internals(provider).getHtmlForWebview(webview);
+      const rebuiltHostHtml = internals(rebuiltProvider).getHtmlForWebview(webview);
+      const resource = (html: string, tag: 'script' | 'link') =>
+        html.match(new RegExp(`<${tag}[^>]+(?:src|href)="([^"]+)"`))?.[1];
+
+      expect(resource(firstHtml, 'script')).toMatch(/webview\.js\?/);
+      expect(resource(firstHtml, 'link')).toMatch(/webview\.css\?/);
+      expect(resource(firstHtml, 'script')).toBe(resource(sameHostHtml, 'script'));
+      expect(resource(firstHtml, 'link')).toBe(resource(sameHostHtml, 'link'));
+      expect(resource(firstHtml, 'script')).not.toBe(resource(rebuiltHostHtml, 'script'));
+      expect(resource(firstHtml, 'link')).not.toBe(resource(rebuiltHostHtml, 'link'));
+    } finally {
+      uriApi.joinPath = originalJoinPath;
+    }
   });
 
   it.each([
