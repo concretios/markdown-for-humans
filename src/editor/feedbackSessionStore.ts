@@ -4994,6 +4994,11 @@ function parseReportLock(contents: Buffer): ParsedReportLock | undefined {
   return { pid, createdAtMs: createdAt.getTime() };
 }
 
+// process.kill(pid, 0) is only meaningful when the checking process and the lock's
+// owning process share a PID namespace. A lock file visible across different
+// namespaces (e.g., NFS between hosts) can produce a false dead verdict. This is a
+// known, accepted limitation: removing the check entirely would be worse, as it
+// would expose a genuinely alive process to lock theft on the same machine.
 function isProcessDemonstrablyDead(pid: number): boolean {
   try {
     process.kill(pid, 0);
