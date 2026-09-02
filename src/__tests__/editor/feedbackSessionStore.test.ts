@@ -164,6 +164,37 @@ function makeRgbaPng(
   ]);
 }
 
+// A real, decodable multi-megabyte PNG (grayscale, level-0 "store"
+// compression) so quota-eviction tests can exercise code paths that fully
+// re-validate every screenshot on disk, not just its file size. Kept under
+// ~3 MiB raw wherever it is passed as a base64 string through the public
+// add/replace APIs: Node's regex engine (isStrictBase64) stack-overflows on
+// base64 strings much longer than that, independent of this fix.
+function makeLargeGrayscalePng(approximateBytes: number): {
+  bytes: Buffer;
+  width: number;
+  height: number;
+} {
+  const width = 3000;
+  const height = Math.max(1, Math.round(approximateBytes / (width + 1)));
+  const raw = Buffer.alloc(height * (width + 1));
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 0;
+  ihdr[10] = 0;
+  ihdr[11] = 0;
+  ihdr[12] = 0;
+  const bytes = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw, { level: 0 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+  return { bytes, width, height };
+}
+
 describe('feedbackSessionStore helpers', () => {
   it('computes SHA-256 from the exact saved bytes', () => {
     const withBom = Buffer.from([0xef, 0xbb, 0xbf, ...Buffer.from('hello\r\n')]);
@@ -2504,50 +2535,99 @@ describe('FeedbackSessionStore', () => {
     });
   });
 
-  it('counts screenshot bytes retained for Undo toward the cumulative quota', async () => {
+  const TOMBSTONE_QUOTA_BYTES = 16 * 1024 * 1024;
+  const SCREENSHOT_QUOTA_BYTES = 64 * 1024 * 1024;
+
+  interface SyntheticTombstone {
+    item: {
+      id: string;
+      sequence: number;
+      kind: 'screenshot';
+      startLine: number;
+      endLine: number;
+      feedback: string;
+      assetRelativePath: string;
+      assetSha256: string;
+    };
+    screenshotBytes?: Buffer;
+    evicted?: boolean;
+  }
+
+  type MutableTombstoneStore = {
+    _nextSequence: number;
+    _tombstones: Map<string, SyntheticTombstone>;
+  };
+
+  function asMutableTombstoneStore(store: FeedbackSessionStore): MutableTombstoneStore {
+    return store as unknown as MutableTombstoneStore;
+  }
+
+  // The quota path reads metadata only. Avoid allocating tens of MiB solely to
+  // model already-validated in-memory Undo buffers in these unit tests.
+  function setSyntheticScreenshotTombstone(
+    store: FeedbackSessionStore,
+    id: string,
+    sequence: number,
+    byteLength: number
+  ): void {
+    asMutableTombstoneStore(store)._tombstones.set(id, {
+      item: {
+        id,
+        sequence,
+        kind: 'screenshot',
+        startLine: 1,
+        endLine: 1,
+        feedback: 'Deleted evidence.',
+        assetRelativePath: `assets/${id}.png`,
+        assetSha256: 'a'.repeat(64),
+      },
+      screenshotBytes: { byteLength } as Buffer,
+    });
+  }
+
+  function residentTombstoneBytes(store: FeedbackSessionStore): number {
+    let total = 0;
+    for (const tombstone of asMutableTombstoneStore(store)._tombstones.values()) {
+      total += tombstone.screenshotBytes?.byteLength ?? 0;
+    }
+    return total;
+  }
+
+  it('bounds screenshot bytes retained for Undo at 16 MiB and never exceeds the 64 MiB combined ceiling', async () => {
     const store = await createStore('q003');
     const incomingPngBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
-    const mutableStore = store as unknown as {
-      _nextSequence: number;
-      _tombstones: Map<
-        string,
-        {
-          item: {
-            id: string;
-            sequence: number;
-            kind: 'screenshot';
-            startLine: number;
-            endLine: number;
-            feedback: string;
-            assetRelativePath: string;
-            assetSha256: string;
-          };
-          screenshotBytes: Buffer;
-        }
-      >;
-    };
-    for (let index = 0; index < 7; index += 1) {
-      const id = `F${index + 1}`;
-      const retainedByteLength =
-        index < 6 ? 10 * 1024 * 1024 : 4 * 1024 * 1024 - incomingPngBytes + 1;
-      mutableStore._tombstones.set(id, {
-        item: {
-          id,
-          sequence: index + 1,
-          kind: 'screenshot',
-          startLine: 1,
-          endLine: 1,
-          feedback: 'Deleted evidence.',
-          assetRelativePath: `assets/${id}.png`,
-          assetSha256: 'a'.repeat(64),
-        },
-        // The quota path reads metadata only. Avoid allocating 64 MiB solely
-        // to model already-validated in-memory Undo buffers in this unit test.
-        screenshotBytes: { byteLength: retainedByteLength } as Buffer,
-      });
-    }
-    mutableStore._nextSequence = 8;
 
+    // Five real 10 MiB active screenshots (50 MiB): non-trivial active bytes
+    // that narrow the tombstone budget below its own flat 16 MiB sub-cap
+    // (64 - 50 = 14 MiB), so the combined-ceiling assertion below actually
+    // depends on active bytes being counted, not just on the sub-cap.
+    const activeItems = Array.from({ length: 5 }, (_, index) => ({
+      id: `F${index + 1}`,
+      sequence: index + 1,
+      kind: 'screenshot' as const,
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Kept evidence.',
+      assetRelativePath: `assets/F${index + 1}.png`,
+      assetSha256: 'a'.repeat(64),
+    }));
+    for (const item of activeItems) {
+      const assetPath = path.join(store.bundleDirectory, item.assetRelativePath);
+      await writeFile(assetPath, '');
+      await truncate(assetPath, 10 * 1024 * 1024);
+    }
+    (store as unknown as { _items: typeof activeItems })._items = activeItems;
+
+    // Two tombstones totaling 15 MiB: under the flat 16 MiB sub-cap on their
+    // own, but over the ~14 MiB the 50 MiB of active content actually leaves.
+    setSyntheticScreenshotTombstone(store, 'T1', 6, 8 * 1024 * 1024);
+    setSyntheticScreenshotTombstone(store, 'T2', 7, 7 * 1024 * 1024);
+    asMutableTombstoneStore(store)._nextSequence = 8;
+
+    // Before this fix, tombstoned bytes counted against the ceiling forever.
+    // The oldest tombstone (T1) is now evicted (its bytes freed, not just
+    // excluded from the count) to make room, so the add succeeds and both
+    // caps hold afterward.
     await expect(
       store.addScreenshotFeedback({
         startLine: 1,
@@ -2555,10 +2635,570 @@ describe('FeedbackSessionStore', () => {
         feedback: 'Do not bypass the quota through repeated delete and add cycles.',
         pngData: ONE_PIXEL_PNG_BASE64,
       })
-    ).rejects.toThrow(/64 MiB cumulative screenshot limit/i);
+    ).resolves.toMatchObject({ id: 'F8' });
+
+    expect(asMutableTombstoneStore(store)._tombstones.get('T1')?.evicted).toBe(true);
+    const tombstoneBytes = residentTombstoneBytes(store);
+    expect(tombstoneBytes).toBeLessThanOrEqual(TOMBSTONE_QUOTA_BYTES);
+    const activeBytes = 5 * 10 * 1024 * 1024 + incomingPngBytes;
+    expect(activeBytes + tombstoneBytes).toBeLessThanOrEqual(SCREENSHOT_QUOTA_BYTES);
+  });
+
+  it('frees tombstoned screenshot bytes so a new small screenshot succeeds once active content is well under the ceiling', async () => {
+    const store = await createStore('q004');
+
+    // Active content: one real 5 MiB screenshot, well under the 64 MiB ceiling.
+    const activeItem = {
+      id: 'F1',
+      sequence: 1,
+      kind: 'screenshot' as const,
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Kept evidence.',
+      assetRelativePath: 'assets/F1.png',
+      assetSha256: 'a'.repeat(64),
+    };
+    const activeAssetPath = path.join(store.bundleDirectory, activeItem.assetRelativePath);
+    await writeFile(activeAssetPath, '');
+    await truncate(activeAssetPath, 5 * 1024 * 1024);
+
+    // Tombstoned content: six deleted 10 MiB screenshots (60 MiB total), well
+    // over the 16 MiB tombstone sub-cap. Combined with the 5 MiB of active
+    // content, this would have exceeded the 64 MiB ceiling before this fix.
+    for (let index = 0; index < 6; index += 1) {
+      const id = `F${index + 2}`;
+      setSyntheticScreenshotTombstone(store, id, index + 2, 10 * 1024 * 1024);
+    }
+
+    const mutableStore = store as unknown as { _items: unknown[]; _nextSequence: number };
+    mutableStore._items = [activeItem];
+    mutableStore._nextSequence = 8;
+
+    await expect(
+      store.addScreenshotFeedback({
+        startLine: 1,
+        endLine: 1,
+        feedback: 'Small addition once tombstoned memory has been freed.',
+        pngData: ONE_PIXEL_PNG_BASE64,
+      })
+    ).resolves.toMatchObject({ id: 'F8' });
+  });
+
+  it("actually frees an evicted tombstone's screenshot bytes from memory and marks it evicted", async () => {
+    const store = await createStore('q005');
+    const incomingPngBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
+    for (let index = 0; index < 7; index += 1) {
+      const id = `F${index + 1}`;
+      const retainedByteLength =
+        index < 6 ? 10 * 1024 * 1024 : 4 * 1024 * 1024 - incomingPngBytes + 1;
+      setSyntheticScreenshotTombstone(store, id, index + 1, retainedByteLength);
+    }
+    asMutableTombstoneStore(store)._nextSequence = 8;
+
+    await store.addScreenshotFeedback({
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Trigger eviction of the oldest tombstones.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+    });
+
+    const tombstones = asMutableTombstoneStore(store)._tombstones;
+    const oldest = tombstones.get('F1');
+    expect(oldest?.evicted).toBe(true);
+    expect(oldest?.screenshotBytes).toBeUndefined();
+
+    // The newest tombstone fits within the surviving 16 MiB budget and stays resident.
+    const newest = tombstones.get('F7');
+    expect(newest?.evicted).toBeFalsy();
+    expect(newest?.screenshotBytes).toBeDefined();
+  });
+
+  it('lets a further mutation succeed after eviction instead of throwing MD4H-FB-CAPTURE-002', async () => {
+    const store = await createStore('q006');
+    const incomingPngBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
+    for (let index = 0; index < 7; index += 1) {
+      const id = `F${index + 1}`;
+      const retainedByteLength =
+        index < 6 ? 10 * 1024 * 1024 : 4 * 1024 * 1024 - incomingPngBytes + 1;
+      setSyntheticScreenshotTombstone(store, id, index + 1, retainedByteLength);
+    }
+    asMutableTombstoneStore(store)._nextSequence = 8;
+
+    await store.addScreenshotFeedback({
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Trigger eviction of the oldest tombstones.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+    });
+    expect(asMutableTombstoneStore(store)._tombstones.get('F1')?.evicted).toBe(true);
+
+    // F1's screenshotBytes is now undefined because it was evicted, not
+    // corrupted. Without the evicted skip, this next quota check would throw
+    // MD4H-FB-CAPTURE-002 for F1 even though nothing is actually wrong.
+    await expect(
+      store.addScreenshotFeedback({
+        startLine: 1,
+        endLine: 1,
+        feedback: 'A further mutation after eviction.',
+        pngData: ONE_PIXEL_PNG_BASE64,
+      })
+    ).resolves.toMatchObject({ id: 'F9' });
+  });
+
+  it('leaves tombstone state untouched when a later guard rolls back the whole mutation', async () => {
+    const store = await createStore('q009');
+    const incomingPngBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
+    const originalByteLengths: number[] = [];
+    for (let index = 0; index < 7; index += 1) {
+      const id = `F${index + 1}`;
+      const retainedByteLength =
+        index < 6 ? 10 * 1024 * 1024 : 4 * 1024 * 1024 - incomingPngBytes + 1;
+      originalByteLengths.push(retainedByteLength);
+      setSyntheticScreenshotTombstone(store, id, index + 1, retainedByteLength);
+    }
+    asMutableTombstoneStore(store)._nextSequence = 8;
+
+    // The quota check that runs before commit would decide several of these
+    // tombstones need eviction to fit the new screenshot. A host guard that
+    // only fails after the report bytes are written must still roll the
+    // whole mutation back without applying that eviction decision.
+    let beforeCommitCalls = 0;
+    await expect(
+      store.addScreenshotFeedback(
+        {
+          startLine: 1,
+          endLine: 1,
+          feedback: 'A guard that fails after the report write must not evict tombstones.',
+          pngData: ONE_PIXEL_PNG_BASE64,
+        },
+        () => {
+          beforeCommitCalls += 1;
+          if (beforeCommitCalls > 1) {
+            throw new Error('host guard rejected the commit');
+          }
+        }
+      )
+    ).rejects.toThrow(/host guard rejected the commit/);
+
+    const tombstones = asMutableTombstoneStore(store)._tombstones;
+    for (let index = 0; index < 7; index += 1) {
+      const id = `F${index + 1}`;
+      expect(tombstones.get(id)?.evicted).toBeFalsy();
+      expect(tombstones.get(id)?.screenshotBytes?.byteLength).toBe(originalByteLengths[index]);
+    }
     await expect(stat(path.join(store.bundleDirectory, 'assets', 'F8.png'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  });
+
+  it('returns a graceful outcome instead of the internal corruption error when restoring an evicted tombstone', async () => {
+    const store = await createStore('q007');
+    const incomingPngBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
+    for (let index = 0; index < 7; index += 1) {
+      const id = `F${index + 1}`;
+      const retainedByteLength =
+        index < 6 ? 10 * 1024 * 1024 : 4 * 1024 * 1024 - incomingPngBytes + 1;
+      setSyntheticScreenshotTombstone(store, id, index + 1, retainedByteLength);
+    }
+    asMutableTombstoneStore(store)._nextSequence = 8;
+
+    await store.addScreenshotFeedback({
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Trigger eviction of the oldest tombstones.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+    });
+    expect(asMutableTombstoneStore(store)._tombstones.get('F1')?.evicted).toBe(true);
+
+    await expect(store.restoreFeedback('F1')).rejects.toMatchObject({
+      code: 'MD4H-FB-STORE-001',
+      message: expect.stringMatching(/no longer available/i),
+    });
+  });
+
+  it('returns a graceful outcome instead of the internal corruption error when restoring an evicted v2 tombstone', async () => {
+    const store = await FeedbackSessionStore.create({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      schemaVersion: 2,
+      now: NOW,
+      roundSuffix: 'q010',
+    });
+    const firstParagraphHash = createHash('sha256').update('First paragraph.').digest('hex');
+    await store.addScreenshotFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Visual evidence that will be deleted and then evicted.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+      target: {
+        version: 2,
+        requestedScope: 'visual-region',
+        effectiveScope: 'visual-region',
+        resolution: 'exact',
+        blockSpan: {
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startKind: 'paragraph',
+          endKind: 'paragraph',
+          startBlockSha256: firstParagraphHash,
+          endBlockSha256: firstParagraphHash,
+        },
+      },
+      sourceReference: {
+        relationship: 'containing-blocks',
+        format: 'markdown',
+        normalization: 'lf',
+        sourceSliceSha256: firstParagraphHash,
+      },
+    });
+    await store.deleteFeedbackV2('F1');
+
+    const tombstone = asMutableTombstoneStore(store)._tombstones.get('F1');
+    if (tombstone === undefined) {
+      throw new Error('Test setup failed: expected a v2 tombstone for F1.');
+    }
+    tombstone.screenshotBytes = undefined;
+    tombstone.evicted = true;
+
+    await expect(store.restoreFeedbackV2('F1')).rejects.toMatchObject({
+      code: 'MD4H-FB-STORE-001',
+      message: expect.stringMatching(/no longer available/i),
+    });
+  });
+
+  it('throws for a genuinely corrupted, non-evicted tombstone instead of treating it as evicted', async () => {
+    const store = await createStore('q011');
+    setSyntheticScreenshotTombstone(store, 'F1', 1, 10 * 1024 * 1024);
+    const tombstone = asMutableTombstoneStore(store)._tombstones.get('F1');
+    if (tombstone === undefined) {
+      throw new Error('Test setup failed: expected a synthetic tombstone for F1.');
+    }
+    // Corrupted: bytes are gone but `evicted` was never set. This must fail
+    // closed, not be silently treated the same as a deliberate eviction.
+    tombstone.screenshotBytes = undefined;
+    asMutableTombstoneStore(store)._nextSequence = 2;
+
+    await expect(
+      store.addScreenshotFeedback({
+        startLine: 1,
+        endLine: 1,
+        feedback: 'A corrupted, non-evicted tombstone must fail closed.',
+        pngData: ONE_PIXEL_PNG_BASE64,
+      })
+    ).rejects.toMatchObject({
+      code: 'MD4H-FB-CAPTURE-002',
+      message: expect.stringMatching(/retained screenshot asset for F1 is invalid/i),
+    });
+  });
+
+  it('narrows the tombstone budget below the flat 16 MiB cap once active content approaches the 64 MiB ceiling', async () => {
+    const store = await createStore('q012');
+    const incomingPngBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
+
+    // Six real 10 MiB active screenshots: ~60 MiB of genuinely active content,
+    // leaving roughly 4 MiB of the 64 MiB ceiling for tombstones, well under
+    // their own flat 16 MiB sub-cap.
+    const activeItems = Array.from({ length: 6 }, (_, index) => ({
+      id: `F${index + 1}`,
+      sequence: index + 1,
+      kind: 'screenshot' as const,
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Kept evidence.',
+      assetRelativePath: `assets/F${index + 1}.png`,
+      assetSha256: 'a'.repeat(64),
+    }));
+    for (const item of activeItems) {
+      const assetPath = path.join(store.bundleDirectory, item.assetRelativePath);
+      await writeFile(assetPath, '');
+      await truncate(assetPath, 10 * 1024 * 1024);
+    }
+
+    // Two tombstones totaling 6 MiB: over the ~4 MiB headroom this active
+    // content leaves, but comfortably under the flat 16 MiB tombstone cap.
+    setSyntheticScreenshotTombstone(store, 'T1', 100, 3 * 1024 * 1024);
+    setSyntheticScreenshotTombstone(store, 'T2', 101, 3 * 1024 * 1024);
+
+    const mutableStore = store as unknown as { _items: typeof activeItems; _nextSequence: number };
+    mutableStore._items = activeItems;
+    mutableStore._nextSequence = 7;
+
+    await expect(
+      store.addScreenshotFeedback({
+        startLine: 1,
+        endLine: 1,
+        feedback: 'Trigger the quota check while active content dominates the ceiling.',
+        pngData: ONE_PIXEL_PNG_BASE64,
+      })
+    ).resolves.toMatchObject({ id: 'F7' });
+
+    const activeBytes = 6 * 10 * 1024 * 1024 + incomingPngBytes;
+    const expectedBudget = SCREENSHOT_QUOTA_BYTES - activeBytes;
+    expect(expectedBudget).toBeLessThan(TOMBSTONE_QUOTA_BYTES);
+    const tombstoneBytes = residentTombstoneBytes(store);
+    expect(tombstoneBytes).toBeLessThanOrEqual(expectedBudget);
+    expect(tombstoneBytes).toBeLessThan(TOMBSTONE_QUOTA_BYTES);
+  });
+
+  it('applies pending tombstone eviction after v1 replaceScreenshotFeedback commits, keeping the 64 MiB ceiling intact', async () => {
+    const store = await createStore('q014');
+    const target = await store.addScreenshotFeedback({
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Replacement target, tiny for now.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+    });
+
+    // Five real 9.5 MiB active screenshots alongside the target: ~47.5 MiB
+    // of active content the quota check must count via on-disk file size
+    // (the auditor's proof scenario, reused here for the v1 replace path).
+    const fillerBytes = 9.5 * 1024 * 1024;
+    const fillerItems = Array.from({ length: 5 }, (_, index) => ({
+      id: `F${index + 2}`,
+      sequence: index + 2,
+      kind: 'screenshot' as const,
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Kept evidence.',
+      assetRelativePath: `assets/F${index + 2}.png`,
+      assetSha256: 'a'.repeat(64),
+    }));
+    for (const item of fillerItems) {
+      const assetPath = path.join(store.bundleDirectory, item.assetRelativePath);
+      await writeFile(assetPath, '');
+      await truncate(assetPath, fillerBytes);
+    }
+    const mutableStore = store as unknown as {
+      _items: Array<{ id: string }>;
+      _nextSequence: number;
+    };
+    mutableStore._items = [...store.items, ...fillerItems];
+    mutableStore._nextSequence = 7;
+
+    // Two resident tombstones totaling the full 16 MiB sub-cap: an older,
+    // larger one and a newer, smaller one, so eviction can be partial.
+    setSyntheticScreenshotTombstone(store, 'T1', 100, 10 * 1024 * 1024);
+    setSyntheticScreenshotTombstone(store, 'T2', 101, 6 * 1024 * 1024);
+
+    // Pre-state is legal: ~47.5 MiB active + 16 MiB tombstoned, just under
+    // the 64 MiB combined ceiling.
+    expect(fillerItems.length * fillerBytes + residentTombstoneBytes(store)).toBeLessThanOrEqual(
+      SCREENSHOT_QUOTA_BYTES
+    );
+
+    // Growing the replaced screenshot to ~2 MiB (kept well under the ~3 MiB
+    // base64 string length Node's regex engine can validate without
+    // stack-overflowing, unrelated to this fix) pushes active bytes past
+    // 49 MiB. The full 16 MiB of tombstones would then push combined
+    // resident bytes over the 64 MiB ceiling unless the eviction this
+    // replace computes is actually applied after the commit succeeds.
+    const grownPng = makeLargeGrayscalePng(2 * 1024 * 1024);
+    await store.replaceScreenshotFeedback(target.id, {
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Replacement target, now large.',
+      pngData: grownPng.bytes.toString('base64'),
+    });
+
+    const activeBytes = fillerItems.length * fillerBytes + grownPng.bytes.byteLength;
+    const tombstoneBytesAfter = residentTombstoneBytes(store);
+    const expectedTombstoneBudget = Math.min(
+      TOMBSTONE_QUOTA_BYTES,
+      Math.max(0, SCREENSHOT_QUOTA_BYTES - activeBytes)
+    );
+    expect(expectedTombstoneBudget).toBeLessThan(TOMBSTONE_QUOTA_BYTES);
+    expect(tombstoneBytesAfter).toBeLessThanOrEqual(expectedTombstoneBudget);
+    expect(activeBytes + tombstoneBytesAfter).toBeLessThanOrEqual(SCREENSHOT_QUOTA_BYTES);
+
+    const tombstones = asMutableTombstoneStore(store)._tombstones;
+    expect(tombstones.get('T1')?.evicted).toBe(true);
+    expect(tombstones.get('T1')?.screenshotBytes).toBeUndefined();
+    expect(tombstones.get('T2')?.evicted).toBeFalsy();
+  });
+
+  it('applies pending tombstone eviction after replaceScreenshotFeedbackV2 commits, keeping the 64 MiB ceiling intact', async () => {
+    const store = await FeedbackSessionStore.create({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      schemaVersion: 2,
+      now: NOW,
+      roundSuffix: 'q015',
+    });
+    const firstParagraphHash = createHash('sha256').update('First paragraph.').digest('hex');
+    const v2VisualTarget = {
+      version: 2 as const,
+      requestedScope: 'visual-region' as const,
+      effectiveScope: 'visual-region' as const,
+      resolution: 'exact' as const,
+      blockSpan: {
+        startOrdinal: 1,
+        endOrdinal: 1,
+        startKind: 'paragraph' as const,
+        endKind: 'paragraph' as const,
+        startBlockSha256: firstParagraphHash,
+        endBlockSha256: firstParagraphHash,
+      },
+    };
+    const v2SourceReference = {
+      relationship: 'containing-blocks' as const,
+      format: 'markdown' as const,
+      normalization: 'lf' as const,
+      sourceSliceSha256: firstParagraphHash,
+    };
+
+    // The replace target: a real screenshot added through the public API,
+    // tiny before, larger after.
+    const targetItem = await store.addScreenshotFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Replacement target, tiny for now.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+      target: v2VisualTarget,
+      sourceReference: v2SourceReference,
+    });
+    const oldTargetBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
+
+    // Five real ~9.5 MiB filler screenshots (~47.5 MiB total): written
+    // directly to disk and injected as items, cloning the target's already
+    // host-validated target/evidence shape. `replaceScreenshotFeedbackV2`
+    // fully re-validates every screenshot's real bytes on disk (not just its
+    // file size), so these must be genuinely decodable PNGs, unlike the v1
+    // quota tests elsewhere in this file. They are written directly rather
+    // than through `addScreenshotFeedbackV2` because that public API takes
+    // the PNG as a base64 *string*, and Node's regex engine stack-overflows
+    // validating base64 strings much above ~3 MiB, independent of this fix.
+    const fillerBytesTarget = 9.5 * 1024 * 1024;
+    const fillerItems: (typeof targetItem)[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const png = makeLargeGrayscalePng(fillerBytesTarget);
+      const assetRelativePath = `assets/F${index + 2}.png`;
+      await writeFile(path.join(store.bundleDirectory, assetRelativePath), png.bytes);
+      const assetSha256 = computeFeedbackSourceSha256(png.bytes);
+      fillerItems.push({
+        ...targetItem,
+        id: `F${index + 2}`,
+        sequence: index + 2,
+        feedback: `Filler evidence ${index + 1}.`,
+        assetRelativePath,
+        assetSha256,
+        width: png.width,
+        height: png.height,
+        evidence: {
+          effective: {
+            ...targetItem.evidence.effective,
+            assetRelativePath,
+            assetSha256,
+            width: png.width,
+            height: png.height,
+          },
+        },
+      } as typeof targetItem);
+    }
+    const mutableStore = store as unknown as {
+      _items: Array<{ id: string }>;
+      _nextSequence: number;
+    };
+    mutableStore._items = [...store.items, ...fillerItems];
+    mutableStore._nextSequence = 7;
+
+    // Two resident tombstones totaling the full 16 MiB sub-cap: an older,
+    // larger one and a newer, smaller one, so eviction can be partial.
+    setSyntheticScreenshotTombstone(store, 'T1', 100, 10 * 1024 * 1024);
+    setSyntheticScreenshotTombstone(store, 'T2', 101, 6 * 1024 * 1024);
+
+    // Pre-state is legal: ~47.5 MiB active + 16 MiB tombstoned, just under
+    // the 64 MiB combined ceiling.
+    const activeBytesBefore = fillerItems.length * fillerBytesTarget + oldTargetBytes;
+    expect(activeBytesBefore + residentTombstoneBytes(store)).toBeLessThanOrEqual(
+      SCREENSHOT_QUOTA_BYTES
+    );
+
+    // Grow the replaced screenshot to ~2 MiB (kept well under the ~3 MiB
+    // base64 string length Node's regex engine can validate without
+    // stack-overflowing, unrelated to this fix). Active bytes alone (~49.5
+    // MiB) plus the fully resident 16 MiB of tombstones would then exceed
+    // the 64 MiB ceiling unless the eviction this replace computes is
+    // actually applied after the commit succeeds (the bug this test guards
+    // against: the v2 replace path previously discarded that decision).
+    const newTargetPng = makeLargeGrayscalePng(2 * 1024 * 1024);
+    await store.replaceScreenshotFeedbackV2(targetItem.id, {
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Replacement target, now large.',
+      pngData: newTargetPng.bytes.toString('base64'),
+      target: v2VisualTarget,
+      sourceReference: v2SourceReference,
+    });
+    const activeBytes = activeBytesBefore - oldTargetBytes + newTargetPng.bytes.byteLength;
+
+    const tombstoneBytesAfter = residentTombstoneBytes(store);
+    const expectedTombstoneBudget = Math.min(
+      TOMBSTONE_QUOTA_BYTES,
+      Math.max(0, SCREENSHOT_QUOTA_BYTES - activeBytes)
+    );
+    expect(expectedTombstoneBudget).toBeLessThan(TOMBSTONE_QUOTA_BYTES);
+    expect(tombstoneBytesAfter).toBeLessThanOrEqual(expectedTombstoneBudget);
+    expect(activeBytes + tombstoneBytesAfter).toBeLessThanOrEqual(SCREENSHOT_QUOTA_BYTES);
+
+    // The oldest, larger tombstone was actually evicted (bytes freed), the
+    // newer, smaller one survived.
+    const tombstones = asMutableTombstoneStore(store)._tombstones;
+    expect(tombstones.get('T1')?.evicted).toBe(true);
+    expect(tombstones.get('T1')?.screenshotBytes).toBeUndefined();
+    expect(tombstones.get('T2')?.evicted).toBeFalsy();
+  });
+
+  it('keeps a repeated delete-then-readd loop within both the 16 MiB tombstone and 64 MiB combined ceilings at every step', async () => {
+    const store = await createStore('q008');
+    const incomingPngBytes = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64').byteLength;
+
+    // Five real 10 MiB active screenshots (50 MiB total) give the combined
+    // ceiling real weight: with this much active content already resident,
+    // the safe tombstone budget (64 MiB - active) is narrower than the flat
+    // 16 MiB sub-cap, so a combined-ceiling assertion here is not vacuous.
+    const activeItems = Array.from({ length: 5 }, (_, index) => ({
+      id: `F${index + 1}`,
+      sequence: index + 1,
+      kind: 'screenshot' as const,
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Kept evidence.',
+      assetRelativePath: `assets/F${index + 1}.png`,
+      assetSha256: 'a'.repeat(64),
+    }));
+    for (const item of activeItems) {
+      const assetPath = path.join(store.bundleDirectory, item.assetRelativePath);
+      await writeFile(assetPath, '');
+      await truncate(assetPath, 10 * 1024 * 1024);
+    }
+    const mutableStore = store as unknown as { _items: typeof activeItems; _nextSequence: number };
+    mutableStore._items = activeItems;
+    mutableStore._nextSequence = 6;
+
+    const activeBytes = activeItems.length * 10 * 1024 * 1024;
+    const combinedBudget = SCREENSHOT_QUOTA_BYTES - activeBytes - incomingPngBytes * 10;
+    expect(combinedBudget).toBeLessThan(TOMBSTONE_QUOTA_BYTES);
+
+    for (let round = 1; round <= 10; round += 1) {
+      // Simulate deleting a large screenshot: a new 10 MiB tombstone joins the pool.
+      setSyntheticScreenshotTombstone(store, `T${round}`, 1_000 + round, 10 * 1024 * 1024);
+
+      // Simulate re-adding a small screenshot.
+      await store.addScreenshotFeedback({
+        startLine: 1,
+        endLine: 1,
+        feedback: `Round ${round} addition.`,
+        pngData: ONE_PIXEL_PNG_BASE64,
+      });
+
+      const tombstoneBytes = residentTombstoneBytes(store);
+      expect(tombstoneBytes).toBeLessThanOrEqual(TOMBSTONE_QUOTA_BYTES);
+      expect(activeBytes + incomingPngBytes * round + tombstoneBytes).toBeLessThanOrEqual(
+        SCREENSHOT_QUOTA_BYTES
+      );
+    }
   });
 
   it('fails closed on an existing report lock without changing or deleting it', async () => {

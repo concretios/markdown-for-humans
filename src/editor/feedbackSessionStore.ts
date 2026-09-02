@@ -167,6 +167,11 @@ const MAX_FEEDBACK_ITEMS_PER_BUNDLE = 2_000;
 // Aggregate image storage is bounded independently from the 10 MiB per-image
 // limit. 64 MiB supports many typical captures without allowing unbounded bundles.
 const MAX_SCREENSHOT_BYTES_PER_BUNDLE = 64 * 1024 * 1024;
+// Tombstoned (soft-deleted) screenshots are retained only for Undo. Capping
+// their resident bytes independently guarantees at least 48 MiB of headroom
+// for active content regardless of deletion history, without ever raising
+// the 64 MiB combined ceiling above.
+const MAX_TOMBSTONE_SCREENSHOT_BYTES_PER_BUNDLE = 16 * 1024 * 1024;
 const MAX_REPORT_LOCK_BYTES = 256;
 // Feedback writes normally finish in milliseconds. Five minutes avoids taking
 // over a legitimately slow owner while allowing recovery after a host crash.
@@ -450,6 +455,12 @@ export interface ValidatedFeedbackPng {
 interface FeedbackTombstone {
   item: FeedbackStoredItem;
   screenshotBytes?: Buffer;
+  /**
+   * Set when the retained screenshot bytes were deliberately freed to stay
+   * within the tombstone quota. Distinct from an undefined `screenshotBytes`
+   * on a non-evicted tombstone, which indicates a corrupted asset.
+   */
+  evicted?: boolean;
 }
 
 interface ParsedFeedbackReport {
@@ -1362,9 +1373,17 @@ export class FeedbackSessionStore {
         };
         const nextItems = this.canonicalizeV2Items([...existingItems, candidate]);
         const nextSnapshot = toDraftSnapshotV2(this._snapshot);
-        await this.persistReport(nextSnapshot, nextItems, sequence + 1, options.beforeCommit, () =>
-          this.validateScreenshotAssetsForItems(nextItems)
+        let pendingEvictedTombstoneIds: readonly string[] = [];
+        await this.persistReport(
+          nextSnapshot,
+          nextItems,
+          sequence + 1,
+          options.beforeCommit,
+          async () => {
+            pendingEvictedTombstoneIds = await this.validateScreenshotAssetsForItems(nextItems);
+          }
         );
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._snapshot = nextSnapshot;
         this._items = nextItems;
         this._nextSequence = sequence + 1;
@@ -1398,7 +1417,13 @@ export class FeedbackSessionStore {
         assertFeedbackItemCount(this._items.length + 1);
         const validatedPng = decodeAndValidateFeedbackPng(input.pngData);
         const existingItems = this.prepareV2ItemsForMutation(options.migrationItems);
-        await this.validateScreenshotAssetQuota(existingItems, validatedPng.bytes.byteLength);
+        // Pre-check only, to avoid an unnecessary disk write; it never mutates
+        // tombstone state, so discarding its eviction decision is safe. The
+        // authoritative check runs again below, right before the commit point.
+        await this.computeScreenshotAssetQuotaEviction(
+          existingItems,
+          validatedPng.bytes.byteLength
+        );
 
         const sequence = this._nextSequence;
         const id = `F${sequence}`;
@@ -1453,6 +1478,7 @@ export class FeedbackSessionStore {
           throw error;
         }
 
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         try {
           await this.persistReport(
             nextSnapshot,
@@ -1460,7 +1486,8 @@ export class FeedbackSessionStore {
             sequence + 1,
             options.beforeCommit,
             async () => {
-              await this.validateScreenshotAssetQuota(nextItems);
+              pendingEvictedTombstoneIds =
+                await this.computeScreenshotAssetQuotaEviction(nextItems);
               await this.validateScreenshotAsset(candidate);
             }
           );
@@ -1472,6 +1499,7 @@ export class FeedbackSessionStore {
           ).catch(() => undefined);
           throw error;
         }
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._snapshot = nextSnapshot;
         this._items = nextItems;
         this._nextSequence = sequence + 1;
@@ -1507,7 +1535,10 @@ export class FeedbackSessionStore {
         validateRequiredText(input.feedback, 'Feedback', MAX_FEEDBACK_TEXT_LENGTH);
         const validatedPng = decodeAndValidateFeedbackPng(input.pngData);
         assertFeedbackItemCount(currentItems.length + 1);
-        await this.validateScreenshotAssetQuota(currentItems, validatedPng.bytes.byteLength);
+        // Pre-check only, to avoid an unnecessary disk write; it never mutates
+        // tombstone state, so discarding its eviction decision is safe. The
+        // authoritative check runs again below, right before the commit point.
+        await this.computeScreenshotAssetQuotaEviction(currentItems, validatedPng.bytes.byteLength);
         assertFeedbackSequenceCanAllocate(this._nextSequence);
         const sequence = this._nextSequence;
         const id = `F${sequence}`;
@@ -1541,6 +1572,7 @@ export class FeedbackSessionStore {
         }
 
         const nextItems = [...currentItems, item];
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         try {
           await this.persistReport(
             this._snapshot,
@@ -1548,7 +1580,8 @@ export class FeedbackSessionStore {
             sequence + 1,
             beforeCommit,
             async () => {
-              await this.validateScreenshotAssetQuota(nextItems);
+              pendingEvictedTombstoneIds =
+                await this.computeScreenshotAssetQuotaEviction(nextItems);
               await this.validateScreenshotAsset(item);
             }
           );
@@ -1560,6 +1593,7 @@ export class FeedbackSessionStore {
           ).catch(() => undefined);
           throw error;
         }
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._items = nextItems;
         this._nextSequence = sequence + 1;
         return cloneFeedbackItem(item) as ScreenshotFeedbackItem;
@@ -1627,6 +1661,7 @@ export class FeedbackSessionStore {
           this._location.workspaceRoot,
           this._location.bundleDirectory
         );
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         await withExclusiveReportLock(this._location.feedbackFilePath, async () => {
           const currentReportBytes = await this.readVerifiedCurrentReport();
           const previousAsset = await readValidatedFeedbackPngFile(
@@ -1654,7 +1689,7 @@ export class FeedbackSessionStore {
           await writeFileAtomically(assetPath, validatedPng.bytes);
           let reportWritten = false;
           try {
-            await this.validateScreenshotAssetQuota(nextItems);
+            pendingEvictedTombstoneIds = await this.computeScreenshotAssetQuotaEviction(nextItems);
             await writeFileAtomically(this._location.feedbackFilePath, nextReportBytes);
             reportWritten = true;
             await beforeCommit?.();
@@ -1687,6 +1722,7 @@ export class FeedbackSessionStore {
           this._persistedReportSha256 = computeFeedbackSourceSha256(nextReportBytes);
         });
 
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._items = nextItems;
         return cloneFeedbackItem(updatedItem) as ScreenshotFeedbackItem;
       } catch (error) {
@@ -1776,6 +1812,7 @@ export class FeedbackSessionStore {
           this._location.workspaceRoot,
           this._location.bundleDirectory
         );
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         await withExclusiveReportLock(this._location.feedbackFilePath, async () => {
           const currentReportBytes = await this.readVerifiedCurrentReport();
           const previousAsset = await readValidatedFeedbackPngFile(
@@ -1807,7 +1844,7 @@ export class FeedbackSessionStore {
           await writeFileAtomically(assetPath, validatedPng.bytes);
           let reportWritten = false;
           try {
-            await this.validateScreenshotAssetsForItems(nextItems);
+            pendingEvictedTombstoneIds = await this.validateScreenshotAssetsForItems(nextItems);
             await writeFileAtomically(this._location.feedbackFilePath, nextReportBytes);
             reportWritten = true;
             await options.beforeCommit?.();
@@ -1840,6 +1877,7 @@ export class FeedbackSessionStore {
           this._persistedReportSha256 = computeFeedbackSourceSha256(nextReportBytes);
         });
 
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._snapshot = nextSnapshot;
         this._items = nextItems;
         if (migratedFromV1) this._tombstones.clear();
@@ -1919,13 +1957,21 @@ export class FeedbackSessionStore {
         nextCandidates[itemIndex] = { ...nextCandidates[itemIndex], feedback };
         const nextItems = this.canonicalizeV2Items(nextCandidates);
         const nextSnapshot = toDraftSnapshotV2(this._snapshot);
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         await this.persistReport(
           nextSnapshot,
           nextItems,
           this._nextSequence,
           options.beforeCommit,
-          () => this.validateScreenshotAssetsForItems(nextItems, undefined, true)
+          async () => {
+            pendingEvictedTombstoneIds = await this.validateScreenshotAssetsForItems(
+              nextItems,
+              undefined,
+              true
+            );
+          }
         );
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._snapshot = nextSnapshot;
         this._items = nextItems;
         if (migratedFromV1) this._tombstones.clear();
@@ -2043,13 +2089,21 @@ export class FeedbackSessionStore {
         }
         const nextItems = this.canonicalizeV2Items(existingItems.filter(item => item.id !== id));
         const nextSnapshot = toDraftSnapshotV2(this._snapshot);
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         await this.persistReport(
           nextSnapshot,
           nextItems,
           this._nextSequence,
           options.beforeCommit,
-          () => this.validateScreenshotAssetsForItems(nextItems, undefined, true)
+          async () => {
+            pendingEvictedTombstoneIds = await this.validateScreenshotAssetsForItems(
+              nextItems,
+              undefined,
+              true
+            );
+          }
         );
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._snapshot = nextSnapshot;
         this._items = nextItems;
         if (migratedFromV1) this._tombstones.clear();
@@ -2100,6 +2154,12 @@ export class FeedbackSessionStore {
 
         let wroteScreenshotAsset = false;
         if (tombstone.item.kind === 'screenshot') {
+          if (tombstone.evicted) {
+            throw new FeedbackSessionError(
+              'MD4H-FB-STORE-001',
+              `This screenshot is no longer available to restore for feedback item ${id}.`
+            );
+          }
           if (tombstone.screenshotBytes === undefined) {
             throw new FeedbackSessionError(
               'MD4H-FB-CAPTURE-002',
@@ -2144,6 +2204,7 @@ export class FeedbackSessionStore {
           (left, right) => left.sequence - right.sequence
         );
         assertFeedbackExactCellBudget(nextItems);
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         try {
           await this.persistReport(
             this._snapshot,
@@ -2152,7 +2213,11 @@ export class FeedbackSessionStore {
             beforeCommit,
             restoredItem.kind === 'screenshot'
               ? async () => {
-                  await this.validateScreenshotAssetQuota(nextItems, 0, id);
+                  pendingEvictedTombstoneIds = await this.computeScreenshotAssetQuotaEviction(
+                    nextItems,
+                    0,
+                    id
+                  );
                   await this.validateScreenshotAsset(restoredItem);
                 }
               : undefined
@@ -2169,6 +2234,7 @@ export class FeedbackSessionStore {
           throw error;
         }
 
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._items = nextItems;
         this._tombstones.delete(id);
         return cloneFeedbackItem(restoredItem);
@@ -2203,6 +2269,12 @@ export class FeedbackSessionStore {
         const restoredItem = cloneFeedbackItemV2(tombstone.item);
         let wroteScreenshotAsset = false;
         if (restoredItem.kind === 'screenshot') {
+          if (tombstone.evicted) {
+            throw new FeedbackSessionError(
+              'MD4H-FB-STORE-001',
+              `This screenshot is no longer available to restore for feedback item ${id}.`
+            );
+          }
           if (tombstone.screenshotBytes === undefined) {
             throw new FeedbackSessionError(
               'MD4H-FB-CAPTURE-002',
@@ -2246,13 +2318,19 @@ export class FeedbackSessionStore {
         const nextItems = this.canonicalizeV2Items(
           [...currentItems, restoredItem].sort((left, right) => left.sequence - right.sequence)
         );
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         try {
           await this.persistReport(
             this._snapshot,
             nextItems,
             this._nextSequence,
             options.beforeCommit,
-            () => this.validateScreenshotAssetsForItems(nextItems, id)
+            async () => {
+              pendingEvictedTombstoneIds = await this.validateScreenshotAssetsForItems(
+                nextItems,
+                id
+              );
+            }
           );
         } catch (error) {
           if (wroteScreenshotAsset && restoredItem.kind === 'screenshot') {
@@ -2264,6 +2342,7 @@ export class FeedbackSessionStore {
           }
           throw error;
         }
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._items = nextItems;
         this._tombstones.delete(id);
         return cloneFeedbackItemV2(restoredItem);
@@ -2410,7 +2489,11 @@ export class FeedbackSessionStore {
           sealedItems,
           this._nextSequence,
           options.beforeCommit,
-          () => this.validateScreenshotAssetsForItems(sealedItems)
+          // The decision is not applied: sealing always clears every tombstone
+          // immediately below regardless of eviction, so there is nothing to apply.
+          async () => {
+            await this.validateScreenshotAssetsForItems(sealedItems);
+          }
         );
         this._snapshot = sealedSnapshot;
         this._items = sealedItems;
@@ -2731,8 +2814,12 @@ export class FeedbackSessionStore {
     // skipUnchanged, so they always fully re-verify against disk (addScreenshotFeedbackV2
     // never calls this function at all; it validates only its own new candidate item).
     skipUnchanged = false
-  ): Promise<void> {
-    await this.validateScreenshotAssetQuota(items, 0, excludedTombstoneId);
+  ): Promise<readonly string[]> {
+    const evictedTombstoneIds = await this.computeScreenshotAssetQuotaEviction(
+      items,
+      0,
+      excludedTombstoneId
+    );
     for (const item of items) {
       if (item.kind !== 'screenshot') continue;
       if (skipUnchanged) {
@@ -2749,6 +2836,7 @@ export class FeedbackSessionStore {
       }
       await this.validateScreenshotAsset(item);
     }
+    return evictedTombstoneIds;
   }
 
   // Only called with skipUnchanged=true from updateFeedbackV2/deleteFeedbackV2, whose
@@ -2882,37 +2970,30 @@ export class FeedbackSessionStore {
   }
 
   /**
-   * Bounds active and Undo-retained screenshot storage using contained,
-   * no-follow file metadata.
+   * Computes, without mutating any tombstone, which resident tombstoned
+   * screenshots would need to be evicted for `items` (plus `additionalBytes`)
+   * to fit within the 64 MiB combined and 16 MiB tombstone caps. Also
+   * validates that the mutation would actually fit after that hypothetical
+   * eviction, using contained, no-follow file metadata.
+   *
+   * This check runs before a mutation's commit point, so it must stay
+   * read-only: callers apply the returned decision only via
+   * {@link applyScreenshotAssetQuotaEviction}, and only once their own
+   * mutation has actually committed. Otherwise a mutation that is later
+   * rolled back (or whose write never lands) would still have permanently
+   * dropped tombstone bytes as a side effect of merely checking the quota.
    *
    * @param items - Persisted items whose screenshot files count toward the bundle
    * @param additionalBytes - Validated incoming bytes not present on disk yet
    * @param excludedTombstoneId - Restored Undo item already represented by `items`
+   * @returns Tombstone IDs whose resident screenshot bytes must be dropped
    */
-  private async validateScreenshotAssetQuota(
+  private async computeScreenshotAssetQuotaEviction(
     items: readonly FeedbackStoredItem[],
     additionalBytes: number = 0,
     excludedTombstoneId?: string
-  ): Promise<void> {
-    let cumulativeBytes = addScreenshotBytesWithinQuota(0, additionalBytes);
-    for (const [id, tombstone] of this._tombstones) {
-      if (id === excludedTombstoneId || tombstone.item.kind !== 'screenshot') continue;
-      if (
-        tombstone.screenshotBytes === undefined ||
-        !Number.isSafeInteger(tombstone.screenshotBytes.byteLength) ||
-        tombstone.screenshotBytes.byteLength < 0 ||
-        tombstone.screenshotBytes.byteLength > MAX_PNG_BYTES
-      ) {
-        throw new FeedbackSessionError(
-          'MD4H-FB-CAPTURE-002',
-          `The retained screenshot asset for ${id} is invalid.`
-        );
-      }
-      cumulativeBytes = addScreenshotBytesWithinQuota(
-        cumulativeBytes,
-        tombstone.screenshotBytes.byteLength
-      );
-    }
+  ): Promise<readonly string[]> {
+    let activeBytes = addScreenshotBytesWithinQuota(0, additionalBytes);
     await assertSafeFeedbackDirectoryChain(
       this._location.workspaceRoot,
       this._location.assetsDirectory
@@ -2928,7 +3009,7 @@ export class FeedbackSessionStore {
           'MD4H-FB-CAPTURE-002',
           'feedback screenshot asset'
         );
-        cumulativeBytes = addScreenshotBytesWithinQuota(cumulativeBytes, stats.size);
+        activeBytes = addScreenshotBytesWithinQuota(activeBytes, stats.size);
       } catch (error) {
         if (error instanceof FeedbackSessionError) {
           throw error;
@@ -2938,6 +3019,66 @@ export class FeedbackSessionStore {
           `The screenshot asset for ${item.id} is missing or invalid: ${getErrorMessage(error)}.`
         );
       }
+    }
+
+    // Tombstoned screenshots cannot fund headroom active content doesn't have:
+    // their resident bytes are capped at their own 16 MiB sub-budget, further
+    // narrowed by whatever the 64 MiB combined ceiling leaves after active bytes.
+    const tombstoneByteBudget = Math.min(
+      MAX_TOMBSTONE_SCREENSHOT_BYTES_PER_BUNDLE,
+      Math.max(0, MAX_SCREENSHOT_BYTES_PER_BUNDLE - activeBytes)
+    );
+    const residentTombstones: Array<{ id: string; bytes: number }> = [];
+    let tombstoneBytes = 0;
+    for (const [id, tombstone] of this._tombstones) {
+      if (id === excludedTombstoneId || tombstone.item.kind !== 'screenshot' || tombstone.evicted) {
+        continue;
+      }
+      if (
+        tombstone.screenshotBytes === undefined ||
+        !Number.isSafeInteger(tombstone.screenshotBytes.byteLength) ||
+        tombstone.screenshotBytes.byteLength < 0 ||
+        tombstone.screenshotBytes.byteLength > MAX_PNG_BYTES
+      ) {
+        throw new FeedbackSessionError(
+          'MD4H-FB-CAPTURE-002',
+          `The retained screenshot asset for ${id} is invalid.`
+        );
+      }
+      const bytes = tombstone.screenshotBytes.byteLength;
+      tombstoneBytes += bytes;
+      residentTombstones.push({ id, bytes });
+    }
+
+    // Decide which OLDEST tombstones (Map iteration is insertion order) would
+    // need their actual bytes freed until both caps hold. Nothing is mutated
+    // here: the caller drops the bytes only once its own mutation commits.
+    const evictedTombstoneIds: string[] = [];
+    for (const resident of residentTombstones) {
+      if (tombstoneBytes <= tombstoneByteBudget) break;
+      evictedTombstoneIds.push(resident.id);
+      tombstoneBytes -= resident.bytes;
+    }
+
+    addScreenshotBytesWithinQuota(activeBytes, tombstoneBytes);
+    return evictedTombstoneIds;
+  }
+
+  /**
+   * Applies a previously computed eviction decision, dropping the resident
+   * screenshot bytes for each tombstone ID and marking it evicted. Must only
+   * be called once the mutation that required the eviction has actually
+   * committed; a rolled-back mutation must not call this, so tombstone state
+   * is left exactly as it was before the attempt.
+   *
+   * @param evictedTombstoneIds - IDs returned by {@link computeScreenshotAssetQuotaEviction}
+   */
+  private applyScreenshotAssetQuotaEviction(evictedTombstoneIds: readonly string[]): void {
+    for (const id of evictedTombstoneIds) {
+      const tombstone = this._tombstones.get(id);
+      if (tombstone === undefined || tombstone.evicted) continue;
+      tombstone.screenshotBytes = undefined;
+      tombstone.evicted = true;
     }
   }
 
