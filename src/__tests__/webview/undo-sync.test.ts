@@ -1059,6 +1059,38 @@ describe('webview undo/redo guards', () => {
     );
   });
 
+  it('logs when teardown flush is blocked by more than one outstanding predecessor', () => {
+    jest.useFakeTimers();
+    window.setTimeout = setTimeout;
+    window.clearTimeout = clearTimeout;
+    const getMarkdown = jest.fn(() => 'content');
+    testing.setMockEditor({
+      getMarkdown,
+      state: {
+        selection: { from: 1, to: 1 },
+        doc: { content: { size: 10 } },
+      },
+    });
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    testing.queueDebouncedUpdateForTests('first edit');
+    jest.advanceTimersByTime(500);
+
+    // The first teardown flush pipelines a second, still-unacknowledged edit
+    // behind the first, leaving two outstanding predecessors.
+    testing.queueDebouncedUpdateForTests('second edit');
+    testing.flushRichViewBeforeTeardownForTests();
+
+    testing.queueDebouncedUpdateForTests('third edit');
+    testing.flushRichViewBeforeTeardownForTests();
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Flush blocked before webview teardown')
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
   it('keeps immediate save inert while a Feedback peer lock owns editing', () => {
     jest.useFakeTimers();
     const getMarkdown = jest.fn(() => 'locked content');

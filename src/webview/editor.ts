@@ -390,7 +390,12 @@ function flushRichViewBeforeTeardown(): void {
   try {
     // The source TextDocument remains authoritative. Push the last debounced
     // edit across the message boundary before VS Code discards this DOM.
-    if (documentSyncController?.hasPendingSync()) documentSyncController.flushForTeardown();
+    if (documentSyncController?.hasPendingSync()) {
+      const result = documentSyncController.flushForTeardown();
+      if (result.status === 'blocked') {
+        console.error('[MD4H] Flush blocked before webview teardown: newest edit may be lost');
+      }
+    }
   } catch (error) {
     console.error('[MD4H] Could not flush pending Markdown before webview teardown:', error);
   }
