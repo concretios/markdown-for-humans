@@ -693,6 +693,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     vscode.Webview,
     Map<string, DocumentEditAck>
   >();
+  /** Rejected acks only, bounded separately so a burst of accepted edits can't evict them. */
+  private readonly documentEditRejectionHistory = new WeakMap<
+    vscode.Webview,
+    Map<string, DocumentEditAck>
+  >();
   /** Immutable request envelope retained beside each pending or replayable edit ACK. */
   private readonly documentEditEnvelopeHashes = new WeakMap<vscode.Webview, Map<string, string>>();
   /** Latest renderer-ready signal held behind edits from its predecessor. */
@@ -725,6 +730,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   private static readonly IMAGE_SAVE_COMPLETION_MAX_RETRY_DELAY_MS = 4_000;
   private static readonly IMAGE_SAVE_COMPLETION_MAX_ATTEMPTS = 10;
   private static readonly DOCUMENT_EDIT_ACK_HISTORY_LIMIT = 128;
+  private static readonly DOCUMENT_EDIT_REJECTION_HISTORY_LIMIT = 128;
   private static readonly FEEDBACK_SNAPSHOT_REPORT_TIMEOUT_MS = 2_000;
   /** Avoid whole-buffer WorkspaceEdits once their undo/diff cost becomes material. */
   private static readonly MINIMAL_EDIT_DOCUMENT_THRESHOLD = 32 * 1024;
@@ -3647,7 +3653,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     const viewGeneration = this.getEditViewGeneration(webview);
     const documentVersion = this.getDocumentVersion(document);
     const registeredBeforeFlush = this.feedbackWebviews.get(documentKey)?.has(webview) === true;
-    const completedBefore = new Set(this.documentEditAckHistory.get(webview)?.keys() ?? []);
+    const completedBefore = new Set([
+      ...(this.documentEditAckHistory.get(webview)?.keys() ?? []),
+      ...(this.documentEditRejectionHistory.get(webview)?.keys() ?? []),
+    ]);
     let acknowledgementTimeout: ReturnType<typeof setTimeout> | undefined;
     let settled = false;
     let markFlushSettled: () => void = () => undefined;
@@ -3731,11 +3740,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       );
     }
     const completedAfter = this.documentEditAckHistory.get(webview);
+    const rejectionsAfter = this.documentEditRejectionHistory.get(webview);
     const rejected =
       results.some(result => !result.accepted) ||
       [...(completedAfter?.entries() ?? [])].some(
         ([editId, result]) => !completedBefore.has(editId) && !result.accepted
-      );
+      ) ||
+      [...(rejectionsAfter?.keys() ?? [])].some(editId => !completedBefore.has(editId));
     if (rejected) {
       throw new FeedbackSessionError(
         'MD4H-FB-STORE-002',
@@ -10386,6 +10397,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     this.appliedFeedbackPeerLocks.delete(webview);
     this.pendingDocumentEditAcks.delete(webview);
     this.documentEditAckHistory.delete(webview);
+    this.documentEditRejectionHistory.delete(webview);
     this.documentEditEnvelopeHashes.delete(webview);
   }
 
@@ -10463,6 +10475,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           if (oldest === undefined) break;
           completed.delete(oldest);
           envelopes?.delete(oldest);
+        }
+        if (!ack.accepted) {
+          let rejections = this.documentEditRejectionHistory.get(webview);
+          if (!rejections) {
+            rejections = new Map();
+            this.documentEditRejectionHistory.set(webview, rejections);
+          }
+          rejections.set(edit.editId, ack);
+          while (rejections.size > MarkdownEditorProvider.DOCUMENT_EDIT_REJECTION_HISTORY_LIMIT) {
+            const oldest = rejections.keys().next().value as string | undefined;
+            if (oldest === undefined) break;
+            rejections.delete(oldest);
+          }
         }
       }
       this.postDocumentEditAck(webview, ack);
@@ -10657,7 +10682,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   ): Promise<boolean> {
     if (!(await this.drainDocumentEdits(document))) return false;
 
-    const completedBefore = new Set(this.documentEditAckHistory.get(webview)?.keys() ?? []);
+    const completedBefore = new Set([
+      ...(this.documentEditAckHistory.get(webview)?.keys() ?? []),
+      ...(this.documentEditRejectionHistory.get(webview)?.keys() ?? []),
+    ]);
     if (!(await this.requestDocumentFlush(document, webview, timeoutMs, requestPrefix))) {
       return false;
     }
@@ -10671,9 +10699,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     if (results.some(result => !result.accepted)) return false;
 
     const completedAfter = this.documentEditAckHistory.get(webview);
-    if (!completedAfter) return true;
-    for (const [editId, result] of completedAfter) {
-      if (!completedBefore.has(editId) && !result.accepted) return false;
+    if (completedAfter) {
+      for (const [editId, result] of completedAfter) {
+        if (!completedBefore.has(editId) && !result.accepted) return false;
+      }
+    }
+    const rejectionsAfter = this.documentEditRejectionHistory.get(webview);
+    if (rejectionsAfter) {
+      for (const editId of rejectionsAfter.keys()) {
+        if (!completedBefore.has(editId)) return false;
+      }
     }
     return true;
   }

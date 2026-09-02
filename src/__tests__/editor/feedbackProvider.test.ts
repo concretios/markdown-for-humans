@@ -47,6 +47,13 @@ interface ProviderInternals {
     document: vscode.TextDocument,
     webview: vscode.Webview
   ) => Promise<boolean>;
+  flushRendererAtDocumentBoundary: (
+    document: vscode.TextDocument,
+    webview: vscode.Webview,
+    timeoutMs: number,
+    requestPrefix: string
+  ) => Promise<boolean>;
+  documentEditAckHistory: WeakMap<vscode.Webview, Map<string, { accepted: boolean }>>;
   invalidateFeedbackSession: (documentKey: string, webview: vscode.Webview) => void;
   handleFeedbackDocumentChange: (
     documentKey: string,
@@ -137,6 +144,9 @@ interface MockDocumentOptions {
 
 const SOURCE_TEXT = '# Guide\n\nParagraph.\n';
 const SOURCE_BYTES = Buffer.from(SOURCE_TEXT, 'utf8');
+const DOCUMENT_EDIT_ACK_HISTORY_LIMIT = (
+  MarkdownEditorProvider as unknown as { DOCUMENT_EDIT_ACK_HISTORY_LIMIT: number }
+).DOCUMENT_EDIT_ACK_HISTORY_LIMIT;
 const START_BLOCKS = [
   { ordinal: 0, kind: 'heading', markdown: '# Guide', contentSize: 'Guide'.length },
   { ordinal: 1, kind: 'paragraph', markdown: 'Paragraph.', contentSize: 'Paragraph.'.length },
@@ -7925,6 +7935,177 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(error.message).toMatch(/symbolic-link|safe|storage/i);
     expect(deleteFromWorkspace).not.toHaveBeenCalled();
     await expect(pathExists(bundleDirectory)).resolves.toBe(true);
+  });
+
+  it('still reports a rejection at the document boundary after a burst of accepted edits evicts it from the bounded ack history', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document, false);
+    const viewGeneration = 'boundary-rejection-generation';
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'ready',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        feedbackDeliveryProtocolVersion: 0,
+        viewGeneration,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    jest
+      .spyOn(provider as never, 'applyEdit' as never)
+      .mockImplementation(((
+        _content: string,
+        _document: vscode.TextDocument,
+        options?: { localRevision?: number }
+      ) => Promise.resolve(options?.localRevision !== 0)) as never);
+
+    const flushPromise = internals(provider).flushRendererAtDocumentBoundary(
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview,
+      5_000,
+      'boundary-eviction-test'
+    );
+
+    const flush = await waitForMessage(webview, 'flushPendingEdit');
+
+    // The renderer flushes its own pending edit(s) before acking the flush
+    // barrier. Here it emits one rejected edit followed by a burst of accepted
+    // edits at least as large as the bounded ack history, all inside the
+    // flush window, before the barrier itself settles.
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'edit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        editId: 'rejected-edit',
+        viewGeneration,
+        localRevision: 0,
+        baseDocumentVersion: 1,
+        content: '# Rejected\n',
+        editReason: 'typing',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    for (let index = 1; index <= DOCUMENT_EDIT_ACK_HISTORY_LIMIT; index += 1) {
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'edit',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          editId: `accepted-edit-${index}`,
+          viewGeneration,
+          localRevision: index,
+          baseDocumentVersion: 1,
+          content: `# Accepted ${index}\n`,
+          editReason: 'typing',
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+    }
+
+    await waitUntil(
+      () =>
+        messagesOfType(webview, 'document.edit.ack').length >= DOCUMENT_EDIT_ACK_HISTORY_LIMIT + 1
+    );
+
+    // Prove the burst actually evicted the rejected edit from the shared
+    // bounded FIFO before checking that the boundary still catches it.
+    expect(
+      internals(provider)
+        .documentEditAckHistory.get(webview as unknown as vscode.Webview)
+        ?.has('rejected-edit')
+    ).toBe(false);
+
+    internals(provider).handleWebviewMessage(
+      createFlushAcknowledgement(flush, true),
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await expect(flushPromise).resolves.toBe(false);
+  });
+
+  it('still reports a rejection when starting feedback after a burst of accepted edits evicts it from the bounded ack history', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document, false);
+
+    jest
+      .spyOn(provider as never, 'applyEdit' as never)
+      .mockImplementation(((
+        _content: string,
+        _document: vscode.TextDocument,
+        options?: { localRevision?: number }
+      ) => Promise.resolve(options?.localRevision !== 0)) as never);
+
+    const flushPromise = internals(provider).flushFeedbackWebview(
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const flush = await waitForMessage(webview, 'flushPendingEdit');
+    const viewGeneration = flush.viewGeneration as string;
+
+    // Same scenario as the sibling flushRendererAtDocumentBoundary test above,
+    // but through flushFeedbackWebview, which is the half of the fix that
+    // starting a Feedback session actually drives.
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'edit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        editId: 'rejected-edit',
+        viewGeneration,
+        localRevision: 0,
+        baseDocumentVersion: 1,
+        content: '# Rejected\n',
+        editReason: 'typing',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    for (let index = 1; index <= DOCUMENT_EDIT_ACK_HISTORY_LIMIT; index += 1) {
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'edit',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          editId: `accepted-edit-${index}`,
+          viewGeneration,
+          localRevision: index,
+          baseDocumentVersion: 1,
+          content: `# Accepted ${index}\n`,
+          editReason: 'typing',
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+    }
+
+    await waitUntil(
+      () =>
+        messagesOfType(webview, 'document.edit.ack').length >= DOCUMENT_EDIT_ACK_HISTORY_LIMIT + 1
+    );
+
+    // Prove the burst actually evicted the rejected edit from the shared
+    // bounded FIFO before checking that flushFeedbackWebview still catches it.
+    expect(
+      internals(provider)
+        .documentEditAckHistory.get(webview as unknown as vscode.Webview)
+        ?.has('rejected-edit')
+    ).toBe(false);
+
+    internals(provider).handleWebviewMessage(
+      createFlushAcknowledgement(flush, true),
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await expect(flushPromise).rejects.toMatchObject({
+      code: 'MD4H-FB-STORE-002',
+      message: expect.stringMatching(/apply the latest editor changes/i),
+    });
   });
 
   async function startAndAddTextFeedback(
