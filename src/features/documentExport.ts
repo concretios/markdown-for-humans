@@ -18,7 +18,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import * as cheerio from 'cheerio';
 
-type SafeDimensionImageFormat = 'png' | 'jpeg' | 'gif' | 'webp';
+type SafeDimensionImageFormat = 'png' | 'jpeg' | 'gif' | 'webp' | 'bmp' | 'ico' | 'svg';
 
 const SAFE_DIMENSION_IMAGE_EXTENSIONS: Readonly<Record<string, SafeDimensionImageFormat>> = {
   '.png': 'png',
@@ -26,6 +26,9 @@ const SAFE_DIMENSION_IMAGE_EXTENSIONS: Readonly<Record<string, SafeDimensionImag
   '.jpeg': 'jpeg',
   '.gif': 'gif',
   '.webp': 'webp',
+  '.bmp': 'bmp',
+  '.ico': 'ico',
+  '.svg': 'svg',
 };
 
 const SAFE_DIMENSION_IMAGE_MEDIA_TYPES: Readonly<Record<string, SafeDimensionImageFormat>> = {
@@ -33,6 +36,11 @@ const SAFE_DIMENSION_IMAGE_MEDIA_TYPES: Readonly<Record<string, SafeDimensionIma
   'image/jpeg': 'jpeg',
   'image/gif': 'gif',
   'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/x-ms-bmp': 'bmp',
+  'image/vnd.microsoft.icon': 'ico',
+  'image/x-icon': 'ico',
+  'image/svg+xml': 'svg',
 };
 
 /**
@@ -57,7 +65,7 @@ function getSafeDimensionImageFormat(source: string): SafeDimensionImageFormat |
 }
 
 /**
- * Identify one of the four image signatures approved for synchronous sizing.
+ * Identify one of the seven image signatures approved for synchronous sizing.
  *
  * @param data - Image bytes to inspect without parsing
  * @returns The detected allowlisted format, or undefined for any other signature
@@ -107,6 +115,26 @@ function getSafeDimensionImageSignature(data: Uint8Array): SafeDimensionImageFor
     return 'webp';
   }
 
+  if (data.length >= 2 && data[0] === 0x42 && data[1] === 0x4d) {
+    return 'bmp';
+  }
+
+  // Reserved (LE16) = 0, type (LE16) = 1. Type 2 is the CUR cursor format,
+  // which shares this exact header shape and must not be parsed as ICO.
+  if (
+    data.length >= 4 &&
+    data[0] === 0x00 &&
+    data[1] === 0x00 &&
+    data[2] === 0x01 &&
+    data[3] === 0x00
+  ) {
+    return 'ico';
+  }
+
+  if (getSvgSignatureSlice(data) !== undefined) {
+    return 'svg';
+  }
+
   return undefined;
 }
 
@@ -119,7 +147,7 @@ function getSafeDimensionImageSignature(data: Uint8Array): SafeDimensionImageFor
  *
  * @param source - Original image source used by the Word export pipeline
  * @param data - Image bytes to inspect
- * @returns True only for matching PNG, JPEG, GIF, or WebP inputs
+ * @returns True only for matching PNG, JPEG, GIF, WebP, BMP, ICO, or SVG inputs
  */
 export function isSafeForImageDimensionParsing(source: string, data: Uint8Array): boolean {
   const sourceFormat = getSafeDimensionImageFormat(source);
@@ -399,11 +427,270 @@ function readWebpDimensions(data: Uint8Array): ExportImageDimensions | undefined
 }
 
 /**
+ * Read BMP dimensions using the DIB header size to select a layout.
+ *
+ * BITMAPCOREHEADER (size 12) stores unsigned LE16 width/height. BITMAPINFOHEADER
+ * and later (size >= 40, e.g. V4/V5) store signed LE32 width/height, where a
+ * negative height is purely a top-down storage-order flag rather than a real
+ * negative size. Any other DIB header size is rejected rather than guessed.
+ *
+ * @param data - Signature-validated BMP bytes
+ * @returns Dimensions, or undefined for a truncated header, an unrecognized DIB
+ *   header size, or a declared DIB header size that doesn't fit within `data`
+ */
+function readBmpDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const dibHeaderSizeFieldEnd = 18; // DIB header size is a LE32 at offset 14
+  if (data.length < dibHeaderSizeFieldEnd) {
+    return undefined;
+  }
+
+  const dibHeaderSize = readLittleEndian32(data, 14);
+  if (data.length < 14 + dibHeaderSize) {
+    return undefined;
+  }
+
+  if (dibHeaderSize === 12) {
+    return validDimensions(readLittleEndian16(data, 18), readLittleEndian16(data, 20));
+  }
+
+  if (dibHeaderSize >= 40) {
+    const rawWidth = readLittleEndian32(data, 18);
+    const width = rawWidth >= 0x80000000 ? rawWidth - 0x100000000 : rawWidth;
+    const rawHeight = readLittleEndian32(data, 22);
+    const height = rawHeight >= 0x80000000 ? rawHeight - 0x100000000 : rawHeight;
+    return validDimensions(width, Math.abs(height));
+  }
+
+  return undefined;
+}
+
+/**
+ * Read dimensions from the first ICONDIRENTRY of an ICO file.
+ *
+ * The 6-byte ICONDIR header is followed by one or more 16-byte ICONDIRENTRY
+ * records; the first record's width and height are single bytes at offsets 6
+ * and 7. A raw byte value of 0 in either field means 256, since a single byte
+ * cannot otherwise represent that value.
+ *
+ * @param data - Signature-validated ICO bytes
+ * @returns Dimensions, or undefined for a truncated header or zero icon entries
+ */
+function readIcoDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const minimumIcoHeaderLength = 22; // 6-byte ICONDIR + first 16-byte ICONDIRENTRY
+  if (data.length < minimumIcoHeaderLength) {
+    return undefined;
+  }
+
+  const entryCount = readLittleEndian16(data, 4);
+  if (entryCount === 0) {
+    return undefined;
+  }
+
+  const rawWidth = data[6];
+  const rawHeight = data[7];
+  return validDimensions(rawWidth === 0 ? 256 : rawWidth, rawHeight === 0 ? 256 : rawHeight);
+}
+
+const MAX_SVG_SIGNATURE_SCAN_BYTES = 4096;
+const SVG_ROOT_TAG_PATTERN_ANCHORED = /^<svg[\s>]/i;
+
+/**
+ * Advance an index past an optional UTF-8 BOM, whitespace, an `<?xml ... ?>`
+ * declaration, XML comments, and a `<!DOCTYPE ...>` declaration (in any
+ * order/repetition), so the caller can check what tag comes next. Each step
+ * either returns or strictly advances the index, so this always terminates
+ * within the scanned slice with no backtracking-prone patterns.
+ *
+ * @param slice - Bounded decoded text to scan
+ * @returns The index of the next real tag, or -1 if a prolog element never closes
+ */
+function skipSvgProlog(slice: string): number {
+  let index = slice.startsWith('\ufeff') ? 1 : 0;
+
+  for (;;) {
+    while (index < slice.length && /\s/.test(slice[index])) {
+      index++;
+    }
+
+    if (slice.startsWith('<?', index)) {
+      const end = slice.indexOf('?>', index + 2);
+      if (end === -1) {
+        return -1;
+      }
+      index = end + 2;
+      continue;
+    }
+
+    if (slice.startsWith('<!--', index)) {
+      const end = slice.indexOf('-->', index + 4);
+      if (end === -1) {
+        return -1;
+      }
+      index = end + 3;
+      continue;
+    }
+
+    if (/^<!doctype/i.test(slice.slice(index, index + 9))) {
+      // Bounded bracket-depth scan so an internal subset (`<!DOCTYPE svg [ ... ]>`)
+      // doesn't end the declaration at a `>` inside its `[...]` block.
+      let cursor = index + 9;
+      let bracketDepth = 0;
+      let closed = false;
+      while (cursor < slice.length) {
+        const char = slice[cursor];
+        if (char === '[') {
+          bracketDepth++;
+        } else if (char === ']') {
+          bracketDepth = Math.max(0, bracketDepth - 1);
+        } else if (char === '>' && bracketDepth === 0) {
+          closed = true;
+          break;
+        }
+        cursor++;
+      }
+      if (!closed) {
+        return -1;
+      }
+      index = cursor + 1;
+      continue;
+    }
+
+    return index;
+  }
+}
+
+/**
+ * Decode the first 4,096 bytes of a candidate image and check that, after
+ * skipping the document prolog (BOM, whitespace, XML declaration, comments,
+ * DOCTYPE), the next tag is a root `<svg>`. Used identically by the
+ * signature gate and the dimension reader so the two can never disagree on
+ * whether a payload is SVG, and so an `<svg>` nested in an HTML body doesn't
+ * pass as a root element.
+ *
+ * @param data - Image bytes to inspect
+ * @returns The bounded decoded text starting at the root `<svg` tag (prolog
+ *   removed), or undefined when no root `<svg` tag is found
+ */
+function getSvgSignatureSlice(data: Uint8Array): string | undefined {
+  const slice = Buffer.from(data.subarray(0, MAX_SVG_SIGNATURE_SCAN_BYTES)).toString('utf8');
+  const prologEnd = skipSvgProlog(slice);
+  if (prologEnd === -1) {
+    return undefined;
+  }
+  const rootSlice = slice.slice(prologEnd);
+  return SVG_ROOT_TAG_PATTERN_ANCHORED.test(rootSlice) ? rootSlice : undefined;
+}
+
+/**
+ * Extract the root `<svg ...>` opening tag's text from an SVG signature slice.
+ *
+ * @param slice - Prolog-skipped text returned by getSvgSignatureSlice, which
+ *   already starts exactly at the root `<svg` tag
+ * @returns The tag's text, or undefined if it isn't closed within the scanned slice
+ */
+function extractSvgRootTag(slice: string): string | undefined {
+  const match = SVG_ROOT_TAG_PATTERN_ANCHORED.exec(slice);
+  if (!match) {
+    return undefined;
+  }
+  const tagEnd = slice.indexOf('>', match.index);
+  return tagEnd === -1 ? undefined : slice.slice(match.index, tagEnd);
+}
+
+/**
+ * Read one attribute's raw string value from an SVG root tag's text.
+ *
+ * @param tag - Bounded root tag text
+ * @param name - Attribute name
+ * @returns The attribute value, or undefined if absent
+ */
+function extractSvgAttribute(tag: string, name: string): string | undefined {
+  // Anchored to the tag boundary or whitespace (not `\b`, which also matches
+  // after a hyphen) so `data-width="7"` can't be mistaken for `width="7"`.
+  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+  const match = pattern.exec(tag);
+  return match ? (match[1] ?? match[2]) : undefined;
+}
+
+// Anchored so hex literals (0x10) and other non-SVG-numeric syntax that
+// bare Number() would silently accept are rejected instead.
+const SVG_STRICT_NUMBER_PATTERN = /^\d+(?:\.\d+)?$/;
+// Same, but allowing an optional leading sign: viewBox's min-x/min-y may
+// legitimately be negative, unlike width/height.
+const SVG_STRICT_SIGNED_NUMBER_PATTERN = /^-?\d+(?:\.\d+)?$/;
+
+/**
+ * Parse an SVG width/height attribute value, accepting only unitless numbers
+ * or explicit px values. Any other unit (%, cm, in, pt, em, ...) is rejected.
+ *
+ * @param value - Raw attribute value
+ * @returns The parsed length, or undefined for a missing value or disallowed unit
+ */
+function parseSvgLength(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const match = /^(\d+(?:\.\d+)?)(px)?$/i.exec(value.trim());
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * Parse an SVG viewBox attribute's width and height (its 3rd and 4th values).
+ *
+ * @param value - Raw viewBox attribute value ("min-x min-y width height")
+ * @returns The parsed dimensions, or undefined for a malformed viewBox
+ */
+function parseSvgViewBox(value: string | undefined): ExportImageDimensions | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parts = value.trim().split(/[\s,]+/);
+  if (
+    parts.length < 4 ||
+    !parts.slice(0, 2).every(part => SVG_STRICT_SIGNED_NUMBER_PATTERN.test(part)) ||
+    !parts.slice(2, 4).every(part => SVG_STRICT_NUMBER_PATTERN.test(part))
+  ) {
+    return undefined;
+  }
+  return { width: Number(parts[2]), height: Number(parts[3]) };
+}
+
+/**
+ * Read SVG dimensions from the root tag's width/height, falling back to
+ * viewBox when width/height are missing or use a disallowed unit.
+ *
+ * @param data - Signature-validated SVG bytes
+ * @returns Dimensions, or undefined when no usable width/height or viewBox is found
+ */
+function readSvgDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const slice = getSvgSignatureSlice(data);
+  if (!slice) {
+    return undefined;
+  }
+  const rootTag = extractSvgRootTag(slice);
+  if (!rootTag) {
+    return undefined;
+  }
+
+  const width = parseSvgLength(extractSvgAttribute(rootTag, 'width'));
+  const height = parseSvgLength(extractSvgAttribute(rootTag, 'height'));
+  if (width !== undefined && height !== undefined) {
+    return validDimensions(width, height);
+  }
+
+  const viewBoxDimensions = parseSvgViewBox(extractSvgAttribute(rootTag, 'viewBox'));
+  return viewBoxDimensions
+    ? validDimensions(viewBoxDimensions.width, viewBoxDimensions.height)
+    : undefined;
+}
+
+/**
  * Read export image dimensions without invoking a general-purpose parser.
  *
- * The strict source/signature gate prevents format confusion. PNG, GIF, and
- * WebP use fixed-offset reads. JPEG traversal is capped at 1 MiB and 4,096
- * markers, and rejects non-advancing or truncated segments.
+ * The strict source/signature gate prevents format confusion. PNG, GIF, WebP,
+ * BMP, and ICO use fixed-offset reads. JPEG traversal is capped at 1 MiB and
+ * 4,096 markers, and rejects non-advancing or truncated segments. SVG uses a
+ * bounded regex scan over the first 4,096 bytes only.
  *
  * @param source - Original image source used by the Word export pipeline
  * @param data - Image bytes to inspect
@@ -427,6 +714,12 @@ export function readExportImageDimensions(
       return readGifDimensions(data);
     case 'webp':
       return readWebpDimensions(data);
+    case 'bmp':
+      return readBmpDimensions(data);
+    case 'ico':
+      return readIcoDimensions(data);
+    case 'svg':
+      return readSvgDimensions(data);
   }
 }
 

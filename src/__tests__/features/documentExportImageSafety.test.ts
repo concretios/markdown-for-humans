@@ -3,7 +3,7 @@
  *
  * Dimension reads run on the extension host, so this boundary must stay
  * dependency-free, synchronous, and structurally bounded. Only PNG, JPEG,
- * GIF, and WebP sources with matching signatures are inspected.
+ * GIF, WebP, BMP, ICO, and SVG sources with matching signatures are inspected.
  */
 
 import {
@@ -148,12 +148,176 @@ function vp8xWithDimensions(width: number, height: number): Uint8Array {
   ]);
 }
 
+// BITMAPFILEHEADER: 'BM' + bfSize(LE32) + bfReserved1/2(LE16 each) + bfOffBits(LE32).
+function bmpFileHeader(totalSize: number, pixelDataOffset: number): number[] {
+  return [
+    ...ascii('BM'),
+    ...littleEndian32(totalSize),
+    0,
+    0,
+    0,
+    0, // reserved1, reserved2
+    ...littleEndian32(pixelDataOffset),
+  ];
+}
+
+// One padded 24-bit-per-pixel row, so every BMP fixture carries real pixel
+// data after its header rather than ending at the header boundary.
+function bmpPixelRow(width: number): number[] {
+  const rowBytes = Math.ceil((Math.abs(width) * 3) / 4) * 4;
+  return new Array(rowBytes).fill(0);
+}
+
+// Full 14-byte BITMAPFILEHEADER + full 12-byte BITMAPCOREHEADER (size,
+// width, height, biPlanes, biBitCount) + one row of pixel data, with
+// bfSize/bfOffBits set consistently with the real total length and offset.
+function bmpCoreHeaderWithDimensions(width: number, height: number): Uint8Array {
+  const dibHeader = [
+    ...littleEndian32(12), // DIB header size: BITMAPCOREHEADER
+    ...littleEndian16(width),
+    ...littleEndian16(height),
+    ...littleEndian16(1), // biPlanes
+    ...littleEndian16(24), // biBitCount
+  ];
+  const pixelData = bmpPixelRow(width);
+  const pixelDataOffset = 14 + dibHeader.length;
+  const fileHeader = bmpFileHeader(pixelDataOffset + pixelData.length, pixelDataOffset);
+  return Uint8Array.from([...fileHeader, ...dibHeader, ...pixelData]);
+}
+
+// Full 14-byte BITMAPFILEHEADER + full 40-byte BITMAPINFOHEADER (size,
+// width, height, biPlanes, biBitCount, biCompression, biSizeImage,
+// biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant) + one row of
+// pixel data, with bfSize/bfOffBits set consistently with the real total
+// length and offset.
+function bmpInfoHeaderWithDimensions(width: number, height: number): Uint8Array {
+  const dibHeader = [
+    ...littleEndian32(40), // DIB header size: BITMAPINFOHEADER
+    ...littleEndian32(width),
+    ...littleEndian32(height),
+    ...littleEndian16(1), // biPlanes
+    ...littleEndian16(24), // biBitCount
+    ...littleEndian32(0), // biCompression
+    ...littleEndian32(0), // biSizeImage
+    ...littleEndian32(0), // biXPelsPerMeter
+    ...littleEndian32(0), // biYPelsPerMeter
+    ...littleEndian32(0), // biClrUsed
+    ...littleEndian32(0), // biClrImportant
+  ];
+  const pixelData = bmpPixelRow(width);
+  const pixelDataOffset = 14 + dibHeader.length;
+  const fileHeader = bmpFileHeader(pixelDataOffset + pixelData.length, pixelDataOffset);
+  return Uint8Array.from([...fileHeader, ...dibHeader, ...pixelData]);
+}
+
+// A BMP whose declared DIB header size is `dibHeaderSize`, backed by exactly
+// `totalLength` bytes: neither the size 12 nor size >=40 layout, and often
+// deliberately shorter than the header it claims.
+function bmpWithDeclaredDibHeaderSize(dibHeaderSize: number, totalLength: number): Uint8Array {
+  const bytes = new Array(totalLength).fill(0);
+  const header = [...ascii('BM'), ...littleEndian32(0), 0, 0, 0, 0, ...littleEndian32(0)];
+  header.forEach((byte, index) => {
+    bytes[index] = byte;
+  });
+  const dibHeaderSizeBytes = littleEndian32(dibHeaderSize);
+  dibHeaderSizeBytes.forEach((byte, index) => {
+    bytes[header.length + index] = byte;
+  });
+  return Uint8Array.from(bytes);
+}
+
+// Claims a BITMAPINFOHEADER (size >= 40) with plausible width/height bytes
+// at the expected offsets, but declares a DIB header size far larger than
+// the actual data: the reader must not trust the two fixed-offset reads
+// just because they happen to be in bounds.
+function bmpWithOversizedDibHeaderClaim(width: number, height: number): Uint8Array {
+  return Uint8Array.from([
+    ...ascii('BM'),
+    ...littleEndian32(0),
+    0,
+    0,
+    0,
+    0,
+    ...littleEndian32(0),
+    ...littleEndian32(0xffffffff), // declared DIB header size far exceeds actual data
+    ...littleEndian32(width),
+    ...littleEndian32(height),
+  ]);
+}
+
+function icoWithEntryDimensions(rawWidth: number, rawHeight: number): Uint8Array {
+  return Uint8Array.from([
+    0x00,
+    0x00, // reserved
+    0x01,
+    0x00, // type = 1 (ICO; type 2 would be CUR)
+    ...littleEndian16(1), // one ICONDIRENTRY
+    rawWidth,
+    rawHeight,
+    0x00, // color count
+    0x00, // reserved
+    ...littleEndian16(1), // color planes
+    ...littleEndian16(32), // bits per pixel
+    ...littleEndian32(0), // size of image data (unused by reader)
+    ...littleEndian32(22), // offset of image data (unused by reader)
+  ]);
+}
+
+function curWithEntryDimensions(rawWidth: number, rawHeight: number): Uint8Array {
+  return Uint8Array.from([
+    0x00,
+    0x00, // reserved
+    0x02,
+    0x00, // type = 2 (CUR cursor format, not ICO)
+    ...littleEndian16(1), // one ICONDIRENTRY
+    rawWidth,
+    rawHeight,
+    0x00, // color count
+    0x00, // reserved
+    ...littleEndian16(1), // color planes
+    ...littleEndian16(32), // bits per pixel
+    ...littleEndian32(0), // size of image data (unused by reader)
+    ...littleEndian32(22), // offset of image data (unused by reader)
+  ]);
+}
+
+function svgWithMarkup(rootAttributes: string): Uint8Array {
+  return Uint8Array.from(ascii(`<svg xmlns="http://www.w3.org/2000/svg" ${rootAttributes}></svg>`));
+}
+
 const png = pngWithDimensions(640, 480);
 const jpeg = jpegWithDimensions(1024, 768);
 const gif = gifWithDimensions(320, 200);
 const vp8 = vp8WithDimensions(800, 600);
 const vp8l = vp8lWithDimensions(511, 257);
 const vp8x = vp8xWithDimensions(1920, 1080);
+const bmpCore = bmpCoreHeaderWithDimensions(32, 48);
+const bmpInfo = bmpInfoHeaderWithDimensions(320, 240);
+const bmpInfoNegativeHeight = bmpInfoHeaderWithDimensions(320, -240);
+const bmpUnrecognizedDibHeaderSize = bmpWithDeclaredDibHeaderSize(16, 30);
+const bmpOversizedDibHeaderClaim = bmpWithOversizedDibHeaderClaim(320, 240);
+const ico = icoWithEntryDimensions(32, 48);
+const icoZeroMeans256 = icoWithEntryDimensions(0, 64);
+const cur = curWithEntryDimensions(32, 48);
+const svgPx = svgWithMarkup('width="640px" height="480px"');
+const svgUnitless = svgWithMarkup('width="640" height="480"');
+const svgViewBoxOnly = svgWithMarkup('viewBox="0 0 640 480"');
+const svgPercentWidth = svgWithMarkup('width="50%" height="50%"');
+const svgDecoyAttributesWithRealViewBox = svgWithMarkup(
+  'data-width="7" data-height="9" data-viewBox="1 1 1 1" viewBox="0 0 640 480"'
+);
+const svgHexViewBox = svgWithMarkup('viewBox="0 0 0x10 0x20"');
+const svgNegativeViewBoxOrigin = svgWithMarkup('viewBox="-10 -10 640 480"');
+const htmlWithNestedSvg = Uint8Array.from(
+  ascii(
+    '<!DOCTYPE html><html><body><p>not an svg root</p><svg width="1" height="1"></svg></body></html>'
+  )
+);
+const svgCommentDecoyBeforeRealRoot = Uint8Array.from(
+  ascii(
+    '<!-- <svg width="1" height="1"></svg> --><svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"></svg>'
+  )
+);
 
 const icns = Uint8Array.from([...ascii('icns'), 0x00, 0x00, 0x00, 0x08]);
 const jxl = Uint8Array.from([0xff, 0x0a, 0x00, 0x00]);
@@ -178,6 +342,10 @@ describe('Word export image dimension reader', () => {
     ['ICNS', 'renamed.png', icns],
     ['JXL', 'renamed.jpg', jxl],
     ['HEIF', 'renamed.webp', heif],
+    ['ICNS', 'renamed.bmp', icns],
+    ['JXL', 'renamed.ico', jxl],
+    ['HEIF', 'renamed.svg', heif],
+    ['CUR', 'renamed.ico', cur],
   ])('rejects a %s payload disguised with an allowlisted extension', (_, source, data) => {
     expect(isSafeForImageDimensionParsing(source, data)).toBe(false);
     expect(readExportImageDimensions(source, data)).toBeUndefined();
@@ -191,9 +359,101 @@ describe('Word export image dimension reader', () => {
     ['WebP VP8', 'photo.webp', vp8, { width: 800, height: 600 }],
     ['WebP VP8L', 'photo.webp', vp8l, { width: 511, height: 257 }],
     ['WebP VP8X', 'photo.webp', vp8x, { width: 1920, height: 1080 }],
+    ['BMP (BITMAPCOREHEADER)', 'diagram.bmp', bmpCore, { width: 32, height: 48 }],
+    ['BMP (BITMAPINFOHEADER)', 'diagram.bmp', bmpInfo, { width: 320, height: 240 }],
+    ['ICO', 'icon.ico', ico, { width: 32, height: 48 }],
+    ['SVG (px)', 'diagram.svg', svgPx, { width: 640, height: 480 }],
+    ['SVG (unitless)', 'diagram.svg', svgUnitless, { width: 640, height: 480 }],
+    [
+      'BMP data URL (image/x-ms-bmp)',
+      'data:image/x-ms-bmp;base64,Qk0=',
+      bmpInfo,
+      { width: 320, height: 240 },
+    ],
+    [
+      'ICO data URL (image/x-icon)',
+      'data:image/x-icon;base64,AAABAAEA',
+      ico,
+      { width: 32, height: 48 },
+    ],
   ])('reads dimensions from supported %s input', (_, source, data, expected) => {
     expect(isSafeForImageDimensionParsing(source, data)).toBe(true);
     expect(readExportImageDimensions(source, data)).toEqual(expected);
+  });
+
+  it('treats a negative BMP height as top-down and returns its absolute value', () => {
+    expect(isSafeForImageDimensionParsing('diagram.bmp', bmpInfoNegativeHeight)).toBe(true);
+    expect(readExportImageDimensions('diagram.bmp', bmpInfoNegativeHeight)).toEqual({
+      width: 320,
+      height: 240,
+    });
+  });
+
+  it('treats a zero ICO width/height byte as 256', () => {
+    expect(isSafeForImageDimensionParsing('icon.ico', icoZeroMeans256)).toBe(true);
+    expect(readExportImageDimensions('icon.ico', icoZeroMeans256)).toEqual({
+      width: 256,
+      height: 64,
+    });
+  });
+
+  it('falls back to viewBox when SVG width/height are absent', () => {
+    expect(isSafeForImageDimensionParsing('diagram.svg', svgViewBoxOnly)).toBe(true);
+    expect(readExportImageDimensions('diagram.svg', svgViewBoxOnly)).toEqual({
+      width: 640,
+      height: 480,
+    });
+  });
+
+  it('returns undefined for a percentage SVG width with no viewBox fallback', () => {
+    expect(isSafeForImageDimensionParsing('diagram.svg', svgPercentWidth)).toBe(true);
+    expect(readExportImageDimensions('diagram.svg', svgPercentWidth)).toBeUndefined();
+  });
+
+  it('ignores data-width/data-height/data-viewBox decoys and reads the real viewBox', () => {
+    expect(isSafeForImageDimensionParsing('diagram.svg', svgDecoyAttributesWithRealViewBox)).toBe(
+      true
+    );
+    expect(readExportImageDimensions('diagram.svg', svgDecoyAttributesWithRealViewBox)).toEqual({
+      width: 640,
+      height: 480,
+    });
+  });
+
+  it('rejects a viewBox with hex components as malformed rather than misreading it', () => {
+    expect(isSafeForImageDimensionParsing('diagram.svg', svgHexViewBox)).toBe(true);
+    expect(readExportImageDimensions('diagram.svg', svgHexViewBox)).toBeUndefined();
+  });
+
+  it('accepts a viewBox with a negative min-x/min-y', () => {
+    expect(isSafeForImageDimensionParsing('diagram.svg', svgNegativeViewBoxOrigin)).toBe(true);
+    expect(readExportImageDimensions('diagram.svg', svgNegativeViewBoxOrigin)).toEqual({
+      width: 640,
+      height: 480,
+    });
+  });
+
+  it('rejects an HTML document with a non-root <svg> tag renamed to .svg', () => {
+    expect(isSafeForImageDimensionParsing('embedded.svg', htmlWithNestedSvg)).toBe(false);
+    expect(readExportImageDimensions('embedded.svg', htmlWithNestedSvg)).toBeUndefined();
+  });
+
+  it('reads the real root <svg> dimensions, not a decoy hidden inside a comment before it', () => {
+    expect(isSafeForImageDimensionParsing('diagram.svg', svgCommentDecoyBeforeRealRoot)).toBe(true);
+    expect(readExportImageDimensions('diagram.svg', svgCommentDecoyBeforeRealRoot)).toEqual({
+      width: 640,
+      height: 480,
+    });
+  });
+
+  it('returns undefined for a BMP with an unrecognized DIB header size (neither 12 nor >=40)', () => {
+    expect(isSafeForImageDimensionParsing('diagram.bmp', bmpUnrecognizedDibHeaderSize)).toBe(true);
+    expect(readExportImageDimensions('diagram.bmp', bmpUnrecognizedDibHeaderSize)).toBeUndefined();
+  });
+
+  it('returns undefined for a BMP declaring a DIB header size far larger than the available data', () => {
+    expect(isSafeForImageDimensionParsing('diagram.bmp', bmpOversizedDibHeaderClaim)).toBe(true);
+    expect(readExportImageDimensions('diagram.bmp', bmpOversizedDibHeaderClaim)).toBeUndefined();
   });
 
   it.each([
