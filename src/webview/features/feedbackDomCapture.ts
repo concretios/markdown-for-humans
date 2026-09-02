@@ -20,6 +20,7 @@ import {
   type CaptureRectangle,
   type DomRasterizer,
 } from './feedbackCapture';
+import { FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 } from '../../shared/feedbackEvidenceV2';
 
 export type ModernScreenshotFunction = (
   node: Node,
@@ -27,7 +28,6 @@ export type ModernScreenshotFunction = (
 ) => Promise<string>;
 
 const MAX_PIXELS = 12_000_000;
-const MAX_DATA_URL_LENGTH = 14 * 1024 * 1024;
 const MAX_CAPTURE_CLONE_NODES = 4_096;
 const MAX_CAPTURE_RESOURCE_REFERENCES = 1_024;
 const RESOURCE_TIMEOUT_MS = 5_000;
@@ -1210,10 +1210,13 @@ export function createModernScreenshotRasterizer(
         request.signal
       );
       throwIfFeedbackCaptureAborted(request.signal);
-      if (!dataUrl.startsWith('data:image/png;base64,') || dataUrl.length > MAX_DATA_URL_LENGTH) {
+      if (
+        !dataUrl.startsWith('data:image/png;base64,') ||
+        dataUrl.length > FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2
+      ) {
         throw new FeedbackCaptureError(
           'MD4H-FB-CAPTURE-002',
-          'The screenshot could not be encoded within the 10 MiB feedback limit.'
+          'The screenshot could not be encoded within the feedback screenshot size limit.'
         );
       }
       throwIfFeedbackCaptureAborted(request.signal);

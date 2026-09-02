@@ -29,6 +29,7 @@ import {
   FEEDBACK_GUIDE_VERSION_V2,
   FEEDBACK_MAX_EMBEDDED_SOURCE_BYTES_PER_SESSION_V2,
   FEEDBACK_MAX_EXACT_CELLS_PER_SESSION_V2,
+  FEEDBACK_MAX_SCREENSHOT_BYTES_V2,
   FEEDBACK_MAX_TEXTUAL_EVIDENCE_BYTES_V2,
   FEEDBACK_SCHEMA_V2,
   feedbackTextualEvidenceBytesV2,
@@ -149,7 +150,6 @@ const LEGACY_FEEDBACK_REPORT_GUIDE_LINES = [
   '7. Do not modify, move, or delete this bundle or its assets.',
   '8. Run appropriate checks and report the outcome for every feedback ID.',
 ] as const;
-const MAX_PNG_BYTES = 10 * 1024 * 1024;
 const MAX_PNG_PIXELS = 12_000_000;
 const MAX_PNG_CHUNKS = 10_000;
 const MAX_PNG_DECODED_BYTES = MAX_PNG_PIXELS * 8 + 32_768;
@@ -599,7 +599,7 @@ export function buildFeedbackBundleLocation(options: {
 export function decodeAndValidateFeedbackPng(pngData: string | Uint8Array): ValidatedFeedbackPng {
   const bytes = typeof pngData === 'string' ? decodePngString(pngData) : Buffer.from(pngData);
 
-  if (bytes.byteLength > MAX_PNG_BYTES) {
+  if (bytes.byteLength > FEEDBACK_MAX_SCREENSHOT_BYTES_V2) {
     throw new FeedbackSessionError(
       'MD4H-FB-CAPTURE-002',
       'The screenshot exceeds the 10 MiB feedback limit.'
@@ -3005,7 +3005,7 @@ export class FeedbackSessionStore {
         const stats = await lstat(assetPath);
         assertSafeRegularFileStats(
           stats,
-          MAX_PNG_BYTES,
+          FEEDBACK_MAX_SCREENSHOT_BYTES_V2,
           'MD4H-FB-CAPTURE-002',
           'feedback screenshot asset'
         );
@@ -3038,7 +3038,7 @@ export class FeedbackSessionStore {
         tombstone.screenshotBytes === undefined ||
         !Number.isSafeInteger(tombstone.screenshotBytes.byteLength) ||
         tombstone.screenshotBytes.byteLength < 0 ||
-        tombstone.screenshotBytes.byteLength > MAX_PNG_BYTES
+        tombstone.screenshotBytes.byteLength > FEEDBACK_MAX_SCREENSHOT_BYTES_V2
       ) {
         throw new FeedbackSessionError(
           'MD4H-FB-CAPTURE-002',
@@ -3227,7 +3227,7 @@ async function validateResumedScreenshotAssetMetadata(
       const stats = await lstat(assetPath);
       assertSafeRegularFileStats(
         stats,
-        MAX_PNG_BYTES,
+        FEEDBACK_MAX_SCREENSHOT_BYTES_V2,
         'MD4H-FB-CAPTURE-002',
         'feedback screenshot asset'
       );
@@ -4730,7 +4730,7 @@ function assertSafeRegularFileStats(
     throw new FeedbackSessionError(code, `The ${description} is not a safe regular file.`);
   }
   if (!Number.isSafeInteger(stats.size) || stats.size < 0 || stats.size > maxBytes) {
-    const limit = maxBytes === MAX_PNG_BYTES ? '10 MiB' : `${maxBytes} bytes`;
+    const limit = maxBytes === FEEDBACK_MAX_SCREENSHOT_BYTES_V2 ? '10 MiB' : `${maxBytes} bytes`;
     throw new FeedbackSessionError(code, `The ${description} exceeds the ${limit} safe limit.`);
   }
 }
@@ -4747,7 +4747,7 @@ async function readValidatedFeedbackPngFile(
   await assertSafeFeedbackDirectoryChain(workspaceRoot, assetsDirectory);
   const bytes = await readBoundedRegularFile(
     assetPath,
-    MAX_PNG_BYTES,
+    FEEDBACK_MAX_SCREENSHOT_BYTES_V2,
     'MD4H-FB-CAPTURE-002',
     'feedback screenshot asset'
   );
@@ -4763,7 +4763,7 @@ async function safeUnlinkFeedbackAsset(
   const stats = await lstat(assetPath);
   assertSafeRegularFileStats(
     stats,
-    MAX_PNG_BYTES,
+    FEEDBACK_MAX_SCREENSHOT_BYTES_V2,
     'MD4H-FB-CAPTURE-002',
     'feedback screenshot asset'
   );

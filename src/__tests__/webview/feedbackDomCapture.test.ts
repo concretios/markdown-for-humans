@@ -6,6 +6,10 @@ import {
   createModernScreenshotRasterizer,
   validateCaptureResources,
 } from '../../webview/features/feedbackDomCapture';
+import { FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 } from '../../shared/feedbackEvidenceV2';
+
+const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';
+const MAX_ENCODED_LENGTH = FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 - PNG_DATA_URL_PREFIX.length;
 
 function rect(left: number, top: number, width: number, height: number): DOMRect {
   return {
@@ -342,6 +346,35 @@ describe('modern-screenshot feedback rasterizer', () => {
       })
     ).resolves.toMatchObject({ dataUrl: 'data:image/png;base64,AAAA' });
     expect(screenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts an encoded screenshot at the derived boundary and rejects one byte over', async () => {
+    document.body.innerHTML = '<div id="root"><p>one</p></div>';
+    const root = document.getElementById('root') as HTMLElement;
+    const block = root.firstElementChild as HTMLElement;
+    Object.defineProperty(root, 'getBoundingClientRect', { value: () => rect(0, 0, 600, 100) });
+    Object.defineProperty(block, 'getBoundingClientRect', {
+      value: () => rect(0, 0, 600, 100),
+    });
+    const atBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH);
+
+    await expect(
+      createModernScreenshotRasterizer(jest.fn(async () => atBoundary))({
+        root,
+        rectangle: { left: 0, top: 0, width: 600, height: 100 },
+        scale: 1,
+      })
+    ).resolves.toMatchObject({ dataUrl: atBoundary });
+
+    const overBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH + 1);
+
+    await expect(
+      createModernScreenshotRasterizer(jest.fn(async () => overBoundary))({
+        root,
+        rectangle: { left: 0, top: 0, width: 600, height: 100 },
+        scale: 1,
+      })
+    ).rejects.toMatchObject({ code: 'MD4H-FB-CAPTURE-002' });
   });
 
   it('removes editor chrome and transient decorations without dropping their text', async () => {

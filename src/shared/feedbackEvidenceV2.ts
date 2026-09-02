@@ -32,6 +32,10 @@ export const FEEDBACK_MAX_TABLE_CELL_CHARACTERS_V2 = 240;
 export const FEEDBACK_MAX_SCREENSHOT_PIXELS_V2 = 12_000_000;
 export const FEEDBACK_MAX_SCREENSHOT_BYTES_V2 = 10 * 1024 * 1024;
 
+/** Maximum base64 PNG data URL length for a screenshot within the raw byte cap above. */
+export const FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 =
+  Math.ceil(FEEDBACK_MAX_SCREENSHOT_BYTES_V2 / 3) * 4 + 'data:image/png;base64,'.length;
+
 const FEEDBACK_MAX_ORDINAL_V2 = 99_999;
 const FEEDBACK_MAX_TABLE_COORDINATE_V2 = 100_000;
 const FEEDBACK_MAX_SCREENSHOT_DIMENSION_V2 = 100_000;

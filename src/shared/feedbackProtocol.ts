@@ -9,6 +9,7 @@
  */
 
 import {
+  FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2,
   isFeedbackRendererTargetEvidenceCompatibleV2,
   parseFeedbackRendererEvidenceV2,
   parseFeedbackRendererTargetV2,
@@ -520,7 +521,6 @@ const MAX_FOCUS_LENGTH = 1_000_000;
 const MAX_BLOCKS = 100_000;
 const MAX_CANONICAL_MARKDOWN_LENGTH = 10 * 1024 * 1024;
 const MAX_DOCUMENT_CONTENT_LENGTH = 64 * 1024 * 1024;
-const MAX_PNG_DATA_URL_LENGTH = 14 * 1024 * 1024;
 const MAX_PATH_LENGTH = 32_768;
 const MAX_WEBVIEW_URI_LENGTH = 1024 * 1024;
 const MAX_TABLE_COORDINATE = 100_000;
@@ -761,7 +761,7 @@ function parseBlocks(value: unknown): CanonicalFeedbackBlock[] | null {
 function isPngDataUrl(value: unknown): value is string {
   if (
     typeof value !== 'string' ||
-    value.length > MAX_PNG_DATA_URL_LENGTH ||
+    value.length > FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 ||
     !value.startsWith('data:image/png;base64,')
   ) {
     return false;

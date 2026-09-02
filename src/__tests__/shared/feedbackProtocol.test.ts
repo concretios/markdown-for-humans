@@ -4,6 +4,10 @@ import {
   parseFeedbackHostMessage,
   parseFeedbackWebviewMessage,
 } from '../../shared/feedbackProtocol';
+import { FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 } from '../../shared/feedbackEvidenceV2';
+
+const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';
+const MAX_ENCODED_LENGTH = FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 - PNG_DATA_URL_PREFIX.length;
 
 describe('feedback protocol', () => {
   it.each(['nextFeedback', 'previousFeedback'] as const)(
@@ -798,6 +802,35 @@ describe('feedback protocol', () => {
           endOrdinal: 0,
           endOffset: 1,
         },
+      })
+    ).toBeNull();
+  });
+
+  it('accepts a screenshot data URL at the derived boundary and rejects one byte over', () => {
+    const atBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH);
+    const overBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH + 1);
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.screenshot.add',
+        requestId: 'screenshot-boundary',
+        sessionId: 'session-1',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        imageDataUrl: atBoundary,
+        feedback: 'At the boundary.',
+      })
+    ).not.toBeNull();
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.screenshot.add',
+        requestId: 'screenshot-over-boundary',
+        sessionId: 'session-1',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        imageDataUrl: overBoundary,
+        feedback: 'Over the boundary.',
       })
     ).toBeNull();
   });
