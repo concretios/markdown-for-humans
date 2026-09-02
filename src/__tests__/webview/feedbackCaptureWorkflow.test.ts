@@ -11,6 +11,7 @@ import {
   captureSelectedFeedbackBlocks,
   startFeedbackAreaCapture,
 } from '../../webview/features/feedbackCaptureWorkflow';
+import * as feedbackCaptureModule from '../../webview/features/feedbackCapture';
 import {
   FeedbackCaptureError,
   type DomRasterizeRequest,
@@ -139,6 +140,7 @@ describe('keyboard Feedback block selector', () => {
     window.dispatchEvent(new CustomEvent('feedbackSessionEnded'));
     document.body.removeAttribute('data-feedback-capture-state');
     document.body.replaceChildren();
+    jest.restoreAllMocks();
   });
 
   it('does not open either capture surface when the review is not writable', () => {
@@ -1019,7 +1021,10 @@ describe('keyboard Feedback block selector', () => {
 
   describe('explicit area capture state', () => {
     function createAreaHarness(
-      options: { draftSurfaceGate?: ReturnType<typeof createFeedbackDraftSurfaceGate> } = {}
+      options: {
+        draftSurfaceGate?: ReturnType<typeof createFeedbackDraftSurfaceGate>;
+        isWritable?: () => boolean;
+      } = {}
     ) {
       const trigger = document.createElement('button');
       trigger.setAttribute('data-feedback-capture', '');
@@ -1053,7 +1058,7 @@ describe('keyboard Feedback block selector', () => {
           anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
           items: [],
         }),
-        isWritable: () => true,
+        isWritable: options.isWritable ?? (() => true),
         setCaptureState,
         reportCaptureError: jest.fn(),
       } as unknown as FeedbackReviewController;
@@ -1400,6 +1405,130 @@ describe('keyboard Feedback block selector', () => {
         window.removeEventListener('feedbackLocalError', onLocalError);
         lease?.release();
       }
+    });
+
+    it('releases the workflow lease and restores idle state when the review turns read-only mid-capture', async () => {
+      let writable = true;
+      const harness = createAreaHarness({ isWritable: () => writable });
+      harness.rasterize.mockImplementation(async () => {
+        writable = false;
+        return {
+          dataUrl: 'data:image/png;base64,AAAA',
+          width: 100,
+          height: 60,
+        };
+      });
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+
+      overlay.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, bubbles: true })
+      );
+      overlay.dispatchEvent(
+        new MouseEvent('pointerup', { button: 0, clientX: 110, clientY: 70, bubbles: true })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+
+      expect(document.querySelector('.feedback-area-capture')).toBeNull();
+      expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+      expect(document.body.hasAttribute('data-feedback-capture-state')).toBe(false);
+      expect(harness.setCaptureState).toHaveBeenLastCalledWith('idle');
+      expect(harness.review.reportCaptureError).toHaveBeenCalledWith('MD4H-FB-SNAPSHOT-001');
+      expect(document.activeElement).toBe(harness.trigger);
+
+      writable = true;
+      const onLocalError = jest.fn();
+      window.addEventListener('feedbackLocalError', onLocalError);
+      try {
+        startFeedbackAreaCapture(harness);
+        expect(onLocalError).not.toHaveBeenCalled();
+        expect(document.querySelector('.feedback-area-capture')).not.toBeNull();
+      } finally {
+        window.removeEventListener('feedbackLocalError', onLocalError);
+      }
+    });
+
+    it('reports the error when opening the annotation dialog throws synchronously', async () => {
+      const harness = createAreaHarness();
+      harness.rasterize.mockImplementation(async () => ({
+        dataUrl: 'data:image/png;base64,AAAA',
+        width: 100,
+        height: 60,
+      }));
+      // createFeedbackAnnotationModal throws a RangeError for a degenerate
+      // bitmap in real usage, but validateRasterizedCapture already rejects
+      // that shape earlier in the pipeline, so it can never reach
+      // openAnnotation. Mock the module to exercise the same synchronous
+      // throw-right-after-cleanup path with an error the reportCaptureError
+      // helper forwards, so the fix is observable end to end.
+      const modalSpy = jest
+        .spyOn(feedbackCaptureModule, 'createFeedbackAnnotationModal')
+        .mockImplementation(() => {
+          throw new FeedbackCaptureError('MD4H-FB-CAPTURE-002', 'boom');
+        });
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+
+      overlay.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, bubbles: true })
+      );
+      overlay.dispatchEvent(
+        new MouseEvent('pointerup', { button: 0, clientX: 110, clientY: 70, bubbles: true })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+
+      expect(modalSpy).toHaveBeenCalled();
+      expect(harness.review.reportCaptureError).toHaveBeenCalledWith('MD4H-FB-CAPTURE-002');
+      expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+      expect(consoleError).toHaveBeenCalledWith(
+        '[MD4H] Feedback annotation failed:',
+        expect.any(FeedbackCaptureError)
+      );
+    });
+
+    it('logs the raw error when opening the annotation dialog throws a plain RangeError', async () => {
+      // createFeedbackAnnotationModal throws a plain RangeError (not a
+      // FeedbackCaptureError) for a degenerate bitmap in real usage.
+      // reportCaptureError silently no-ops for non-FeedbackCaptureError
+      // instances, so console.error is the only surfaced signal for this
+      // failure mode.
+      const harness = createAreaHarness();
+      harness.rasterize.mockImplementation(async () => ({
+        dataUrl: 'data:image/png;base64,AAAA',
+        width: 100,
+        height: 60,
+      }));
+      const modalSpy = jest
+        .spyOn(feedbackCaptureModule, 'createFeedbackAnnotationModal')
+        .mockImplementation(() => {
+          throw new RangeError('Screenshot dimensions must be positive.');
+        });
+      const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+
+      overlay.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, bubbles: true })
+      );
+      overlay.dispatchEvent(
+        new MouseEvent('pointerup', { button: 0, clientX: 110, clientY: 70, bubbles: true })
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+
+      expect(modalSpy).toHaveBeenCalled();
+      expect(harness.review.reportCaptureError).not.toHaveBeenCalled();
+      expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+      expect(consoleError).toHaveBeenCalledWith(
+        '[MD4H] Feedback annotation failed:',
+        expect.any(RangeError)
+      );
     });
   });
 });

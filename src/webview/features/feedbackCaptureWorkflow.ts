@@ -680,14 +680,23 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
         closed ||
         rasterAbort.signal.aborted ||
         rasterState.kind !== 'Rasterizing' ||
-        rasterState.captureId !== captureId ||
-        !isReviewWritable(options.review)
+        rasterState.captureId !== captureId
       ) {
+        return;
+      }
+      if (!isReviewWritable(options.review)) {
+        reportCaptureError(options.review, snapshotChangedError());
+        cleanup(true);
         return;
       }
       applyCaptureEvent({ type: 'rasterSucceeded', captureId }, false);
       cleanup(false);
-      openAnnotation(options, capture, options.initialFeedback ?? '', resolveReturnFocus());
+      try {
+        openAnnotation(options, capture, options.initialFeedback ?? '', resolveReturnFocus());
+      } catch (annotationError) {
+        reportCaptureError(options.review, annotationError);
+        console.error('[MD4H] Feedback annotation failed:', annotationError);
+      }
     } catch (captureError) {
       if (closed || rasterAbort.signal.aborted) return;
       applyCaptureEvent({
