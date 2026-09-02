@@ -5,6 +5,8 @@
  */
 
 import {
+  blankLineLayoutSignature,
+  hasSameBlankLineLayout,
   isMarkdownRendererEquivalent,
   isMarkdownStructurallyEquivalent,
 } from '../../editor/markdownAstEquivalence';
@@ -205,5 +207,36 @@ describe('isMarkdownRendererEquivalent', () => {
     const renderer = '- First paragraph. Second paragraph.\n';
 
     expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+  });
+
+  test('accepts a recognized raw HTML tag round-tripped to native Markdown', () => {
+    const source = 'Some text with <strong>bold</strong> in the middle.\n';
+    const renderer = 'Some text with **bold** in the middle.\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+  });
+
+  test('still rejects whitespace changes inside raw HTML that survives on both sides', () => {
+    const twoSpaces = '<span style="white-space: pre">a  b</span>\n';
+    const oneSpace = '<span style="white-space: pre">a b</span>\n';
+
+    expect(isMarkdownRendererEquivalent(twoSpaces, oneSpace)).toBe(false);
+  });
+});
+
+describe('hasSameBlankLineLayout', () => {
+  test('treats a CRLF blank line the same as its LF equivalent', () => {
+    const crlf = '# Title\r\n\r\nSome paragraph text.\r\n\r\nAnother paragraph.\r\n';
+    const lf = '# Title\n\nSome paragraph text.\n\nAnother paragraph.\n';
+
+    expect(blankLineLayoutSignature(crlf)).toBe(blankLineLayoutSignature(lf));
+    expect(hasSameBlankLineLayout(crlf, lf)).toBe(true);
+  });
+
+  test('still detects a real blank-line-count difference under CRLF', () => {
+    const oneBlank = '# Title\r\n\r\nBody.\r\n';
+    const twoBlanks = '# Title\r\n\r\n\r\nBody.\r\n';
+
+    expect(hasSameBlankLineLayout(oneBlank, twoBlanks)).toBe(false);
   });
 });

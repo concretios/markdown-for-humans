@@ -134,10 +134,18 @@ function isEquivalentWhenRendered(
 ): boolean {
   if (a === b) return true;
   try {
+    const renderedA = renderer.render(a);
+    const renderedB = renderer.render(b);
+    // An exact match before any whitespace normalization is the strongest
+    // possible proof of equivalence: nothing was collapsed away, so a tag
+    // TipTap converts to equivalent native syntax (e.g. <strong> -> **bold**)
+    // can't be mistaken for a real edit just because its raw-HTML token count
+    // changed on one side.
+    if (renderedA === renderedB) return true;
     if (!hasSameRawHtmlContexts(a, b)) return false;
     return (
-      normalizeRenderedHtml(renderer.render(a), ignoreListTightness) ===
-      normalizeRenderedHtml(renderer.render(b), ignoreListTightness)
+      normalizeRenderedHtml(renderedA, ignoreListTightness) ===
+      normalizeRenderedHtml(renderedB, ignoreListTightness)
     );
   } catch {
     // If either side fails to render, fall back to "not equivalent" so the
@@ -159,7 +167,11 @@ function isEquivalentWhenRendered(
  * behaviour for cosmetic round-trips.
  */
 export function blankLineLayoutSignature(source: string): string {
-  return (source.match(/\n+/g) ?? []).map(run => run.length).join(',');
+  // Normalize CRLF to LF first: a CRLF blank line ("\r\n\r\n") has its two \n
+  // characters separated by \r, so the bare regex would count it as two runs
+  // of length 1 instead of one run of length 2 - a line-ending artifact, not
+  // an actual blank-line-count difference.
+  return (source.replace(/\r\n/g, '\n').match(/\n+/g) ?? []).map(run => run.length).join(',');
 }
 
 /**
