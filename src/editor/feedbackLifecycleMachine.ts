@@ -4,6 +4,15 @@
  * The reducer has no I/O. Callers execute effects only after an event returns
  * `applied`. Every operation uses a fresh epoch and monotonically increasing
  * stage revisions so delayed webview messages cannot mutate newer work.
+ *
+ * This reducer is specified in roadmap/pipeline/task-feedback-reliability-architecture.md's
+ * "Remaining architecture and acceptance gaps" section as the target authority for lifecycle
+ * state. However, it is not yet wired into production as that authority; that work remains
+ * tracked and intended. Before wiring either this reducer or its sibling webview reducer into
+ * production, note that HostRecoveryTarget ('Idle' | 'DraftAvailable') and RendererRecoveryTarget
+ * ('Editing' | 'DraftAvailable') must be reconciled. The two types share 'DraftAvailable' but
+ * diverge on the other recovery target ('Idle' vs 'Editing'), and that gap must be resolved
+ * before either reducer becomes the production lifecycle authority.
  */
 
 export type HostRecoveryTarget = 'Idle' | 'DraftAvailable';
