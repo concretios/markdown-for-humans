@@ -5679,9 +5679,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       );
       this.assertFeedbackTransition(documentKey, transitionToken);
       this.feedbackSessions.set(documentKey, session);
-      // Activate the owner before retiring its transition token. Otherwise a
-      // queued transition unlock can briefly make the rich view editable.
-      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, session, document, webview);
+      try {
+        // Activate the owner before retiring its transition token. Otherwise a
+        // queued transition unlock can briefly make the rich view editable.
+        this.postFeedbackSessionStarted(
+          message.requestId,
+          workspaceRoot,
+          session,
+          document,
+          webview
+        );
+      } catch (error) {
+        if (this.feedbackSessions.get(documentKey) === session) {
+          this.feedbackSessions.delete(documentKey);
+        }
+        throw error;
+      }
       this.refreshFeedbackPeerLocks(documentKey);
     } finally {
       await this.endFeedbackTransition(documentKey, transitionToken, document);

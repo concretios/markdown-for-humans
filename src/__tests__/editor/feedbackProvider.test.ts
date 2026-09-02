@@ -2022,6 +2022,40 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(internals(provider).feedbackSessions.size).toBe(1);
   });
 
+  it('rolls back the session entry when the started notification fails to post', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const firstWebview = createWebview(provider, document);
+    const automaticPostMessage = firstWebview.postMessage.getMockImplementation();
+    firstWebview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'feedback.started') {
+        throw new Error('simulated webview delivery failure');
+      }
+      return automaticPostMessage?.(message) ?? Promise.resolve(true);
+    });
+
+    sendStart(provider, document, firstWebview, 'start-post-fails');
+    await waitForMessage(firstWebview, 'feedback.error', 'start-post-fails');
+    expect(internals(provider).feedbackSessions.size).toBe(0);
+
+    const retryWebview = createWebview(provider, document);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      retryWebview as unknown as vscode.Webview
+    );
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.start.new',
+        requestId: 'start-post-fails-retry',
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      retryWebview as unknown as vscode.Webview
+    );
+    await waitForMessage(retryWebview, 'feedback.started', 'start-post-fails-retry');
+    expect(internals(provider).feedbackSessions.size).toBe(1);
+  });
+
   it('does not echo an oversized malformed request identifier', async () => {
     const provider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, SOURCE_TEXT);
