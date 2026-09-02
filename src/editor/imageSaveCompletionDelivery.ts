@@ -38,6 +38,8 @@ export interface ImageSaveCompletionDeliveryOptions {
   readonly retryDelayMs: number;
   /** Upper bound for exponential retry delay. */
   readonly maxRetryDelayMs: number;
+  /** Maximum number of delivery attempts before giving up. */
+  readonly maxAttempts: number;
   /** Optional deterministic timer implementation. */
   readonly timers?: ImageSaveCompletionDeliveryTimers;
 }
@@ -90,6 +92,9 @@ export class ImageSaveCompletionDelivery {
     }
     if (options.maxRetryDelayMs < options.retryDelayMs) {
       throw new RangeError('maxRetryDelayMs must be at least retryDelayMs');
+    }
+    if (!Number.isInteger(options.maxAttempts) || options.maxAttempts < 1) {
+      throw new RangeError('maxAttempts must be a positive integer');
     }
     this.timers = options.timers ?? defaultTimers;
   }
@@ -159,6 +164,11 @@ export class ImageSaveCompletionDelivery {
 
     this.activeAttemptToken = undefined;
     this.clearTimer();
+    if (this.attempts >= this.options.maxAttempts) {
+      this.dispose();
+      console.warn('[MD4H] Image-save completion delivery gave up after reaching the attempt cap.');
+      return;
+    }
     const exponent = Math.min(Math.max(this.attempts - 1, 0), 20);
     const retryDelay = Math.min(
       this.options.retryDelayMs * 2 ** exponent,

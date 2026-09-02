@@ -20,13 +20,14 @@ const completion: PendingImageSaveCompletion = {
   newSrc: './images/image-1.png',
 };
 
-function createDelivery(postMessage: jest.Mock) {
+function createDelivery(postMessage: jest.Mock, maxAttempts = 10) {
   return new ImageSaveCompletionDelivery({
     message: completion,
     postMessage,
     ackTimeoutMs: 20,
     retryDelayMs: 5,
     maxRetryDelayMs: 20,
+    maxAttempts,
   });
 }
 
@@ -109,5 +110,25 @@ describe('ImageSaveCompletionDelivery', () => {
     expect(delivery.acceptAcknowledgement(createPendingImageSaveCompletionAck(completion))).toBe(
       'ignored'
     );
+  });
+
+  it('gives up and stops retrying once maxAttempts is reached', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const postMessage = jest.fn().mockResolvedValue(false);
+    const delivery = createDelivery(postMessage, 2);
+
+    delivery.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(5);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(jest.getTimerCount()).toBe(0);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('[MD4H]');
+
+    warnSpy.mockRestore();
   });
 });

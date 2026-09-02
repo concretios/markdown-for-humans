@@ -723,6 +723,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   private static readonly IMAGE_SAVE_COMPLETION_ACK_TIMEOUT_MS = 1_000;
   private static readonly IMAGE_SAVE_COMPLETION_RETRY_DELAY_MS = 250;
   private static readonly IMAGE_SAVE_COMPLETION_MAX_RETRY_DELAY_MS = 4_000;
+  private static readonly IMAGE_SAVE_COMPLETION_MAX_ATTEMPTS = 10;
   private static readonly DOCUMENT_EDIT_ACK_HISTORY_LIMIT = 128;
   private static readonly FEEDBACK_SNAPSHOT_REPORT_TIMEOUT_MS = 2_000;
   /** Avoid whole-buffer WorkspaceEdits once their undo/diff cost becomes material. */
@@ -8231,6 +8232,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       ackTimeoutMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_ACK_TIMEOUT_MS,
       retryDelayMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_RETRY_DELAY_MS,
       maxRetryDelayMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_MAX_RETRY_DELAY_MS,
+      maxAttempts: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_MAX_ATTEMPTS,
     });
   }
 
