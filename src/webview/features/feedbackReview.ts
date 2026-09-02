@@ -476,7 +476,6 @@ type PendingFeedbackMutation =
   | {
       kind: 'delete';
       item: FeedbackItemSummary;
-      button: HTMLButtonElement;
     }
   | {
       kind: 'restore';
@@ -2556,6 +2555,14 @@ export function createFeedbackReviewController(options: {
         (left, right) =>
           left.startOrdinal - right.startOrdinal || compareFeedbackIds(left.id, right.id)
       );
+    const pendingDeleteIds = new Set(
+      Array.from(pendingMutations.values())
+        .filter(
+          (mutation): mutation is Extract<PendingFeedbackMutation, { kind: 'delete' }> =>
+            mutation.kind === 'delete'
+        )
+        .map(mutation => mutation.item.id)
+    );
     for (const item of ordered) {
       const card = createElement('article', 'feedback-comment-card');
       card.setAttribute('data-feedback-card', item.id);
@@ -2662,21 +2669,24 @@ export function createFeedbackReviewController(options: {
           capturePreview.append(unavailable);
         }
       }
+      const isPendingDelete = pendingDeleteIds.has(item.id);
       const edit = createElement('button', 'feedback-card-action', 'Edit');
       edit.type = 'button';
-      edit.disabled = !hasWritableSession();
+      edit.disabled = !hasWritableSession() || isPendingDelete;
       edit.setAttribute('data-feedback-edit-action', item.id);
       edit.addEventListener('click', () => {
         openFeedbackEdit(item);
       });
       const remove = createElement('button', 'feedback-card-action', 'Delete');
       remove.type = 'button';
-      remove.disabled = !hasWritableSession();
+      remove.disabled = !hasWritableSession() || isPendingDelete;
+      remove.setAttribute('data-feedback-delete-action', item.id);
       remove.addEventListener('click', () => {
         if (!hasWritableSession() || !session || remove.disabled) return;
         const requestId = nextRequestId();
         remove.disabled = true;
-        pendingMutations.set(requestId, { kind: 'delete', item, button: remove });
+        edit.disabled = true;
+        pendingMutations.set(requestId, { kind: 'delete', item });
         post({
           type: 'feedback.item.delete',
           requestId,
@@ -4273,6 +4283,7 @@ export function createFeedbackReviewController(options: {
       if (!session) return;
       session.items = [...items];
       const liveIds = new Set(items.map(item => item.id));
+      const draftWasDiscarded = editDraft !== null && !liveIds.has(editDraft.id);
       if (editDraft && !liveIds.has(editDraft.id)) {
         editDraft.surface.release();
         editDraft = null;
@@ -4333,7 +4344,11 @@ export function createFeedbackReviewController(options: {
           ?.querySelector<HTMLButtonElement>(`[data-feedback-undo-id="${focusUndoAfterRender}"]`)
           ?.focus({ preventScroll: true });
       }
-      announce(`${items.length} feedback ${items.length === 1 ? 'comment' : 'comments'} saved.`);
+      if (draftWasDiscarded) {
+        announce('The unsaved edit was discarded because that comment is no longer present.');
+      } else {
+        announce(`${items.length} feedback ${items.length === 1 ? 'comment' : 'comments'} saved.`);
+      }
     },
 
     openTextComposer(target) {
@@ -5333,8 +5348,15 @@ export function createFeedbackReviewController(options: {
               if (field && !invalidated) {
                 field.focus({ preventScroll: true });
               }
-            } else if (pending?.kind === 'delete' && pending.button.isConnected) {
-              pending.button.disabled = invalidated;
+            } else if (pending?.kind === 'delete') {
+              const liveEdit = panel?.querySelector<HTMLButtonElement>(
+                `[data-feedback-edit-action="${pending.item.id}"]`
+              );
+              const liveRemove = panel?.querySelector<HTMLButtonElement>(
+                `[data-feedback-delete-action="${pending.item.id}"]`
+              );
+              if (liveEdit) liveEdit.disabled = !hasWritableSession();
+              if (liveRemove) liveRemove.disabled = !hasWritableSession();
             } else if (pending?.kind === 'restore' && pending.button.isConnected) {
               pending.button.disabled = invalidated;
             }

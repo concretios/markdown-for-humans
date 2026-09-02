@@ -6094,6 +6094,212 @@ describe('Feedback review controller', () => {
     controller.deactivate();
   });
 
+  it('disables Edit while its sibling Delete is in flight', () => {
+    const editor = createEditorFixture();
+    const items = createSavedFeedbackItems(1);
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items,
+    });
+    document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+    const card = document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button');
+    const edit = Array.from(card).find(button => button.textContent === 'Edit')!;
+    const remove = Array.from(card).find(button => button.textContent === 'Delete')!;
+    expect(edit.disabled).toBe(false);
+
+    remove.click();
+
+    expect(edit.disabled).toBe(true);
+    expect(remove.disabled).toBe(true);
+    controller.deactivate();
+  });
+
+  it('re-enables Edit alongside Delete when the delete request fails', () => {
+    const editor = createEditorFixture();
+    const items = createSavedFeedbackItems(1);
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items,
+    });
+    document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+    const card = document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button');
+    const edit = Array.from(card).find(button => button.textContent === 'Edit')!;
+    const remove = Array.from(card).find(button => button.textContent === 'Delete')!;
+    remove.click();
+    const request = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.item.delete');
+
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: request.requestId,
+      sessionId: controller.getSession()!.sessionId,
+      message: 'Delete failed.',
+      recoverable: true,
+    });
+
+    expect(remove.disabled).toBe(false);
+    expect(edit.disabled).toBe(false);
+    controller.deactivate();
+  });
+
+  it('announces a specific message when an external update drops the item currently under edit', async () => {
+    const editor = createEditorFixture();
+    const items = createSavedFeedbackItems(2);
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items,
+    });
+    const firstMarker = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-marker]')
+    ).find(marker => marker.dataset.feedbackIds?.split(',').includes('F1'))!;
+    firstMarker.click();
+    document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F1"]')?.click();
+    expect(document.querySelector('[data-feedback-edit-input="F1"]')).not.toBeNull();
+
+    // Flush any announcements already queued by activation/edit so only
+    // writes triggered by the update below are recorded below.
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    // Record every non-empty value written to the live region, so the
+    // exclusivity assertion below cannot be fooled by an earlier
+    // announcement that gets overwritten before the timers flush.
+    const liveRegion = document.querySelector<HTMLElement>('.feedback-live-region')!;
+    const writes: string[] = [];
+    const descriptor = Object.getOwnPropertyDescriptor(Node.prototype, 'textContent')!;
+    Object.defineProperty(liveRegion, 'textContent', {
+      configurable: true,
+      get() {
+        return descriptor.get!.call(this);
+      },
+      set(value: string) {
+        if (value) writes.push(value);
+        descriptor.set!.call(this, value);
+      },
+    });
+
+    // An unrelated/external update (no pending mutation on this webview
+    // corresponds to this requestId) simply omits F1 from the source of
+    // truth, e.g. another collaborator or a host-driven prune.
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId: 'external-update',
+      sessionId: 'session-1',
+      items: [items[1]!],
+    });
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    Object.defineProperty(liveRegion, 'textContent', descriptor);
+
+    expect(writes).toEqual([
+      'The unsaved edit was discarded because that comment is no longer present.',
+    ]);
+    controller.deactivate();
+  });
+
+  it('keeps Edit disabled across a re-render while its sibling Delete is still pending', () => {
+    const editor = createEditorFixture();
+    const items = createSavedFeedbackItems(2);
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items,
+    });
+    const firstMarker = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-marker]')
+    ).find(marker => marker.dataset.feedbackIds?.split(',').includes('F1'))!;
+    firstMarker.click();
+    const remove = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+    ).find(button => button.textContent === 'Delete')!;
+    remove.click();
+
+    // An unrelated update for a different item forces renderCards() to rebuild
+    // every card's Edit/Delete buttons from scratch while the delete for F1 is
+    // still in flight.
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId: 'unrelated-request',
+      sessionId: 'session-1',
+      items,
+    });
+
+    const edit = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+    ).find(button => button.textContent === 'Edit')!;
+    const rebuiltRemove = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+    ).find(button => button.textContent === 'Delete')!;
+    expect(edit.disabled).toBe(true);
+    expect(rebuiltRemove.disabled).toBe(true);
+    controller.deactivate();
+  });
+
+  it('re-enables the currently mounted Edit and Delete buttons when a delete-error ack arrives after a re-render', () => {
+    const editor = createEditorFixture();
+    const items = createSavedFeedbackItems(2);
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items,
+    });
+    const firstMarker = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-marker]')
+    ).find(marker => marker.dataset.feedbackIds?.split(',').includes('F1'))!;
+    firstMarker.click();
+    const remove = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+    ).find(button => button.textContent === 'Delete')!;
+    remove.click();
+    const request = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.item.delete');
+
+    // An unrelated update forces renderCards() to rebuild every card's
+    // Edit/Delete buttons from scratch, detaching the button refs captured
+    // above, before the real delete request's error ack arrives.
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId: 'unrelated-request',
+      sessionId: 'session-1',
+      items,
+    });
+
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: request.requestId,
+      sessionId: 'session-1',
+      message: 'Delete failed.',
+      recoverable: true,
+    });
+
+    const liveEdit = document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F1"]')!;
+    const liveRemove = document.querySelector<HTMLButtonElement>(
+      '[data-feedback-delete-action="F1"]'
+    )!;
+    expect(liveEdit.disabled).toBe(false);
+    expect(liveRemove.disabled).toBe(false);
+    controller.deactivate();
+  });
+
   it('retains a failed inline edit for retry and lets Cancel restore the Edit control', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
