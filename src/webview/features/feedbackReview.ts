@@ -1714,9 +1714,21 @@ export function createFeedbackReviewController(options: {
     if (blockActionView?.contains(event.target instanceof Node ? event.target : null)) return;
     blockPointerSelecting = true;
     hideBlockAction();
+    try {
+      editorDom.setPointerCapture?.(event.pointerId);
+    } catch {
+      // A detached or synthetic pointer surface cannot own capture. The
+      // existing pointerup/pointercancel listeners still guarantee cleanup.
+    }
   };
 
   const handleBlockPointerUp = (): void => {
+    if (!blockPointerSelecting) return;
+    blockPointerSelecting = false;
+    scheduleSelectionSample();
+  };
+
+  const handleBlockWindowBlur = (): void => {
     if (!blockPointerSelecting) return;
     blockPointerSelecting = false;
     scheduleSelectionSample();
@@ -5456,6 +5468,7 @@ export function createFeedbackReviewController(options: {
     editorDom.addEventListener('pointerleave', handleBlockPointerLeave);
     document.addEventListener('pointerup', handleBlockPointerUp, true);
     document.addEventListener('pointercancel', handleBlockPointerUp, true);
+    window.addEventListener('blur', handleBlockWindowBlur);
     editorDom.addEventListener('beforeinput', guardMutation, true);
     editorDom.addEventListener('cut', guardMutation, true);
     editorDom.addEventListener('paste', guardMutation, true);
@@ -5481,6 +5494,7 @@ export function createFeedbackReviewController(options: {
     editorDom.removeEventListener('pointerleave', handleBlockPointerLeave);
     document.removeEventListener('pointerup', handleBlockPointerUp, true);
     document.removeEventListener('pointercancel', handleBlockPointerUp, true);
+    window.removeEventListener('blur', handleBlockWindowBlur);
     editorDom.removeEventListener('beforeinput', guardMutation, true);
     editorDom.removeEventListener('cut', guardMutation, true);
     editorDom.removeEventListener('paste', guardMutation, true);

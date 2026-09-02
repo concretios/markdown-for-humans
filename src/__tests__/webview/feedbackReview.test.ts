@@ -7687,6 +7687,100 @@ describe('Feedback review controller', () => {
     }
   });
 
+  it('captures the pointer on the editor surface when a block drag starts', async () => {
+    const editor = createEditorFixture();
+    const title = editor.view.dom.children[0] as HTMLElement;
+    const controller = createFeedbackReviewController({ editor, host });
+    if (!('setPointerCapture' in HTMLElement.prototype)) {
+      (
+        HTMLElement.prototype as { setPointerCapture?: (pointerId: number) => void }
+      ).setPointerCapture = () => {};
+    }
+    const setPointerCaptureSpy = jest
+      .spyOn(HTMLElement.prototype, 'setPointerCapture')
+      .mockImplementation(() => {});
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 1 }],
+        items: [],
+      });
+
+      const pointerDown = new MouseEvent('pointerdown', { bubbles: true });
+      Object.defineProperty(pointerDown, 'pointerId', { value: 17 });
+      title.dispatchEvent(pointerDown);
+
+      expect(setPointerCaptureSpy).toHaveBeenCalledWith(17);
+      expect(setPointerCaptureSpy.mock.instances[0]).toBe(editor.view.dom);
+    } finally {
+      controller.deactivate();
+      setPointerCaptureSpy.mockRestore();
+    }
+  });
+
+  it('resets the block drag state on a window blur so hover works normally afterward', async () => {
+    const editor = createEditorFixture();
+    const title = editor.view.dom.children[0] as HTMLElement;
+    const titleText = title.firstChild;
+    const controller = createFeedbackReviewController({ editor, host });
+    if (!('setPointerCapture' in HTMLElement.prototype)) {
+      (
+        HTMLElement.prototype as { setPointerCapture?: (pointerId: number) => void }
+      ).setPointerCapture = () => {};
+    }
+    const setPointerCaptureSpy = jest
+      .spyOn(HTMLElement.prototype, 'setPointerCapture')
+      .mockImplementation(() => {});
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: titleText,
+      focusNode: titleText,
+      anchorOffset: 2,
+      focusOffset: 2,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 1 }],
+        items: [],
+      });
+
+      dispatchFeedbackBlockHover(title);
+      await waitForFeedbackFrame();
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+      expect(action?.hidden).toBe(false);
+
+      const pointerDown = new MouseEvent('pointerdown', { bubbles: true });
+      Object.defineProperty(pointerDown, 'pointerId', { value: 21 });
+      title.dispatchEvent(pointerDown);
+      expect(action?.hidden).toBe(true);
+
+      // The pointer never reaches this document's pointerup/pointercancel
+      // listeners (e.g. released outside the rendered viewport); only a
+      // window blur signals that the drag ended.
+      window.dispatchEvent(new Event('blur'));
+
+      dispatchFeedbackBlockHover(title);
+      await waitForFeedbackFrame();
+
+      expect(action?.hidden).toBe(false);
+    } finally {
+      controller.deactivate();
+      setPointerCaptureSpy.mockRestore();
+      selectionSpy.mockRestore();
+    }
+  });
+
   it('hides the block action while the keyboard capture picker owns the draft gate', async () => {
     const editor = createEditorFixture();
     const title = editor.view.dom.children[0] as HTMLElement;
