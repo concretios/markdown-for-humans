@@ -403,23 +403,49 @@ function intersectingCaptureChildren(
       child instanceof HTMLElement && !child.matches(CAPTURE_CHROME_SELECTOR)
   );
   const readRectangle = cachedCaptureChildRectangleReader();
-  const candidateStart = firstPotentialCaptureChild(children, rectangle.top, readRectangle);
-  const candidateEnd = firstCaptureChildAfterCrop(
-    children,
-    rectangle.top + rectangle.height,
-    readRectangle
-  );
   const intersections: IntersectingCaptureChild[] = [];
-  for (let index = candidateStart; index < candidateEnd; index += 1) {
+  const testAndAddChild = (index: number): void => {
     throwIfFeedbackCaptureAborted(signal);
     const element = children[index];
     const bounds = readRectangle(element);
     if (rectanglesIntersect(rectangle, domRectangle(bounds))) {
-      intersections.push({ element, bounds });
-      if (intersections.length > MAX_CAPTURE_CLONE_NODES) {
+      // Checking the cap before pushing keeps `intersections` from ever
+      // transiently holding more than MAX_CAPTURE_CLONE_NODES entries. That
+      // invariant is by construction, not separately observable from outside
+      // this function, so the cap-boundary tests pin the success/failure
+      // counts rather than inspecting array length mid-loop.
+      if (intersections.length >= MAX_CAPTURE_CLONE_NODES) {
         throw captureComplexityError(`${MAX_CAPTURE_CLONE_NODES.toLocaleString()} rendered-node`);
       }
+      intersections.push({ element, bounds });
     }
+  };
+  if (children.length === 0) return intersections;
+  const firstBounds = readRectangle(children[0]);
+  const lastBounds = readRectangle(children[children.length - 1]);
+  // This only detects disorder between the first and last children. It cannot
+  // detect a single interior child whose measured position is anomalous while
+  // both endpoints remain correctly ordered relative to each other. Catching
+  // that would need every child's geometry read on every capture, defeating
+  // the O(log n) bound this binary search exists to provide (see
+  // feedbackCapture.test.ts's geometryReads <= 32 test for a 10,000-block
+  // document). This is a deliberate tradeoff, matching the same endpoint-only
+  // check already used by intersectingVerticalElements/
+  // intersectingHorizontalElements below.
+  const isMonotonic =
+    isUsableDomRectangle(firstBounds) &&
+    isUsableDomRectangle(lastBounds) &&
+    lastBounds.top >= firstBounds.top;
+  if (isMonotonic) {
+    const candidateStart = firstPotentialCaptureChild(children, rectangle.top, readRectangle);
+    const candidateEnd = firstCaptureChildAfterCrop(
+      children,
+      rectangle.top + rectangle.height,
+      readRectangle
+    );
+    for (let index = candidateStart; index < candidateEnd; index += 1) testAndAddChild(index);
+  } else {
+    for (let index = 0; index < children.length; index += 1) testAndAddChild(index);
   }
   return intersections;
 }

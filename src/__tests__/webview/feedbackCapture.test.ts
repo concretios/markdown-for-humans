@@ -219,6 +219,50 @@ describe('feedback capture geometry', () => {
     ]);
     expect(geometryReads).toBeLessThanOrEqual(32);
   });
+
+  it('falls back to a full scan when the first and last blocks are out of order', () => {
+    // e.g. the first top-level block was moved out of normal flow by a
+    // transform, so its measured top no longer precedes the last block's.
+    const blocks = [
+      captureBlock(0, domRect(0, 500, 300, 40)),
+      captureBlock(1, domRect(0, 0, 300, 40)),
+      captureBlock(2, domRect(0, -500, 300, 40)),
+      captureBlock(3, domRect(0, -1000, 300, 40)),
+    ];
+    const rectangle = captureRect(0, 10, 300, 20);
+
+    expect(findIntersectingTopLevelBlocks(rectangle, blocks)).toEqual([1]);
+  });
+
+  it('bounds geometry reads on the full-scan fallback triggered by an unusable first block', () => {
+    let geometryReads = 0;
+    const blockCount = 10_000;
+    const blocks = Array.from({ length: blockCount }, (_, index): CaptureBlock => {
+      // A zero-height first block makes the endpoint check unusable, which
+      // forces the same full-scan fallback as genuine first/last disorder.
+      const rectangle = index === 0 ? domRect(0, 0, 400, 0) : domRect(0, index * 24, 400, 20);
+      const element = document.createElement('section');
+      const renderedContent = document.createElement('img');
+      element.getBoundingClientRect = () => {
+        geometryReads += 1;
+        return rectangle;
+      };
+      renderedContent.getBoundingClientRect = () => {
+        geometryReads += 1;
+        return rectangle;
+      };
+      element.append(renderedContent);
+      return { index, element };
+    });
+
+    expect(findIntersectingTopLevelBlocks(captureRect(20, 120_005, 60, 55), blocks)).toEqual([
+      5000, 5001, 5002,
+    ]);
+    // Not a tight optimization requirement, just a regression guard: the
+    // fallback reads roughly one rectangle per block, so it should stay
+    // proportional to the block count rather than become unbounded.
+    expect(geometryReads).toBeLessThanOrEqual(blockCount * 2);
+  });
 });
 
 describe('visible-area rasterization boundary', () => {

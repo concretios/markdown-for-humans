@@ -525,6 +525,10 @@ function firstBlockAfterCropIndex(
  * text-range, and rendered-element intersections, so whitespace is never mapped
  * merely because it lies between the first and last candidate.
  *
+ * A transformed or absolutely-positioned block can break that top ordering. When
+ * the first and last blocks' measured rectangles show that, this falls back to
+ * scanning every block instead of trusting the binary-search-narrowed range.
+ *
  * @returns Sorted, unique block ordinals. Zero-area/unmeasured blocks are ignored.
  */
 export function findIntersectingTopLevelBlocks(
@@ -533,15 +537,10 @@ export function findIntersectingTopLevelBlocks(
 ): number[] {
   if (!isUsableRectangle(rectangle)) return [];
   const orderedBlocks = orderedCaptureBlocks(blocks);
+  if (orderedBlocks.length === 0) return [];
   const readRectangle = cachedBlockRectangleReader();
-  const candidateStart = firstPotentialBlockIndex(orderedBlocks, rectangle.top, readRectangle);
-  const candidateEnd = firstBlockAfterCropIndex(
-    orderedBlocks,
-    rectangle.top + rectangle.height,
-    readRectangle
-  );
   const indices = new Set<number>();
-  for (let index = candidateStart; index < candidateEnd; index += 1) {
+  const testAndAddBlock = (index: number): void => {
     const block = orderedBlocks[index];
     const blockRectangle = readRectangle(block);
     if (
@@ -550,6 +549,32 @@ export function findIntersectingTopLevelBlocks(
     ) {
       indices.add(block.index);
     }
+  };
+  const firstBounds = readRectangle(orderedBlocks[0]);
+  const lastBounds = readRectangle(orderedBlocks[orderedBlocks.length - 1]);
+  // This only detects disorder between the first and last blocks. It cannot
+  // detect a single interior block whose measured position is anomalous while
+  // both endpoints remain correctly ordered relative to each other. Catching
+  // that would need every block's geometry read on every capture, defeating
+  // the O(log n) bound this binary search exists to provide (see the
+  // geometryReads <= 32 test above for a 10,000-block document). This is a
+  // deliberate tradeoff, matching the same endpoint-only check already used
+  // by intersectingVerticalElements/intersectingHorizontalElements in
+  // feedbackDomCapture.ts.
+  const isMonotonic =
+    isUsableRectangle(firstBounds) &&
+    isUsableRectangle(lastBounds) &&
+    lastBounds.top >= firstBounds.top;
+  if (isMonotonic) {
+    const candidateStart = firstPotentialBlockIndex(orderedBlocks, rectangle.top, readRectangle);
+    const candidateEnd = firstBlockAfterCropIndex(
+      orderedBlocks,
+      rectangle.top + rectangle.height,
+      readRectangle
+    );
+    for (let index = candidateStart; index < candidateEnd; index += 1) testAndAddBlock(index);
+  } else {
+    for (let index = 0; index < orderedBlocks.length; index += 1) testAndAddBlock(index);
   }
   return Array.from(indices).sort((first, second) => first - second);
 }

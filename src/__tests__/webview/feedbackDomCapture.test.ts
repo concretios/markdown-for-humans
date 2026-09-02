@@ -72,6 +72,42 @@ describe('modern-screenshot feedback rasterizer', () => {
     expect(document.querySelector('[data-feedback-capture-stage]')).toBeNull();
   });
 
+  it('falls back to a full scan when the first and last top-level children are out of order', async () => {
+    // e.g. the first top-level child was moved out of normal flow by a
+    // transform, so its measured top no longer precedes the last child's.
+    document.body.innerHTML =
+      '<div id="root"><div>first</div><div>target</div><div>decoy-one</div><div>decoy-two</div></div>';
+    const root = document.getElementById('root') as HTMLElement;
+    Object.defineProperty(root, 'getBoundingClientRect', {
+      value: () => rect(0, -1000, 300, 1540),
+    });
+    const [first, target, decoyOne, decoyTwo] = Array.from(root.children) as HTMLElement[];
+    Object.defineProperty(first, 'getBoundingClientRect', { value: () => rect(0, 500, 300, 40) });
+    Object.defineProperty(target, 'getBoundingClientRect', { value: () => rect(0, 0, 300, 40) });
+    Object.defineProperty(decoyOne, 'getBoundingClientRect', {
+      value: () => rect(0, -500, 300, 40),
+    });
+    Object.defineProperty(decoyTwo, 'getBoundingClientRect', {
+      value: () => rect(0, -1000, 300, 40),
+    });
+
+    const screenshot = jest.fn(async (node: Node) => {
+      const stage = node as HTMLElement;
+      const captured = stage.querySelectorAll<HTMLElement>('[data-feedback-captured-block]');
+      expect(captured).toHaveLength(1);
+      expect(captured[0].textContent).toBe('target');
+      return 'data:image/png;base64,AAAA';
+    });
+
+    await createModernScreenshotRasterizer(screenshot)({
+      root,
+      rectangle: { left: 0, top: 10, width: 300, height: 20 },
+      scale: 1,
+    });
+
+    expect(screenshot).toHaveBeenCalledTimes(1);
+  });
+
   it('bounds layout reads when staging a tiny crop from 10,000 ordered blocks', async () => {
     const root = document.createElement('div');
     root.id = 'root';
@@ -753,6 +789,64 @@ describe('modern-screenshot feedback rasterizer', () => {
     });
     expect(screenshot).not.toHaveBeenCalled();
     expect(document.querySelector('[data-feedback-capture-stage]')).toBeNull();
+  });
+
+  // Matches MAX_CAPTURE_CLONE_NODES in feedbackDomCapture.ts.
+  const NODE_CEILING = 4_096;
+
+  function rootWithIntersectingTopLevelChildren(count: number): HTMLElement {
+    const root = document.createElement('div');
+    const fragment = document.createDocumentFragment();
+    for (let index = 0; index < count; index += 1) {
+      const child = document.createElement('span');
+      Object.defineProperty(child, 'getBoundingClientRect', { value: () => rect(0, 0, 10, 10) });
+      fragment.append(child);
+    }
+    root.append(fragment);
+    document.body.append(root);
+    Object.defineProperty(root, 'getBoundingClientRect', { value: () => rect(0, 0, 600, 100) });
+    return root;
+  }
+
+  it('captures exactly the node ceiling of intersecting top-level children with no throw', async () => {
+    // This succeeds at exactly NODE_CEILING children because two independent
+    // budgets happen to share the same value here: intersectingCaptureChildren's
+    // own MAX_CAPTURE_CLONE_NODES cap, and the unrelated nested clone-node
+    // budget consumeCaptureCloneNode enforces while building the stage (one
+    // node consumed per childless span cloned). A future change to either
+    // budget's value on its own could break this test for a reason unrelated
+    // to what it is named for.
+    const root = rootWithIntersectingTopLevelChildren(NODE_CEILING);
+    const screenshot = jest.fn(async () => 'data:image/png;base64,AAAA');
+
+    await expect(
+      createModernScreenshotRasterizer(screenshot)({
+        root,
+        rectangle: { left: 0, top: 0, width: 300, height: 80 },
+        scale: 1,
+      })
+    ).resolves.toMatchObject({ dataUrl: 'data:image/png;base64,AAAA' });
+    expect(screenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws before cloning when intersecting top-level children exceed the node ceiling by one', async () => {
+    // Same coincidental-budget caveat as the success case above: this throws
+    // from intersectingCaptureChildren's own cap before cloning ever starts,
+    // not from consumeCaptureCloneNode's separate, same-valued budget.
+    const root = rootWithIntersectingTopLevelChildren(NODE_CEILING + 1);
+    const screenshot = jest.fn(async () => 'data:image/png;base64,AAAA');
+
+    await expect(
+      createModernScreenshotRasterizer(screenshot)({
+        root,
+        rectangle: { left: 0, top: 0, width: 300, height: 80 },
+        scale: 1,
+      })
+    ).rejects.toMatchObject({
+      code: 'MD4H-FB-CAPTURE-002',
+      message: expect.stringMatching(/rendered-node.*limit/i),
+    });
+    expect(screenshot).not.toHaveBeenCalled();
   });
 
   it('bounds resource inspection inside an otherwise cloneable staged block', async () => {
