@@ -6,7 +6,17 @@
  */
 
 import { createHash } from 'crypto';
-import { mkdir, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+  truncate,
+  writeFile,
+} from 'fs/promises';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { deflateSync } from 'zlib';
@@ -450,6 +460,154 @@ describe('FeedbackSessionStore v2 persistence', () => {
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
+  });
+
+  it('does not re-decode an unrelated corrupted screenshot when updating a text item', async () => {
+    const store = await createV2('im04');
+    await store.addScreenshotFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Clarify this captured region.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+      target: {
+        version: 2,
+        requestedScope: 'visual-region',
+        effectiveScope: 'visual-region',
+        resolution: 'exact',
+        blockSpan: paragraphSpan(1, 'First paragraph.'),
+      },
+      sourceReference: {
+        relationship: 'containing-blocks',
+        format: 'markdown',
+        normalization: 'lf',
+        sourceSliceSha256: sha256('First paragraph.'),
+      },
+    });
+    await store.addTextFeedbackV2(addBlockInput('Second paragraph.', 5, 2, 'Note this too.'));
+
+    const assetPath = path.join(store.bundleDirectory, 'assets', 'F1.png');
+    await writeFile(assetPath, 'corrupt');
+
+    await expect(store.updateFeedbackV2('F2', 'Note this instead.')).resolves.toMatchObject({
+      id: 'F2',
+      feedback: 'Note this instead.',
+    });
+  });
+
+  // Note: this pins the skipUnchanged short-circuit in validateScreenshotAssetsForItems
+  // (the corrupted, non-target screenshot is never re-decoded). It does not, by itself,
+  // distinguish passing existingItems vs. nextItems at this call site: F2 is a text item,
+  // so both lists skip it via the `item.kind !== 'screenshot'` filter, and F1 is skipped
+  // in both lists by skipUnchanged regardless of which list is passed. The
+  // existingItems vs. nextItems distinction is pinned separately below, by
+  // "lets a delete succeed when unrelated screenshots already occupy the full 64 MiB quota".
+  it('deletes an unrelated item even when a non-target screenshot is corrupted on disk', async () => {
+    const store = await createV2('im05');
+    await store.addScreenshotFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Clarify this captured region.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+      target: {
+        version: 2,
+        requestedScope: 'visual-region',
+        effectiveScope: 'visual-region',
+        resolution: 'exact',
+        blockSpan: paragraphSpan(1, 'First paragraph.'),
+      },
+      sourceReference: {
+        relationship: 'containing-blocks',
+        format: 'markdown',
+        normalization: 'lf',
+        sourceSliceSha256: sha256('First paragraph.'),
+      },
+    });
+    await store.addTextFeedbackV2(addBlockInput('Second paragraph.', 5, 2, 'Note this too.'));
+
+    const assetPath = path.join(store.bundleDirectory, 'assets', 'F1.png');
+    await writeFile(assetPath, 'corrupt');
+
+    await expect(store.deleteFeedbackV2('F2')).resolves.toMatchObject({ id: 'F2' });
+    expect(store.items).toEqual([expect.objectContaining({ id: 'F1' })]);
+  });
+
+  it('rejects deleting a v2 screenshot item whose own asset is corrupted on disk', async () => {
+    const store = await createV2('im06');
+    await store.addScreenshotFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Clarify this captured region.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+      target: {
+        version: 2,
+        requestedScope: 'visual-region',
+        effectiveScope: 'visual-region',
+        resolution: 'exact',
+        blockSpan: paragraphSpan(1, 'First paragraph.'),
+      },
+      sourceReference: {
+        relationship: 'containing-blocks',
+        format: 'markdown',
+        normalization: 'lf',
+        sourceSliceSha256: sha256('First paragraph.'),
+      },
+    });
+
+    const assetPath = path.join(store.bundleDirectory, 'assets', 'F1.png');
+    await writeFile(assetPath, 'corrupt');
+
+    await expect(store.deleteFeedbackV2('F1')).rejects.toThrow(/PNG signature/i);
+    expect(store.items).toEqual([expect.objectContaining({ id: 'F1' })]);
+  });
+
+  it('lets a delete succeed when unrelated screenshots already occupy the full 64 MiB quota', async () => {
+    const store = await createV2('im08');
+    const visualTarget = {
+      version: 2,
+      requestedScope: 'visual-region',
+      effectiveScope: 'visual-region',
+      resolution: 'exact',
+      blockSpan: paragraphSpan(1, 'First paragraph.'),
+    } as const;
+    const visualSourceReference = {
+      relationship: 'containing-blocks',
+      format: 'markdown',
+      normalization: 'lf',
+      sourceSliceSha256: sha256('First paragraph.'),
+    } as const;
+
+    const target = await store.addScreenshotFeedbackV2({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Delete me while the quota is maxed out.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+      target: visualTarget,
+      sourceReference: visualSourceReference,
+    });
+
+    const unrelated: Array<Awaited<ReturnType<typeof store.addScreenshotFeedbackV2>>> = [];
+    for (let index = 0; index < 7; index += 1) {
+      unrelated.push(
+        await store.addScreenshotFeedbackV2({
+          startLine: 3,
+          endLine: 3,
+          feedback: `Unrelated evidence ${index + 1}.`,
+          pngData: ONE_PIXEL_PNG_BASE64,
+          target: visualTarget,
+          sourceReference: visualSourceReference,
+        })
+      );
+    }
+
+    // Pad the unrelated assets (after adding, so each add's own quota check
+    // and full re-verify see the real small PNGs) to exactly 64 MiB total:
+    // six at the 10 MiB per-file cap plus one at 4 MiB.
+    for (const [index, item] of unrelated.entries()) {
+      const assetPath = path.join(store.bundleDirectory, item.assetRelativePath);
+      await truncate(assetPath, index < 6 ? 10 * 1024 * 1024 : 4 * 1024 * 1024);
+    }
+
+    await expect(store.deleteFeedbackV2(target.id)).resolves.toMatchObject({ id: target.id });
   });
 
   it('atomically replaces a v2 screenshot and rolls back both files when the guard rejects', async () => {

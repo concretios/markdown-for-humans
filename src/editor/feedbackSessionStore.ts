@@ -1924,7 +1924,7 @@ export class FeedbackSessionStore {
           nextItems,
           this._nextSequence,
           options.beforeCommit,
-          () => this.validateScreenshotAssetsForItems(nextItems)
+          () => this.validateScreenshotAssetsForItems(nextItems, undefined, true)
         );
         this._snapshot = nextSnapshot;
         this._items = nextItems;
@@ -2048,7 +2048,7 @@ export class FeedbackSessionStore {
           nextItems,
           this._nextSequence,
           options.beforeCommit,
-          () => this.validateScreenshotAssetsForItems(existingItems)
+          () => this.validateScreenshotAssetsForItems(nextItems, undefined, true)
         );
         this._snapshot = nextSnapshot;
         this._items = nextItems;
@@ -2722,12 +2722,47 @@ export class FeedbackSessionStore {
 
   private async validateScreenshotAssetsForItems(
     items: readonly FeedbackStoredItem[],
-    excludedTombstoneId?: string
+    excludedTombstoneId?: string,
+    // "Unchanged" means the item record's metadata matches what was already validated
+    // when it was written, not a fresh disk re-verification. This is a performance
+    // tradeoff for updateFeedbackV2/deleteFeedbackV2, which mutate one unrelated item
+    // and would otherwise re-decode every other screenshot on disk. addTextFeedbackV2,
+    // replaceScreenshotFeedbackV2, restoreFeedbackV2, and seal intentionally do not pass
+    // skipUnchanged, so they always fully re-verify against disk (addScreenshotFeedbackV2
+    // never calls this function at all; it validates only its own new candidate item).
+    skipUnchanged = false
   ): Promise<void> {
     await this.validateScreenshotAssetQuota(items, 0, excludedTombstoneId);
     for (const item of items) {
-      if (item.kind === 'screenshot') await this.validateScreenshotAsset(item);
+      if (item.kind !== 'screenshot') continue;
+      if (skipUnchanged) {
+        const previousItem = this._items.find(existing => existing.id === item.id);
+        if (
+          previousItem !== undefined &&
+          previousItem.kind === 'screenshot' &&
+          isFeedbackItemV2(previousItem) &&
+          isFeedbackItemV2(item) &&
+          this.isScreenshotAssetUnchanged(previousItem, item)
+        ) {
+          continue;
+        }
+      }
+      await this.validateScreenshotAsset(item);
     }
+  }
+
+  // Only called with skipUnchanged=true from updateFeedbackV2/deleteFeedbackV2, whose
+  // nextItems are always canonicalized v2 items, so both arguments are v2 screenshot items.
+  private isScreenshotAssetUnchanged(
+    previous: FeedbackScreenshotItemV2,
+    next: FeedbackScreenshotItemV2
+  ): boolean {
+    return (
+      previous.assetRelativePath === next.assetRelativePath &&
+      previous.assetSha256 === next.assetSha256 &&
+      previous.width === next.width &&
+      previous.height === next.height
+    );
   }
 
   private async readValidatedScreenshotItemBytes(
