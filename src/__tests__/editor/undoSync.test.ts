@@ -1208,6 +1208,86 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(edit?.replaces?.[0]?.text).not.toMatch(/base64|md4h-pending-image/);
   });
 
+  it('never calls vscode.workspace.applyEdit for a renderer edit cancelled while active', async () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    const document = createDocument('base\n', 'file://cancelled-active-edit.md');
+    const webview = { postMessage: jest.fn(async () => true) };
+    const internal = provider as unknown as {
+      handleWebviewMessage: (
+        message: { type: string; [key: string]: unknown },
+        doc: vscode.TextDocument,
+        source: vscode.Webview
+      ) => void;
+      trackPendingImageSave: (
+        message: { type: string; [key: string]: unknown },
+        doc: vscode.TextDocument,
+        source: vscode.Webview
+      ) => void;
+      persistImage: jest.Mock<Promise<{ kind: 'saved'; destination: string }>>;
+      documentEditCoordinator: import('../../editor/documentEditCoordinator').DocumentEditCoordinator<string>;
+    };
+    let resolvePersistence: ((result: { kind: 'saved'; destination: string }) => void) | undefined;
+    internal.persistImage = jest.fn(
+      () =>
+        new Promise(resolve => {
+          resolvePersistence = resolve;
+        })
+    );
+
+    internal.handleWebviewMessage(
+      {
+        type: 'ready',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        viewGeneration: 'cancelled-active-view',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    internal.trackPendingImageSave(
+      {
+        type: 'saveImage',
+        protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+        viewGeneration: 'cancelled-active-view',
+        placeholderId: 'img-cancel',
+        name: 'saved.png',
+        data: new Uint8Array([1, 2, 3]),
+        mimeType: 'image/png',
+        targetFolder: 'images',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    internal.handleWebviewMessage(
+      {
+        type: 'edit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        editId: 'cancelled-active-view:1:1',
+        viewGeneration: 'cancelled-active-view',
+        localRevision: 1,
+        baseDocumentVersion: 1,
+        content: '![Pending](md4h-pending-image:img-cancel)',
+        editReason: 'typing',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    // Let the coordinator dequeue the entry and start executing it: it
+    // becomes the *active* entry and suspends inside applyEditNow, awaiting
+    // the still-unresolved image persistence promise mocked above.
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    // Cancel while the entry is active (not merely pending) — the coordinator
+    // cannot splice an active entry out of the queue, so the only thing that
+    // can stop it from reaching vscode.workspace.applyEdit is applyEditNow's
+    // own `options.signal.aborted` guard.
+    internal.documentEditCoordinator.cancel(document.uri.toString());
+    resolvePersistence?.({ kind: 'saved', destination: './images/saved.png' });
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    expect(workspace.applyEdit).not.toHaveBeenCalled();
+  });
+
   it('retains pending image bytes densely, then releases them after a successful save', async () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('base\n', 'file://pending-image-memory.md');

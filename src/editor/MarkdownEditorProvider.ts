@@ -79,7 +79,10 @@ import {
   type FeedbackTextItemV2,
   type FeedbackVisualSourceReferenceV2,
 } from '../shared/feedbackEvidenceV2';
-import { DocumentEditCoordinator } from './documentEditCoordinator';
+import {
+  DocumentEditCoordinator,
+  type DocumentEditExecutionContext,
+} from './documentEditCoordinator';
 import {
   FeedbackSnapshotService,
   computeFeedbackTextSha256,
@@ -10518,7 +10521,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return this.documentEditCoordinator
       .enqueue(documentKey, {
         kind: 'operation',
-        execute: async () => {
+        execute: async context => {
           const predecessorAck = await predecessor;
           if (
             !predecessorAck.accepted ||
@@ -10533,6 +10536,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
             editReason: 'typing',
             sourceWebview: webview,
             pendingImageViewGeneration: edit.viewGeneration,
+            signal: context.signal,
           });
         },
       })
@@ -10729,7 +10733,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
             baseDocumentVersion: options.baseDocumentVersion ?? this.getDocumentVersion(document),
           }
         : options;
-    const execute = (): Promise<boolean> => this.applyEditNow(content, document, executionOptions);
+    const execute = (context: DocumentEditExecutionContext<string>): Promise<boolean> =>
+      this.applyEditNow(content, document, { ...executionOptions, signal: context.signal });
     const result =
       options?.editReason === 'typing'
         ? await this.documentEditCoordinator.enqueue(documentKey, {
@@ -10763,6 +10768,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       baseDocumentVersion?: number;
       localRevision?: number;
       pendingImageViewGeneration?: string;
+      signal?: AbortSignal;
     }
   ): Promise<boolean> {
     // Authorization at message receipt is insufficient because this work may
@@ -10846,6 +10852,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       }
       return true;
     }
+
+    if (options?.signal?.aborted) return false;
 
     // Mark this edit to prevent feedback loop
     const docUri = document.uri.toString();

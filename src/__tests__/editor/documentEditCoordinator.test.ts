@@ -488,6 +488,29 @@ describe('DocumentEditCoordinator', () => {
     });
   });
 
+  it('never invokes a mutating call whose entry is cancelled while awaiting a microtask', async () => {
+    const coordinator = new DocumentEditCoordinator<string>();
+    const mutate = jest.fn();
+    const startedExecuting = deferred<void>();
+
+    const active = coordinator.enqueue('file:///document.md', {
+      kind: 'operation',
+      execute: async context => {
+        startedExecuting.resolve();
+        await nextMicrotask();
+        if (context.signal.aborted) return 'cancelled-before-mutate';
+        mutate();
+        return 'mutated';
+      },
+    });
+
+    await startedExecuting.promise;
+    coordinator.cancel('file:///document.md', new Error('document invalidated'));
+
+    await expect(active).resolves.toMatchObject({ status: 'cancelled' });
+    expect(mutate).not.toHaveBeenCalled();
+  });
+
   it('disposes all queues, aborts active work, and declines later requests', async () => {
     const coordinator = new DocumentEditCoordinator<string>();
     const activeStarted = deferred<DocumentEditExecutionContext<string>>();
