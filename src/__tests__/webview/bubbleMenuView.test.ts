@@ -384,6 +384,20 @@ describe('BubbleMenuView', () => {
       );
     });
 
+    it('disables finish while a comment composer or edit draft is open', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      setFeedbackToolbarState({ active: true, commentsLocked: true });
+
+      let finish = toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement;
+      expect(finish.disabled).toBe(true);
+      expect(finish.getAttribute('aria-disabled')).toBe('true');
+
+      setFeedbackToolbarState({ active: true, commentsLocked: false });
+      finish = toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement;
+      expect(finish.disabled).toBe(false);
+    });
+
     it('marks Start feedback disabled and busy while a session is starting', () => {
       const editor = createMockEditor();
       const toolbar = createFormattingToolbar(editor);

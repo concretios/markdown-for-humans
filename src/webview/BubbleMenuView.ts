@@ -1096,7 +1096,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
         eventName: 'feedbackFinishRequested',
         icon: { name: 'check', fallback: '✓' },
         dataName: 'finish',
-        disabled: invalidated || closing || captureState !== 'idle',
+        disabled:
+          invalidated || closing || captureState !== 'idle' || Boolean(state.commentsLocked),
       }),
       createFeedbackAction({
         label: captureArmed
