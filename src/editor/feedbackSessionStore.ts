@@ -3771,7 +3771,36 @@ function isStrictBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  return /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value);
+  // A regex built from a repeated multi-character group (e.g. `(?:...){4})*`)
+  // makes V8 recurse once per repetition, which stack-overflows on inputs
+  // well within the legal 10 MiB screenshot cap once base64-encoded. Flat
+  // single-character-class quantifiers below are a linear scan instead, so
+  // they don't recurse regardless of input length.
+  //
+  // '=' padding, if present, is only legal as a 1- or 2-character suffix.
+  // Given the length % 4 === 0 check above, stripping 0/1/2 trailing '='
+  // characters always leaves a body whose length is respectively a multiple
+  // of 4, or 3, or 2 more than a multiple of 4 -- exactly the group shapes
+  // the original grouped-quantifier regex required, so no separate alignment
+  // check is needed here.
+  //
+  // The trailing '=' count is found with a plain backward scan rather than
+  // a `/=*$/` regex: that pattern is a greedy star anchored at the end of
+  // the string, so on adversarial input where a long run of '=' sits away
+  // from the end (e.g. a huge block of '=' followed by valid base64
+  // characters), V8 backtracks the star once per starting position -- an
+  // O(n^2) scan. A backward loop counts the trailing run in time
+  // proportional to its own length, so it stays linear even on that input.
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '=') {
+    end -= 1;
+  }
+  const padding = value.length - end;
+  if (padding > 2) {
+    return false;
+  }
+  const body = value.slice(0, end);
+  return /^[A-Za-z0-9+/]*$/.test(body);
 }
 
 function formatRenderedTargetSummary(

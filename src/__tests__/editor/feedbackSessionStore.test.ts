@@ -30,6 +30,7 @@ import {
   decodeAndValidateFeedbackPng,
   renderFeedbackReport,
 } from '../../editor/feedbackSessionStore';
+import { FEEDBACK_MAX_SCREENSHOT_BYTES_V2 } from '../../shared/feedbackEvidenceV2';
 
 const ONE_PIXEL_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
@@ -166,10 +167,7 @@ function makeRgbaPng(
 
 // A real, decodable multi-megabyte PNG (grayscale, level-0 "store"
 // compression) so quota-eviction tests can exercise code paths that fully
-// re-validate every screenshot on disk, not just its file size. Kept under
-// ~3 MiB raw wherever it is passed as a base64 string through the public
-// add/replace APIs: Node's regex engine (isStrictBase64) stack-overflows on
-// base64 strings much longer than that, independent of this fix.
+// re-validate every screenshot on disk, not just its file size.
 function makeLargeGrayscalePng(approximateBytes: number): {
   bytes: Buffer;
   width: number;
@@ -471,6 +469,55 @@ describe('decodeAndValidateFeedbackPng', () => {
     ).toThrow('PNG data URL');
     expect(() => decodeAndValidateFeedbackPng('this is not base64')).toThrow('valid base64');
     expect(() => decodeAndValidateFeedbackPng(Buffer.from('not a png'))).toThrow('PNG signature');
+  });
+
+  it('rejects malformed base64: wrong length, invalid characters, and misplaced or excess padding', () => {
+    // Not a multiple of 4, otherwise all valid characters.
+    expect(() => decodeAndValidateFeedbackPng('ABCDE')).toThrow('valid base64');
+    // An invalid character in an otherwise correctly sized string.
+    expect(() => decodeAndValidateFeedbackPng('AB!D')).toThrow('valid base64');
+    // '=' padding present but not confined to the trailing run.
+    expect(() => decodeAndValidateFeedbackPng('A=BC')).toThrow('valid base64');
+    expect(() => decodeAndValidateFeedbackPng('AB=C')).toThrow('valid base64');
+    // Three trailing '=' characters exceed the legal 1- or 2-character padding.
+    expect(() => decodeAndValidateFeedbackPng('A===')).toThrow('valid base64');
+    // A padding-only final group: no valid characters precede the padding at all.
+    expect(() => decodeAndValidateFeedbackPng('====')).toThrow('valid base64');
+    // Empty string: fails the length check before any padding/body logic runs.
+    expect(() => decodeAndValidateFeedbackPng('')).toThrow('valid base64');
+    // A lone '=' with no preceding valid characters: not a multiple of 4.
+    expect(() => decodeAndValidateFeedbackPng('=')).toThrow('valid base64');
+  });
+
+  it('accepts correctly padded base64 at the base64-validation layer', () => {
+    // 'ABC=' (1-character padding) and 'AB==' (2-character padding) are both
+    // legal base64, but decode to too few bytes to be a PNG. They must fail
+    // on the PNG-signature check rather than the base64 check, which proves
+    // isStrictBase64 itself accepted them.
+    expect(() => decodeAndValidateFeedbackPng('ABC=')).toThrow('PNG signature');
+    expect(() => decodeAndValidateFeedbackPng('AB==')).toThrow('PNG signature');
+  });
+
+  it('validates a base64 string well past the old ~3.5 MiB stack-overflow threshold without throwing', () => {
+    // Target the real 10 MiB screenshot cap, minus a small margin for the PNG
+    // container bytes (signature, chunk headers/CRCs) and the deflate
+    // "store" block framing makeLargeGrayscalePng's compression adds on top
+    // of the raw pixel bytes, so the encoded PNG lands at the real legal
+    // boundary rather than merely close to it.
+    const CONTAINER_OVERHEAD_MARGIN_BYTES = 4096;
+    const targetRawBytes = FEEDBACK_MAX_SCREENSHOT_BYTES_V2 - CONTAINER_OVERHEAD_MARGIN_BYTES;
+    const png = makeLargeGrayscalePng(targetRawBytes);
+    const base64 = png.bytes.toString('base64');
+    expect(png.bytes.byteLength).toBeLessThanOrEqual(FEEDBACK_MAX_SCREENSHOT_BYTES_V2);
+    expect(base64.length).toBeGreaterThan(
+      Math.ceil(FEEDBACK_MAX_SCREENSHOT_BYTES_V2 / 3) * 4 * 0.99
+    );
+
+    const validated = decodeAndValidateFeedbackPng(base64);
+
+    expect(validated.width).toBe(png.width);
+    expect(validated.height).toBe(png.height);
+    expect(validated.bytes.equals(png.bytes)).toBe(true);
   });
 
   it('rejects incomplete, truncated, CRC-invalid, and trailing PNG structures', () => {
@@ -2987,9 +3034,7 @@ describe('FeedbackSessionStore', () => {
       SCREENSHOT_QUOTA_BYTES
     );
 
-    // Growing the replaced screenshot to ~2 MiB (kept well under the ~3 MiB
-    // base64 string length Node's regex engine can validate without
-    // stack-overflowing, unrelated to this fix) pushes active bytes past
+    // Growing the replaced screenshot to ~2 MiB pushes active bytes past
     // 49 MiB. The full 16 MiB of tombstones would then push combined
     // resident bytes over the 64 MiB ceiling unless the eviction this
     // replace computes is actually applied after the commit succeeds.
@@ -3065,10 +3110,7 @@ describe('FeedbackSessionStore', () => {
     // host-validated target/evidence shape. `replaceScreenshotFeedbackV2`
     // fully re-validates every screenshot's real bytes on disk (not just its
     // file size), so these must be genuinely decodable PNGs, unlike the v1
-    // quota tests elsewhere in this file. They are written directly rather
-    // than through `addScreenshotFeedbackV2` because that public API takes
-    // the PNG as a base64 *string*, and Node's regex engine stack-overflows
-    // validating base64 strings much above ~3 MiB, independent of this fix.
+    // quota tests elsewhere in this file.
     const fillerBytesTarget = 9.5 * 1024 * 1024;
     const fillerItems: (typeof targetItem)[] = [];
     for (let index = 0; index < 5; index += 1) {
@@ -3115,9 +3157,7 @@ describe('FeedbackSessionStore', () => {
       SCREENSHOT_QUOTA_BYTES
     );
 
-    // Grow the replaced screenshot to ~2 MiB (kept well under the ~3 MiB
-    // base64 string length Node's regex engine can validate without
-    // stack-overflowing, unrelated to this fix). Active bytes alone (~49.5
+    // Grow the replaced screenshot to ~2 MiB. Active bytes alone (~49.5
     // MiB) plus the fully resident 16 MiB of tombstones would then exceed
     // the 64 MiB ceiling unless the eviction this replace computes is
     // actually applied after the commit succeeds (the bug this test guards
