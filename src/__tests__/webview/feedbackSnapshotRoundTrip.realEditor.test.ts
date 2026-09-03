@@ -120,4 +120,65 @@ describe('Feedback snapshot renderer round-trip', () => {
     expect(buildFeedbackAnchorMap(source, blocks)).toEqual(expect.objectContaining({ ok: true }));
     editor.destroy();
   });
+
+  it('does not HTML-escape a literal ampersand in prose text', () => {
+    const source = [
+      '# AGENTS.md',
+      '',
+      '## Personality & Communication Protocol',
+      '',
+      'Terms & Conditions apply to Q&A sessions for R&D and AT&T alike.',
+      '',
+    ].join('\n');
+    const editor = createFeedbackSnapshotEditor(source);
+
+    const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+
+    expect(serialized).toContain('## Personality & Communication Protocol');
+    expect(serialized).toContain(
+      'Terms & Conditions apply to Q&A sessions for R&D and AT&T alike.'
+    );
+    expect(serialized).not.toContain('&amp;');
+    editor.destroy();
+  });
+
+  it('leaves a literal "&amp;" written inside a code span untouched', () => {
+    const source = ['Use `&amp;` for a literal ampersand entity.', ''].join('\n');
+    const editor = createFeedbackSnapshotEditor(source);
+
+    const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+
+    expect(serialized).toContain('`&amp;`');
+    editor.destroy();
+  });
+
+  it('does not turn a bare GFM autolink into an explicit Markdown link', () => {
+    const source = [
+      'Instances may be reported to the community leaders responsible for',
+      'enforcement at support@concret.io. All complaints will be reviewed.',
+      '',
+      'See https://example.com or www.example.com for details.',
+      '',
+    ].join('\n');
+    const editor = createFeedbackSnapshotEditor(source);
+
+    const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+
+    expect(serialized).toContain('enforcement at support@concret.io. All complaints');
+    expect(serialized).toContain('See https://example.com or www.example.com for details.');
+    expect(serialized).not.toContain('[support@concret.io]');
+    expect(serialized).not.toContain('[https://example.com]');
+    expect(serialized).not.toContain('[www.example.com]');
+    editor.destroy();
+  });
+
+  it('still renders an explicit Markdown link with its bracketed syntax', () => {
+    const source = ['Contact us via [support](mailto:support@concret.io) for help.', ''].join('\n');
+    const editor = createFeedbackSnapshotEditor(source);
+
+    const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+
+    expect(serialized).toContain('[support](mailto:support@concret.io)');
+    editor.destroy();
+  });
 });

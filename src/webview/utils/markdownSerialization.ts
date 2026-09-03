@@ -40,6 +40,47 @@ interface EditorBlockSerializationCache {
 // retaining old document trees after ProseMirror releases them.
 const editorBlockSerializationCaches = new WeakMap<Editor, EditorBlockSerializationCache>();
 
+interface PatchableMarkdownManager {
+  encodeTextForMarkdown?: (text: string, node: JSONContent, parentNode?: JSONContent) => string;
+  codeTypes?: Set<string>;
+  __md4hAmpersandPatched?: boolean;
+}
+
+function isEncodedInsideCode(
+  manager: PatchableMarkdownManager,
+  node: JSONContent,
+  parentNode?: JSONContent
+): boolean {
+  const codeTypes = manager.codeTypes;
+  if (!codeTypes) return false;
+  if (parentNode?.type != null && codeTypes.has(parentNode.type)) return true;
+  return (node.marks || []).some(mark =>
+    codeTypes.has(typeof mark === 'string' ? mark : mark.type)
+  );
+}
+
+/**
+ * @tiptap/markdown@3.30.5 always HTML-entity-encodes "&" in plain text nodes
+ * (MarkdownManager#encodeTextForMarkdown), even though Markdown never requires
+ * escaping a bare ampersand. Every "&" in prose (e.g. "Q&A") is corrupted to
+ * "&amp;" on each save/Feedback snapshot round-trip. Undo just that
+ * substitution outside code, where the upstream method already leaves text
+ * unencoded, so we don't touch legitimate "&amp;" text inside code samples.
+ */
+function patchAmpersandOverEncoding(manager: MarkdownManager): void {
+  const patchable = manager as unknown as PatchableMarkdownManager;
+  if (patchable.__md4hAmpersandPatched || typeof patchable.encodeTextForMarkdown !== 'function') {
+    return;
+  }
+  const original = patchable.encodeTextForMarkdown.bind(manager);
+  patchable.encodeTextForMarkdown = (text, node, parentNode) => {
+    const encoded = original(text, node, parentNode);
+    if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
+    return encoded.replace(/&amp;/g, '&');
+  };
+  patchable.__md4hAmpersandPatched = true;
+}
+
 function isMeaningfulInlineNode(node: JSONContent): boolean {
   if (!node || typeof node.type !== 'string') return false;
 
@@ -282,6 +323,7 @@ export function getEditorMarkdownForSync(
   };
 
   const markdownManager = editorUnknown.markdown || editorUnknown.storage?.markdown;
+  if (markdownManager) patchAmpersandOverEncoding(markdownManager);
 
   const getFallbackMarkdown = (): string => {
     const getMarkdown = editorUnknown.getMarkdown;
