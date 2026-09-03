@@ -3,6 +3,14 @@
  *
  * The DOM adapter owns listeners, pointer-capture APIs, and AbortControllers.
  * This module owns the state and emits idempotent effects for that adapter.
+ *
+ * The 'Submitting' state and its submissionStarted/submissionSucceeded/
+ * submissionFailed events are specified here but not yet dispatched from
+ * production: the real screenshot-submission call in
+ * feedbackCaptureWorkflow.ts's onAdd handler bypasses this machine entirely,
+ * so a hanging save can't currently be cancelled via these primitives.
+ * Wiring that up is a tracked, deliberately deferred follow-up, not an
+ * oversight.
  */
 
 export interface FeedbackCapturePoint {
