@@ -439,4 +439,55 @@ describe('FeedbackSnapshotService', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.reason).toBe('block-content-mismatch');
   });
+
+  it('resolves a shortcut reference link against the whole document when fingerprinting a block', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText = [
+      '## [Unreleased]',
+      '',
+      '[Unreleased]: https://github.com/example/repo/compare/v1.0.0...HEAD',
+    ].join('\n');
+    const source = requirePrepared(service, sourceText);
+    const result = service.finalize({
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+      descriptors: {
+        revision: 3,
+        blocks: [
+          block(
+            0,
+            'heading',
+            '## [Unreleased](https://github.com/example/repo/compare/v1.0.0...HEAD)'
+          ),
+        ],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('still rejects a canonical link that does not match the resolved reference target', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText = [
+      '## [Unreleased]',
+      '',
+      '[Unreleased]: https://github.com/example/repo/compare/v1.0.0...HEAD',
+    ].join('\n');
+    const source = requirePrepared(service, sourceText);
+    const result = service.finalize({
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+      descriptors: {
+        revision: 3,
+        blocks: [block(0, 'heading', '## [Unreleased](https://evil.example.com)')],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.reason).toBe('block-content-mismatch');
+  });
 });

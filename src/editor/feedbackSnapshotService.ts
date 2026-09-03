@@ -254,18 +254,33 @@ function frontmatterPayload(markdown: string): string {
   return `${format}\0${normalized}`;
 }
 
-function semanticBlockPayload(kind: FeedbackAnchorKind, markdown: string): string | null {
+/** Link reference definitions collected from markdown-it's `env.references`. */
+type MarkdownReferenceMap = Record<string, { readonly title: string; readonly href: string }>;
+
+function semanticBlockPayload(
+  kind: FeedbackAnchorKind,
+  markdown: string,
+  references?: MarkdownReferenceMap
+): string | null {
   if (kind === 'frontmatter') return frontmatterPayload(markdown);
 
   try {
-    return normalizeRenderedHtml(markdownParser.render(markdown));
+    // Seeding env.references lets a block rendered in isolation (e.g. a
+    // "## [Unreleased]" heading) resolve a shortcut reference link whose
+    // "[Unreleased]: https://..." definition lives in a different block,
+    // matching how the rich editor resolves it against the whole document.
+    return normalizeRenderedHtml(markdownParser.render(markdown, references && { references }));
   } catch {
     return null;
   }
 }
 
-function blockFingerprint(kind: FeedbackAnchorKind, markdown: string): string | null {
-  const payload = semanticBlockPayload(kind, markdown);
+function blockFingerprint(
+  kind: FeedbackAnchorKind,
+  markdown: string,
+  references?: MarkdownReferenceMap
+): string | null {
+  const payload = semanticBlockPayload(kind, markdown, references);
   if (payload === null) return null;
   return computeFeedbackTextSha256(`${kind}\0${payload}`);
 }
@@ -518,12 +533,22 @@ export class FeedbackSnapshotService {
     // Build the line index once. Splitting the complete source inside this
     // block loop makes snapshot finalization quadratic on long documents.
     const sourceLines = input.source.sourceText.split(/\r?\n/);
+
+    // Collect link reference definitions ("[label]: url") from the whole
+    // document once. A block rendered in isolation (e.g. a lone
+    // "## [Unreleased]" heading) can't otherwise resolve a shortcut reference
+    // link whose definition lives in a different block, even though the rich
+    // editor parses the full document and resolves it correctly.
+    const sourceReferencesEnv: { references?: MarkdownReferenceMap } = {};
+    markdownParser.render(input.source.sourceText, sourceReferencesEnv);
+    const sourceReferences = sourceReferencesEnv.references;
+
     const fingerprints: FeedbackBlockContentFingerprint[] = [];
     for (let index = 0; index < anchorResult.map.blocks.length; index += 1) {
       const anchor = anchorResult.map.blocks[index];
       const descriptor = input.descriptors.blocks[index];
       const sourceMarkdown = extractSourceBlock(sourceLines, anchor);
-      const sourceFingerprint = blockFingerprint(anchor.kind, sourceMarkdown);
+      const sourceFingerprint = blockFingerprint(anchor.kind, sourceMarkdown, sourceReferences);
       const canonicalFingerprint = blockFingerprint(anchor.kind, descriptor.markdown);
 
       // Keep the historical soft-wrap fingerprint first. The rich renderer
