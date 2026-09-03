@@ -6918,7 +6918,30 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       );
       this.assertFeedbackTransition(documentKey, transitionToken);
       this.feedbackSessions.set(documentKey, session);
-      this.postFeedbackSessionStarted(message.requestId, workspaceRoot, session, document, webview);
+      try {
+        // Mirrors startFeedbackSession's rollback: if this call throws (e.g. a
+        // webview whose postMessage throws), the just-set session entry must
+        // not survive, or endFeedbackTransition's success check
+        // (feedbackSessions.has) wrongly takes the success branch while the
+        // renderer never received a session. Scoped to this one call only,
+        // matching startFeedbackSession: refreshFeedbackPeerLocks and
+        // postDegradedFeedbackRangeWarning run after a session the renderer
+        // has already received, so rolling back on their failure would delete
+        // a live session instead of an orphaned one, and could strand a
+        // peer's lock state pointed at a session id nothing will ever release.
+        this.postFeedbackSessionStarted(
+          message.requestId,
+          workspaceRoot,
+          session,
+          document,
+          webview
+        );
+      } catch (error) {
+        if (this.feedbackSessions.get(documentKey) === session) {
+          this.feedbackSessions.delete(documentKey);
+        }
+        throw error;
+      }
       this.refreshFeedbackPeerLocks(documentKey);
       this.postDegradedFeedbackRangeWarning(session, webview);
     } finally {

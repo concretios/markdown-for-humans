@@ -2066,6 +2066,108 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(internals(provider).feedbackSessions.size).toBe(1);
   });
 
+  it('rolls back the session entry when a resumed draft fails to post the started notification', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const firstWebview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, firstWebview);
+    internals(provider).releaseFeedbackStateForWebview(
+      document.uri.toString(),
+      firstWebview as unknown as vscode.Webview,
+      document as unknown as vscode.TextDocument
+    );
+    internals(provider).unregisterFeedbackWebview(
+      document.uri.toString(),
+      firstWebview as unknown as vscode.Webview
+    );
+
+    const resumeWebview = createWebview(provider, document);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      resumeWebview as unknown as vscode.Webview
+    );
+    const automaticPostMessage = resumeWebview.postMessage.getMockImplementation();
+    resumeWebview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'feedback.started') {
+        throw new Error('simulated webview delivery failure');
+      }
+      return automaticPostMessage?.(message) ?? Promise.resolve(true);
+    });
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-post-fails',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      resumeWebview as unknown as vscode.Webview
+    );
+    await waitForMessage(resumeWebview, 'feedback.error', 'resume-post-fails');
+    expect(internals(provider).feedbackSessions.size).toBe(0);
+
+    const retryWebview = createWebview(provider, document);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      retryWebview as unknown as vscode.Webview
+    );
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-post-fails-retry',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      retryWebview as unknown as vscode.Webview
+    );
+    await waitForMessage(retryWebview, 'feedback.started', 'resume-post-fails-retry');
+    expect(internals(provider).feedbackSessions.size).toBe(1);
+  });
+
+  it('keeps a resumed session when peer-lock refresh fails after the started notification lands', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const firstWebview = createWebview(provider, document);
+    const started = await startAndAddTextFeedback(provider, document, firstWebview);
+    internals(provider).releaseFeedbackStateForWebview(
+      document.uri.toString(),
+      firstWebview as unknown as vscode.Webview,
+      document as unknown as vscode.TextDocument
+    );
+    internals(provider).unregisterFeedbackWebview(
+      document.uri.toString(),
+      firstWebview as unknown as vscode.Webview
+    );
+
+    const resumeWebview = createWebview(provider, document);
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      resumeWebview as unknown as vscode.Webview
+    );
+    const automaticPostMessage = resumeWebview.postMessage.getMockImplementation();
+    resumeWebview.postMessage.mockImplementation((message: FeedbackMessage) => {
+      if (message.type === 'feedback.peer.unlocked') {
+        throw new Error('simulated webview delivery failure');
+      }
+      return automaticPostMessage?.(message) ?? Promise.resolve(true);
+    });
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-peer-refresh-fails',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      resumeWebview as unknown as vscode.Webview
+    );
+    await waitForMessage(resumeWebview, 'feedback.started', 'resume-peer-refresh-fails');
+    expect(internals(provider).feedbackSessions.size).toBe(1);
+  });
+
   it('does not echo an oversized malformed request identifier', async () => {
     const provider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, SOURCE_TEXT);
