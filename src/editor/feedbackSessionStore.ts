@@ -3748,14 +3748,21 @@ function resolveFeedbackAssetPath(
 function decodePngString(pngData: string): Buffer {
   let encoded = pngData;
   if (pngData.startsWith('data:')) {
-    const match = /^data:([^;,]+);base64,([A-Za-z0-9+/]*={0,2})$/.exec(pngData);
+    // A regex whose tail chains two quantifiers before an end anchor (the
+    // former `[A-Za-z0-9+/]*={0,2}$`) makes V8 backtrack the base64 body
+    // once per character when the overall match fails, which stack-
+    // overflows on inputs well within the legal 10 MiB screenshot cap (see
+    // isStrictBase64 below). Match only the short, fixed-shape prefix here,
+    // then validate the (possibly huge) payload separately with
+    // isStrictBase64's linear scan.
+    const match = /^data:([^;,]+);base64,/.exec(pngData);
     if (match === null || match[1].toLowerCase() !== 'image/png') {
       throw new FeedbackSessionError(
         'MD4H-FB-CAPTURE-002',
         'The screenshot must use a valid PNG data URL.'
       );
     }
-    encoded = match[2];
+    encoded = pngData.slice(match[0].length);
   }
 
   if (!isStrictBase64(encoded)) {

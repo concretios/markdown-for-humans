@@ -520,6 +520,23 @@ describe('decodeAndValidateFeedbackPng', () => {
     expect(validated.bytes.equals(png.bytes)).toBe(true);
   });
 
+  it('validates a data: URL past the old stack-overflow threshold without throwing', () => {
+    // Same boundary as the raw-base64 case above, but through the `data:`
+    // URL prefix regex, which had its own independent stack-overflow-prone
+    // shape (two adjacent quantifiers before an end anchor) even after the
+    // raw-base64 payload check was hardened.
+    const CONTAINER_OVERHEAD_MARGIN_BYTES = 4096;
+    const targetRawBytes = FEEDBACK_MAX_SCREENSHOT_BYTES_V2 - CONTAINER_OVERHEAD_MARGIN_BYTES;
+    const png = makeLargeGrayscalePng(targetRawBytes);
+    const dataUrl = `data:image/png;base64,${png.bytes.toString('base64')}`;
+
+    const validated = decodeAndValidateFeedbackPng(dataUrl);
+
+    expect(validated.width).toBe(png.width);
+    expect(validated.height).toBe(png.height);
+    expect(validated.bytes.equals(png.bytes)).toBe(true);
+  });
+
   it('rejects incomplete, truncated, CRC-invalid, and trailing PNG structures', () => {
     const valid = makeRgbaPng(24, 48, 72);
     const ihdrOnly = valid.subarray(0, 33);
