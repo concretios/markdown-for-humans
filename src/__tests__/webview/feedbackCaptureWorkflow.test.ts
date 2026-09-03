@@ -1131,6 +1131,18 @@ describe('keyboard Feedback block selector', () => {
       expect(preInertBackground.inert).toBe(true);
     });
 
+    it('logs the cleanup reason when Escape cancels the armed capture', () => {
+      const consoleDebug = jest.spyOn(console, 'debug').mockImplementation(() => undefined);
+      const harness = createAreaHarness();
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+
+      overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+
+      expect(document.querySelector('.feedback-area-capture')).toBeNull();
+      expect(consoleDebug).toHaveBeenCalledWith('[MD4H] Feedback capture cleanup:', 'escape');
+    });
+
     it('finishes rasterization when toolbar state disables Capture but review stays writable', async () => {
       const harness = createAreaHarness();
       harness.rasterize.mockImplementation(async () => {
@@ -1298,6 +1310,35 @@ describe('keyboard Feedback block selector', () => {
         expect(harness.rasterize).not.toHaveBeenCalled();
       }
     );
+
+    it('logs the ignore reason when a second pointer tries to steal an owned drag', () => {
+      const consoleDebug = jest.spyOn(console, 'debug').mockImplementation(() => undefined);
+      const harness = createAreaHarness();
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+      const firstPointerDown = new MouseEvent('pointerdown', {
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        bubbles: true,
+      });
+      Object.defineProperty(firstPointerDown, 'pointerId', { value: 17 });
+      overlay.dispatchEvent(firstPointerDown);
+
+      const secondPointerDown = new MouseEvent('pointerdown', {
+        button: 0,
+        clientX: 20,
+        clientY: 20,
+        bubbles: true,
+      });
+      Object.defineProperty(secondPointerDown, 'pointerId', { value: 23 });
+      overlay.dispatchEvent(secondPointerDown);
+
+      expect(consoleDebug).toHaveBeenCalledWith(
+        '[MD4H] Feedback capture event ignored:',
+        'pointer-owned'
+      );
+    });
 
     it.each(['blur', 'visibilitychange'] as const)(
       'terminates an owned drag when the document receives %s',

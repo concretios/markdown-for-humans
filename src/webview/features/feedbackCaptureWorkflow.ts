@@ -508,6 +508,9 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
   const applyCaptureEvent = (event: FeedbackCaptureEvent, restoreFocusOnCleanup = true): void => {
     const reduction = reduceFeedbackCapture(captureMachine, event);
     captureMachine = reduction.machine;
+    if (reduction.disposition === 'ignored') {
+      console.debug('[MD4H] Feedback capture event ignored:', reduction.reason);
+    }
     for (const effect of reduction.effects) {
       if (effect.type === 'setPointerCapture') {
         try {
@@ -527,6 +530,7 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
       } else if (effect.type === 'abortPhase') {
         activeRasterAbort?.abort();
       } else {
+        console.debug('[MD4H] Feedback capture cleanup:', effect.reason);
         cleanup(restoreFocusOnCleanup);
       }
     }
