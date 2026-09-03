@@ -30,6 +30,7 @@ import {
   FEEDBACK_MAX_EMBEDDED_SOURCE_BYTES_PER_SESSION_V2,
   FEEDBACK_MAX_EXACT_CELLS_PER_SESSION_V2,
   FEEDBACK_MAX_SCREENSHOT_BYTES_V2,
+  FEEDBACK_MAX_TABLE_COORDINATE_V2,
   FEEDBACK_MAX_TEXTUAL_EVIDENCE_BYTES_V2,
   FEEDBACK_SCHEMA_V2,
   feedbackTextualEvidenceBytesV2,
@@ -180,7 +181,6 @@ const REPORT_LOCK_TOKEN_BYTES = 12;
 const MAX_FEEDBACK_TEXT_LENGTH = 100_000;
 const MAX_FOCUS_TEXT_LENGTH = 1_000_000;
 const MAX_RENDERED_BLOCK_ORDINAL = 99_999;
-const MAX_TABLE_COORDINATE = 100_000;
 
 function feedbackCellTargetArea(target: FeedbackCellTargetV1): number {
   const { rectangle } = target;
@@ -4145,8 +4145,8 @@ function validateAndCloneCellTarget(
     !isNonNegativeSafeInteger(right) ||
     top >= bottom ||
     left >= right ||
-    bottom > MAX_TABLE_COORDINATE ||
-    right > MAX_TABLE_COORDINATE ||
+    bottom > FEEDBACK_MAX_TABLE_COORDINATE_V2 ||
+    right > FEEDBACK_MAX_TABLE_COORDINATE_V2 ||
     (enforceExactCellLimit &&
       !isFeedbackCellRectangleWithinExactLimit({ top, left, bottom, right }))
   ) {
