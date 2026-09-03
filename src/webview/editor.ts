@@ -1438,20 +1438,6 @@ function initializeEditor(initialContent: string) {
     editorInstance.on('update', updateLinkHandlers);
     updateLinkHandlers(); // Initial call
 
-    // Clean up listeners when editor is destroyed to prevent memory leaks
-    editorInstance.on('destroy', () => {
-      documentSyncController?.dispose();
-      documentSyncController = null;
-      document.removeEventListener('contextmenu', contextMenuHandler);
-      document.removeEventListener('click', documentClickHandler);
-      document.removeEventListener('keydown', keydownHandler);
-      editorInstance.view.dom.removeEventListener('click', handleLinkClick);
-      feedbackNodeViewGuards.dispose();
-      feedbackPeerLockController?.destroy();
-      feedbackPeerLockController = null;
-      console.log('[MD4H] Editor destroyed, global listeners cleaned up');
-    });
-
     console.log('[MD4H] Editor initialization complete');
   } catch (error) {
     console.error('[MD4H] Fatal error initializing editor:', error);
