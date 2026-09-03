@@ -4773,11 +4773,21 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   pointer-events: auto;
 }
 
-.feedback-card-layer .feedback-comment-card,
-.feedback-card-layer .feedback-composer {
+.feedback-card-layer .feedback-comment-card {
   position: absolute;
   right: 44px;
   z-index: 2;
+  box-sizing: border-box;
+  width: min(320px, calc(100vw - 96px));
+  margin: 0;
+  pointer-events: auto;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow) 45%, transparent);
+}
+
+.feedback-card-layer .feedback-composer {
+  position: fixed;
+  right: 44px;
+  z-index: 4;
   box-sizing: border-box;
   width: min(320px, calc(100vw - 96px));
   margin: 0;

@@ -1451,12 +1451,10 @@ describe('Feedback review controller', () => {
         }) as DOMRect;
       await waitForFeedbackFrame();
 
-      const viewportTop = 1_000;
-      const viewportBottom = viewportTop + 600;
       const composerTop = Number.parseFloat(composer.style.top);
       expect(composer.dataset.feedbackComposerSize).toBe('wide');
-      expect(composerTop).toBeGreaterThanOrEqual(viewportTop + 64 + 12);
-      expect(composerTop + 260).toBeLessThanOrEqual(viewportBottom - 12);
+      expect(composerTop).toBeGreaterThanOrEqual(64 + 12);
+      expect(composerTop + 260).toBeLessThanOrEqual(600 - 12);
     } finally {
       controller.deactivate();
       Object.defineProperty(window, 'innerHeight', {
@@ -1531,6 +1529,183 @@ describe('Feedback review controller', () => {
       expect(composer.dataset.feedbackComposerSize).toBe('compact');
       expect(composerTop).toBeGreaterThanOrEqual(12);
       expect(composerTop + 260).toBeLessThanOrEqual(600 - 12);
+    } finally {
+      controller.deactivate();
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('keeps the composer pinned to the viewport across a scroll event', async () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    document.querySelector<HTMLElement>('.formatting-toolbar')!.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 64,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 64,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: -1_000,
+        bottom: 2_000,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 3_000,
+        x: 0,
+        y: -1_000,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    (editor.view.dom.children[1] as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: 460,
+        bottom: 500,
+        left: 32,
+        right: 1_120,
+        width: 1_088,
+        height: 40,
+        x: 32,
+        y: 460,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+
+    try {
+      controller.openTextComposer({
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Alpha beta',
+        startLine: 3,
+        endLine: 3,
+      });
+      const composer = document.querySelector<HTMLElement>('.feedback-composer')!;
+      composer.getBoundingClientRect = () =>
+        ({
+          top: 0,
+          bottom: 260,
+          left: 0,
+          right: 320,
+          width: 320,
+          height: 260,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      await waitForFeedbackFrame();
+
+      const topBeforeScroll = composer.style.top;
+      const leftBeforeScroll = composer.style.left;
+      const requestFrame = jest.spyOn(window, 'requestAnimationFrame');
+
+      window.dispatchEvent(new Event('scroll'));
+
+      expect(requestFrame).not.toHaveBeenCalled();
+      expect(composer.style.top).toBe(topBeforeScroll);
+      expect(composer.style.left).toBe(leftBeforeScroll);
+      requestFrame.mockRestore();
+    } finally {
+      controller.deactivate();
+      Object.defineProperty(window, 'innerHeight', {
+        configurable: true,
+        value: originalInnerHeight,
+      });
+    }
+  });
+
+  it('keeps the composer clamped inside the viewport even when its target has scrolled far out of view', async () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });
+    const editor = createEditorFixture();
+    const editorContainer = document.querySelector<HTMLElement>('#editor')!;
+    document.querySelector<HTMLElement>('.formatting-toolbar')!.getBoundingClientRect = () =>
+      ({
+        top: 0,
+        bottom: 64,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 64,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    editorContainer.getBoundingClientRect = () =>
+      ({
+        top: -50_000,
+        bottom: -49_400,
+        left: 0,
+        right: 1_200,
+        width: 1_200,
+        height: 51_000,
+        x: 0,
+        y: -50_000,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    (editor.view.dom.children[1] as HTMLElement).getBoundingClientRect = () =>
+      ({
+        top: -49_500,
+        bottom: -49_460,
+        left: 32,
+        right: 1_120,
+        width: 1_088,
+        height: 40,
+        x: 32,
+        y: -49_500,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+
+    try {
+      controller.openTextComposer({
+        startOrdinal: 1,
+        endOrdinal: 1,
+        focus: 'Alpha beta',
+        startLine: 3,
+        endLine: 3,
+      });
+      const composer = document.querySelector<HTMLElement>('.feedback-composer')!;
+      composer.getBoundingClientRect = () =>
+        ({
+          top: 0,
+          bottom: 260,
+          left: 0,
+          right: 320,
+          width: 320,
+          height: 260,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      await waitForFeedbackFrame();
+
+      const composerTop = Number.parseFloat(composer.style.top);
+      expect(composerTop).toBeGreaterThanOrEqual(0);
+      expect(composerTop + 260).toBeLessThanOrEqual(600);
     } finally {
       controller.deactivate();
       Object.defineProperty(window, 'innerHeight', {

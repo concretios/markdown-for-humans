@@ -3336,7 +3336,7 @@ export function createFeedbackReviewController(options: {
             : Math.min(FEEDBACK_COMPOSER_WIDE_WIDTH, availableComposerWidth)
           : Math.min(FEEDBACK_COMPOSER_COMPACT_WIDTH, availableComposerWidth);
       const composerLeft = Math.max(12, containerWidth - composerWidth - 44);
-      composer.style.left = `${composerLeft}px`;
+      composer.style.left = `${composerLeft + containerBounds.left}px`;
       composer.style.right = 'auto';
       const nextComposerWidth = `${composerWidth}px`;
       if (composer.style.width !== nextComposerWidth) {
@@ -3383,8 +3383,6 @@ export function createFeedbackReviewController(options: {
           );
           const fitsVisibleViewport = (top: number): boolean =>
             top >= minimumVisibleComposerTop && top + measuredComposerHeight <= viewportBottom - 12;
-          const targetIntersectsViewport =
-            geometry.targetEnd > viewportTop && geometry.targetStart < viewportBottom;
           let composerTop = collisionFreeComposerTop;
           if (!fitsVisibleViewport(composerTop)) {
             if (horizontallyOverlapsTarget) {
@@ -3397,17 +3395,16 @@ export function createFeedbackReviewController(options: {
                 composerTop = alternateCollisionFreeTop;
               }
             }
-            if (!fitsVisibleViewport(composerTop) && targetIntersectsViewport) {
-              // Any active form remains reachable. Wide forms still prefer a
-              // collision-free target edge before this viewport clamp.
+            if (!fitsVisibleViewport(composerTop)) {
+              // The composer is fixed to the viewport, so it must stay
+              // reachable even when its target has scrolled out of view.
               composerTop = Math.min(
                 maximumVisibleComposerTop,
                 Math.max(minimumVisibleComposerTop, composerTop)
               );
             }
           }
-          composer.style.top = `${composerTop}px`;
-          requiredBottom = Math.max(requiredBottom, composerTop + measuredComposerHeight);
+          composer.style.top = `${composerTop + containerBounds.top}px`;
         }
       }
     }
