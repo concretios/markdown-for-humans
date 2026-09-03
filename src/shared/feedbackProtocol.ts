@@ -9,7 +9,9 @@
  */
 
 import {
+  FEEDBACK_MAX_EXACT_CELLS_PER_ITEM_V2,
   FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2,
+  FEEDBACK_MAX_TABLE_COORDINATE_V2,
   isFeedbackRendererTargetEvidenceCompatibleV2,
   parseFeedbackRendererEvidenceV2,
   parseFeedbackRendererTargetV2,
@@ -27,8 +29,13 @@ export const FEEDBACK_ERROR_CODES = {
 
 export type FeedbackErrorCode = (typeof FEEDBACK_ERROR_CODES)[keyof typeof FEEDBACK_ERROR_CODES];
 
-/** Maximum number of cells represented by one exact table-cell locator. */
-export const FEEDBACK_MAX_EXACT_CELL_COUNT = 256;
+/**
+ * Maximum number of cells represented by one exact table-cell locator.
+ * Shared with `FEEDBACK_MAX_EXACT_CELLS_PER_ITEM_V2`: `feedbackMigrationV2.ts` re-validates a v1
+ * rectangle already accepted here against that v2 constant, so the two must stay equal or
+ * migration can reject a rectangle v1 already accepted.
+ */
+export const FEEDBACK_MAX_EXACT_CELL_COUNT = FEEDBACK_MAX_EXACT_CELLS_PER_ITEM_V2;
 
 /** Maximum aggregate exact table-cell geometry retained by one Feedback session. */
 export const FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION = 4_096;
@@ -523,7 +530,6 @@ const MAX_CANONICAL_MARKDOWN_LENGTH = 10 * 1024 * 1024;
 const MAX_DOCUMENT_CONTENT_LENGTH = 64 * 1024 * 1024;
 const MAX_PATH_LENGTH = 32_768;
 const MAX_WEBVIEW_URI_LENGTH = 1024 * 1024;
-const MAX_TABLE_COORDINATE = 100_000;
 const MAX_FEEDBACK_ITEMS = 2_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -655,8 +661,8 @@ function parseCellRectangle(value: unknown): FeedbackCellTargetInputV1['rectangl
     !isOrdinal(value.right) ||
     value.top >= value.bottom ||
     value.left >= value.right ||
-    value.bottom > MAX_TABLE_COORDINATE ||
-    value.right > MAX_TABLE_COORDINATE ||
+    value.bottom > FEEDBACK_MAX_TABLE_COORDINATE_V2 ||
+    value.right > FEEDBACK_MAX_TABLE_COORDINATE_V2 ||
     !isFeedbackCellRectangleWithinExactLimit({
       top: value.top,
       left: value.left,

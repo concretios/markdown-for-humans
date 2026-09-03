@@ -639,7 +639,7 @@ describe('feedback protocol', () => {
       {
         version: 1,
         tableOrdinal: 4,
-        rectangle: { top: 0, left: 0, bottom: 100_001, right: 2 },
+        rectangle: { top: 100_000, left: 0, bottom: 100_001, right: 2 },
         tableFingerprint: 'md4h-table/v1:0123456789abcdef',
       },
     ],

@@ -371,6 +371,32 @@ describe('Feedback v1 to v2 item migration', () => {
     );
   });
 
+  it('fails closed when a valid cell locator exceeds the exact cell count bound', () => {
+    const item = textItem({
+      endLine: 3,
+      focus: 'A\tB\n1\t2',
+      cellTarget: cellTarget({ rectangle: { top: 0, left: 0, bottom: 1, right: 257 } }),
+    });
+    const table = endpoint({
+      ordinal: 4,
+      kind: 'table',
+      sha256: HASH_B,
+      tableFingerprint: TABLE_FINGERPRINT,
+    });
+
+    expectMigrationError(
+      () =>
+        migrateFeedbackItemV1ToV2(
+          migrationInput('| A | B |\n| - | - |\n| 1 | 2 |', item, {
+            startBlock: table,
+            endBlock: { ...table },
+            locatorValidity: { renderedRange: false, cellTarget: true },
+          })
+        ),
+      'invalid-cell-locator'
+    );
+  });
+
   it('migrates a screenshot to exact visual evidence with trusted dimensions and source reference', () => {
     const sourceText = '<figure>image</figure>\r\n';
     const item = screenshotItem();

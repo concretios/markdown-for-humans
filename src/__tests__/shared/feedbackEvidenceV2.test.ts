@@ -202,6 +202,25 @@ describe('Feedback evidence v2 renderer trust boundary', () => {
       },
       { version: 2, requestedScope: 'legacy-unknown' },
       { version: 2, requestedScope: 'blocks', extra: true },
+      {
+        version: 2,
+        requestedScope: 'table-cells',
+        locator: {
+          kind: 'table-cells',
+          value: {
+            ...cellTargetInput(),
+            rectangle: { top: 100_000, left: 0, bottom: 100_001, right: 2 },
+          },
+        },
+      },
+      {
+        version: 2,
+        requestedScope: 'table-cells',
+        locator: {
+          kind: 'table-cells',
+          value: { ...cellTargetInput(), rectangle: { top: 0, left: 0, bottom: 1, right: 257 } },
+        },
+      },
     ];
 
     expect(malformed.map(parseFeedbackRendererTargetV2)).toEqual(malformed.map(() => null));

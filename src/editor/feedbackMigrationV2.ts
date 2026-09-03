@@ -8,6 +8,7 @@
 
 import {
   FEEDBACK_MAX_EMBEDDED_SOURCE_BYTES_PER_SESSION_V2,
+  FEEDBACK_MAX_EXACT_CELLS_PER_ITEM_V2,
   FEEDBACK_MAX_EXACT_CELLS_PER_SESSION_V2,
   FEEDBACK_MAX_TEXTUAL_EVIDENCE_BYTES_V2,
   feedbackTextualEvidenceBytesV2,
@@ -786,7 +787,7 @@ function validateCellTarget(
     rectangle.left < 0 ||
     rows <= 0 ||
     columns <= 0 ||
-    rows > Math.floor(256 / columns)
+    rows > Math.floor(FEEDBACK_MAX_EXACT_CELLS_PER_ITEM_V2 / columns)
   ) {
     throw new FeedbackMigrationV2Error(
       'invalid-cell-locator',
