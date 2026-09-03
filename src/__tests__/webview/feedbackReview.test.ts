@@ -1458,6 +1458,7 @@ describe('Feedback review controller', () => {
       expect(composerTop).toBeGreaterThanOrEqual(viewportTop + 64 + 12);
       expect(composerTop + 260).toBeLessThanOrEqual(viewportBottom - 12);
     } finally {
+      controller.deactivate();
       Object.defineProperty(window, 'innerHeight', {
         configurable: true,
         value: originalInnerHeight,
@@ -1531,6 +1532,7 @@ describe('Feedback review controller', () => {
       expect(composerTop).toBeGreaterThanOrEqual(12);
       expect(composerTop + 260).toBeLessThanOrEqual(600 - 12);
     } finally {
+      controller.deactivate();
       Object.defineProperty(window, 'innerHeight', {
         configurable: true,
         value: originalInnerHeight,
