@@ -257,6 +257,8 @@ export type FeedbackWebviewMessage =
       type:
         | 'feedback.discard'
         | 'feedback.reveal'
+        | 'feedback.revealInOS'
+        | 'feedback.finish.preview'
         | 'feedback.copyDiagnostics'
         | 'feedback.close.ready';
     })
@@ -398,6 +400,12 @@ export type FeedbackHostMessage =
       itemCount: number;
       prompt: string;
       promptCopied: boolean;
+    }
+  | {
+      type: 'feedback.finish.previewReady';
+      requestId: string;
+      sessionId: string;
+      prompt: string;
     }
   | {
       type: 'feedback.discarded';
@@ -1148,6 +1156,8 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
 
     case 'feedback.discard':
     case 'feedback.reveal':
+    case 'feedback.revealInOS':
+    case 'feedback.finish.preview':
     case 'feedback.copyDiagnostics':
     case 'feedback.close.ready':
       return hasExactKeys(value, ['type', 'requestId', 'sessionId'])
@@ -1644,6 +1654,19 @@ export function parseFeedbackHostMessage(value: unknown): FeedbackHostMessage | 
             itemCount: value.itemCount,
             prompt: value.prompt,
             promptCopied: value.promptCopied,
+          }
+        : null;
+
+    case 'feedback.finish.previewReady':
+      return hasExactKeys(value, ['type', 'requestId', 'sessionId', 'prompt']) &&
+        isRequestId(value.requestId) &&
+        isSessionId(value.sessionId) &&
+        isBoundedString(value.prompt, MAX_FOCUS_LENGTH)
+        ? {
+            type: value.type,
+            requestId: value.requestId,
+            sessionId: value.sessionId,
+            prompt: value.prompt,
           }
         : null;
 

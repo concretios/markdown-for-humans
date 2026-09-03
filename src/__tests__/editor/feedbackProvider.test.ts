@@ -5674,6 +5674,61 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(vscode.commands.executeCommand).not.toHaveBeenCalled();
   });
 
+  it('reveals the feedback file in the OS file browser', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    sendStart(provider, document, webview, 'start-reveal-os');
+    const started = await waitForMessage(webview, 'feedback.started', 'start-reveal-os');
+    (vscode.commands.executeCommand as jest.Mock).mockClear();
+
+    internals(provider).handleWebviewMessage(
+      { type: 'feedback.revealInOS', requestId: 'reveal-os-1', sessionId: started.sessionId },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    await waitUntil(() => (vscode.commands.executeCommand as jest.Mock).mock.calls.length > 0);
+
+    const session = internals(provider).feedbackSessions.get(document.uri.toString())!;
+    expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+      'revealFileInOS',
+      vscode.Uri.file(session.store.getRevealPath())
+    );
+  });
+
+  it('previews the exact handoff prompt without sealing the session', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    sendStart(provider, document, webview, 'start-finish-preview');
+    const started = await waitForMessage(webview, 'feedback.started', 'start-finish-preview');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.finish.preview',
+        requestId: 'finish-preview-1',
+        sessionId: started.sessionId,
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    const preview = await waitForMessage(
+      webview,
+      'feedback.finish.previewReady',
+      'finish-preview-1'
+    );
+    expect(preview).toEqual(
+      expect.objectContaining({
+        sessionId: started.sessionId,
+        prompt: expect.stringContaining(started.feedbackFile as string),
+      })
+    );
+
+    const session = internals(provider).feedbackSessions.get(document.uri.toString())!;
+    expect(session.store.snapshot.state).toBe('draft');
+  });
+
   it.each([
     ['save returns false', jest.fn(async () => false)],
     ['save rejects', jest.fn(async () => Promise.reject(new Error('disk is read-only')))],

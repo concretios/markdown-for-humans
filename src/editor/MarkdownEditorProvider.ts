@@ -5033,6 +5033,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       if (
         session.invalidated &&
         message.type !== 'feedback.reveal' &&
+        message.type !== 'feedback.revealInOS' &&
         message.type !== 'feedback.discard' &&
         message.type !== 'feedback.copyDiagnostics' &&
         message.type !== 'feedback.capture.error'
@@ -5341,6 +5342,46 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
             vscode.Uri.file(session.store.getRevealPath())
           );
           return;
+
+        case 'feedback.revealInOS':
+          await session.store.validateContainedPaths();
+          await vscode.commands.executeCommand(
+            'revealFileInOS',
+            vscode.Uri.file(session.store.getRevealPath())
+          );
+          return;
+
+        case 'feedback.finish.preview': {
+          const workspaceRoot = this.getWorkspaceFolderPath(document);
+          if (!workspaceRoot || document.uri.scheme !== 'file') {
+            throw new FeedbackSessionError(
+              'MD4H-FB-STORE-001',
+              'Open this saved Markdown file inside a workspace to preview the agent handoff.'
+            );
+          }
+          const snapshot = session.store.snapshot;
+          const feedbackFile = path
+            .relative(workspaceRoot, session.store.feedbackFilePath)
+            .split(path.sep)
+            .join('/');
+          const configuredPromptTemplate = vscode.workspace
+            .getConfiguration('markdownForHumans.feedback', document.uri)
+            .get<unknown>('handoffPromptTemplate');
+          const handoff = renderFeedbackHandoffPrompt(configuredPromptTemplate, {
+            feedbackFile,
+            source: snapshot.source,
+            sourceSha256: snapshot.sourceSha256,
+            itemCount: session.store.items.length,
+            round: snapshot.round,
+          });
+          this.postFeedbackMessage(webview, {
+            type: 'feedback.finish.previewReady',
+            requestId: message.requestId,
+            sessionId: session.sessionId,
+            prompt: handoff.prompt,
+          });
+          return;
+        }
 
         case 'feedback.copyDiagnostics': {
           const version =

@@ -129,6 +129,38 @@ describe('feedback protocol', () => {
     expect(parseFeedbackWebviewMessage({ ...message, outcome: 'finished' })).toBeNull();
   });
 
+  it('accepts only an exact OS-reveal request identity', () => {
+    const message = {
+      type: 'feedback.revealInOS',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, force: true })).toBeNull();
+  });
+
+  it('accepts only an exact finish-preview request identity', () => {
+    const message = {
+      type: 'feedback.finish.preview',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, force: true })).toBeNull();
+  });
+
+  it('accepts only an exact correlated finish-preview response with a bounded prompt', () => {
+    const message = {
+      type: 'feedback.finish.previewReady',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      prompt: 'Implement the sealed feedback bundle.',
+    };
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, prompt: undefined })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, sessionId: undefined })).toBeNull();
+  });
+
   it('requires a positive sync revision on close application', () => {
     const message = {
       type: 'feedback.close.applied',

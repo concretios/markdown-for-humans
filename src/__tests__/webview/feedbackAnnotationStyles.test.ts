@@ -429,14 +429,14 @@ describe('Feedback annotation styles', () => {
     const count = css.match(/\.feedback-completion-count\s*\{[^}]*\}/)?.[0] ?? '';
     const path = css.match(/\.feedback-completion-path\s*\{[^}]*\}/)?.[0] ?? '';
 
-    expect(panel).toMatch(/width:\s*min\(520px,\s*calc\(100vw\s*-\s*32px\)\)/);
+    expect(panel).toMatch(/width:\s*min\(640px,\s*calc\(100vw\s*-\s*32px\)\)/);
     expect(panel).toMatch(/max-height:\s*min\(620px,\s*calc\(100vh\s*-\s*32px\)\)/);
     expect(count).toContain('--vscode-editor-foreground');
     expect(count).toMatch(/font-weight:\s*400/);
     expect(count).not.toContain('--md4h-feedback-accent');
     expect(count).not.toContain('--md4h-feedback-highlight');
     expect(count).not.toMatch(/background:|border:|padding:/);
-    expect(path).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(path).toMatch(/white-space:\s*nowrap/);
     expect(path).toMatch(/user-select:\s*text/);
   });
 

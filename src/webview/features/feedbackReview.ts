@@ -687,6 +687,23 @@ function compareFeedbackIds(left: string, right: string): number {
   return Number(left.slice(1)) - Number(right.slice(1));
 }
 
+/**
+ * Collapse a feedback bundle path's noisy round id (the `--<timestamp>-<hash>`
+ * segment between the source filename and `feedback.md`) into one ellipsis, so
+ * the path fits on one line while keeping both the source filename and
+ * `feedback.md` visible. Falls back to the untruncated path when the
+ * `--`-separated round-id convention isn't found.
+ */
+function truncateFeedbackPathMiddle(fullPath: string): string {
+  const lastSlash = fullPath.lastIndexOf('/');
+  if (lastSlash === -1) return fullPath;
+  const tail = fullPath.slice(lastSlash);
+  const head = fullPath.slice(0, lastSlash);
+  const separator = head.lastIndexOf('--');
+  if (separator === -1) return fullPath;
+  return `${head.slice(0, separator + 2)}…${tail}`;
+}
+
 interface FeedbackExactCellBudgetAllocation {
   readonly retainedIds: ReadonlySet<string>;
   readonly usedCellCount: number;
@@ -1008,9 +1025,11 @@ export function createFeedbackReviewController(options: {
   let completionReturnSelector: string | null = null;
   let completionDraftSurface: FeedbackDraftSurfaceLease | null = null;
   let completionResumeButton: HTMLButtonElement | null = null;
-  let completionRevealButton: HTMLButtonElement | null = null;
+  let completionPathButton: HTMLButtonElement | null = null;
+  let completionRevealOSButton: HTMLButtonElement | null = null;
   let completionConfirmButton: HTMLButtonElement | null = null;
   let pendingFinishRequestId: string | null = null;
+  let pendingPreviewRequestId: string | null = null;
   let sealedCompletionSummary: FeedbackCompletionSummary | null = null;
   let restoreEditorFocusAfterClose = false;
   let pendingTransitionRecovery: {
@@ -1988,8 +2007,10 @@ export function createFeedbackReviewController(options: {
     completionReturnFocus = null;
     completionReturnSelector = null;
     completionResumeButton = null;
-    completionRevealButton = null;
+    completionPathButton = null;
+    completionRevealOSButton = null;
     completionConfirmButton = null;
+    pendingPreviewRequestId = null;
     document.body.classList.remove('feedback-completion-open');
     if (restoreFocus) {
       if (!focusElementWithoutScroll(returnFocus)) focusElementWithoutScroll(editorDom);
@@ -2065,16 +2086,17 @@ export function createFeedbackReviewController(options: {
     const status = completionDialog.querySelector<HTMLElement>('[data-feedback-completion-status]');
     const actions = completionDialog.querySelector<HTMLElement>('.feedback-completion-actions');
     const resume = completionResumeButton;
-    const reveal = completionRevealButton;
+    const path = completionPathButton;
+    const revealOS = completionRevealOSButton;
     const confirm = completionConfirmButton;
     if (countElement) countElement.textContent = feedbackCompletionCount(count, false);
     if (status) status.textContent = message ?? '';
     if (!isFinishing && actions && confirm) {
       if (resume && !resume.isConnected) actions.insertBefore(resume, confirm);
-      if (reveal && !reveal.isConnected) actions.insertBefore(reveal, confirm);
     }
     if (resume) resume.disabled = isFinishing;
-    if (reveal) reveal.disabled = isFinishing;
+    if (path) path.disabled = isFinishing;
+    if (revealOS) revealOS.disabled = isFinishing;
     if (confirm) {
       confirm.textContent = isFinishing ? 'Finishing…' : 'Finish & copy';
       confirm.disabled = isFinishing || invalidated || count === 0;
@@ -2131,15 +2153,45 @@ export function createFeedbackReviewController(options: {
     count.setAttribute('data-feedback-completion-count', '');
     const pathLabel = createElement('p', 'feedback-completion-path-label', 'Feedback file');
     pathLabel.id = 'feedback-completion-path-label';
-    const path = createElement(
-      'code',
-      'feedback-composer-focus feedback-completion-path',
-      session.feedbackFile ?? 'Feedback file path unavailable'
-    );
+    const fullFeedbackPath = session.feedbackFile ?? 'Feedback file path unavailable';
+    const pathRow = createElement('div', 'feedback-completion-path-row');
+    const path = createElement('button', 'feedback-composer-focus feedback-completion-path');
+    path.type = 'button';
     path.id = 'feedback-completion-path';
-    path.tabIndex = 0;
-    path.setAttribute('aria-labelledby', pathLabel.id);
+    path.title = fullFeedbackPath;
+    path.textContent = truncateFeedbackPathMiddle(fullFeedbackPath);
+    path.setAttribute('aria-label', `Open ${fullFeedbackPath} in the editor`);
+    path.setAttribute('aria-describedby', pathLabel.id);
     path.setAttribute('data-feedback-completion-path', '');
+    const revealOS = createElement('button', 'feedback-completion-reveal-os');
+    revealOS.type = 'button';
+    revealOS.title = 'Reveal in Finder/Explorer';
+    revealOS.setAttribute('aria-label', 'Reveal feedback file in Finder/Explorer');
+    revealOS.setAttribute('data-feedback-completion-reveal-os', '');
+    const revealOSIcon = createElement('span', 'codicon codicon-folder-opened');
+    revealOSIcon.setAttribute('aria-hidden', 'true');
+    revealOS.append(revealOSIcon);
+    pathRow.append(path, revealOS);
+
+    const disclosure = createElement('details', 'feedback-completion-disclosure');
+    disclosure.setAttribute('data-feedback-preview-state', 'idle');
+    const disclosureSummary = createElement('summary', '', 'What gets copied to your clipboard');
+    const previewCode = createElement('code', '');
+    previewCode.setAttribute('data-feedback-completion-preview', '');
+    const previewBody = createElement('pre', 'feedback-completion-preview');
+    previewBody.append(previewCode);
+    disclosure.append(disclosureSummary, previewBody);
+    disclosure.addEventListener('toggle', () => {
+      if (!disclosure.open || !session) return;
+      const previewState = disclosure.getAttribute('data-feedback-preview-state');
+      if (previewState === 'ready' || previewState === 'loading') return;
+      disclosure.setAttribute('data-feedback-preview-state', 'loading');
+      previewCode.textContent = 'Loading preview…';
+      const requestId = nextRequestId();
+      pendingPreviewRequestId = requestId;
+      post({ type: 'feedback.finish.preview', requestId, sessionId: session.sessionId });
+    });
+
     const status = createElement('p', 'feedback-completion-status');
     status.id = 'feedback-completion-status';
     status.setAttribute('data-feedback-completion-status', '');
@@ -2150,19 +2202,17 @@ export function createFeedbackReviewController(options: {
     const resume = createElement('button', 'feedback-secondary-button', 'Resume feedback');
     resume.type = 'button';
     resume.setAttribute('data-feedback-completion-resume', '');
-    const reveal = createElement('button', 'feedback-secondary-button', 'Reveal feedback file');
-    reveal.type = 'button';
-    reveal.setAttribute('data-feedback-completion-reveal', '');
     const confirm = createElement('button', 'feedback-primary-button', 'Finish & copy');
     confirm.type = 'button';
     confirm.setAttribute('data-feedback-action', 'add');
     confirm.setAttribute('data-feedback-completion-confirm', '');
     confirm.disabled = session.items.length === 0;
     completionResumeButton = resume;
-    completionRevealButton = reveal;
+    completionPathButton = path;
+    completionRevealOSButton = revealOS;
     completionConfirmButton = confirm;
-    actions.append(resume, reveal, confirm);
-    surface.append(title, explanation, count, pathLabel, path, status, actions);
+    actions.append(resume, confirm);
+    surface.append(title, explanation, count, pathLabel, pathRow, disclosure, status, actions);
     dialog.append(surface);
     containCompletionPointerScroll(dialog, surface);
 
@@ -2171,10 +2221,18 @@ export function createFeedbackReviewController(options: {
       removeCompletionDialog(true);
     };
     resume.addEventListener('click', resumeFeedback);
-    reveal.addEventListener('click', () => {
+    path.addEventListener('click', () => {
       if (!session || pendingFinishRequestId !== null) return;
       post({
         type: 'feedback.reveal',
+        requestId: nextRequestId(),
+        sessionId: session.sessionId,
+      });
+    });
+    revealOS.addEventListener('click', () => {
+      if (!session || pendingFinishRequestId !== null) return;
+      post({
+        type: 'feedback.revealInOS',
         requestId: nextRequestId(),
         sessionId: session.sessionId,
       });
@@ -2193,7 +2251,8 @@ export function createFeedbackReviewController(options: {
       dialog.setAttribute('data-feedback-completion-state', 'finishing');
       dialog.setAttribute('aria-busy', 'true');
       resume.remove();
-      reveal.remove();
+      path.disabled = true;
+      revealOS.disabled = true;
       confirm.textContent = 'Finishing…';
       confirm.disabled = true;
       status.textContent = 'Locking feedback and copying the agent handoff…';
@@ -3323,7 +3382,7 @@ export function createFeedbackReviewController(options: {
         }
       }
     }
-    let requiredBottom = result.requiredBottom;
+    const requiredBottom = result.requiredBottom;
 
     if (composer && composerTarget) {
       const composerSize = composer.dataset.feedbackComposerSize as
@@ -5054,6 +5113,7 @@ export function createFeedbackReviewController(options: {
         message.type === 'feedback.updated' ||
         message.type === 'feedback.invalidated' ||
         message.type === 'feedback.finished' ||
+        message.type === 'feedback.finish.previewReady' ||
         message.type === 'feedback.discarded' ||
         message.type === 'feedback.close.release' ||
         message.type === 'feedback.diagnosticsCopied';
@@ -5227,6 +5287,21 @@ export function createFeedbackReviewController(options: {
           });
           break;
         }
+        case 'feedback.finish.previewReady': {
+          if (pendingPreviewRequestId === null || message.requestId !== pendingPreviewRequestId) {
+            break;
+          }
+          pendingPreviewRequestId = null;
+          const previewDisclosure = completionDialog?.querySelector<HTMLElement>(
+            '.feedback-completion-disclosure'
+          );
+          const previewElement = completionDialog?.querySelector<HTMLElement>(
+            '[data-feedback-completion-preview]'
+          );
+          previewDisclosure?.setAttribute('data-feedback-preview-state', 'ready');
+          if (previewElement) previewElement.textContent = message.prompt;
+          break;
+        }
         case 'feedback.discarded':
           removeDraftBanner();
           if (pendingClose) {
@@ -5313,6 +5388,20 @@ export function createFeedbackReviewController(options: {
                 ) ??
                 null
             );
+          }
+          if (message.requestId !== undefined && message.requestId === pendingPreviewRequestId) {
+            pendingPreviewRequestId = null;
+            const previewDisclosure = completionDialog?.querySelector<HTMLElement>(
+              '.feedback-completion-disclosure'
+            );
+            const previewElement = completionDialog?.querySelector<HTMLElement>(
+              '[data-feedback-completion-preview]'
+            );
+            previewDisclosure?.setAttribute('data-feedback-preview-state', 'error');
+            if (previewElement) {
+              previewElement.textContent =
+                'Could not load the preview. Collapse and reopen to try again.';
+            }
           }
           if (
             message.requestId !== undefined &&

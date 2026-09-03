@@ -2167,8 +2167,14 @@ describe('Feedback review controller', () => {
       expect(countElement?.textContent).toBe(expected);
       expect(pathElement?.id).toBe('feedback-completion-path');
       expect(pathElement?.tabIndex).toBe(0);
-      expect(pathElement?.getAttribute('aria-labelledby')).toBe('feedback-completion-path-label');
-      expect(pathElement?.textContent).toBe('.md4h/feedback/docs/guide.md--round-1/feedback.md');
+      expect(pathElement?.getAttribute('aria-describedby')).toBe('feedback-completion-path-label');
+      expect(pathElement?.getAttribute('aria-label')).toBe(
+        'Open .md4h/feedback/docs/guide.md--round-1/feedback.md in the editor'
+      );
+      expect(pathElement?.getAttribute('title')).toBe(
+        '.md4h/feedback/docs/guide.md--round-1/feedback.md'
+      );
+      expect(pathElement?.textContent).toBe('.md4h/feedback/docs/guide.md--…/feedback.md');
       expect(document.activeElement).toBe(resume);
       expect(controller.isWritable()).toBe(true);
       expect(editor.view.dom.getAttribute('aria-readonly')).toBe('true');
@@ -2202,9 +2208,15 @@ describe('Feedback review controller', () => {
       controller.finish();
 
       let dialog = document.querySelector<HTMLElement>('[data-feedback-completion-dialog]');
-      dialog?.querySelector<HTMLButtonElement>('[data-feedback-completion-reveal]')?.click();
+      dialog?.querySelector<HTMLButtonElement>('[data-feedback-completion-path]')?.click();
       expect(host.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({ type: 'feedback.reveal', sessionId: 'session-1' })
+      );
+      expect(document.querySelector('[data-feedback-completion-dialog]')).toBe(dialog);
+
+      dialog?.querySelector<HTMLButtonElement>('[data-feedback-completion-reveal-os]')?.click();
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'feedback.revealInOS', sessionId: 'session-1' })
       );
       expect(document.querySelector('[data-feedback-completion-dialog]')).toBe(dialog);
       expect(
@@ -2277,6 +2289,16 @@ describe('Feedback review controller', () => {
       expect(controller.isWritable()).toBe(false);
       expect(dialog?.getAttribute('data-feedback-completion-state')).toBe('finishing');
       expect(dialog?.querySelector('[data-feedback-completion-resume]')).toBeNull();
+      const finishingPath = dialog?.querySelector<HTMLButtonElement>(
+        '[data-feedback-completion-path]'
+      );
+      const finishingRevealOS = dialog?.querySelector<HTMLButtonElement>(
+        '[data-feedback-completion-reveal-os]'
+      );
+      expect(finishingPath).not.toBeNull();
+      expect(finishingPath?.disabled).toBe(true);
+      expect(finishingRevealOS).not.toBeNull();
+      expect(finishingRevealOS?.disabled).toBe(true);
 
       const finishRequest = finishMessages[0];
       controller.handleHostMessage({

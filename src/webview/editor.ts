@@ -2132,6 +2132,7 @@ window.addEventListener('message', (event: MessageEvent) => {
       case 'feedback.transition.locked':
       case 'feedback.updated':
       case 'feedback.finished':
+      case 'feedback.finish.previewReady':
       case 'feedback.discarded':
       case 'feedback.close.release':
       case 'feedback.diagnosticsCopied':
