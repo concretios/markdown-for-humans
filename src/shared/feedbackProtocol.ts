@@ -774,7 +774,24 @@ function isPngDataUrl(value: unknown): value is string {
   }
 
   const encoded = value.slice('data:image/png;base64,'.length);
-  return encoded.length > 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(encoded);
+  if (encoded.length === 0) {
+    return false;
+  }
+  // See isStrictBase64 in feedbackSessionStore.ts: a greedy quantifier
+  // immediately followed by another quantifier before an end anchor (here,
+  // `[A-Za-z0-9+/]+={0,2}$`) makes V8 backtrack, and recurse, once per
+  // character on inputs well within the legal screenshot size cap. Count the
+  // trailing '=' padding with a plain backward scan instead, then validate
+  // the remaining body with a flat single-character-class regex that has
+  // nothing left to backtrack into.
+  let end = encoded.length;
+  while (end > 0 && encoded[end - 1] === '=') {
+    end -= 1;
+  }
+  if (encoded.length - end > 2) {
+    return false;
+  }
+  return end > 0 && /^[A-Za-z0-9+/]*$/.test(encoded.slice(0, end));
 }
 
 /**
