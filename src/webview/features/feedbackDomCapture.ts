@@ -104,6 +104,7 @@ function isAllowedResourceUrl(value: string): boolean {
     const url = new URL(value, window.location.href);
     return (
       url.protocol === 'vscode-webview-resource:' ||
+      url.protocol === 'vscode-webview:' ||
       url.hostname.endsWith('.vscode-resource.vscode-cdn.net') ||
       url.hostname === 'file+.vscode-resource.vscode-cdn.net'
     );
@@ -276,7 +277,19 @@ async function waitForTwoAnimationFrames(signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function waitForRenderedResources(root: HTMLElement, signal?: AbortSignal): Promise<void> {
+/**
+ * Verify the live rendered blocks before cloning them for capture.
+ *
+ * A cloned VS Code resource image does not inherit the source element's decoded
+ * frame and Chromium can reject `decode()` for that detached resource even
+ * while the visible source is fully rendered. The screenshot library owns its
+ * own clone and resource-fetch step, so readiness must be established against
+ * the pixels the user selected rather than our intermediate off-screen clone.
+ */
+async function waitForRenderedResources(
+  images: readonly HTMLImageElement[],
+  signal?: AbortSignal
+): Promise<void> {
   throwIfFeedbackCaptureAborted(signal);
   if ('fonts' in document && document.fonts?.ready) {
     await withTimeout(
@@ -287,7 +300,6 @@ async function waitForRenderedResources(root: HTMLElement, signal?: AbortSignal)
   }
 
   throwIfFeedbackCaptureAborted(signal);
-  const images = Array.from(root.querySelectorAll<HTMLImageElement>('img'));
   await Promise.all(
     images.map(async image => {
       throwIfFeedbackCaptureAborted(signal);
@@ -458,6 +470,7 @@ interface IndexedCaptureIntersection<TElement extends HTMLElement> {
 
 interface CaptureCloneBudget {
   nodeCount: number;
+  readonly sourceImages: Set<HTMLImageElement>;
 }
 
 function isUsableDomRectangle(rectangle: DOMRect): boolean {
@@ -593,6 +606,7 @@ function cloneCaptureNodeShallow<TNode extends Node>(
   budget: CaptureCloneBudget
 ): TNode {
   consumeCaptureCloneNode(budget);
+  if (source instanceof HTMLImageElement) budget.sourceImages.add(source);
   return source.cloneNode(false) as TNode;
 }
 
@@ -1100,9 +1114,9 @@ function buildCaptureStage(
   rectangle: CaptureRectangle,
   intersections: readonly IntersectingCaptureChild[],
   signal?: AbortSignal
-): HTMLElement {
+): { readonly stage: HTMLElement; readonly sourceImages: readonly HTMLImageElement[] } {
   throwIfFeedbackCaptureAborted(signal);
-  const cloneBudget: CaptureCloneBudget = { nodeCount: 0 };
+  const cloneBudget: CaptureCloneBudget = { nodeCount: 0, sourceImages: new Set() };
   const rootBounds = root.getBoundingClientRect();
   const stage = document.createElement('div');
   stage.setAttribute('data-feedback-capture-stage', '');
@@ -1149,7 +1163,7 @@ function buildCaptureStage(
   throwIfFeedbackCaptureAborted(signal);
   stage.append(content);
   document.body.append(stage);
-  return stage;
+  return { stage, sourceImages: [...cloneBudget.sourceImages] };
 }
 
 function captureScale(rectangle: CaptureRectangle, requested: number): number {
@@ -1195,10 +1209,16 @@ export function createModernScreenshotRasterizer(
         );
       }
       throwIfFeedbackCaptureAborted(request.signal);
-      stage = buildCaptureStage(request.root, request.rectangle, intersections, request.signal);
+      const captureStage = buildCaptureStage(
+        request.root,
+        request.rectangle,
+        intersections,
+        request.signal
+      );
+      stage = captureStage.stage;
       throwIfFeedbackCaptureAborted(request.signal);
       validateCaptureResources(stage, request.signal);
-      await waitForRenderedResources(stage, request.signal);
+      await waitForRenderedResources(captureStage.sourceImages, request.signal);
       throwIfFeedbackCaptureAborted(request.signal);
       const rasterize =
         screenshot ?? (await withAbortSignal(loadDefaultScreenshot(), request.signal));

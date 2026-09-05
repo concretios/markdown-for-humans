@@ -15,6 +15,7 @@ import {
   insertImage,
   releasePendingImageSave,
   tryReservePendingImageSave,
+  waitForPendingImageSaves,
 } from '../../webview/features/imageDragDrop';
 
 const PendingImage = Image.extend({
@@ -132,6 +133,53 @@ describe('pending image renderer capacity', () => {
 
     expect(getPendingImageCount()).toBe(0);
     expect(postMessage).not.toHaveBeenCalled();
+    editor.destroy();
+  });
+
+  it('settles explicit-action waiters only after the final pending image completes', async () => {
+    const first = 'wait-first';
+    const second = 'wait-second';
+    reservedIds.push(first, second);
+    expect(tryReservePendingImageSave(first)).toBe(true);
+    expect(tryReservePendingImageSave(second)).toBe(true);
+    let settled = false;
+    const drained = waitForPendingImageSaves().then(() => {
+      settled = true;
+    });
+
+    releasePendingImageSave(first);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releasePendingImageSave(second);
+    await drained;
+    expect(settled).toBe(true);
+  });
+
+  it('registers the host image write before publishing its pending document marker', async () => {
+    const order: string[] = [];
+    const editor = new Editor({
+      extensions: [StarterKit, PendingImage.configure({ allowBase64: true })],
+      content: '<p>before</p>',
+      onUpdate: () => order.push('edit'),
+    });
+    const file = createImageFile(async () => new Uint8Array([1, 2, 3]).buffer);
+    const postMessage = jest.fn((message: unknown) => {
+      order.push((message as { type?: string }).type ?? 'unknown');
+    });
+
+    await insertImage(
+      editor,
+      file,
+      { viewGeneration: 'ordering-view', postMessage },
+      'images',
+      'dropped'
+    );
+
+    expect(order).toEqual(['saveImage', 'edit']);
+    const saveMessage = postMessage.mock.calls[0]?.[0] as { placeholderId?: string } | undefined;
+    expect(saveMessage?.placeholderId).toEqual(expect.any(String));
+    if (saveMessage?.placeholderId) releasePendingImageSave(saveMessage.placeholderId);
     editor.destroy();
   });
 

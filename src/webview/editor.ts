@@ -46,6 +46,7 @@ import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
 import {
   setupImageDragDrop,
   hasPendingImageSaves,
+  waitForPendingImageSaves,
   getPendingImageCount,
 } from './features/imageDragDrop';
 import { hideTocOverlay, isTocVisible, toggleTocOverlay } from './features/tocOverlay';
@@ -164,6 +165,10 @@ type VsCodeApi = {
   setState: (state: unknown) => void;
 };
 
+type GenerationBoundVsCodeApi = VsCodeApi & {
+  readonly viewGeneration: string;
+};
+
 declare const acquireVsCodeApi: () => VsCodeApi;
 
 // Message type for communication between extension and webview
@@ -176,7 +181,7 @@ interface WebviewMessage {
 // Extended window interface for MD4H globals
 declare global {
   interface Window {
-    vscode?: VsCodeApi;
+    vscode?: GenerationBoundVsCodeApi;
     resolveImagePath?: (relativePath: string) => Promise<string>;
     getImageReferences?: (imagePath: string) => Promise<unknown>;
     checkImageRename?: (oldPath: string, newName: string) => Promise<unknown>;
@@ -194,9 +199,6 @@ declare global {
 }
 
 const vscode = acquireVsCodeApi();
-
-// Make vscode API available globally for toolbar buttons
-window.vscode = vscode;
 
 let editor: Editor | null = null;
 let feedbackReviewController: FeedbackReviewController | null = null;
@@ -234,6 +236,15 @@ function createViewGeneration(): string {
 }
 
 const viewGeneration = createViewGeneration();
+// Toolbar image insertion uses the same generation-bound protocol as paste and
+// drag/drop. Exposing the raw API here would omit this identity and make the
+// host reject every picker save as stale or malformed.
+window.vscode = {
+  postMessage: message => vscode.postMessage(message),
+  getState: () => vscode.getState(),
+  setState: state => vscode.setState(state),
+  viewGeneration,
+};
 let localDocumentRevision = 0;
 let acceptedDocumentVersion = 0;
 let nextDocumentEditSequence = 1;
@@ -1457,7 +1468,7 @@ function initializeEditor(initialContent: string) {
 /**
  * Handle messages from extension
  */
-window.addEventListener('message', (event: MessageEvent) => {
+window.addEventListener('message', async (event: MessageEvent) => {
   const incomingType =
     typeof event.data === 'object' && event.data !== null
       ? (event.data as { type?: unknown }).type
@@ -2081,10 +2092,12 @@ window.addEventListener('message', (event: MessageEvent) => {
             message.viewGeneration !== undefined ||
             message.documentVersion !== undefined;
           if (hasPendingImageSaves()) {
-            // The editor may already contain a compact pending-image marker,
-            // but the host cannot resolve it until the matching saveImage
-            // message has been posted. Do not adopt a newer host barrier while
-            // that ordering boundary is still open.
+            // Save and Feedback are explicit user actions. Keep their bounded
+            // host barrier open while an already-posted image write reaches a
+            // terminal result instead of making the user retry the action.
+            await waitForPendingImageSaves();
+          }
+          if (hasPendingImageSaves()) {
             ok = false;
           } else if (hostReconciliationPending) {
             // A rejected edit may have newer local typing derived from a stale

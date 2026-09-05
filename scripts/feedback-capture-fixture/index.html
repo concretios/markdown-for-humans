@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; connect-src 'self'; font-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      content="default-src 'none'; connect-src 'self' http:; font-src 'self'; img-src 'self' http: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     />
     <title>MD4H feedback capture fixture</title>
     <link rel="stylesheet" href="./assets/katex/katex.min.css" />
@@ -131,7 +131,8 @@
     <main data-capture-fixture>
       <h1>Rendered Markdown capture</h1>
       <div class="fixture-grid">
-        <img data-local-image src="./assets/local-image.svg" alt="Local fixture landscape" />
+        <img data-local-image alt="Local fixture landscape" />
+        <img data-local-png alt="Local fixture PNG" />
         <table>
           <thead>
             <tr>

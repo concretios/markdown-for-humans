@@ -56,6 +56,7 @@ try {
     join(fixtureDirectory, 'assets', 'local-image.svg'),
     join(appDirectory, 'assets', 'local-image.svg')
   );
+  await cp(join(repositoryRoot, 'icon.png'), join(appDirectory, 'assets', 'local-image.png'));
   await cp(
     join(repositoryRoot, 'node_modules', 'katex', 'dist', 'katex.min.css'),
     join(appDirectory, 'assets', 'katex', 'katex.min.css')

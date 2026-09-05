@@ -20,6 +20,8 @@ import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTabl
 import { IndentedImageCodeBlock } from '../../webview/extensions/indentedImageCodeBlock';
 import { MarkdownCode, MarkdownLink } from '../../webview/extensions/markdownCompatibilityMarks';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
+import { InlineMath } from '../../webview/extensions/inlineMath';
+import { MathBlock } from '../../webview/extensions/mathBlock';
 import { Mermaid } from '../../webview/extensions/mermaid';
 import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMarkdownFix';
 import { PreservedMarkdownLiteral } from '../../webview/extensions/preservedMarkdownLiteral';
@@ -51,6 +53,8 @@ function createFeedbackSnapshotEditor(source: string): Editor {
     element,
     extensions: [
       Mermaid,
+      MathBlock,
+      InlineMath,
       IndentedImageCodeBlock,
       SpaceFriendlyImagePaths,
       GitHubAlerts,
@@ -93,6 +97,61 @@ function createFeedbackSnapshotEditor(source: string): Editor {
 }
 
 describe('Feedback snapshot renderer round-trip', () => {
+  it('keeps mixed local image formats renderer-equivalent after an authoritative apply', () => {
+    const source = [
+      '# Feedback image matrix',
+      '',
+      '## PNG with spaces and Unicode',
+      '',
+      '![PNG with a spaced Unicode path](assets/icon space ünicode.png)',
+      '',
+      '## Large PNG',
+      '',
+      '![Large PNG](assets/large.png)',
+      '',
+      '## JPEG',
+      '',
+      '![JPEG](assets/photo.jpg)',
+      '',
+      '## Animated GIF',
+      '',
+      '![Animated GIF](assets/animated.gif)',
+      '',
+      '## SVG',
+      '',
+      '![SVG](local-image.svg)',
+      '',
+      '## Table',
+      '',
+      '| Format | Expected |',
+      '| --- | --- |',
+      '| PNG | visible |',
+      '| JPEG | visible |',
+      '| GIF | visible |',
+      '| SVG | visible |',
+      '',
+      '## Formula',
+      '',
+      '$$',
+      'E = mc^2 + \\frac{a}{b}',
+      '$$',
+      '',
+      '## Mermaid',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  Image --> Capture',
+      '```',
+      '',
+    ].join('\n');
+    const editor = createFeedbackSnapshotEditor(source);
+
+    const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+
+    expect(isMarkdownRendererEquivalent(serialized, source)).toBe(true);
+    editor.destroy();
+  });
+
   it('accepts TipTap hard-break serialization for a source soft wrap', () => {
     const source = [
       'Requires VS Code 1.98.0 or newer in a trusted workspace. Compatible',

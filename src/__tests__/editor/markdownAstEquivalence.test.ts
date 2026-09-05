@@ -180,6 +180,27 @@ describe('isMarkdownStructurallyEquivalent', () => {
 });
 
 describe('isMarkdownRendererEquivalent', () => {
+  test('accepts the angle-bracket form of a standalone image path containing spaces', () => {
+    const source = '![Diagram](assets/local image ünicode.png)\n';
+    const renderer = '![Diagram](<assets/local image ünicode.png>)\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+  });
+
+  test('does not reinterpret quoted image destinations that may contain a title', () => {
+    const source = '![Diagram](assets/local.png "Original title")\n';
+    const renderer = '![Diagram](<assets/local.png Changed title>)\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+  });
+
+  test('does not reinterpret an image embedded inside a prose line', () => {
+    const source = 'Before ![Diagram](assets/local image.png) after.\n';
+    const renderer = 'Before ![Diagram](<assets/local image.png>) changed.\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+  });
+
   test('accepts the renderer hard-break form of a source soft wrap', () => {
     const source = 'Compatible VS Code hosts\nmust provide webview APIs.\n';
     const renderer = 'Compatible VS Code hosts  \nmust provide webview APIs.\n';

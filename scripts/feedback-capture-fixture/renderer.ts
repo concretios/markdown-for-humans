@@ -1,6 +1,7 @@
 import katex from 'katex';
 import mermaid from 'mermaid';
-import { domToBlob } from 'modern-screenshot';
+import { domToPng } from 'modern-screenshot';
+import { createModernScreenshotRasterizer } from '../../src/webview/features/feedbackDomCapture';
 
 type FixtureTheme = 'light' | 'dark' | 'high-contrast';
 type Rgba = [number, number, number, number];
@@ -16,8 +17,10 @@ interface CaptureResult {
   bytes: number;
   signature: string;
   localImageLoaded: boolean;
+  localPngLoaded: boolean;
   markers: {
     localImage: Rgba;
+    localPng: Rgba;
     table: Rgba;
   };
   rendered: {
@@ -44,6 +47,15 @@ function readPngDimensions(bytes: Uint8Array): { width: number; height: number }
 
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   return { width: view.getUint32(16), height: view.getUint32(20) };
+}
+
+function pngDataUrlToBlob(dataUrl: string): Blob {
+  const prefix = 'data:image/png;base64,';
+  if (!dataUrl.startsWith(prefix)) throw new Error('Capture did not return a PNG data URL.');
+  const binary = atob(dataUrl.slice(prefix.length));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return new Blob([bytes], { type: 'image/png' });
 }
 
 function themeVariables(theme: FixtureTheme): Record<string, string> {
@@ -117,17 +129,26 @@ async function renderRichFixtures(theme: FixtureTheme): Promise<{
 
 async function waitForFixture(theme: FixtureTheme): Promise<{
   image: HTMLImageElement;
+  png: HTMLImageElement;
   mermaid: HTMLElement;
   katex: HTMLElement;
 }> {
   const rendered = await renderRichFixtures(theme);
   await document.fonts.ready;
   const image = document.querySelector<HTMLImageElement>('[data-local-image]');
+  const png = document.querySelector<HTMLImageElement>('[data-local-png]');
   if (!image) throw new Error('Local fixture image is missing.');
-  await image.decode();
+  if (!png) throw new Error('Local PNG fixture image is missing.');
+  if (!image.src) {
+    const resourcePort = new URLSearchParams(window.location.search).get('resourcePort');
+    if (!resourcePort) throw new Error('The webview resource fixture port is missing.');
+    image.src = `http://file+.vscode-resource.vscode-cdn.net:${resourcePort}/assets/local-image.svg`;
+    png.src = `http://file+.vscode-resource.vscode-cdn.net:${resourcePort}/assets/local-image.png`;
+  }
+  await Promise.all([image.decode(), png.decode()]);
   await new Promise<void>(resolveFrame => requestAnimationFrame(() => resolveFrame()));
   await new Promise<void>(resolveFrame => requestAnimationFrame(() => resolveFrame()));
-  return { image, ...rendered };
+  return { image, png, ...rendered };
 }
 
 function parseCssColor(value: string): Rgba {
@@ -139,7 +160,13 @@ function parseCssColor(value: string): Rgba {
 function runPixelChecks(
   bitmap: ImageBitmap,
   fixtureBounds: DOMRect,
-  targets: { image: HTMLElement; table: HTMLElement; mermaid: HTMLElement; katex: HTMLElement }
+  targets: {
+    image: HTMLElement;
+    png: HTMLElement;
+    table: HTMLElement;
+    mermaid: HTMLElement;
+    katex: HTMLElement;
+  }
 ): {
   markers: CaptureResult['markers'];
   mermaidNonBackgroundPixels: number;
@@ -197,6 +224,7 @@ function runPixelChecks(
   const result = {
     markers: {
       localImage: sample(targets.image, 5, 5),
+      localPng: sample(targets.png, 100, 60),
       table: sample(targets.table, 5, tableBounds.height - 5),
     },
     mermaidNonBackgroundPixels: countNonBackground(targets.mermaid),
@@ -211,7 +239,7 @@ async function runCapture(zoom: number, theme: FixtureTheme): Promise<CaptureRes
   const fixture = document.querySelector<HTMLElement>('[data-capture-fixture]');
   if (!fixture) throw new Error('Capture fixture root is missing.');
 
-  const { image, mermaid: mermaidOutput, katex: katexOutput } = await waitForFixture(theme);
+  const { image, png, mermaid: mermaidOutput, katex: katexOutput } = await waitForFixture(theme);
   const tableMarker = document.querySelector<HTMLElement>('[data-table-marker]');
   if (!tableMarker) throw new Error('The rendered table marker is missing.');
   const mermaidSvg = mermaidOutput.querySelector<SVGSVGElement>('svg');
@@ -221,11 +249,17 @@ async function runCapture(zoom: number, theme: FixtureTheme): Promise<CaptureRes
   await new Promise<void>(resolveFrame => requestAnimationFrame(() => resolveFrame()));
 
   const bounds = fixture.getBoundingClientRect();
-  const blob = await domToBlob(fixture, {
-    backgroundColor: getComputedStyle(fixture).backgroundColor,
+  const capture = await createModernScreenshotRasterizer(domToPng)({
+    root: fixture,
+    rectangle: {
+      left: bounds.left,
+      top: bounds.top,
+      width: bounds.width,
+      height: bounds.height,
+    },
     scale: 1,
-    type: 'image/png',
   });
+  const blob = pngDataUrlToBlob(capture.dataUrl);
   const bytes = new Uint8Array(await blob.arrayBuffer());
   const dimensions = readPngDimensions(bytes);
   const cssWidth = Math.floor(bounds.width);
@@ -236,6 +270,7 @@ async function runCapture(zoom: number, theme: FixtureTheme): Promise<CaptureRes
   const bitmap = await createImageBitmap(blob);
   const pixelChecks = runPixelChecks(bitmap, bounds, {
     image,
+    png,
     table: tableMarker,
     mermaid: mermaidOutput,
     katex: katexOutput,
@@ -259,11 +294,17 @@ async function runCapture(zoom: number, theme: FixtureTheme): Promise<CaptureRes
   const passed =
     image.complete &&
     image.naturalWidth > 0 &&
+    png.complete &&
+    png.naturalWidth > 0 &&
     blob.type === 'image/png' &&
     signature === '89504e470d0a1a0a' &&
     dimensions.width === cssWidth &&
     dimensions.height === cssHeight &&
+    capture.width === cssWidth &&
+    capture.height === cssHeight &&
     colorMatches(pixelChecks.markers.localImage, [255, 0, 255, 255]) &&
+    pixelChecks.markers.localPng[3] === 255 &&
+    pixelChecks.markers.localPng.slice(0, 3).some(component => component < 245) &&
     colorMatches(pixelChecks.markers.table, [0, 255, 0, 255]) &&
     rendered.mermaid.svg &&
     rendered.mermaid.nodes >= 2 &&
@@ -284,6 +325,7 @@ async function runCapture(zoom: number, theme: FixtureTheme): Promise<CaptureRes
     bytes: bytes.byteLength,
     signature,
     localImageLoaded: image.complete && image.naturalWidth > 0,
+    localPngLoaded: png.complete && png.naturalWidth > 0,
     markers: pixelChecks.markers,
     rendered,
     passed,

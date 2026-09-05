@@ -1050,6 +1050,16 @@ Implementation agents are finished. Final local automated results are recorded b
 - Add packaged real-webview lifecycle fault tests, macOS coverage, and complete VSIX smoke verification.
 - Complete heap profiling, the physical Windows i5/16 GB performance and DPI pass, the 3,000-word 10-minute light/dark reading review, and user review.
 
+### 2026-09-05 - Pre-PR image capture stabilization
+
+- **Loaded local images:** Feedback capture now validates and rasterizes the already rendered webview image elements. It no longer decodes detached clones whose VS Code resource URLs can fail outside the live webview resource context.
+- **Current VS Code resources:** Capture accepts both current `vscode-webview:` resources and the legacy VS Code CDN resource host while continuing to reject arbitrary remote resources.
+- **Picker-to-Feedback boundary:** Save and Feedback flush requests now wait for already-posted image writes to finish within the existing bounded host barrier. This removes the immediate `Could not flush the latest editor changes` failure after toolbar image insertion.
+- **Toolbar image protocol:** Toolbar picker saves now carry the renderer generation required by the host protocol. The renderer also registers the host-owned image write before TipTap synchronously publishes its pending Markdown marker. Together these prevent picker saves from being rejected as stale or unowned when image insertion and Feedback start happen back to back.
+- **Space-containing image paths:** Snapshot equivalence now mirrors the editor's narrow standalone-image path normalization, so TipTap's angle-bracket canonicalization for local paths containing spaces or Unicode does not cause a false snapshot-revision rejection. Quoted destinations, titles, and images embedded in prose remain strict.
+- **Regression coverage:** Unit tests cover a loaded source image with a clone that cannot decode, current resource URLs, multiple pending image writes, and the exact flush barrier behavior. The Electron capture fixture now drives the production rasterizer adapter with local SVG and PNG images, Mermaid, KaTeX, tables, three themes, and three zoom levels.
+- **Dependency audit:** Lockfile-only development dependency refreshes remove the reported advisories. No direct dependency or shipped license set changed.
+
 ---
 
 ## 17. Follow-up Work
@@ -1061,3 +1071,4 @@ Implementation agents are finished. Final local automated results are recorded b
 - Revisit TypeScript 7 and ESLint 10 when the Jest and typescript-eslint ecosystem supports them.
 - Consider an optional VS Code source-editor Comments projection after the TipTap-native Feedback experience is reliable.
 - Consider remote workspace support as a separately tested product capability if URI-first migration is not completed here.
+- Investigate image quality loss reported during QA for dragged or picker-inserted large screenshots. Compare the original bytes, saved bytes, intrinsic dimensions, editor CSS scaling, and browser interpolation before changing compression or resize behavior.

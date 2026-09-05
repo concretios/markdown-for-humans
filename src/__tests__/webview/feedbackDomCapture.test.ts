@@ -72,6 +72,58 @@ describe('modern-screenshot feedback rasterizer', () => {
     expect(document.querySelector('[data-feedback-capture-stage]')).toBeNull();
   });
 
+  it('captures a visibly loaded webview image without decoding its off-screen clone', async () => {
+    document.body.innerHTML = [
+      '<div id="root">',
+      '  <p><img src="vscode-webview-resource://fixture/local-image.png" alt="Loaded"></p>',
+      '</div>',
+    ].join('');
+    const root = document.getElementById('root') as HTMLElement;
+    const block = root.firstElementChild as HTMLElement;
+    const sourceImage = block.querySelector('img') as HTMLImageElement;
+    Object.defineProperty(root, 'getBoundingClientRect', {
+      value: () => rect(0, 0, 300, 100),
+    });
+    Object.defineProperty(block, 'getBoundingClientRect', {
+      value: () => rect(0, 0, 300, 100),
+    });
+    Object.defineProperty(sourceImage, 'complete', { value: true });
+    Object.defineProperty(sourceImage, 'naturalWidth', { value: 128 });
+    const originalDecode = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'decode');
+    Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+      configurable: true,
+      value: jest.fn(async () => {
+        throw new DOMException(
+          'The cloned image has no independent decoded frame.',
+          'EncodingError'
+        );
+      }),
+    });
+
+    const screenshot = jest.fn(async (node: Node) => {
+      const stagedImage = (node as HTMLElement).querySelector('img');
+      expect(stagedImage?.src).toBe(sourceImage.src);
+      return 'data:image/png;base64,AAAA';
+    });
+
+    try {
+      await expect(
+        createModernScreenshotRasterizer(screenshot)({
+          root,
+          rectangle: { left: 0, top: 0, width: 300, height: 100 },
+          scale: 1,
+        })
+      ).resolves.toMatchObject({ dataUrl: 'data:image/png;base64,AAAA' });
+      expect(screenshot).toHaveBeenCalledTimes(1);
+    } finally {
+      if (originalDecode) {
+        Object.defineProperty(HTMLImageElement.prototype, 'decode', originalDecode);
+      } else {
+        delete (HTMLImageElement.prototype as Partial<HTMLImageElement>).decode;
+      }
+    }
+  });
+
   it('falls back to a full scan when the first and last top-level children are out of order', async () => {
     // e.g. the first top-level child was moved out of normal flow by a
     // transform, so its measured top no longer precedes the last child's.
@@ -928,6 +980,7 @@ describe('modern-screenshot feedback rasterizer', () => {
     root.innerHTML = [
       '<img src="data:image/png;base64,AAAA">',
       '<img src="blob:https://webview.invalid/id">',
+      '<img src="vscode-webview://fixture/path/image.png">',
       '<img src="https://file+.vscode-resource.vscode-cdn.net/path/image.png">',
     ].join('');
 

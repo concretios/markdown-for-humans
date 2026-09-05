@@ -1,6 +1,7 @@
 # Feedback capture Electron fixture
 
-This fixture validates `modern-screenshot@4.7.0` in a real Electron renderer at
+This fixture validates the production Feedback capture adapter with
+`modern-screenshot@4.7.0` in a real Electron renderer at
 100%, 125%, and 200% zoom across light, dark, and high-contrast themes. It uses
 the Electron version bundled with the locally installed VS Code so the Chromium
 behavior matches the extension host target.
@@ -21,7 +22,8 @@ without `npx`, or set `MD4H_CODE_APP` if VS Code is installed somewhere else.
 Each of the nine theme and zoom combinations verifies:
 
 - a PNG signature and IHDR dimensions matching the captured CSS box;
-- a local SVG image fetched under a restrictive CSP;
+- local SVG and PNG images fetched through a VS Code-style webview resource host
+  under a restrictive CSP;
 - a rendered table marker;
 - actual Mermaid output rendered from the project's `mermaid` dependency;
 - actual KaTeX HTML and fonts rendered from the project's `katex` dependency;

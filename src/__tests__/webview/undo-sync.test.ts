@@ -93,6 +93,7 @@ jest.mock('./../../webview/BubbleMenuView', () => ({
 jest.mock('./../../webview/features/imageDragDrop', () => ({
   setupImageDragDrop: jest.fn(),
   hasPendingImageSaves: jest.fn(() => false),
+  waitForPendingImageSaves: jest.fn(async () => undefined),
   getPendingImageCount: jest.fn(() => 0),
 }));
 jest.mock('./../../webview/features/tocOverlay', () => ({ toggleTocOverlay: jest.fn() }));
@@ -208,6 +209,15 @@ describe('webview undo/redo guards', () => {
 
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it('exposes the renderer generation to toolbar image operations', () => {
+    const toolbarApi = (global as unknown as { window: { vscode?: { viewGeneration?: string } } })
+      .window.vscode;
+
+    expect(toolbarApi?.viewGeneration).toBe(
+      testing.getDocumentSyncIdentityForTests().viewGeneration
+    );
   });
 
   it('does not resend an already-delivered debounce when a later flush arrives', () => {
@@ -936,14 +946,18 @@ describe('webview undo/redo guards', () => {
     expect(getMarkdown).toHaveBeenCalledTimes(1);
   });
 
-  it('does not adopt a host barrier while an image file is still pending', () => {
+  it('waits for a pending image save before adopting a host flush barrier', async () => {
     jest.useFakeTimers();
     window.setTimeout = setTimeout;
     window.clearTimeout = clearTimeout;
     const imageDragDrop = jest.requireMock('../../webview/features/imageDragDrop') as {
       hasPendingImageSaves: jest.Mock;
+      waitForPendingImageSaves: jest.Mock;
     };
     imageDragDrop.hasPendingImageSaves.mockReturnValue(true);
+    imageDragDrop.waitForPendingImageSaves.mockImplementation(async () => {
+      imageDragDrop.hasPendingImageSaves.mockReturnValue(false);
+    });
     testing.setMockEditor({ getMarkdown: jest.fn(() => 'pending image marker') });
     testing.queueDebouncedUpdateForTests('ignored');
     const identity = testing.getDocumentSyncIdentityForTests();
@@ -959,12 +973,16 @@ describe('webview undo/redo guards', () => {
       },
     } as MessageEvent);
 
-    expect(testing.getDocumentSyncIdentityForTests().acceptedDocumentVersion).toBe(0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(imageDragDrop.waitForPendingImageSaves).toHaveBeenCalledTimes(1);
+    expect(testing.getDocumentSyncIdentityForTests().acceptedDocumentVersion).toBe(9);
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'flushPendingEditAck',
         requestId: 'flush-pending-image',
-        ok: false,
+        ok: true,
       })
     );
   });

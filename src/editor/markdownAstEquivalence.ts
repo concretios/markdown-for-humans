@@ -49,6 +49,31 @@ const rendererMd = new MarkdownIt({
   linkify: false,
 });
 
+const STANDALONE_IMAGE_LINE_WITH_SPACES_REGEX =
+  /^([ \t]*)!\[([^\]\n]*)\]\(\s*([^\n)]*?\s+[^\n)]*?)\s*\)[ \t]*$/gm;
+
+/**
+ * Apply the same narrow space-containing image fallback as the rich editor.
+ * TipTap emits the CommonMark angle-bracket form after parsing the convenient
+ * bare form, so renderer verification must compare both under that contract.
+ */
+function normalizeSpaceFriendlyImagePaths(markdown: string): string {
+  return markdown.replace(
+    STANDALONE_IMAGE_LINE_WITH_SPACES_REGEX,
+    (line, indent: string, alt: string, rawDestination: string) => {
+      const destination = rawDestination.trim();
+      if (
+        destination.includes('"') ||
+        destination.includes("'") ||
+        (destination.startsWith('<') && destination.endsWith('>'))
+      ) {
+        return line;
+      }
+      return `${indent}![${alt}](<${destination}>)`;
+    }
+  );
+}
+
 /**
  * Collapse runs of whitespace to a single space, but leave content inside
  * `<pre>...</pre>` and inline `<code>...</code>` untouched. Renderer snapshot
@@ -122,7 +147,12 @@ export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean 
  * intentionally accepts TipTap's `  \n` serialization of a source soft wrap.
  */
 export function isMarkdownRendererEquivalent(a: string, b: string): boolean {
-  return isEquivalentWhenRendered(a, b, rendererMd, true);
+  return isEquivalentWhenRendered(
+    normalizeSpaceFriendlyImagePaths(a),
+    normalizeSpaceFriendlyImagePaths(b),
+    rendererMd,
+    true
+  );
 }
 
 /** Compare two Markdown strings with one explicit rendering contract. */

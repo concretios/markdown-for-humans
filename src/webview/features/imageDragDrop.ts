@@ -39,6 +39,7 @@ import {
  * Track images currently being saved to prevent document sync race conditions
  */
 const pendingImageSaves = new Set<string>();
+const pendingImageSaveWaiters = new Set<() => void>();
 let pendingImageCapacityWarningShown = false;
 
 /** Reserve one bounded renderer slot before any image conversion begins. */
@@ -53,6 +54,10 @@ export function tryReservePendingImageSave(placeholderId: string): boolean {
 /** Release one renderer slot after completion or failed insertion. */
 export function releasePendingImageSave(placeholderId: string): void {
   pendingImageSaves.delete(placeholderId);
+  if (pendingImageSaves.size === 0) {
+    for (const resolve of pendingImageSaveWaiters) resolve();
+    pendingImageSaveWaiters.clear();
+  }
   if (pendingImageSaves.size < MAX_PENDING_IMAGE_SAVES) {
     pendingImageCapacityWarningShown = false;
   }
@@ -76,6 +81,12 @@ function showPendingImageCapacityWarning(vscodeApi: VsCodeApi): void {
  */
 export function hasPendingImageSaves(): boolean {
   return pendingImageSaves.size > 0;
+}
+
+/** Wait until every picker, paste, or drop image has reached a terminal host result. */
+export function waitForPendingImageSaves(): Promise<void> {
+  if (!hasPendingImageSaves()) return Promise.resolve();
+  return new Promise(resolve => pendingImageSaveWaiters.add(resolve));
 }
 
 type EditorForInsertPosition = {
@@ -760,9 +771,30 @@ export async function insertImage(
     // otherwise a hidden non-retained webview can disappear with no host copy.
     const buffer = await imageFile.arrayBuffer();
 
+    // Generate filename with source type and dimensions
+    const imageName = generateImageName(file.name, source, finalDimensions);
+
+    // Register the host-owned write before TipTap publishes the pending marker.
+    // TipTap's update listener sends document edits synchronously from run(), so
+    // reversing these calls can make the host see an unowned marker first.
+    console.log(
+      `[MD4H] Sending saveImage message: placeholderId=${placeholderId}, name=${imageName}, targetFolder=${targetFolder}`
+    );
+
+    vscodeApi.postMessage({
+      type: 'saveImage',
+      protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+      viewGeneration: vscodeApi.viewGeneration,
+      placeholderId,
+      name: imageName,
+      data: new Uint8Array(buffer),
+      mimeType: file.type,
+      targetFolder, // User-selected folder
+    });
+
     const safePos = resolveImageInsertPosition(editor, pos);
 
-    // Insert image with base64 preview
+    // Insert image with base64 preview only after the host owns its file write.
     const inserted = editor
       .chain()
       .focus()
@@ -781,25 +813,6 @@ export async function insertImage(
     // The slot was reserved before conversion so concurrent multi-file loops
     // cannot create more placeholders than the host can own.
     console.log(`[MD4H] Added to pending saves. Total pending: ${pendingImageSaves.size}`);
-
-    // Generate filename with source type and dimensions
-    const imageName = generateImageName(file.name, source, finalDimensions);
-
-    // Send to extension to save to workspace
-    console.log(
-      `[MD4H] Sending saveImage message: placeholderId=${placeholderId}, name=${imageName}, targetFolder=${targetFolder}`
-    );
-
-    vscodeApi.postMessage({
-      type: 'saveImage',
-      protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
-      viewGeneration: vscodeApi.viewGeneration,
-      placeholderId,
-      name: imageName,
-      data: new Uint8Array(buffer),
-      mimeType: file.type,
-      targetFolder, // User-selected folder
-    });
   } catch (error) {
     if (placeholderInserted) {
       applyFailedImageCompletion(editor, placeholderId);
