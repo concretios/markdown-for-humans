@@ -171,6 +171,7 @@ export function activate(context: vscode.ExtensionContext) {
   const feedbackCommands = [
     ['markdownForHumans.feedback.start', 'start'],
     ['markdownForHumans.feedback.commentSelection', 'commentSelection'],
+    ['markdownForHumans.feedback.chooseScope', 'chooseScope'],
     ['markdownForHumans.feedback.captureArea', 'captureArea'],
     ['markdownForHumans.feedback.captureSelectedBlocks', 'captureSelectedBlocks'],
     ['markdownForHumans.feedback.toggleComments', 'toggleComments'],

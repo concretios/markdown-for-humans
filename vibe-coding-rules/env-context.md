@@ -78,6 +78,8 @@ normal content deduplication is not safe at this boundary.
 - Pure host and renderer lifecycle reducers reject stale stages in deterministic tests. Production still routes lifecycle effects through provider and renderer adapters, so do not treat those reducers as the sole authority until that migration is completed. Durable drafts, not webview state, are the recovery authority after reload.
 - Any later source change invalidates the frozen round, preserves the draft, and blocks new writes and sealing.
 
+Feedback structural choices are indexed once per frozen document. Top-level heading sections use complete v2 source block spans. Nested scopes use existing exact rendered-text locators, with source lines labelled as containing context; they do not assert exact nested authored-source regions. Ancestor choices use parent pointers, and table matrices are built only when the user opens Change scope. Ordinary text drags never capture the pointer. Frozen indexes are disposed with their session, and the host source-format index is reset during ownership transfer.
+
 Text anchors use exact block-relative ranges. Table selections use typed rectangular cell targets bound to a table fingerprint and host-enriched canonical table-block SHA-256. Exact table geometry is capped at 256 cells per item and 4,096 cells per session. Invalid or over-budget restored cell metadata degrades to the containing block and never fuzzy-matches.
 
 ## Feedback Capture Limits

@@ -7,7 +7,7 @@ import { Schema, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { CellSelection } from '@tiptap/pm/tables';
 import {
   createFeedbackDraftSurfaceGate,
-  createFeedbackReviewController,
+  createFeedbackReviewController as createReviewController,
   enumerateCanonicalFeedbackBlocks,
   feedbackReadOnlyPluginKey,
   getFeedbackSelectionTarget,
@@ -30,6 +30,16 @@ import {
   FEEDBACK_ERROR_CODES,
   FEEDBACK_MAX_EXACT_CELL_COUNT_PER_SESSION,
 } from '../../shared/feedbackProtocol';
+
+const reviewControllers = new Set<ReturnType<typeof createReviewController>>();
+
+function createFeedbackReviewController(
+  options: Parameters<typeof createReviewController>[0]
+): ReturnType<typeof createReviewController> {
+  const controller = createReviewController(options);
+  reviewControllers.add(controller);
+  return controller;
+}
 
 const feedbackTableSchema = new Schema({
   nodes: {
@@ -280,6 +290,10 @@ describe('Feedback review controller', () => {
   });
 
   afterEach(() => {
+    // Removing the DOM does not remove controller listeners on window/document.
+    // Dispose every fixture so a later scroll cannot schedule a prior test's rail.
+    reviewControllers.forEach(controller => controller.deactivate());
+    reviewControllers.clear();
     window.dispatchEvent(new CustomEvent('feedbackSessionEnded'));
     document.body.classList.remove('feedback-capture-active');
     document.body.innerHTML = '';
@@ -4756,7 +4770,7 @@ describe('Feedback review controller', () => {
     requestFrame.mockRestore();
   });
 
-  it('suppresses fallback brackets while hidden or capturing and does no scroll-time work', () => {
+  it('suppresses fallback brackets while hidden or capturing without scroll-time annotation layout', () => {
     const queuedFrames: FrameRequestCallback[] = [];
     const requestFrame = jest
       .spyOn(window, 'requestAnimationFrame')
@@ -4795,8 +4809,7 @@ describe('Feedback review controller', () => {
     ) as HTMLElement;
 
     window.dispatchEvent(new Event('scroll'));
-
-    expect(requestFrame).not.toHaveBeenCalled();
+    while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
     expect(firstRect).not.toHaveBeenCalled();
     expect(lastRect).not.toHaveBeenCalled();
 
@@ -5085,7 +5098,7 @@ describe('Feedback review controller', () => {
     expect(document.activeElement).toBe(marker);
   });
 
-  it('performs no annotation measurement or animation scheduling during document scroll', () => {
+  it('performs no saved-annotation measurement during document scroll', () => {
     const originalRequestAnimationFrame = window.requestAnimationFrame;
     const queuedFrames: FrameRequestCallback[] = [];
     const requestFrame = jest.fn((callback: FrameRequestCallback) => {
@@ -5136,16 +5149,18 @@ describe('Feedback review controller', () => {
     requestFrame.mockClear();
     targetRect.mockClear();
 
-    window.dispatchEvent(new Event('scroll'));
-
-    expect(requestFrame).not.toHaveBeenCalled();
-    expect(targetRect).not.toHaveBeenCalled();
-    controller.deactivate();
-    Object.defineProperty(window, 'requestAnimationFrame', {
-      configurable: true,
-      writable: true,
-      value: originalRequestAnimationFrame,
-    });
+    try {
+      window.dispatchEvent(new Event('scroll'));
+      while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
+      expect(targetRect).not.toHaveBeenCalled();
+    } finally {
+      controller.deactivate();
+      Object.defineProperty(window, 'requestAnimationFrame', {
+        configurable: true,
+        writable: true,
+        value: originalRequestAnimationFrame,
+      });
+    }
   });
 
   it('schedules one fresh layout when document fonts finish loading', async () => {
@@ -5248,7 +5263,7 @@ describe('Feedback review controller', () => {
     expect(perCardLookups).toHaveLength(0);
   });
 
-  it('keeps 10,000-line geometry reads bounded to 200 annotated targets and does no scroll work', () => {
+  it('keeps 10,000-line geometry reads bounded to 200 annotated targets without scroll-time annotation measurements', () => {
     const originalRequestAnimationFrame = window.requestAnimationFrame;
     const queuedFrames: FrameRequestCallback[] = [];
     const requestFrame = jest.fn((callback: FrameRequestCallback) => {
@@ -5352,45 +5367,51 @@ describe('Feedback review controller', () => {
         } as DOMRect;
       });
     const controller = createFeedbackReviewController({ editor, host });
-    controller.activate({
-      sessionId: 'session-1',
-      source: 'docs/guide.md',
-      sourceSha256: 'c'.repeat(64),
-      round: 'round-1',
-      items: Array.from({ length: 200 }, (_, index) => ({
-        id: `F${index + 1}`,
-        kind: 'text' as const,
-        startOrdinal: index * 50,
-        endOrdinal: index * 50,
-        startLine: index * 50 + 1,
-        endLine: index * 50 + 1,
-        focus: `Line ${index * 50 + 1}`,
-        feedback: `Comment ${index + 1}`,
-      })),
-    });
-    while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
-    requestFrame.mockClear();
-    const readsBeforeScroll = annotatedBlockReads;
+    try {
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'c'.repeat(64),
+        round: 'round-1',
+        items: Array.from({ length: 200 }, (_, index) => ({
+          id: `F${index + 1}`,
+          kind: 'text' as const,
+          startOrdinal: index * 50,
+          endOrdinal: index * 50,
+          startLine: index * 50 + 1,
+          endLine: index * 50 + 1,
+          focus: `Line ${index * 50 + 1}`,
+          feedback: `Comment ${index + 1}`,
+        })),
+      });
+      while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
+      requestFrame.mockClear();
+      const readsBeforeScroll = annotatedBlockReads;
 
-    window.dispatchEvent(new Event('scroll'));
+      window.dispatchEvent(new Event('scroll'));
+      while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
 
-    expect(unannotatedBlockReads).toBe(0);
-    expect(annotatedBlockReads).toBe(200);
-    expect(annotatedBlockReads).toBe(readsBeforeScroll);
-    expect(requestFrame).not.toHaveBeenCalled();
-    expect(
-      Number.parseFloat(
-        (document.querySelector('[data-feedback-marker][data-feedback-ids="F200"]') as HTMLElement)
-          .style.top
-      )
-    ).toBeGreaterThan(200_000);
-    controller.deactivate();
-    rect.mockRestore();
-    Object.defineProperty(window, 'requestAnimationFrame', {
-      configurable: true,
-      writable: true,
-      value: originalRequestAnimationFrame,
-    });
+      expect(unannotatedBlockReads).toBe(0);
+      expect(annotatedBlockReads).toBe(200);
+      expect(annotatedBlockReads).toBe(readsBeforeScroll);
+      expect(
+        Number.parseFloat(
+          (
+            document.querySelector(
+              '[data-feedback-marker][data-feedback-ids="F200"]'
+            ) as HTMLElement
+          ).style.top
+        )
+      ).toBeGreaterThan(200_000);
+    } finally {
+      controller.deactivate();
+      rect.mockRestore();
+      Object.defineProperty(window, 'requestAnimationFrame', {
+        configurable: true,
+        writable: true,
+        value: originalRequestAnimationFrame,
+      });
+    }
   }, 10_000);
 
   it('keeps repeated whole-block hover bounded in a 10,000-block document', () => {
@@ -5550,7 +5571,11 @@ describe('Feedback review controller', () => {
       requestFrame.mockClear();
       window.dispatchEvent(new Event('scroll'));
       expect(targetReads).toBe(readsBeforeScroll);
-      expect(requestFrame).not.toHaveBeenCalled();
+      expect(requestFrame).toHaveBeenCalledTimes(1);
+      while (queuedFrames.length > 0) queuedFrames.shift()?.(0);
+      expect(targetReads).toBe(readsBeforeScroll + 1);
+      expect(otherBlockReads).toBe(0);
+      expect(forEachBlock).not.toHaveBeenCalled();
     } finally {
       controller.deactivate();
       selectionSpy.mockRestore();
@@ -7720,6 +7745,87 @@ describe('Feedback review controller', () => {
     }
   });
 
+  it('keeps the rail visible while a tall table scrolls and cancels pending layout on teardown', async () => {
+    const editor = createTableEditorFixture();
+    const table = editor.view.dom.firstElementChild as HTMLElement;
+    const container = document.querySelector<HTMLElement>('#editor')!;
+    const toolbar = document.querySelector<HTMLElement>('.formatting-toolbar')!;
+    let scrollTop = 0;
+    const rect = (top: number, height: number) =>
+      ({ top, bottom: top + height, left: 80, right: 720, width: 640, height }) as DOMRect;
+    table.getBoundingClientRect = jest.fn(() => rect(120 - scrollTop, 1200));
+    container.getBoundingClientRect = () => rect(-scrollTop, 1500);
+    toolbar.getBoundingClientRect = () => rect(0, 64);
+    const controller = createFeedbackReviewController({ editor, host });
+    const selection = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: null,
+      focusNode: null,
+      anchorOffset: 0,
+      focusOffset: 0,
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+    } as unknown as Selection);
+    const request = jest.spyOn(window, 'requestAnimationFrame');
+    const cancel = jest.spyOn(window, 'cancelAnimationFrame');
+    try {
+      controller.activate({
+        sessionId: 'scroll-session',
+        source: 'table.md',
+        sourceSha256: 'e'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 20 }],
+        items: [],
+      });
+      dispatchFeedbackBlockHover(table.querySelector('td')!);
+      await waitForFeedbackFrame();
+      const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]')!;
+      expect(action.hidden).toBe(false);
+      expect(action.style.top).toBe('122px');
+
+      const frames: FrameRequestCallback[] = [];
+      request.mockImplementation(callback => {
+        frames.push(callback);
+        return frames.length;
+      });
+      const measure = table.getBoundingClientRect as jest.Mock;
+      measure.mockClear();
+      scrollTop = 400;
+      // Scroll does not bubble, including on nested scroll containers.
+      container.dispatchEvent(new Event('scroll'));
+      document.dispatchEvent(new Event('scroll'));
+      window.dispatchEvent(new Event('scroll'));
+      expect(frames).toHaveLength(1);
+      expect(measure).not.toHaveBeenCalled();
+      frames[0](0);
+      expect(measure).toHaveBeenCalledTimes(1);
+      expect(action.hidden).toBe(false);
+      expect(Number.parseFloat(action.style.top) - scrollTop).toBe(68);
+
+      scrollTop = 1400;
+      document.dispatchEvent(new Event('scroll'));
+      frames[1](0);
+      expect(action.hidden).toBe(true);
+      scrollTop = 400;
+      document.dispatchEvent(new Event('scroll'));
+      frames[2](0);
+      expect(action.hidden).toBe(false);
+
+      document.dispatchEvent(new Event('scroll'));
+      controller.deactivate();
+      expect(cancel).toHaveBeenCalledWith(4);
+      expect(action.isConnected).toBe(false);
+      request.mockClear();
+      document.dispatchEvent(new Event('scroll'));
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      controller.deactivate();
+      selection.mockRestore();
+      request.mockRestore();
+      cancel.mockRestore();
+    }
+  });
+
   it('keeps the exact-text action authoritative over a visible block action', async () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
@@ -7766,6 +7872,7 @@ describe('Feedback review controller', () => {
       const blockAction = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
       expect(blockAction).not.toBeNull();
       expect(blockAction?.hidden).toBe(false);
+      blockAction?.dispatchEvent(new Event('pointerenter'));
       expect(
         document.querySelector<HTMLElement>('[data-feedback-block-target-preview]')?.hidden
       ).toBe(false);

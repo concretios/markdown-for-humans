@@ -44,6 +44,11 @@ const FEEDBACK_COMMANDS = [
     'Markdown for Humans: Add Feedback to Selection',
   ],
   [
+    'markdownForHumans.feedback.chooseScope',
+    'chooseScope',
+    'Markdown for Humans: Choose Feedback Scope',
+  ],
+  [
     'markdownForHumans.feedback.captureArea',
     'captureArea',
     'Markdown for Humans: Capture Feedback Area',

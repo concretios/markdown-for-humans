@@ -49,6 +49,8 @@ export interface FeedbackTargetPresentationInput {
   readonly renderedRange?: FeedbackRenderedRangeInputV1;
   readonly cellTarget?: FeedbackCellTargetInputV1;
   readonly presentationReason?: FeedbackTargetPresentationReason;
+  readonly sectionLabel?: string;
+  readonly structuralScope?: { readonly label: string };
 }
 
 export interface FeedbackTextTargetPreview {
@@ -354,6 +356,27 @@ export function getFeedbackTargetPresentation(
     };
   }
 
+  if (target.structuralScope)
+    return {
+      kind: 'multi-block',
+      label: target.structuralScope.label,
+      detail: 'Complete rendered text in this scope. Source lines identify the containing block.',
+      preferredComposerSize: 'compact',
+      lineContext: 'containing-source',
+      preview: null,
+      explanation: null,
+    };
+  if (target.sectionLabel && !target.renderedRange && !target.cellTarget) {
+    return {
+      kind: 'multi-block',
+      label: `Section: ${target.sectionLabel}`,
+      detail: 'Includes the heading and all subsections',
+      preferredComposerSize: 'compact',
+      lineContext: 'source',
+      preview: null,
+      explanation: null,
+    };
+  }
   const first = doc.maybeChild(target.startOrdinal) as ProseMirrorNode | null;
   const last = doc.maybeChild(target.endOrdinal) as ProseMirrorNode | null;
   if (!first || !last) {

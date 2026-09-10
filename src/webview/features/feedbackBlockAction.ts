@@ -6,7 +6,9 @@
  * @fileoverview Session-scoped whole-block Feedback targeting and gutter action.
  */
 
+import type { FeedbackStructureScope } from './feedbackStructureIndex';
 import type { Editor } from '@tiptap/core';
+import { createFeedbackSectionIndex } from './feedbackSectionIndex';
 import { feedbackFocusForMappedBlock } from './feedbackRenderedRange';
 import type { FeedbackTargetPresentationReason } from './feedbackTargetPresentation';
 
@@ -23,6 +25,10 @@ export interface FeedbackBlockActionTarget {
   startLine: number;
   endLine: number;
   presentationReason?: FeedbackTargetPresentationReason;
+  /** Ephemeral UI intent; v2 persists an ordinary complete-block span. */
+  sectionLabel?: string;
+  structuralScope?: FeedbackStructureScope;
+  scopePosition?: number;
 }
 
 export interface FeedbackBlockElementTarget {
@@ -36,10 +42,11 @@ export interface FeedbackBlockElementIndex {
 }
 
 /**
- * Index every frozen top-level document node once. ProseMirror widgets such as
- * GapCursor can be direct DOM children, so document offsets and `nodeDOM`
- * remain authoritative instead of raw child indexes. Anchor availability is
- * enforced separately by the target resolver, while annotation geometry can
+ * Index frozen top-level document positions while allowing their live DOM to
+ * change. ProseMirror may replace a pending target's DOM without changing the
+ * document. Recover only through canonical positions and exact `nodeDOM`
+ * identity, never by treating widgets as document children. Anchor availability
+ * is enforced separately by the target resolver, while annotation geometry can
  * still resolve legacy sessions with sparse or absent anchors.
  */
 export function createFeedbackBlockElementIndex(
@@ -47,13 +54,17 @@ export function createFeedbackBlockElementIndex(
   anchors: readonly FeedbackBlockActionAnchor[]
 ): FeedbackBlockElementIndex {
   const root = editor.view.dom as HTMLElement;
+  const frozenDocument = editor.state.doc;
   const ordinalsByElement = new WeakMap<HTMLElement, number>();
   const elementsByOrdinal = new Map<number, HTMLElement>();
   const offsetsByOrdinal = new Map<number, number>();
 
-  editor.state.doc.forEach((_node, offset, ordinal) => {
+  frozenDocument.forEach((_node, offset, ordinal) => {
     offsetsByOrdinal.set(ordinal, offset);
   });
+
+  const matchesFrozenDocument = (): boolean =>
+    editor.state.doc === frozenDocument && editor.view.dom === root && root.isConnected;
 
   const remember = (ordinal: number, nodeDom: Node | null): HTMLElement | null => {
     const element = nodeDom instanceof HTMLElement ? nodeDom : null;
@@ -76,13 +87,23 @@ export function createFeedbackBlockElementIndex(
   }
 
   const elementForOrdinal = (ordinal: number): HTMLElement | null => {
+    if (!matchesFrozenDocument()) return null;
     const cached = elementsByOrdinal.get(ordinal);
-    if (cached) return cached;
+    if (cached?.isConnected && cached.parentElement === root) return cached;
+    if (cached) {
+      ordinalsByElement.delete(cached);
+      elementsByOrdinal.delete(ordinal);
+    }
     const offset = offsetsByOrdinal.get(ordinal);
-    if (offset === undefined || hasDenseCanonicalMap || typeof editor.view.nodeDOM !== 'function') {
+    if (offset === undefined || typeof editor.view.nodeDOM !== 'function') {
       return null;
     }
-    return remember(ordinal, editor.view.nodeDOM(offset));
+    try {
+      return remember(ordinal, editor.view.nodeDOM(offset));
+    } catch {
+      // A NodeView can be temporarily unavailable during reconciliation.
+      return null;
+    }
   };
 
   // Ambiguous custom DOM falls back only for actionable anchors and resolves
@@ -94,6 +115,7 @@ export function createFeedbackBlockElementIndex(
 
   return {
     resolve(node) {
+      if (!matchesFrozenDocument()) return null;
       let element = node instanceof Element ? node : (node?.parentElement ?? null);
       while (element && element.parentElement !== root) {
         if (element === root) return null;
@@ -101,7 +123,25 @@ export function createFeedbackBlockElementIndex(
       }
       if (!(element instanceof HTMLElement) || element.parentElement !== root) return null;
       const ordinal = ordinalsByElement.get(element);
-      return ordinal === undefined ? null : { ordinal, element };
+      if (ordinal !== undefined) return { ordinal, element };
+      if (
+        typeof editor.view.posAtDOM !== 'function' ||
+        typeof frozenDocument.resolve !== 'function'
+      ) {
+        return null;
+      }
+      try {
+        const position = editor.view.posAtDOM(element, 0);
+        if (!Number.isSafeInteger(position)) return null;
+        const recoveredOrdinal = frozenDocument.resolve(position).index(0);
+        // A foreign widget may map to a nearby position. Only the canonical
+        // element itself may acquire that position's Feedback target.
+        return elementForOrdinal(recoveredOrdinal) === element
+          ? { ordinal: recoveredOrdinal, element }
+          : null;
+      } catch {
+        return null;
+      }
     },
     elementForOrdinal,
   };
@@ -109,6 +149,8 @@ export function createFeedbackBlockElementIndex(
 
 export interface FeedbackBlockActionTargetResolver {
   resolve(ordinal: number): FeedbackBlockActionTarget | null;
+  section(ordinal: number): FeedbackBlockActionTarget | null;
+  sectionsContaining(ordinal: number): readonly FeedbackBlockActionTarget[];
 }
 
 /** Index anchors once and build honest block-only targets on demand. */
@@ -122,7 +164,30 @@ export function createFeedbackBlockActionTargetResolver(
     number,
     { document: object; target: FeedbackBlockActionTarget | null }
   >();
+  const sectionIndex = createFeedbackSectionIndex(editor.state.doc, anchors);
+  const sectionTarget = (ordinal: number): FeedbackBlockActionTarget | null => {
+    const section = sectionIndex.section(ordinal);
+    if (!section) return null;
+    const first = anchorsByOrdinal.get(section.startOrdinal);
+    const last = anchorsByOrdinal.get(section.endOrdinal);
+    if (!first || !last) return null;
+    return {
+      startOrdinal: section.startOrdinal,
+      endOrdinal: section.endOrdinal,
+      startLine: first.startLine,
+      endLine: last.endLine,
+      focus: section.label,
+      sectionLabel: section.label,
+      presentationReason: 'whole-block-action',
+    };
+  };
   return {
+    section: sectionTarget,
+    sectionsContaining: ordinal =>
+      sectionIndex.ancestors(ordinal).flatMap(section => {
+        const target = sectionTarget(section.startOrdinal);
+        return target ? [target] : [];
+      }),
     resolve(ordinal) {
       const anchor = anchorsByOrdinal.get(ordinal);
       const document = editor.state.doc;
@@ -165,6 +230,7 @@ interface VisibleFeedbackBlockAction {
   target: FeedbackBlockActionTarget;
   element: HTMLElement;
   isTable: boolean;
+  endElement?: HTMLElement;
 }
 
 export interface FeedbackBlockActionView {
@@ -208,6 +274,7 @@ export function createFeedbackBlockActionView(options: {
   let visible: VisibleFeedbackBlockAction | null = null;
   let previewTarget: HTMLElement | null = null;
   let alternatePreviewAnimation = false;
+  let previewEngaged = false;
 
   const hidePreview = (): void => {
     preview.hidden = true;
@@ -260,7 +327,20 @@ export function createFeedbackBlockActionView(options: {
       return;
     }
     button.hidden = false;
-    positionPreview(visible.element, blockRect, containerRect);
+    if (previewEngaged) {
+      const endRect = visible.endElement?.getBoundingClientRect() ?? blockRect;
+      positionPreview(
+        visible.element,
+        {
+          ...blockRect,
+          left: blockRect.left,
+          top: blockRect.top,
+          width: blockRect.width,
+          height: Math.max(blockRect.height, endRect.bottom - blockRect.top),
+        } as DOMRect,
+        containerRect
+      );
+    } else hidePreview();
     const unclampedLeft = blockRect.left - containerRect.left - actionWidth - 8;
     const maxLeft = Math.max(0, containerRect.width - actionWidth);
     button.style.left = `${Math.max(0, Math.min(unclampedLeft, maxLeft))}px`;
@@ -272,6 +352,22 @@ export function createFeedbackBlockActionView(options: {
     event.preventDefault();
     event.stopPropagation();
   };
+  button.addEventListener('pointerenter', () => {
+    previewEngaged = true;
+    position();
+  });
+  button.addEventListener('pointerleave', () => {
+    previewEngaged = document.activeElement === button;
+    if (!previewEngaged) hidePreview();
+  });
+  button.addEventListener('focus', () => {
+    previewEngaged = true;
+    position();
+  });
+  button.addEventListener('blur', () => {
+    previewEngaged = false;
+    hidePreview();
+  });
   button.addEventListener('pointerdown', preserveDocumentSelection);
   button.addEventListener('mousedown', preserveDocumentSelection);
   button.addEventListener('click', () => {
@@ -289,17 +385,27 @@ export function createFeedbackBlockActionView(options: {
     show(input) {
       const unchanged =
         visible?.target.startOrdinal === input.target.startOrdinal &&
+        visible?.target.endOrdinal === input.target.endOrdinal &&
+        visible?.target.structuralScope?.from === input.target.structuralScope?.from &&
+        visible?.target.structuralScope?.to === input.target.structuralScope?.to &&
         visible.element === input.element &&
         visible.isTable === input.isTable;
       const needsPosition = !unchanged || button.hidden;
       visible = input;
       button.setAttribute(
         'aria-label',
-        input.isTable ? 'Add feedback to this table' : 'Add feedback to this block'
+        input.target.structuralScope
+          ? `Add feedback to ${input.target.structuralScope.label}`
+          : input.target.sectionLabel
+            ? `Add feedback to section ${input.target.sectionLabel}, including subsections`
+            : input.isTable
+              ? 'Add feedback to this table'
+              : 'Add feedback to this block'
       );
       if (needsPosition) position();
     },
     hide() {
+      previewEngaged = false;
       visible = null;
       button.hidden = true;
       hidePreview();

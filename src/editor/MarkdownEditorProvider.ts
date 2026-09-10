@@ -4,6 +4,7 @@
  * Licensed under the MIT License. See LICENSE file in the project root for details.
  */
 
+import { createFeedbackSourceFormatIndex } from './feedbackSourceFormatIndex';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
@@ -320,6 +321,7 @@ interface ActiveFeedbackSession {
   sourceIndex: FeedbackSourceIndex;
   anchorMap: FeedbackAnchorMap;
   canonicalBlocks: Map<number, FeedbackCanonicalBlockState>;
+  sourceFormatIndex?: ReturnType<typeof createFeedbackSourceFormatIndex>;
   targets: Map<string, { startOrdinal: number; endOrdinal: number }>;
   previewNonce: string;
   previewRevisions: Map<string, number>;
@@ -4091,35 +4093,26 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     session: ActiveFeedbackSession,
     target: { startOrdinal: number; endOrdinal: number; startLine: number }
   ): FeedbackSourceEvidenceFormat {
-    const formats = new Set<FeedbackSourceEvidenceFormat>();
-    for (let ordinal = target.startOrdinal; ordinal <= target.endOrdinal; ordinal += 1) {
-      const block = this.feedbackCanonicalEndpointV2(session, ordinal);
-      const kind = normalizeFeedbackBlockKindV2(block.kind);
-      if (kind === null || kind === 'other') {
-        formats.add('text');
-        continue;
-      }
-      if (kind === 'html') {
-        formats.add('html');
-        continue;
-      }
-      const anchor = session.anchorMap.blocks.find(candidate => candidate.ordinal === ordinal);
-      const firstLine =
-        anchor === undefined ? undefined : session.sourceIndex.lines[anchor.startLine - 1];
-      if (firstLine !== undefined && kind === 'table') {
-        const prefix = session.sourceBytes
-          .subarray(firstLine.startByteOffset, firstLine.endByteOffset)
-          .toString('utf8')
-          .trimStart();
-        if (/^<(?:table|thead|tbody|tfoot|tr|th|td)\b/i.test(prefix)) {
-          formats.add('html');
-          continue;
-        }
-      }
-      formats.add('markdown');
+    if (!session.sourceFormatIndex) {
+      session.sourceFormatIndex = createFeedbackSourceFormatIndex(
+        session.anchorMap.blocks.map(anchor => {
+          const block = this.feedbackCanonicalEndpointV2(session, anchor.ordinal);
+          const kind = normalizeFeedbackBlockKindV2(block.kind);
+          let format: FeedbackSourceEvidenceFormat =
+            kind === null || kind === 'other' ? 'text' : kind === 'html' ? 'html' : 'markdown';
+          const firstLine = session.sourceIndex.lines[anchor.startLine - 1];
+          if (kind === 'table' && firstLine) {
+            const prefix = session.sourceBytes
+              .subarray(firstLine.startByteOffset, firstLine.endByteOffset)
+              .toString('utf8')
+              .trimStart();
+            if (/^<(?:table|thead|tbody|tfoot|tr|th|td)\b/i.test(prefix)) format = 'html';
+          }
+          return { ordinal: anchor.ordinal, format };
+        })
+      );
     }
-    if (formats.size === 1) return formats.values().next().value ?? 'text';
-    return 'text';
+    return session.sourceFormatIndex(target.startOrdinal, target.endOrdinal);
   }
 
   /** Recompute stable v2 aggregate budgets from durable items only. */
@@ -7115,6 +7108,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         sourceIndex: createFeedbackSourceIndex(sourceBytes),
         anchorMap: nextAnchorMap,
         canonicalBlocks: nextCanonicalBlocks,
+        sourceFormatIndex: undefined,
         targets: new Map(),
         previewNonce: crypto.randomBytes(8).toString('hex'),
         previewRevisions: new Map(

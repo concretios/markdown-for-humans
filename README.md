@@ -157,6 +157,10 @@ Feedback mode freezes one saved Markdown file so you can comment on the rich vie
 4. Use **Comments** to hide or show document-aligned pins and cards. Exact text, including resolved cross-block text, is highlighted only in Feedback mode. Multi-block block-level fallbacks and opaque targets use one continuous edge bracket. Compact cards follow their targets as the document scrolls, and only the active card expands with the exact quote or capture preview plus source lines.
 5. Click **Finish & copy** to verify the frozen source hash, seal the bundle, and copy an agent handoff prompt.
 
+The left-rail action beside a heading selects its entire section, including subsections, up to the next heading at the same or higher level. **Change scope** keeps the unfinished comment while switching to the heading alone, a containing section, or a supported container. A parent list item includes its descendants and excludes sibling items. For a regular table, point inside a cell and use **Change scope** for the cell, full row, full column, or whole table. **Choose Feedback Scope** in the Command Palette opens these choices at the caret. Ordinary text dragging keeps its normal behavior; only hovering or focusing the rail control previews a structural target.
+
+Whole top-level blocks and heading sections retain exact authored source evidence. Nested text scopes use exact rendered-text evidence and a snapshot-bound locator; their source-line labels refer to the containing block. Their semantic labels are shown while composing, while saved v2 comments reopen with the existing exact-text or block-range presentation. Images, opaque content, oversized nested text and unsupported table grids keep explicit containing-block or area-capture alternatives. These actions do not claim an exact nested Markdown subtree or an image-only source span.
+
 The formatting toolbar is replaced by Feedback actions while a session is active, and document editing is locked while text selection and search remain available. If the source changes outside the frozen rich view, the session is invalidated: its draft stays on disk, but new feedback and finishing are disabled.
 
 Use the visible **Discard draft…** action to abandon the whole session. Its confirmation reports how many saved feedback items will be moved to Trash before Feedback mode ends. Discard remains available as a recovery action when an external source change invalidates the snapshot.
@@ -352,6 +356,7 @@ Feedback commands are available in the Command Palette with no default keyboard 
 | ------------------------------- | -------------------------------------------------- |
 | Start Feedback                  | `markdownForHumans.feedback.start`                 |
 | Add Feedback to Selection       | `markdownForHumans.feedback.commentSelection`      |
+| Choose Feedback Scope           | `markdownForHumans.feedback.chooseScope`           |
 | Capture Feedback Area           | `markdownForHumans.feedback.captureArea`           |
 | Capture Selected Blocks         | `markdownForHumans.feedback.captureSelectedBlocks` |
 | Toggle Feedback Comments        | `markdownForHumans.feedback.toggleComments`        |

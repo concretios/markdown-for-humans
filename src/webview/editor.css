@@ -5940,3 +5940,23 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
     transform: none;
   }
 }
+
+/* A single bounded scope chooser shares the existing composer draft. */
+.feedback-scope-controls {
+  margin: 8px 0;
+}
+.feedback-scope-list:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--vscode-editorWidget-border);
+  border-radius: 4px;
+}
+.feedback-scope-list button {
+  text-align: left;
+  white-space: normal;
+}

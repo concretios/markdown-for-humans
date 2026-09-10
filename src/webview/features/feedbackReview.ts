@@ -33,6 +33,11 @@ import {
   type FeedbackRendererEvidenceV2,
   type FeedbackRendererTargetV2,
 } from '../../shared/feedbackEvidenceV2';
+import {
+  createFeedbackStructureIndex,
+  type FeedbackStructureScope,
+} from './feedbackStructureIndex';
+import { feedbackTableScopes } from './feedbackTableScopes';
 import { serializeBlockMarkdown } from '../utils/markdownSerialization';
 import {
   FEEDBACK_COMMENTS_PANEL_ID,
@@ -67,6 +72,7 @@ import {
   type FeedbackDiscardDialogController,
 } from './feedbackDiscardDialog';
 import {
+  blockRelativeRangeFromPositions,
   feedbackFocusForBlockRange,
   feedbackTopLevelOrdinalForDomNode,
   getFeedbackTargetFromDomRange,
@@ -186,6 +192,11 @@ export interface FeedbackTextTarget {
   };
   /** Renderer-only reason used to explain honest whole-block fallbacks. */
   presentationReason?: FeedbackTargetPresentationReason;
+  /** Current composer intent, not persisted in the v2 grammar. */
+  sectionLabel?: string;
+  structuralScope?: FeedbackStructureScope;
+  scopePosition?: number;
+  scopeLabel?: string;
 }
 
 export interface FeedbackRendererCaptureV2 {
@@ -411,6 +422,8 @@ export interface FeedbackReviewController {
   updateItems(items: FeedbackItemSummary[]): void;
   openTextComposer(target: FeedbackTextTarget): void;
   commentOnSelection(): boolean;
+  /** Open the bounded scope chooser at the current caret or selection. */
+  chooseScope(): boolean;
   toggleComments(force?: boolean): void;
   navigateFeedback(direction: 'next' | 'previous'): void;
   finish(): void;
@@ -978,8 +991,11 @@ export function createFeedbackReviewController(options: {
   let blockTargetResolver: FeedbackBlockActionTargetResolver | null = null;
   let hoveredBlockTarget: FeedbackBlockElementTarget | null = null;
   let visibleBlockOrdinal: number | null = null;
+  let structureIndex: ReturnType<typeof createFeedbackStructureIndex> | null = null;
+  let hoveredScopePosition: number | null = null;
   let pendingBlockHoverNode: Node | null = null;
   let blockHoverFrame: number | null = null;
+  let blockScrollFrame: number | null = null;
   let blockLeaveTimer: number | null = null;
   let blockPointerSelecting = false;
   let blockActionPointerInside = false;
@@ -1565,6 +1581,10 @@ export function createFeedbackReviewController(options: {
 
   const destroyBlockAction = (): void => {
     clearBlockLeaveTimer();
+    if (blockScrollFrame !== null) {
+      if (blockScrollFrame >= 0) cancelAnimationFrame(blockScrollFrame);
+      blockScrollFrame = null;
+    }
     if (blockHoverFrame !== null) {
       if (blockHoverFrame >= 0) cancelAnimationFrame(blockHoverFrame);
       blockHoverFrame = null;
@@ -1578,6 +1598,8 @@ export function createFeedbackReviewController(options: {
     blockActionView = null;
     blockElementIndex = null;
     blockTargetResolver = null;
+    structureIndex = null;
+    hoveredScopePosition = null;
   };
 
   /**
@@ -1661,6 +1683,41 @@ export function createFeedbackReviewController(options: {
     return null;
   };
 
+  const structuralTarget = (
+    scope: FeedbackStructureScope,
+    position: number
+  ): FeedbackTextTarget | null => {
+    const base = blockTargetResolver?.resolve(scope.ordinal);
+    if (!base) return null;
+    if (scope.wholeBlock) return { ...base, scopePosition: position };
+    return { ...base, focus: scope.label, structuralScope: scope, scopePosition: position };
+  };
+  const materializeScope = (target: FeedbackTextTarget): FeedbackTextTarget | null => {
+    if (!target.structuralScope)
+      return {
+        ...target,
+        focus:
+          target.renderedRange || target.cellTarget
+            ? target.focus
+            : feedbackFocusForBlockRange(editor, target.startOrdinal, target.endOrdinal),
+      };
+    const scope = target.structuralScope;
+    const range = blockRelativeRangeFromPositions(editor.state.doc, scope.from, scope.to);
+    const resolved = range && resolveFeedbackRenderedRange(editor, range);
+    if (
+      !resolved ||
+      feedbackUtf8ByteLengthV2(resolved.focus) > FEEDBACK_MAX_TEXTUAL_EVIDENCE_BYTES_V2
+    )
+      return null;
+    // NodeViews can put labels and controls beside their contentDOM. A complete
+    // subtree DOM range must not turn that UI text into document evidence.
+    const authoredText = editor.state.doc
+      .textBetween(resolved.from, resolved.to, '', '')
+      .replace(/\r\n/g, '\n');
+    if (authoredText !== resolved.focus) return null;
+    return { ...target, focus: resolved.focus, renderedRange: resolved.range };
+  };
+
   const showBlockActionFor = (block: FeedbackBlockElementTarget): void => {
     if (!blockActionSelectionIsEligible() || !blockTargetResolver || !blockActionView) {
       hideBlockAction();
@@ -1677,7 +1734,16 @@ export function createFeedbackReviewController(options: {
       hideBlockAction(true);
       return;
     }
-    const target = blockTargetResolver.resolve(block.ordinal);
+    const position = hoveredScopePosition ?? editor.state.selection.from;
+    const scope = structureIndex?.atPosition(position);
+    const nested =
+      scope && !scope.wholeBlock && scope.ordinal === block.ordinal
+        ? structuralTarget(scope, position)
+        : null;
+    const target =
+      nested ??
+      blockTargetResolver.section(block.ordinal) ??
+      blockTargetResolver.resolve(block.ordinal);
     const node = editor.state.doc.maybeChild(block.ordinal);
     if (!target || !node) {
       hideBlockAction(true);
@@ -1685,9 +1751,17 @@ export function createFeedbackReviewController(options: {
     }
     visibleBlockOrdinal = block.ordinal;
     blockActionView.show({
-      target,
-      element: block.element,
+      target: { ...target, scopePosition: position },
+      element: target.structuralScope
+        ? ((editor.view.nodeDOM(target.structuralScope.from) as HTMLElement) ?? block.element)
+        : block.element,
       isTable: node.type.name === 'table',
+      endElement: target.structuralScope
+        ? (() => {
+            const dom = editor.view.domAtPos(target.structuralScope.to - 1).node;
+            return dom instanceof HTMLElement ? dom : (dom.parentElement ?? undefined);
+          })()
+        : (blockElementIndex?.elementForOrdinal(target.endOrdinal) ?? undefined),
     });
   };
 
@@ -1718,6 +1792,12 @@ export function createFeedbackReviewController(options: {
       const pendingNode = pendingBlockHoverNode;
       pendingBlockHoverNode = null;
       hoveredBlockTarget = blockElementIndex?.resolve(pendingNode) ?? null;
+      try {
+        hoveredScopePosition =
+          pendingNode && structureIndex ? editor.view.posAtDOM(pendingNode, 0) : null;
+      } catch {
+        hoveredScopePosition = null;
+      }
       if (hoveredBlockTarget) showBlockActionFor(hoveredBlockTarget);
       else hideBlockAction();
     });
@@ -1757,6 +1837,7 @@ export function createFeedbackReviewController(options: {
       blockLeaveTimer = null;
       if (blockActionPointerInside || document.activeElement === blockActionView?.element) return;
       hoveredBlockTarget = null;
+      hoveredScopePosition = null;
       refreshBlockAction();
     }, 80);
   };
@@ -1768,6 +1849,18 @@ export function createFeedbackReviewController(options: {
       return;
     }
     scheduleBlockLeave();
+  };
+
+  const handleReviewScroll = (): void => {
+    if (visibleBlockOrdinal === null || blockScrollFrame !== null) return;
+    // QA-RAIL-001: tall blocks remain targeted while scrolling. Refresh only
+    // their geometry, once per paint, without changing native selection.
+    blockScrollFrame = -1;
+    const frame = requestAnimationFrame(() => {
+      blockScrollFrame = null;
+      blockActionView?.reposition();
+    });
+    if (blockScrollFrame === -1) blockScrollFrame = frame;
   };
 
   const handleReviewResize = (): void => {
@@ -1786,6 +1879,8 @@ export function createFeedbackReviewController(options: {
     const elementIndex = createFeedbackBlockElementIndex(editor, anchors);
     blockElementIndex = elementIndex;
     blockTargetResolver = createFeedbackBlockActionTargetResolver(editor, anchors, elementIndex);
+    if (typeof editor.state.doc.resolve === 'function')
+      structureIndex = createFeedbackStructureIndex(editor.state.doc);
     blockActionView = createFeedbackBlockActionView({
       container: editorContainer,
       before: rail,
@@ -1803,8 +1898,11 @@ export function createFeedbackReviewController(options: {
           hideBlockAction(true);
           return;
         }
-        const target = blockTargetResolver?.resolve(ordinal) ?? null;
+        const target = materializeScope(candidate);
         if (!target) {
+          announce(
+            'This scope cannot be represented as complete text. Choose its whole container or use area capture.'
+          );
           hideBlockAction(true);
           return;
         }
@@ -4493,7 +4591,7 @@ export function createFeedbackReviewController(options: {
       });
       syncComposerSize();
       headingRow.append(heading, sizeToggle);
-      const targetContext = createFeedbackTargetPresentationView({
+      let targetContext = createFeedbackTargetPresentationView({
         ownerDocument: document,
         presentation: targetPresentation,
         focusAttribute: 'data-feedback-focus',
@@ -4645,7 +4743,160 @@ export function createFeedbackReviewController(options: {
         }
       });
       actions.append(cancel, submit);
-      composerElement.append(headingRow, targetContext, lines, label, actions);
+      const scopeContainer = createElement('div', 'feedback-scope-controls');
+      if (blockTargetResolver) {
+        const scopeButton = createElement('button', 'feedback-secondary-button', 'Change scope');
+        scopeButton.type = 'button';
+        scopeButton.setAttribute('aria-expanded', 'false');
+        const scopeList = createElement('div', 'feedback-scope-list');
+        scopeList.hidden = true;
+        scopeList.setAttribute('role', 'group');
+        scopeList.setAttribute('aria-label', 'Choose feedback scope');
+        const firstOrdinal = target.startOrdinal;
+        const block = blockTargetResolver.resolve(firstOrdinal);
+        const position = target.scopePosition ?? editor.state.selection.from;
+        const structuralChoices =
+          structureIndex
+            ?.choices(position)
+            .filter(scope => scope.ordinal === firstOrdinal)
+            .flatMap(scope => {
+              const candidate = structuralTarget(scope, position);
+              return candidate ? [candidate] : [];
+            }) ?? [];
+        const candidates: FeedbackTextTarget[] = [
+          ...structuralChoices,
+          ...(block &&
+          !structuralChoices.some(
+            choice => !choice.structuralScope && choice.startOrdinal === firstOrdinal
+          )
+            ? [block]
+            : []),
+          ...blockTargetResolver.sectionsContaining(firstOrdinal),
+        ];
+        // Keep a manually chosen range reachable after promoting to an ancestor.
+        const choices = candidates.some(
+          candidate =>
+            candidate.startOrdinal === target.startOrdinal &&
+            candidate.endOrdinal === target.endOrdinal &&
+            candidate.sectionLabel === target.sectionLabel &&
+            candidate.structuralScope?.from === target.structuralScope?.from &&
+            candidate.structuralScope?.to === target.structuralScope?.to &&
+            (!target.renderedRange || Boolean(target.structuralScope)) &&
+            !target.cellTarget
+        )
+          ? candidates
+          : [target, ...candidates];
+        const appendScopeChoice = (candidate: FeedbackTextTarget): void => {
+          const description = getFeedbackTargetPresentation(editor.state.doc, candidate);
+          const option = createElement(
+            'button',
+            'feedback-secondary-button',
+            candidate.scopeLabel ?? description.label
+          );
+          option.type = 'button';
+          option.addEventListener('click', () => {
+            if (pendingRequestId !== null || !hasWritableSession()) return;
+            const resolved = materializeScope(candidate);
+            if (!resolved) {
+              announce(
+                'This scope cannot be represented as complete text. Choose its whole container or use area capture.'
+              );
+              return;
+            }
+            const bounded = constrainCellTargetToSessionBudget(resolved);
+            if (resolved.cellTarget && !bounded.cellTarget) {
+              announce(
+                'This round has reached its exact-cell limit. Choose the whole table or start a new round.'
+              );
+              return;
+            }
+            target = bounded;
+            composerTarget = target;
+            lastValidTargetGeometry.delete('__composer__');
+            markPendingTarget(target);
+            const presentation = getFeedbackTargetPresentation(editor.state.doc, target);
+            const next = createFeedbackTargetPresentationView({
+              ownerDocument: document,
+              presentation,
+              focusAttribute: 'data-feedback-focus',
+            });
+            targetContext.replaceWith(next);
+            targetContext = next;
+            lines.textContent = formatFeedbackTargetSourceLines(
+              target.startLine,
+              target.endLine,
+              presentation.lineContext
+            );
+            scopeList.hidden = true;
+            scopeButton.setAttribute('aria-expanded', 'false');
+            syncAnnotationDecorations();
+            scheduleAnnotationLayout();
+            scopeButton.focus({ preventScroll: true });
+          });
+          scopeList.append(option);
+        };
+        choices.forEach(appendScopeChoice);
+        let tableScopesLoaded = false;
+        const isTableScope = Boolean(
+          structureIndex &&
+          block &&
+          editor.state.doc.maybeChild(firstOrdinal)?.type.name === 'table'
+        );
+        scopeButton.addEventListener('click', () => {
+          if (pendingRequestId !== null) return;
+          scopeList.hidden = !scopeList.hidden;
+          scopeButton.setAttribute('aria-expanded', String(!scopeList.hidden));
+          if (!scopeList.hidden && !tableScopesLoaded && isTableScope && block) {
+            tableScopesLoaded = true;
+            const tableChoices = feedbackTableScopes(editor.state.doc, position, {
+              ordinal: firstOrdinal,
+              startLine: block.startLine,
+              endLine: block.endLine,
+            });
+            tableChoices.forEach(appendScopeChoice);
+            if (!tableChoices.length)
+              scopeList.append(
+                createElement(
+                  'p',
+                  'feedback-muted',
+                  'Cell, row and column scopes are unavailable here. Choose the whole table or select text inside a cell.'
+                )
+              );
+          }
+          if (!scopeList.hidden)
+            scopeList.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true });
+          scheduleAnnotationLayout();
+        });
+        scopeList.addEventListener('keydown', event => {
+          const options = Array.from(scopeList.querySelectorAll<HTMLButtonElement>('button'));
+          const current = options.indexOf(document.activeElement as HTMLButtonElement);
+          const destination =
+            event.key === 'Home'
+              ? 0
+              : event.key === 'End'
+                ? options.length - 1
+                : event.key === 'ArrowDown'
+                  ? (current + 1) % options.length
+                  : event.key === 'ArrowUp'
+                    ? (current - 1 + options.length) % options.length
+                    : null;
+          if (destination !== null) {
+            event.preventDefault();
+            event.stopPropagation();
+            options[destination]?.focus({ preventScroll: true });
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            scopeList.hidden = true;
+            scopeButton.setAttribute('aria-expanded', 'false');
+            scopeButton.focus({ preventScroll: true });
+            scheduleAnnotationLayout();
+          }
+        });
+        if (choices.length > 1 || isTableScope) scopeContainer.append(scopeButton, scopeList);
+      }
+      composerElement.append(headingRow, targetContext, lines, scopeContainer, label, actions);
       refreshComposerActions();
       panel.replaceChildren(composerElement);
       annotationResizeObserver?.observe(composerElement);
@@ -4655,6 +4906,30 @@ export function createFeedbackReviewController(options: {
       // Native focus scrolling before that layout can treat it as a top-of-
       // document element and jump a deeply scrolled review back to the start.
       field.focus({ preventScroll: true });
+    },
+
+    chooseScope() {
+      if (!hasWritableSession() || !session || !structureIndex) return false;
+      if (focusDraftSurfaceBefore('choosing a scope')) return false;
+      const position = editor.state.selection.from;
+      const scope = structureIndex.atPosition(position);
+      const selected = editor.state.selection.empty
+        ? null
+        : getFeedbackSelectionTarget(editor, session.anchors ?? []);
+      const candidate =
+        selected ??
+        (scope &&
+          (scope.wholeBlock
+            ? (blockTargetResolver?.section(scope.ordinal) ?? structuralTarget(scope, position))
+            : structuralTarget(scope, position)));
+      const target = candidate && materializeScope({ ...candidate, scopePosition: position });
+      if (!target) {
+        announce('Choose a mapped text block or use area capture for this content.');
+        return false;
+      }
+      controller.openTextComposer(target);
+      composer?.querySelector<HTMLButtonElement>('.feedback-scope-controls > button')?.click();
+      return true;
     },
 
     commentOnSelection() {
@@ -5497,6 +5772,7 @@ export function createFeedbackReviewController(options: {
         case 'feedback.command':
           if (message.command === 'start') controller.start();
           else if (message.command === 'commentSelection') controller.commentOnSelection();
+          else if (message.command === 'chooseScope') controller.chooseScope();
           else if (message.command === 'toggleComments') controller.toggleComments();
           else if (message.command === 'nextFeedback') controller.navigateFeedback('next');
           else if (message.command === 'previousFeedback') controller.navigateFeedback('previous');
@@ -5547,6 +5823,7 @@ export function createFeedbackReviewController(options: {
     document.addEventListener('selectionchange', scheduleSelectionSample);
     editorDom.addEventListener('focusin', scheduleSelectionSample);
     window.addEventListener('resize', handleReviewResize);
+    window.addEventListener('scroll', handleReviewScroll, { capture: true, passive: true });
     editorDom.addEventListener('pointerover', handleBlockPointerOver);
     editorDom.addEventListener('pointerdown', handleBlockPointerDown, true);
     editorDom.addEventListener('pointerleave', handleBlockPointerLeave);
@@ -5573,6 +5850,7 @@ export function createFeedbackReviewController(options: {
       selectionSampleFrame = null;
     }
     window.removeEventListener('resize', handleReviewResize);
+    window.removeEventListener('scroll', handleReviewScroll, true);
     editorDom.removeEventListener('pointerover', handleBlockPointerOver);
     editorDom.removeEventListener('pointerdown', handleBlockPointerDown, true);
     editorDom.removeEventListener('pointerleave', handleBlockPointerLeave);

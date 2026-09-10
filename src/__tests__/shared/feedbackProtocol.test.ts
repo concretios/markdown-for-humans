@@ -1175,6 +1175,7 @@ describe('feedback protocol', () => {
       },
       { type: 'feedback.peer.unlocked', lockId: 'peer-lock-1' },
       { type: 'feedback.command', command: 'nextFeedback' },
+      { type: 'feedback.command', command: 'chooseScope' },
     ];
 
     for (const message of messages) {

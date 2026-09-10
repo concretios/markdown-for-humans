@@ -1,4 +1,10 @@
-import { prepareNativeSelection } from './selection';
+import {
+  finishNativeRailScroll,
+  prepareNativeRailRecovery,
+  prepareNativeRailScroll,
+  prepareNativeSelection,
+  prepareSemanticScope,
+} from './selection';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import katex from 'katex';
@@ -147,6 +153,10 @@ declare global {
   interface Window {
     fixtureReady?: boolean;
     prepareNativeSelection?: typeof prepareNativeSelection;
+    prepareSemanticScope?: typeof prepareSemanticScope;
+    prepareNativeRailScroll?: typeof prepareNativeRailScroll;
+    prepareNativeRailRecovery?: typeof prepareNativeRailRecovery;
+    finishNativeRailScroll?: typeof finishNativeRailScroll;
     runAnnotationScenario?: (config: AnnotationScenarioConfig) => Promise<AnnotationScenarioResult>;
     runAnnotationStress?: () => Promise<AnnotationStressResult>;
     runRealControllerScenario?: () => Promise<RealControllerResult>;
@@ -1464,4 +1474,8 @@ window.runAnnotationScenario = runAnnotationScenario;
 window.runAnnotationStress = runAnnotationStress;
 window.runRealControllerScenario = runRealControllerScenario;
 window.prepareNativeSelection = prepareNativeSelection;
+window.prepareSemanticScope = prepareSemanticScope;
+window.prepareNativeRailScroll = prepareNativeRailScroll;
+window.prepareNativeRailRecovery = prepareNativeRailRecovery;
+window.finishNativeRailScroll = finishNativeRailScroll;
 window.fixtureReady = true;

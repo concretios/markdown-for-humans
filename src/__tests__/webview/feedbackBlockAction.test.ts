@@ -2,7 +2,8 @@
  * @jest-environment jsdom
  */
 
-import type { Editor } from '@tiptap/core';
+import { Editor } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
 import {
   createFeedbackBlockActionTargetResolver,
   createFeedbackBlockActionView,
@@ -136,6 +137,102 @@ describe('Feedback block action', () => {
     expect(nodeDOM).toHaveBeenCalledTimes(3);
   });
 
+  it('recovers canonical elements replaced by a ProseMirror view update in a frozen document', () => {
+    const element = document.createElement('div');
+    document.body.append(element);
+    const editor = new Editor({
+      element,
+      extensions: [StarterKit],
+      content: '<p>First block</p><p>Second block</p>',
+    });
+    try {
+      const frozenDocument = editor.state.doc;
+      const original = Array.from(editor.view.dom.children);
+      const index = createFeedbackBlockElementIndex(editor, [
+        { ordinal: 0, startLine: 1, endLine: 1 },
+        { ordinal: 1, startLine: 3, endLine: 3 },
+      ]);
+      editor.view.setProps({
+        nodeViews: {
+          paragraph: () => {
+            const dom = document.createElement('p');
+            return { dom, contentDOM: dom };
+          },
+        },
+      });
+      const replacements = Array.from(editor.view.dom.children);
+      expect(editor.state.doc).toBe(frozenDocument);
+      expect(replacements[0]).not.toBe(original[0]);
+      expect(replacements[1]).not.toBe(original[1]);
+      expect(original.every(node => !node.isConnected)).toBe(true);
+
+      expect(index.resolve(replacements[0].firstChild)).toEqual({
+        ordinal: 0,
+        element: replacements[0],
+      });
+      expect(index.elementForOrdinal(1)).toBe(replacements[1]);
+      expect(index.resolve(replacements[1])).toEqual({ ordinal: 1, element: replacements[1] });
+      expect(index.resolve(original[0])).toBeNull();
+      expect(index.resolve(original[1].firstChild)).toBeNull();
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('does not assign an injected direct widget to the nearby canonical block', () => {
+    const editor = createEditorFixture();
+    const root = editor.view.dom;
+    const firstBlock = root.children[0];
+    const index = createFeedbackBlockElementIndex(editor, []);
+    const foreign = document.createElement('div');
+    root.insertBefore(foreign, firstBlock);
+    const posAtDOM = jest.fn(() => 1);
+    editor.view.posAtDOM = posAtDOM;
+    Object.assign(editor.state.doc, { resolve: jest.fn(() => ({ index: () => 0 })) });
+
+    expect(index.resolve(foreign)).toBeNull();
+    expect(posAtDOM).toHaveBeenCalledWith(foreign, 0);
+    expect(index.elementForOrdinal(0)).toBe(firstBlock);
+    expect(index.resolve(firstBlock)).toEqual({ ordinal: 0, element: firstBlock });
+  });
+
+  it('fails closed if the document or editor root no longer matches the frozen index', () => {
+    const editor = createEditorFixture();
+    const root = editor.view.dom;
+    const firstBlock = root.children[0];
+    const frozenDocument = editor.state.doc;
+    const index = createFeedbackBlockElementIndex(editor, []);
+    Object.assign(editor.state, { doc: { ...frozenDocument } });
+
+    expect(index.elementForOrdinal(0)).toBeNull();
+    expect(index.resolve(firstBlock)).toBeNull();
+
+    Object.assign(editor.state, { doc: frozenDocument });
+    Object.assign(editor.view, { dom: document.createElement('div') });
+    expect(index.elementForOrdinal(0)).toBeNull();
+    expect(index.resolve(firstBlock)).toBeNull();
+  });
+
+  it('keeps unchanged hover lookups on the cached path without position lookups or document scans', () => {
+    const editor = createEditorFixture();
+    const nodeDOM = jest.spyOn(editor.view, 'nodeDOM');
+    const forEach = jest.spyOn(editor.state.doc, 'forEach');
+    const posAtDOM = jest.fn();
+    editor.view.posAtDOM = posAtDOM;
+    const resolvePosition = jest.fn();
+    Object.assign(editor.state.doc, { resolve: resolvePosition });
+    const index = createFeedbackBlockElementIndex(editor, []);
+    const firstBlock = editor.view.dom.children[0];
+    for (let iteration = 0; iteration < 100; iteration++) {
+      expect(index.resolve(firstBlock.firstChild)).toEqual({ ordinal: 0, element: firstBlock });
+      expect(index.elementForOrdinal(0)).toBe(firstBlock);
+    }
+    expect(forEach).toHaveBeenCalledTimes(1);
+    expect(nodeDOM).not.toHaveBeenCalled();
+    expect(posAtDOM).not.toHaveBeenCalled();
+    expect(resolvePosition).not.toHaveBeenCalled();
+  });
+
   it('creates one honest whole-table target without exact-selection metadata', () => {
     const editor = createEditorFixture();
 
@@ -208,6 +305,8 @@ describe('Feedback block action', () => {
     expect(button.getAttribute('aria-label')).toBe('Add feedback to this block');
     expect(button.querySelector('.codicon-comment-discussion-sparkle')).not.toBeNull();
     const preview = container.querySelector<HTMLElement>('[data-feedback-block-target-preview]');
+    expect(preview?.hidden).toBe(true);
+    button.dispatchEvent(new Event('pointerenter'));
     expect(preview?.hidden).toBe(false);
     expect(preview?.getAttribute('aria-hidden')).toBe('true');
     expect(preview?.style.cssText).toContain('left: 60px');
@@ -220,7 +319,7 @@ describe('Feedback block action', () => {
 
     view.show({ target: proseTarget, element: prose, isTable: false });
     expect(view.element).toBe(button);
-    expect(prose.getBoundingClientRect).toHaveBeenCalledTimes(1);
+    expect(prose.getBoundingClientRect).toHaveBeenCalledTimes(2);
 
     view.show({ target: tableTarget, element: table, isTable: true });
     expect(view.element).toBe(button);
@@ -238,7 +337,7 @@ describe('Feedback block action', () => {
     expect(button.hidden).toBe(true);
     expect(preview?.hidden).toBe(true);
     view.show({ target: proseTarget, element: prose, isTable: false });
-    expect(preview?.hidden).toBe(false);
+    expect(preview?.hidden).toBe(true);
     view.destroy();
     expect(preview?.isConnected).toBe(false);
     expect(button.isConnected).toBe(false);
@@ -305,6 +404,8 @@ describe('Feedback block action', () => {
     tableRect = rect(30, -100, 740, 400);
     view.reposition();
     expect(view.element.hidden).toBe(false);
+    expect(preview?.hidden).toBe(true);
+    view.element.dispatchEvent(new Event('pointerenter'));
     expect(preview?.hidden).toBe(false);
     expect(view.element.style.top).toBe('54px');
   });

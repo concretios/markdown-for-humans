@@ -520,6 +520,7 @@ export type FeedbackHostMessage =
       command:
         | 'start'
         | 'commentSelection'
+        | 'chooseScope'
         | 'captureArea'
         | 'captureSelectedBlocks'
         | 'toggleComments'
@@ -1203,6 +1204,7 @@ function isFeedbackCommand(
   return (
     value === 'start' ||
     value === 'commentSelection' ||
+    value === 'chooseScope' ||
     value === 'captureArea' ||
     value === 'captureSelectedBlocks' ||
     value === 'toggleComments' ||
