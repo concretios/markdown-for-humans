@@ -1,3 +1,4 @@
+import { prepareNativeSelection } from './selection';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import katex from 'katex';
@@ -145,6 +146,7 @@ interface AnnotationController {
 declare global {
   interface Window {
     fixtureReady?: boolean;
+    prepareNativeSelection?: typeof prepareNativeSelection;
     runAnnotationScenario?: (config: AnnotationScenarioConfig) => Promise<AnnotationScenarioResult>;
     runAnnotationStress?: () => Promise<AnnotationStressResult>;
     runRealControllerScenario?: () => Promise<RealControllerResult>;
@@ -1461,4 +1463,5 @@ async function runRealControllerScenario(): Promise<RealControllerResult> {
 window.runAnnotationScenario = runAnnotationScenario;
 window.runAnnotationStress = runAnnotationStress;
 window.runRealControllerScenario = runRealControllerScenario;
+window.prepareNativeSelection = prepareNativeSelection;
 window.fixtureReady = true;

@@ -12,6 +12,12 @@ participation, marker roving focus, hidden high-contrast targets, and teardown.
 This reduces the parallel-controller blind spot, but does not turn the full visual
 matrix into an end-to-end Extension Host test.
 
+Native selection checks also mount the real controller and drive Chromium mouse
+input in both directions through nested list items, nesting boundaries, table
+cells and paragraphs. Each Feedback range must match the nonempty editing-mode
+range from the same character coordinates. These checks do not set the browser
+selection programmatically, so pointer-capture regressions remain observable.
+
 Run from the repository root:
 
 ```sh

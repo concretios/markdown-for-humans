@@ -1733,12 +1733,10 @@ export function createFeedbackReviewController(options: {
     if (blockActionView?.contains(event.target instanceof Node ? event.target : null)) return;
     blockPointerSelecting = true;
     hideBlockAction();
-    try {
-      editorDom.setPointerCapture?.(event.pointerId);
-    } catch {
-      // A detached or synthetic pointer surface cannot own capture. The
-      // existing pointerup/pointercancel listeners still guarantee cleanup.
-    }
+    // QA-001/QA-002: capturing on the editor retargets native text drags,
+    // corrupting selection endpoints in lists and table cells. Observe the
+    // gesture without owning it; document pointerup/cancel and window blur
+    // already restore the block action when selection ends.
   };
 
   const handleBlockPointerUp = (): void => {

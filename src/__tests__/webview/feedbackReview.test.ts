@@ -7886,7 +7886,7 @@ describe('Feedback review controller', () => {
     }
   });
 
-  it('captures the pointer on the editor surface when a block drag starts', async () => {
+  it('leaves native text drags uncaptured and uncancelled in Feedback', async () => {
     const editor = createEditorFixture();
     const title = editor.view.dom.children[0] as HTMLElement;
     const controller = createFeedbackReviewController({ editor, host });
@@ -7909,12 +7909,12 @@ describe('Feedback review controller', () => {
         items: [],
       });
 
-      const pointerDown = new MouseEvent('pointerdown', { bubbles: true });
+      const pointerDown = new MouseEvent('pointerdown', { bubbles: true, cancelable: true });
       Object.defineProperty(pointerDown, 'pointerId', { value: 17 });
       title.dispatchEvent(pointerDown);
 
-      expect(setPointerCaptureSpy).toHaveBeenCalledWith(17);
-      expect(setPointerCaptureSpy.mock.instances[0]).toBe(editor.view.dom);
+      expect(setPointerCaptureSpy).not.toHaveBeenCalled();
+      expect(pointerDown.defaultPrevented).toBe(false);
     } finally {
       controller.deactivate();
       setPointerCaptureSpy.mockRestore();

@@ -56,6 +56,40 @@ async function setScenarioEnvironment(window, config) {
   await new Promise(resolve => setTimeout(resolve, 120));
 }
 
+// Drive Chromium input rather than dispatchEvent, which cannot perform native selection.
+async function verifyNativeSelections(window) {
+  const results = [];
+  for (let caseIndex = 0; caseIndex < 4; caseIndex++) {
+    for (const reverse of [false, true]) {
+      const selected = [];
+      let name;
+      for (const feedback of [false, true]) {
+        const gesture = await window.webContents.executeJavaScript(
+          `window.prepareNativeSelection(${caseIndex}, ${feedback}, ${reverse})`
+        );
+        name = gesture.name;
+        const send = parameters => window.webContents.debugger.sendCommand('Input.dispatchMouseEvent', parameters);
+        await send({ type: 'mouseMoved', ...gesture.start });
+        await send({ type: 'mousePressed', ...gesture.start, button: 'left', buttons: 1, clickCount: 1 });
+        for (let step = 1; step <= 20; step++) {
+          const portion = step / 20;
+          await send({ type: 'mouseMoved',
+            x: gesture.start.x + (gesture.end.x - gesture.start.x) * portion,
+            y: gesture.start.y + (gesture.end.y - gesture.start.y) * portion,
+            button: 'left', buttons: 1 });
+          await new Promise(resolve => setTimeout(resolve, 8));
+        }
+        await send({ type: 'mouseReleased', ...gesture.end, button: 'left', buttons: 0, clickCount: 1 });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        selected.push(await window.webContents.executeJavaScript('window.getSelection().toString()'));
+      }
+      results.push({ name, reverse, editing: selected[0], feedback: selected[1],
+        passed: selected[0].trim().length > 0 && selected[0] === selected[1] });
+    }
+  }
+  return { passed: results.every(result => result.passed), results };
+}
+
 app.whenReady().then(async () => {
   const window = new BrowserWindow({
     width: 1280,
@@ -169,13 +203,16 @@ app.whenReady().then(async () => {
       );
     }
 
+    await setScenarioEnvironment(window, { viewport: 'wide', zoom: 1, reducedMotion: false });
+    const nativeSelection = await verifyNativeSelections(window);
+
     const runtimeMatches = process.versions.electron === process.env.MD4H_EXPECTED_ELECTRON_VERSION;
     const result = {
       passed:
         runtimeMatches &&
         results.every(scenario => scenario.passed) &&
         stress.passed &&
-        realController.passed,
+        realController.passed && nativeSelection.passed,
       runtime: {
         electron: process.versions.electron,
         chrome: process.versions.chrome,
@@ -202,6 +239,7 @@ app.whenReady().then(async () => {
       results,
       stress,
       realController,
+      nativeSelection,
       harness: {
         matrix:
           'Parallel DOM harness using the production layout module and production editor stylesheet.',

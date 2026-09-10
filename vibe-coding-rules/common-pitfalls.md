@@ -2,6 +2,18 @@
 
 > Known failure modes and the implementation patterns that prevent them. See `AGENTS.md` for the canonical workflow.
 
+## Capturing Ordinary Text Drags in Feedback
+
+**Failure:** Capturing the pointer on the editor during `pointerdown` retargets
+native selection events. Partial list and table ranges can snap to item or cell
+boundaries even though paragraph selection still works (QA-001/QA-002).
+
+**Use instead:** Observe ordinary text drags without capturing or cancelling them.
+Hide block actions during the gesture and restore eligibility through document
+`pointerup`/`pointercancel` and window blur. Reserve capture for explicit custom
+gestures such as area capture. The annotation Electron fixture exercises native
+mouse selection; synthetic DOM events alone cannot validate this behavior.
+
 ## 1. Using `ignoreNextUpdate` for Document Sync
 
 **Failure:** One global boolean cannot identify which asynchronous edit, webview split or renderer lifetime produced a change. It can suppress a real external update or allow an older completion to overwrite newer content.
