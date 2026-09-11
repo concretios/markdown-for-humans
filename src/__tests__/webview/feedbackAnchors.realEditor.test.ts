@@ -7,6 +7,7 @@ import StarterKit from '@tiptap/starter-kit';
 import { buildFeedbackAnchorMap } from '../../editor/feedbackAnchors';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
 import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMarkdownFix';
+import { MarkdownListItem } from '../../webview/extensions/markdownListItem';
 import { enumerateCanonicalFeedbackBlocks } from '../../webview/features/feedbackReview';
 
 const MIXED_LIST_MARKDOWN = [
@@ -37,7 +38,8 @@ function createListEditor(markdown: string): Editor {
       }),
       MarkdownParagraph,
       Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
-      ListKit.configure({ orderedList: false, taskItem: { nested: true } }),
+      ListKit.configure({ listItem: false, orderedList: false, taskItem: { nested: true } }),
+      MarkdownListItem,
       OrderedListMarkdownFix,
     ],
     content: markdown,

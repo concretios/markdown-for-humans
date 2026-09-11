@@ -223,6 +223,38 @@ describe('isMarkdownRendererEquivalent', () => {
     expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
   });
 
+  test.each([
+    ['numbered', '1. Alpha\n\n2. Beta\n', '1. Alpha\n2. Beta\n'],
+    ['bulleted', '- Alpha\n\n- Beta\n', '- Alpha\n- Beta\n'],
+    ['nested', '1. Parent\n\n   - Child\n\n2. Next\n', '1. Parent\n   - Child\n2. Next\n'],
+    [
+      'fenced code',
+      '10. Example\n\n    ```js\n    const value = "a  b";\n    ```\n',
+      '10. Example\n    ```js\n    const value = "a  b";\n    ```\n',
+    ],
+  ])('accepts %s loose/tight lists only for Feedback', (_name, source, renderer) => {
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+    expect(isMarkdownRendererEquivalent(source, renderer)).toBe(true);
+    expect(isMarkdownStructurallyEquivalent(renderer, source)).toBe(false);
+  });
+
+  test.each([
+    ['nesting', '1. Parent\n   - Child\n', '1. Parent\n  - Child\n'],
+    ['text', '1. Alpha\n\n2. Beta\n', '1. Alpha\n2. Changed\n'],
+    ['link', '- [Text](https://a.example)\n\n- Next\n', '- [Text](https://b.example)\n- Next\n'],
+    ['code whitespace', '- `a  b`\n\n- Next\n', '- `a b`\n- Next\n'],
+    [
+      'raw HTML whitespace',
+      '- <span style="white-space: pre">a  b</span>\n\n- Next\n',
+      '- <span style="white-space: pre">a b</span>\n- Next\n',
+    ],
+    ['multiple paragraphs', '- First\n\n  Second\n\n- Next\n', '- First Second\n- Next\n'],
+    ['code block', '1. Code\n\n   ```\n   a  b\n   ```\n', '1. Code\n\n   ```\n   a b\n   ```\n'],
+  ])('rejects changed %s while normalizing list tightness', (_name, source, renderer) => {
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+    expect(isMarkdownRendererEquivalent(source, renderer)).toBe(false);
+  });
+
   test('does not collapse two real list-item paragraphs into one', () => {
     const source = '- First paragraph.\n\n  Second paragraph.\n';
     const renderer = '- First paragraph. Second paragraph.\n';

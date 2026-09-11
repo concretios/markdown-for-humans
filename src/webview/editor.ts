@@ -31,6 +31,7 @@ import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
+import { MarkdownListItem } from './extensions/markdownListItem';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
 import { DraggableBlocks } from './extensions/draggableBlocks';
 import { DocumentAuditExtension } from './features/auditDocument';
@@ -979,11 +980,13 @@ function initializeEditor(initialContent: string) {
         TableHeader,
         TableCell,
         ListKit.configure({
+          listItem: false,
           orderedList: false,
           taskItem: {
             nested: true,
           },
         }),
+        MarkdownListItem,
         OrderedListMarkdownFix,
         TabIndentation, // Enable Tab/Shift+Tab for list indentation
         ImageEnterSpacing, // Handle Enter key around images and gap cursor

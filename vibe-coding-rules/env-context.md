@@ -82,6 +82,14 @@ Feedback structural choices are indexed once per frozen document. Top-level head
 
 Text anchors use exact block-relative ranges. Table selections use typed rectangular cell targets bound to a table fingerprint and host-enriched canonical table-block SHA-256. Exact table geometry is capped at 256 cells per item and 4,096 cells per session. Invalid or over-budget restored cell metadata degrades to the containing block and never fuzzy-matches.
 
+Feedback renderer equivalence normalizes single-paragraph list wrappers using
+Markdown-it tokens, including items with nested lists or verbatim code blocks.
+Actual nesting changes, multiple paragraphs, code whitespace and raw HTML remain
+strict. Numbered lists use marked's CommonMark tokenizer and the local
+`MarkdownListItem` serializer, whose child indentation follows the actual marker
+width (including `0.` and `10.`). Ordinary document-write equivalence and the
+explicit preserve-blank-lines policy are unchanged.
+
 ## Feedback Capture Limits
 
 - Capture is DOM-based and limited to mapped visible blocks.
@@ -107,26 +115,27 @@ Shared-runner gates do not prove physical Windows i5/16 GB p95 latency, memory u
 
 ## Key Files
 
-| Concern                     | File                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------- |
-| Activation and commands     | `src/extension.ts`                                                                |
-| VS Code adapter             | `src/editor/MarkdownEditorProvider.ts`                                            |
-| Ordered document work       | `src/editor/documentEditCoordinator.ts`                                           |
-| Large-document edit range   | `src/editor/minimalTextEdit.ts`                                                   |
-| Sync protocol               | `src/shared/documentSyncProtocol.ts`                                              |
-| Renderer sync controller    | `src/webview/documentSyncController.ts`                                           |
-| TipTap composition          | `src/webview/editor.ts`                                                           |
-| Sync serialization          | `src/webview/utils/markdownSerialization.ts`                                      |
-| Hidden-view state           | `src/webview/utils/richViewState.ts`                                              |
-| Feedback request contract   | `src/shared/feedbackProtocol.ts`                                                  |
-| Snapshot protocol/service   | `src/shared/feedbackSnapshotProtocol.ts`, `src/editor/feedbackSnapshotService.ts` |
-| Delivery protocol/transport | `src/shared/feedbackDeliveryProtocol.ts`, `src/editor/feedbackTransport.ts`       |
-| Feedback bundle store       | `src/editor/feedbackSessionStore.ts`                                              |
-| Feedback renderer           | `src/webview/features/feedbackReview.ts`                                          |
-| Capture                     | `src/webview/features/feedbackCapture*.ts`, `feedbackDomCapture.ts`               |
-| Runtime targets             | `scripts/runtime-targets.js`                                                      |
-| Performance fixture         | `scripts/feedback-performance-fixture/`                                           |
-| Host integration tests      | `.vscode-test.mjs`, `test/integration/`                                           |
+| Concern                     | File                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| Activation and commands     | `src/extension.ts`                                                                               |
+| VS Code adapter             | `src/editor/MarkdownEditorProvider.ts`                                                           |
+| Ordered document work       | `src/editor/documentEditCoordinator.ts`                                                          |
+| Large-document edit range   | `src/editor/minimalTextEdit.ts`                                                                  |
+| Sync protocol               | `src/shared/documentSyncProtocol.ts`                                                             |
+| Renderer sync controller    | `src/webview/documentSyncController.ts`                                                          |
+| TipTap composition          | `src/webview/editor.ts`                                                                          |
+| List Markdown compatibility | `src/webview/extensions/markdownListItem.ts`, `src/webview/extensions/orderedListMarkdownFix.ts` |
+| Sync serialization          | `src/webview/utils/markdownSerialization.ts`                                                     |
+| Hidden-view state           | `src/webview/utils/richViewState.ts`                                                             |
+| Feedback request contract   | `src/shared/feedbackProtocol.ts`                                                                 |
+| Snapshot protocol/service   | `src/shared/feedbackSnapshotProtocol.ts`, `src/editor/feedbackSnapshotService.ts`                |
+| Delivery protocol/transport | `src/shared/feedbackDeliveryProtocol.ts`, `src/editor/feedbackTransport.ts`                      |
+| Feedback bundle store       | `src/editor/feedbackSessionStore.ts`                                                             |
+| Feedback renderer           | `src/webview/features/feedbackReview.ts`                                                         |
+| Capture                     | `src/webview/features/feedbackCapture*.ts`, `feedbackDomCapture.ts`                              |
+| Runtime targets             | `scripts/runtime-targets.js`                                                                     |
+| Performance fixture         | `scripts/feedback-performance-fixture/`                                                          |
+| Host integration tests      | `.vscode-test.mjs`, `test/integration/`                                                          |
 
 ## Change Pattern
 

@@ -1714,13 +1714,14 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     const provider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, SOURCE_TEXT);
     const webview = createWebview(provider, document);
-    enableSnapshotProtocol(provider, document, webview, {
+    const options = {
       viewGeneration: 'snapshot-mismatch-generation',
       inspectContent: SOURCE_TEXT,
       appliedContent: '# Different renderer source\n',
       dirty: false,
       blocks: START_BLOCKS,
-    });
+    };
+    enableSnapshotProtocol(provider, document, webview, options);
 
     internals(provider).handleWebviewMessage(
       { type: 'feedback.start', requestId: 'start-mismatched-applied-content' },
@@ -1733,10 +1734,84 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     ).resolves.toEqual(
       expect.objectContaining({
         code: 'MD4H-FB-SNAPSHOT-001',
-        message: expect.stringMatching(/snapshot|renderer|content/i),
+        message:
+          'Feedback could not start because the rendered Markdown differs from the saved file.',
       })
     );
     expect(internals(provider).feedbackSessions.size).toBe(0);
+    expect(internals(provider).feedbackTransitions.size).toBe(0);
+    expect(messagesOfType(webview, 'feedback.started')).toHaveLength(0);
+    expect(messagesOfType(webview, 'feedback.peer.release').map(message => message.phase)).toEqual([
+      'apply',
+      'commit',
+    ]);
+    options.appliedContent = SOURCE_TEXT;
+    sendStart(provider, document, webview, 'start-after-content-mismatch');
+    await waitForMessage(webview, 'feedback.started', 'start-after-content-mismatch');
+  });
+
+  it('reports a descriptor revision mismatch separately and permits a subsequent start', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const webview = createWebview(provider, document);
+    const options = {
+      viewGeneration: 'snapshot-revision-generation',
+      inspectContent: SOURCE_TEXT,
+      dirty: false,
+      blocks: START_BLOCKS,
+      appliedDescriptorRevision: 99,
+    };
+    enableSnapshotProtocol(provider, document, webview, options);
+    sendStart(provider, document, webview, 'start-wrong-revision');
+    await expect(
+      waitForMessage(webview, 'feedback.error', 'start-wrong-revision')
+    ).resolves.toEqual(
+      expect.objectContaining({
+        code: 'MD4H-FB-SNAPSHOT-001',
+        message: 'The rich editor returned an unexpected Feedback snapshot revision.',
+      })
+    );
+    expect(messagesOfType(webview, 'feedback.started')).toHaveLength(0);
+    expect(internals(provider).feedbackSessions.size).toBe(0);
+    options.appliedDescriptorRevision = 1;
+    sendStart(provider, document, webview, 'start-after-wrong-revision');
+    await waitForMessage(webview, 'feedback.started', 'start-after-wrong-revision');
+  });
+
+  it.each(['strip', 'preserve'])('respects %s mode for loose/tight list snapshots', async mode => {
+    const source = '# Guide\n\n1. Alpha\n\n2. Beta\n';
+    const canonical = '# Guide\n\n1. Alpha\n2. Beta\n';
+    await writeFile(sourcePath, source, 'utf8');
+    (vscode.workspace.getConfiguration as jest.Mock).mockImplementation(() => ({
+      get: (key: string, fallback: unknown) =>
+        key === 'markdownForHumans.blankLines.mode' ? mode : fallback,
+      update: jest.fn(),
+    }));
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, source);
+    const webview = createWebview(provider, document);
+    enableSnapshotProtocol(provider, document, webview, {
+      viewGeneration: 'snapshot-loose-list-generation',
+      inspectContent: source,
+      appliedContent: canonical,
+      dirty: false,
+      blocks: [
+        { ordinal: 0, kind: 'heading', markdown: '# Guide', contentSize: 5 },
+        { ordinal: 1, kind: 'orderedList', markdown: '1. Alpha\n2. Beta', contentSize: 9 },
+      ],
+    });
+    sendStart(provider, document, webview, 'start-loose-list');
+    if (mode === 'preserve') {
+      await expect(waitForMessage(webview, 'feedback.error', 'start-loose-list')).resolves.toEqual(
+        expect.objectContaining({ code: 'MD4H-FB-SNAPSHOT-001' })
+      );
+      expect(messagesOfType(webview, 'feedback.started')).toHaveLength(0);
+      expect(internals(provider).feedbackSessions.size).toBe(0);
+    } else {
+      await waitForMessage(webview, 'feedback.started', 'start-loose-list');
+      expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+    }
+    expect(await readFile(sourcePath, 'utf8')).toBe(source);
   });
 
   it('accepts equivalent TipTap list canonicalization reported after snapshot apply', async () => {
@@ -8553,6 +8628,7 @@ function enableSnapshotProtocol(
     viewGeneration: string;
     inspectContent: string;
     appliedContent?: string;
+    appliedDescriptorRevision?: number;
     dirty: boolean;
     blocks: Array<{ ordinal: number; kind: string; markdown: string; contentSize: number }>;
   }
@@ -8595,7 +8671,8 @@ function enableSnapshotProtocol(
                 content:
                   options.appliedContent ??
                   (typeof message.content === 'string' ? message.content : ''),
-                canonicalDescriptorRevision: message.descriptorRevision,
+                canonicalDescriptorRevision:
+                  options.appliedDescriptorRevision ?? message.descriptorRevision,
                 ...(message.includeCanonicalBlocks === true ? { blocks: options.blocks } : {}),
               },
           document as unknown as vscode.TextDocument,

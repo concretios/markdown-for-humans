@@ -3941,16 +3941,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       );
     }
     const appliedReports = reports as FeedbackSnapshotAppliedReport[];
+    if (appliedReports.some(report => report.canonicalDescriptorRevision !== descriptorRevision)) {
+      throw new FeedbackSessionError(
+        'MD4H-FB-SNAPSHOT-001',
+        'The rich editor returned an unexpected Feedback snapshot revision.'
+      );
+    }
     if (
       appliedReports.some(
-        report =>
-          report.canonicalDescriptorRevision !== descriptorRevision ||
-          !this.feedbackRendererContentMatchesSource(report.content, source.sourceText)
+        report => !this.feedbackRendererContentMatchesSource(report.content, source.sourceText)
       )
     ) {
       throw new FeedbackSessionError(
         'MD4H-FB-SNAPSHOT-001',
-        'A rich editor split applied a different Feedback snapshot revision.'
+        'Feedback could not start because the rendered Markdown differs from the saved file.'
       );
     }
     const ownerIndex = webviews.indexOf(ownerWebview);

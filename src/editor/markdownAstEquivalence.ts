@@ -28,6 +28,7 @@
  */
 
 import MarkdownIt from 'markdown-it';
+import type Token from 'markdown-it/lib/token.mjs';
 
 const md = new MarkdownIt({
   html: true,
@@ -76,27 +77,75 @@ function normalizeSpaceFriendlyImagePaths(markdown: string): string {
 
 /**
  * Collapse runs of whitespace to a single space, but leave content inside
- * `<pre>...</pre>` and inline `<code>...</code>` untouched. Renderer snapshot
- * checks may also ignore the one paragraph wrapper Markdown uses to distinguish
- * loose from tight list items because TipTap does not retain that source-only
- * distinction. Multiple real paragraphs are deliberately left intact. Raw HTML
- * contexts have already passed an exact comparison before normalization runs.
+ * `<pre>...</pre>` and inline `<code>...</code>` untouched. Raw HTML contexts
+ * have already passed an exact comparison before normalization runs.
  */
-function normalizeRenderedHtml(html: string, ignoreListTightness = false): string {
-  const comparableHtml = ignoreListTightness
-    ? html.replace(/(<li\b[^>]*>)\s*<p>([\s\S]*?)<\/p>(?=\s*(?:<(?:ul|ol)\b|<\/li>))/gi, '$1$2')
-    : html;
+function normalizeRenderedHtml(html: string): string {
   const verbatimRegex = /<(pre|code)\b[\s\S]*?<\/\1>/gi;
   const parts: string[] = [];
   let cursor = 0;
   let match: RegExpExecArray | null;
-  while ((match = verbatimRegex.exec(comparableHtml)) !== null) {
-    parts.push(comparableHtml.slice(cursor, match.index).replace(/\s+/g, ' '));
+  while ((match = verbatimRegex.exec(html)) !== null) {
+    parts.push(html.slice(cursor, match.index).replace(/\s+/g, ' '));
     parts.push(match[0]);
     cursor = match.index + match[0].length;
   }
-  parts.push(comparableHtml.slice(cursor).replace(/\s+/g, ' '));
+  parts.push(html.slice(cursor).replace(/\s+/g, ' '));
   return parts.join('').trim();
+}
+
+/**
+ * Hide only the source-format paragraph wrappers of single-paragraph list
+ * items, optionally followed by nested lists or code. Using token levels keeps nested
+ * items independent and lets Markdown-it omit generated boundary newlines.
+ * Code is still compared verbatim. Multiple paragraphs and other block content
+ * retain their full structure.
+ * Mutates only the fresh comparison tokens, in one linear pass.
+ */
+function normalizeListParagraphs(tokens: Token[]): void {
+  const items: Array<{
+    level: number;
+    paragraphCount: number;
+    paragraphOpen?: Token;
+    paragraphClose?: Token;
+    hasOtherBlocks: boolean;
+  }> = [];
+
+  for (const token of tokens) {
+    if (token.type === 'list_item_open') {
+      items.push({ level: token.level, paragraphCount: 0, hasOtherBlocks: false });
+      continue;
+    }
+    if (token.type === 'list_item_close') {
+      const item = items.pop();
+      if (
+        item?.paragraphCount === 1 &&
+        !item.hasOtherBlocks &&
+        item.paragraphOpen &&
+        item.paragraphClose
+      ) {
+        item.paragraphOpen.hidden = true;
+        item.paragraphClose.hidden = true;
+      }
+      continue;
+    }
+    const item = items[items.length - 1];
+    if (!item || token.level !== item.level + 1) continue;
+    if (token.type === 'paragraph_open') {
+      item.paragraphCount++;
+      item.paragraphOpen = token;
+    } else if (token.type === 'paragraph_close') {
+      item.paragraphClose = token;
+    } else if (
+      token.nesting >= 0 &&
+      token.type !== 'bullet_list_open' &&
+      token.type !== 'ordered_list_open' &&
+      token.type !== 'fence' &&
+      token.type !== 'code_block'
+    ) {
+      item.hasOtherBlocks = true;
+    }
+  }
 }
 
 /**
@@ -144,7 +193,8 @@ export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean 
 /**
  * Return true when both strings render identically under the rich editor's
  * single-newline-as-break contract. This is narrower than source equality but
- * intentionally accepts TipTap's `  \n` serialization of a source soft wrap.
+ * intentionally accepts TipTap's `  \n` serialization of a source soft wrap
+ * and single-paragraph list tightness without losing real block structure.
  */
 export function isMarkdownRendererEquivalent(a: string, b: string): boolean {
   return isEquivalentWhenRendered(
@@ -164,8 +214,10 @@ function isEquivalentWhenRendered(
 ): boolean {
   if (a === b) return true;
   try {
-    const renderedA = renderer.render(a);
-    const renderedB = renderer.render(b);
+    const tokensA = renderer.parse(a, {});
+    const tokensB = renderer.parse(b, {});
+    const renderedA = renderer.renderer.render(tokensA, renderer.options, {});
+    const renderedB = renderer.renderer.render(tokensB, renderer.options, {});
     // An exact match before any whitespace normalization is the strongest
     // possible proof of equivalence: nothing was collapsed away, so a tag
     // TipTap converts to equivalent native syntax (e.g. <strong> -> **bold**)
@@ -173,10 +225,15 @@ function isEquivalentWhenRendered(
     // changed on one side.
     if (renderedA === renderedB) return true;
     if (!hasSameRawHtmlContexts(a, b)) return false;
-    return (
-      normalizeRenderedHtml(renderedA, ignoreListTightness) ===
-      normalizeRenderedHtml(renderedB, ignoreListTightness)
-    );
+    if (ignoreListTightness) {
+      normalizeListParagraphs(tokensA);
+      normalizeListParagraphs(tokensB);
+      return (
+        normalizeRenderedHtml(renderer.renderer.render(tokensA, renderer.options, {})) ===
+        normalizeRenderedHtml(renderer.renderer.render(tokensB, renderer.options, {}))
+      );
+    }
+    return normalizeRenderedHtml(renderedA) === normalizeRenderedHtml(renderedB);
   } catch {
     // If either side fails to render, fall back to "not equivalent" so the
     // caller takes the safe path of writing the change through.

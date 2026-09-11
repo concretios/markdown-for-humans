@@ -24,6 +24,7 @@ import { InlineMath } from '../../webview/extensions/inlineMath';
 import { MathBlock } from '../../webview/extensions/mathBlock';
 import { Mermaid } from '../../webview/extensions/mermaid';
 import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMarkdownFix';
+import { MarkdownListItem } from '../../webview/extensions/markdownListItem';
 import { PreservedMarkdownLiteral } from '../../webview/extensions/preservedMarkdownLiteral';
 import {
   parsePreservedCodeBlock,
@@ -78,7 +79,8 @@ function createFeedbackSnapshotEditor(source: string): Editor {
       TableRow,
       TableHeader,
       TableCell,
-      ListKit.configure({ orderedList: false, taskItem: { nested: true } }),
+      ListKit.configure({ listItem: false, orderedList: false, taskItem: { nested: true } }),
+      MarkdownListItem,
       OrderedListMarkdownFix,
       MarkdownLink.configure({ openOnClick: false }),
       CustomImage,
@@ -97,6 +99,48 @@ function createFeedbackSnapshotEditor(source: string): Editor {
 }
 
 describe('Feedback snapshot renderer round-trip', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  it('keeps the unchanged contribution guide equivalent with exact source anchors', () => {
+    const source = readFileSync(resolve(__dirname, '../../../CONTRIBUTING.md'), 'utf8');
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+      expect(isMarkdownRendererEquivalent(serialized, source)).toBe(true);
+      expect(buildFeedbackAnchorMap(source, enumerateCanonicalFeedbackBlocks(editor))).toEqual(
+        expect.objectContaining({ ok: true })
+      );
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it.each([
+    ['bullet child', '1. Parent\n   - Child\n'],
+    ['numbered child', '1. Parent\n   1. Child\n'],
+    ['non-default start', '4. Parent\n   - Child\n'],
+    ['zero start', '0. Parent\n   - Child\n'],
+    ['two-digit start', '10. Parent\n    - Child\n'],
+    ['digit-width transition', '9. Parent\n   - First\n10. Next\n    - Second\n'],
+    ['deep mixed nesting', '1. Parent\n   - Child\n     1. Grandchild\n        - Leaf\n'],
+    ['continuation paragraph', '10. First paragraph\n\n    Second paragraph\n'],
+    ['nested fenced code', '10. Example\n\n    ```js\n    const value = "a  b";\n    ```\n'],
+    ['bullet-list control', '- Parent\n  - Child\n'],
+    ['task-list child', '1. Parent\n   - [ ] Pending\n   - [x] Done\n'],
+  ])('preserves %s across repeated Markdown round trips', (_name, source) => {
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      const originalTree = editor.getJSON();
+      const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+      expect(isMarkdownRendererEquivalent(serialized, source)).toBe(true);
+      editor.commands.setContent(serialized, { contentType: 'markdown' });
+      expect(editor.getJSON()).toEqual(originalTree);
+      expect(`${getEditorMarkdownForSync(editor, 'strip')}\n`).toBe(serialized);
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('keeps mixed local image formats renderer-equivalent after an authoritative apply', () => {
     const source = [
       '# Feedback image matrix',

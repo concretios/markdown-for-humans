@@ -19,6 +19,7 @@ import { Markdown } from '@tiptap/markdown';
 import { ListKit } from '@tiptap/extension-list';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
 import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMarkdownFix';
+import { MarkdownListItem } from '../../webview/extensions/markdownListItem';
 import { BlankLinePreservation } from '../../webview/extensions/blankLinePreservation';
 import { DraggableBlocks } from '../../webview/extensions/draggableBlocks';
 import { getEditorMarkdownForSync } from '../../webview/utils/markdownSerialization';
@@ -43,7 +44,8 @@ function createRealEditor(initialMarkdown: string): Editor {
       MarkdownParagraph,
       BlankLinePreservation,
       Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
-      ListKit.configure({ orderedList: false, taskItem: { nested: true } }),
+      ListKit.configure({ listItem: false, orderedList: false, taskItem: { nested: true } }),
+      MarkdownListItem,
       OrderedListMarkdownFix,
       DraggableBlocks,
     ],

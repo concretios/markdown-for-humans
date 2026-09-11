@@ -26,8 +26,22 @@ type OrderedListToken = MarkdownToken & {
  *
  * Fix: delegate list item parsing to the ListItem extension via `helpers.parseChildren(items)`,
  * which correctly parses inline marks for both `1.` and `1)` list styles.
+ * Numeric lists use marked's built-in tokenizer: TipTap 3.30.5's custom
+ * tokenizer strips too little continuation indentation and detaches ordered
+ * grandchildren from intervening bullet items. Keep its nonnumeric handling.
  */
 export const OrderedListMarkdownFix = OrderedList.extend({
+  markdownTokenizer: {
+    name: 'orderedList',
+    level: 'block',
+    start: () => -1,
+    tokenize: (source, tokens, lexer) => {
+      // Returning undefined lets marked's CommonMark list tokenizer retain the
+      // entire nested structure, fenced code whitespace and task item tokens.
+      if (/^[ \t]*\d+[.)](?:[ \t\n]|$)/.test(source)) return undefined;
+      return OrderedList.config.markdownTokenizer?.tokenize(source, tokens, lexer);
+    },
+  },
   parseMarkdown: (
     token: MarkdownToken,
     helpers: MarkdownParseHelpers
