@@ -1,59 +1,69 @@
-name: AI Code Review
-
-# SECURITY NOTE — pull_request_target trust model
-# ------------------------------------------------
-# `pull_request_target` evaluates the workflow file from the BASE branch (`main`),
-# not from the PR head. This is intentional: it grants access to repository
-# secrets (GEMINI_API_KEY) so a PR from a fork can be reviewed.
-#
-# The risk this trust grant carries is the "pwn_request" pattern
-# (https://securitylab.github.com/research/github-actions-preventing-pwn-requests/):
-# any third-party action invoked here runs with secrets in scope. If a
-# referenced action is compromised — or its tag is moved to point at malicious
-# code — the secret leaks on every PR, including from forks.
-#
-# Mitigations applied:
-#   1. Every third-party action below is pinned to a full commit SHA, not a
-#      moveable tag. A maintainer can update the SHA deliberately when bumping
-#      versions; an attacker who only controls the tag namespace cannot
-#      hijack the run.
-#   2. The top-level `permissions:` block is set to the minimum required
-#      (read repo contents, write PR comments). `id-token`, `actions`, etc.
-#      are explicitly not granted.
-#   3. We do NOT execute PR code (no `npm install`, no `node …`, no shell
-#      that interprets PR content). The AI reviewer reads files only.
-#
-# When updating action versions, look up the new commit SHA and pin to it,
-# e.g. `gh api repos/<owner>/<repo>/git/refs/tags/<tag> --jq .object.sha`.
-
+name: Dr. Concret.io Review
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
-
-# Default to no permissions; the single job opts in to exactly what it needs.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number
+        required: true
+        type: string
+      review_mode:
+        description: Review budget
+        type: choice
+        options: [auto, extended]
+        default: extended
+      publish:
+        description: Publish findings
+        type: boolean
+        default: false
 permissions: {}
-
-concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
   review:
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.actor != 'dependabot[bot]') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
       pull-requests: write
+    concurrency:
+      group: >-
+        ai-review-${{ github.repository_id }}-${{
+          github.event.pull_request.number || inputs.pr_number
+        }}-${{
+          github.event_name == 'workflow_dispatch' && !inputs.publish &&
+          format('pilot-{0}', github.run_id) || 'publish'
+        }}
+      cancel-in-progress: false
+      queue: max
     steps:
-      # actions/checkout@v4 — pinned to commit SHA (tag v4)
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # Audited Dr. Concret.io release with compact requests and one main diagnosis.
+      - uses: concretios/ai-pr-reviewer@b2925fc25f964faab9ee0d9a2bcf15276316f96f
+        id: review
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
-          fetch-depth: 0
-          persist-credentials: false
-
-      # concretios/ai-pr-reviewer@v1 — pinned to commit SHA (tag v1)
-      - uses: concretios/ai-pr-reviewer@7d151e668dce51de3022b95ecfab53b0a69cc5a2
-        with:
+          github_token: ${{ github.token }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          context_depth: changed-files
-          submit_review_verdict: true
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          review_mode: ${{ inputs.review_mode || 'auto' }}
+          publish: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always() && steps.review.outputs.report_directory != ''
+        with:
+          name: ai-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.review.outputs.report_directory }}
+          retention-days: 7
+  skipped-event:
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.pull_request.head.repo.full_name != github.repository ||
+       github.actor == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: echo 'AI review skipped. Fork and Dependabot PRs are excluded; no model calls made.' >> "$GITHUB_STEP_SUMMARY"
