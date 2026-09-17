@@ -25,6 +25,8 @@
  * inside `<pre>` and inline `<code>` is preserved during normalization. Raw
  * HTML-bearing token contexts are compared source-exactly before normalization
  * because HTML and CSS can make otherwise collapsible whitespace significant.
+ * Feedback additionally tolerates generated emphasis/strong spans split around
+ * a line break. Ordinary document-write equivalence keeps its stricter contract.
  */
 
 import MarkdownIt from 'markdown-it';
@@ -149,6 +151,42 @@ function normalizeListParagraphs(tokens: Token[]): void {
 }
 
 /**
+ * Join matching generated italic/bold spans separated only by one line break.
+ * QA-001: TipTap closes and reopens marks around hardBreak nodes even when the
+ * source span is continuous. Cancel only matching boundary pairs, preserving
+ * nesting, the break itself, and all content. Links, code and other tokens are
+ * barriers. Runs linearly on fresh inline tokens after raw-HTML validation.
+ */
+function normalizeInlineMarksAtBreaks(tokens: Token[]): void {
+  for (const token of tokens) {
+    if (token.type !== 'inline' || !token.children) continue;
+    // Markdown-it emits empty text tokens at some nested emphasis boundaries.
+    // They render nothing but would otherwise hide adjacent matching marks.
+    const children = token.children.filter(child => child.type !== 'text' || child.content !== '');
+    const normalized: Token[] = [];
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index];
+      if (child.type === 'softbreak' || child.type === 'hardbreak') {
+        while (index + 1 < children.length) {
+          const closing = normalized[normalized.length - 1];
+          const opening = children[index + 1];
+          if (!(
+            (closing?.type === 'em_close' && opening.type === 'em_open') ||
+            (closing?.type === 'strong_close' && opening.type === 'strong_open')
+          )) {
+            break;
+          }
+          normalized.pop();
+          index++;
+        }
+      }
+      normalized.push(child);
+    }
+    token.children = normalized;
+  }
+}
+
+/**
  * Return source-exact contexts containing raw HTML tokens.
  *
  * Markdown-it keeps an HTML block in one token, but splits inline HTML tags
@@ -194,7 +232,8 @@ export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean 
  * Return true when both strings render identically under the rich editor's
  * single-newline-as-break contract. This is narrower than source equality but
  * intentionally accepts TipTap's `  \n` serialization of a source soft wrap
- * and single-paragraph list tightness without losing real block structure.
+ * and matching italic/bold spans split at that break, plus single-paragraph
+ * list tightness, without losing content, formatting or real block structure.
  */
 export function isMarkdownRendererEquivalent(a: string, b: string): boolean {
   return isEquivalentWhenRendered(
@@ -210,7 +249,7 @@ function isEquivalentWhenRendered(
   a: string,
   b: string,
   renderer: MarkdownIt,
-  ignoreListTightness: boolean
+  useRendererNormalization: boolean
 ): boolean {
   if (a === b) return true;
   try {
@@ -225,9 +264,11 @@ function isEquivalentWhenRendered(
     // changed on one side.
     if (renderedA === renderedB) return true;
     if (!hasSameRawHtmlContexts(a, b)) return false;
-    if (ignoreListTightness) {
+    if (useRendererNormalization) {
       normalizeListParagraphs(tokensA);
       normalizeListParagraphs(tokensB);
+      normalizeInlineMarksAtBreaks(tokensA);
+      normalizeInlineMarksAtBreaks(tokensB);
       return (
         normalizeRenderedHtml(renderer.renderer.render(tokensA, renderer.options, {})) ===
         normalizeRenderedHtml(renderer.renderer.render(tokensB, renderer.options, {}))

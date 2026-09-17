@@ -212,6 +212,41 @@ describe('Feedback snapshot renderer round-trip', () => {
     editor.destroy();
   });
 
+  it.each([
+    ['italic soft wrap', '*A marked first line\ncontinues on the next line.*\n'],
+    ['bold soft wrap', '**A marked first line\ncontinues on the next line.**\n'],
+    ['italic hard break', '*A marked first line  \ncontinues on the next line.*\n'],
+    ['bold hard break', '**A marked first line  \ncontinues on the next line.**\n'],
+    ['nested marks', '***A marked first line\ncontinues on the next line.***\n'],
+    [
+      'partially nested marks',
+      '*An italic lead with **bold text\ncontinuing in bold** and an italic tail.*\n',
+    ],
+    ['italic list continuation', '- *A marked list item\n  continues on the next line.*\n'],
+    [
+      'bold numbered-list hard break',
+      '1. **A marked list item  \n   continues on the next line.**\n',
+    ],
+  ])('accepts unchanged %s with exact source anchors', (_name, source) => {
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      const originalTree = editor.getJSON();
+      const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+
+      expect(serialized).not.toBe(source);
+      expect(isMarkdownRendererEquivalent(serialized, source)).toBe(true);
+      expect(buildFeedbackAnchorMap(source, enumerateCanonicalFeedbackBlocks(editor))).toEqual(
+        expect.objectContaining({ ok: true })
+      );
+
+      editor.commands.setContent(serialized, { contentType: 'markdown' });
+      expect(editor.getJSON()).toEqual(originalTree);
+      expect(`${getEditorMarkdownForSync(editor, 'strip')}\n`).toBe(serialized);
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('keeps the long README renderer-equivalent after an authoritative apply', () => {
     const source = readFileSync(resolve(__dirname, '../../../README.md'), 'utf8');
     const editor = createFeedbackSnapshotEditor(source);

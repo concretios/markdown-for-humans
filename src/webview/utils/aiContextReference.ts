@@ -12,6 +12,8 @@
  *
  * Path resolution and the auto-save-before-copy step are handled by the extension
  * host; this module only computes line numbers and formats the final string.
+ * It also exposes the focus/selection gate used to retain deliberate selections
+ * after blur, and accounts for frontmatter wrapper lines removed on save.
  */
 
 import type { Editor, JSONContent } from '@tiptap/core';
@@ -70,6 +72,34 @@ export function formatAiContextRef(relPath: string, startLine?: number, endLine?
 }
 
 /**
+ * Decide whether a "Copy as AI Context" action should include a line range.
+ *
+ * The webview entry point (`runCopyAiContextRef`) snapshots `editor.isFocused`
+ * and `editor.state.selection.empty` synchronously at command time and passes
+ * them here. Extracted as a pure function so the four-case contract is unit
+ * testable — the entry point itself depends on the VS Code webview API and
+ * cannot be exercised in isolation.
+ *
+ * | isFocused | selectionEmpty | result | scenario                                   |
+ * |-----------|----------------|--------|--------------------------------------------|
+ * | true      | true           | true   | focused, cursor only → include block line  |
+ * | true      | false          | true   | focused, range selected → include range    |
+ * | false     | true           | false  | blurred, stale cursor → bare @file          |
+ * | false     | false          | true   | blurred but a real selection survives blur  |
+ *
+ * The last row is the Bug 2 fix: ProseMirror preserves `state.selection` after
+ * the editor blurs, so a non-empty selection is a reliable "the user picked
+ * this" signal even when focus has moved to a toolbar or another panel.
+ *
+ * Note: using `!selectionEmpty` ALONE (ignoring focus) would regress row 1 —
+ * the most common action, placing a cursor and clicking the button — back to a
+ * bare `@file`. Both inputs are required.
+ */
+export function shouldIncludeLineRange(isFocused: boolean, selectionEmpty: boolean): boolean {
+  return isFocused || !selectionEmpty;
+}
+
+/**
  * Find the index of the block that contains a given ProseMirror document position.
  *
  * A position exactly at a block boundary (`pos === block.to`) is treated as
@@ -103,6 +133,32 @@ interface BlockLineRange {
   jsonIdx: number;
   startLine: number;
   endLine: number;
+}
+
+/**
+ * True when a serialized first block is a YAML/JSON frontmatter code block —
+ * i.e. the host's `wrapFrontmatterForWebview` wrapped the document's leading
+ * `---...---` frontmatter in a ```yaml fence so it renders as a code block in
+ * the editor instead of being parsed as document structure.
+ *
+ * Match `unwrapFrontmatterFromWebview`: YAML/YML/JSON, three or more backticks,
+ * an equally long closing fence, and an initial `---` inside the block.
+ * Longer fences protect embedded backticks in YAML values. Only the first
+ * content block can be frontmatter. Ordinary code blocks retain their fences.
+ */
+function isFrontmatterSerializedBlock(md: string): boolean {
+  if (!md.startsWith('```')) return false;
+  const lines = md.split('\n');
+  if (lines.length < 3) return false;
+  const fenceMatch = lines[0]
+    .trim()
+    .toLowerCase()
+    .match(/^(`{3,})(yaml|yml|json)$/);
+  if (!fenceMatch) return false;
+  const closingIdx = lines.findIndex((line, idx) => idx > 0 && line.trim() === fenceMatch[1]);
+  if (closingIdx === -1) return false;
+  const inside = lines.slice(1, closingIdx);
+  return inside.length > 0 && inside[0].trim() === '---';
 }
 
 /**
@@ -156,7 +212,15 @@ function computeBlockLineRanges(
       continue;
     }
 
-    const blockLines = countLines(nodeMarkdown);
+    // The host wraps leading YAML frontmatter in a ```yaml fence for editing
+    // and strips those two fence lines back off on save. The serializer re-emits
+    // the fenced form, so for the first block we subtract the two fence lines to
+    // match the on-disk file — otherwise every block after the frontmatter is
+    // reported two lines too high. The predicate mirrors the host's unwrap guard
+    // exactly, so we only subtract when the host will actually strip.
+    const frontmatterFenceLines =
+      !seenContent && isFrontmatterSerializedBlock(nodeMarkdown) ? 2 : 0;
+    const blockLines = countLines(nodeMarkdown) - frontmatterFenceLines;
     if (!seenContent) {
       cursorLine = 1;
       seenContent = true;
@@ -339,7 +403,8 @@ export interface CopyAiContextReferenceOptions {
    * ProseMirror keeps a stale selection in place after the editor blurs, so
    * `editor.state.selection` alone can't tell us whether the user is engaged.
    * The caller (the webview shell) is in a better position to know — typically
-   * by snapshotting `editor.isFocused` synchronously at command-trigger time.
+   * by snapshotting focus and selection emptiness synchronously and consulting
+   * `shouldIncludeLineRange` so a deliberate selection survives focus changes.
    *
    * When `false`, the line-range computation is skipped entirely and the copy
    * produces a bare `@path` reference. Defaults to `true` for backwards compat.

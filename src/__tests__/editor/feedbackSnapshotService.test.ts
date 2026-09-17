@@ -157,6 +157,75 @@ describe('FeedbackSnapshotService', () => {
     expect(result.source.sourceByteCount).toBe(savedBytes.byteLength);
   });
 
+  it('accepts split inline marks while binding fingerprints and anchors to the saved source', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText =
+      '*An italic first line\ncontinues here.*\n\n**A bold first line\ncontinues here.**\n';
+    const source = requirePrepared(service, sourceText);
+    const input = {
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+    };
+    const sourceForm = service.finalize({
+      ...input,
+      descriptors: {
+        revision: 3,
+        blocks: [
+          block(0, 'paragraph', '*An italic first line\ncontinues here.*'),
+          block(1, 'paragraph', '**A bold first line\ncontinues here.**'),
+        ],
+      },
+    });
+    const rendererForm = service.finalize({
+      ...input,
+      descriptors: {
+        revision: 3,
+        blocks: [
+          block(0, 'paragraph', '*An italic first line*  \n*continues here.*'),
+          block(1, 'paragraph', '**A bold first line**  \n**continues here.**'),
+        ],
+      },
+    });
+
+    expect(sourceForm.ok).toBe(true);
+    expect(rendererForm.ok).toBe(true);
+    if (!sourceForm.ok || !rendererForm.ok) return;
+
+    expect(rendererForm.snapshot.sourceTextSha256).toBe(computeFeedbackTextSha256(sourceText));
+    expect(rendererForm.snapshot.savedBytesSha256).toBe(source.savedBytesSha256);
+    expect(rendererForm.snapshot.anchorMap.blocks).toMatchObject([
+      { ordinal: 0, kind: 'paragraph', startLine: 1, endLine: 2 },
+      { ordinal: 1, kind: 'paragraph', startLine: 4, endLine: 5 },
+    ]);
+    expect(rendererForm.snapshot.blocks).toHaveLength(2);
+    for (let index = 0; index < rendererForm.snapshot.blocks.length; index += 1) {
+      expect(rendererForm.snapshot.blocks[index].contentSha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(rendererForm.snapshot.blocks[index].contentSha256).not.toBe(
+        sourceForm.snapshot.blocks[index].contentSha256
+      );
+    }
+  });
+
+  it('rejects formatting lost after a line break even when the reported source digest matches', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText = '*An italic first line\ncontinues here.*\n';
+    const source = requirePrepared(service, sourceText);
+    const result = service.finalize({
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+      descriptors: {
+        revision: 3,
+        blocks: [block(0, 'paragraph', '*An italic first line*  \ncontinues here.')],
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { reason: 'block-content-mismatch' } });
+  });
+
   it('rejects a source capture when the document version changed before preparation', () => {
     const service = new FeedbackSnapshotService();
     const result = service.prepareSource({

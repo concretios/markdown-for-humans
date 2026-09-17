@@ -5,6 +5,7 @@
  * corresponds to the top-level blocks containing the current TipTap selection.
  */
 
+import type { Editor } from '@tiptap/core';
 import {
   countLines,
   formatAiContextRef,
@@ -167,6 +168,30 @@ function buildStubEditor(opts: {
 }
 
 describe('getSelectionBlockRange', () => {
+  it.each([
+    ['standard wrapper', '```yaml\n---\ntitle: Test\n---\n```', 5],
+    ['long wrapper with embedded fence', '````yaml\n---\nexample: |\n  ```\n---\n````', 6],
+    ['uppercase CRLF wrapper', '````YML\r\n---\r\ntitle: Test\r\n---\r\n````', 5],
+    ['ordinary YAML code', '```yaml\ntitle: Test\n```', 5],
+    ['mismatched closing fence', '````yaml\n---\ntitle: Test\n---\n```', 7],
+  ])('maps the following heading for %s using the host unwrap contract', (_name, wrapped, line) => {
+    const editor = buildStubEditor({
+      blocks: [
+        { typeName: 'codeBlock', text: 'frontmatter', nodeSize: 12 },
+        { typeName: 'heading', text: 'Heading', nodeSize: 9 },
+      ],
+      selection: { from: 14, to: 14, empty: true },
+      serialize: json => {
+        const node = json.content[0] as { type: string };
+        return node.type === 'codeBlock' ? wrapped : '# Heading';
+      },
+    });
+    expect(getSelectionBlockRange(editor as unknown as Editor)).toEqual({
+      startLine: line,
+      endLine: line,
+    });
+  });
+
   it('returns null for an empty document', () => {
     const editor = buildStubEditor({
       blocks: [],

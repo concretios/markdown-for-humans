@@ -85,7 +85,10 @@ Text anchors use exact block-relative ranges. Table selections use typed rectang
 Feedback renderer equivalence normalizes single-paragraph list wrappers using
 Markdown-it tokens, including items with nested lists or verbatim code blocks.
 Actual nesting changes, multiple paragraphs, code whitespace and raw HTML remain
-strict. Numbered lists use marked's CommonMark tokenizer and the local
+strict. Matching italic/bold spans closed and reopened around a single inline
+line break are equivalent to one continuous span. This renderer-only comparison
+preserves the break and rejects actual text, formatting and link changes.
+Numbered lists use marked's CommonMark tokenizer and the local
 `MarkdownListItem` serializer, whose child indentation follows the actual marker
 width (including `0.` and `10.`). Ordinary document-write equivalence and the
 explicit preserve-blank-lines policy are unchanged.

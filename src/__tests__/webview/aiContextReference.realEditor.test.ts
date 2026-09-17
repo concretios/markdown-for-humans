@@ -16,24 +16,35 @@ import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMark
 import { MarkdownListItem } from '../../webview/extensions/markdownListItem';
 import { CustomImage } from '../../webview/extensions/customImage';
 import { PreservedMarkdownLiteral } from '../../webview/extensions/preservedMarkdownLiteral';
-import { computeSelectionBlockRange } from '../../webview/utils/aiContextReference';
+import {
+  computeSelectionBlockRange,
+  shouldIncludeLineRange,
+} from '../../webview/utils/aiContextReference';
 import { getEditorMarkdownForSync } from '../../webview/utils/markdownSerialization';
 import { installBlankLineLexerNormalizer } from '../../webview/utils/markedLexerNormalizer';
 
-function createRealEditor(initialMarkdown: string): Editor {
+function createRealEditor(initialMarkdown: string, opts: { codeBlock?: boolean } = {}): Editor {
   const element = document.createElement('div');
   document.body.appendChild(element);
   // We must install the lexer normaliser BEFORE any markdown is parsed,
   // otherwise the first parse uses the un-normalised lexer and constructs
   // like `[]()` get dropped on the way into the editor. Production wires
   // this up the same way (see editor.ts) before setting initial content.
+  //
+  // `opts.codeBlock` defaults to false (StarterKit's code block disabled),
+  // matching every existing caller. Frontmatter tests opt in: production wraps
+  // YAML frontmatter in a ```yaml fenced block, which only lands as a real
+  // node when a code-block extension is registered. StarterKit's default code
+  // block round-trips the fenced form identically to production's
+  // CodeBlockLowlight (which cannot load under jsdom), so it faithfully
+  // reproduces the frontmatter line-offset for line-counting purposes.
   const editor = new Editor({
     element,
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3, 4, 5, 6] },
         paragraph: false,
-        codeBlock: false,
+        ...(opts.codeBlock ? {} : { codeBlock: false }),
         bulletList: false,
         orderedList: false,
         listItem: false,
@@ -421,5 +432,113 @@ describe('computeSelectionBlockRange with a real TipTap editor', () => {
       }
       editor.destroy();
     });
+  });
+});
+
+// ===========================================================================
+// Regression coverage imported from fix/copy-ai-context-line-numbers:
+//   Bug 2 — selection dropped after the editor blurs (gate logic).
+//   Bug 1 — line numbers off by 2 for any file with YAML frontmatter.
+// ===========================================================================
+describe('Copy as AI Context — bug regression suite', () => {
+  // -- Bug 2: the gate contract -------------------------------------------
+  // The decision "should this copy include a line range?" lives in
+  // runCopyAiContextRef (editor.ts), which depends on the VS Code webview API
+  // and is not unit-testable. shouldIncludeLineRange is the extracted pure
+  // gate it delegates to; these four rows pin its contract.
+  describe('GATE SPEC: shouldIncludeLineRange(isFocused, selectionEmpty)', () => {
+    it('GATE SPEC: focused + cursor-only (empty selection) → include (true)', () => {
+      // The most common action: place a cursor, click the button. The rejected
+      // `!selectionEmpty`-only fix would return false here — a regression.
+      expect(shouldIncludeLineRange(true, true)).toBe(true);
+    });
+
+    it('GATE SPEC: focused + range selected → include (true)', () => {
+      expect(shouldIncludeLineRange(true, false)).toBe(true);
+    });
+
+    it('GATE SPEC: blurred + cursor-only → bare @file (false)', () => {
+      // A stale cursor position after blur has ambiguous intent.
+      expect(shouldIncludeLineRange(false, true)).toBe(false);
+    });
+
+    it('BUG-2 CONTRACT: blurred + range selected → include (true)', () => {
+      // ProseMirror preserves state.selection after blur. This is the exact
+      // case the old `editor.isFocused`-only gate got wrong (returned false,
+      // producing a bare @file when the user had a real selection).
+      expect(shouldIncludeLineRange(false, false)).toBe(true);
+    });
+  });
+
+  // -- Bug 2: selection availability after blur ----------------------------
+  it('SELECTION AVAILABILITY: a non-empty selection still maps to a range (PM keeps selection post-blur)', () => {
+    const editor = createRealEditor('First paragraph\n\nSecond paragraph\n\nThird');
+    // Select inside the first paragraph (a real, non-empty range).
+    editor.commands.setTextSelection({ from: 1, to: 6 });
+    expect(editor.state.selection.empty).toBe(false);
+    // computeSelectionBlockRange reads state.selection, not focus — so the
+    // data the fix relies on is present regardless of blur.
+    const result = computeSelectionBlockRange(editor);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.range.startLine).toBe(1);
+      expect(result.range.endLine).toBe(1);
+    }
+    editor.destroy();
+  });
+
+  // -- Bug 1: frontmatter line offset --------------------------------------
+  // Production wraps YAML frontmatter in a ```yaml fenced block before the
+  // webview parses it (wrapFrontmatterForWebview), then strips the two fence
+  // lines on save (unwrapFrontmatterFromWebview). computeBlockLineRanges
+  // counts the fenced (webview) form, so every block after the frontmatter is
+  // reported 2 lines too high relative to the on-disk file.
+  it('BUG-1 REPRODUCTION: heading after frontmatter is reported 2 lines too high', () => {
+    // What the host sends the webview: frontmatter wrapped as a ```yaml block.
+    const wrapped = [
+      '```yaml', // webview-only fence (stripped on save)
+      '---',
+      'title: "Test Post"',
+      'platform: medium',
+      'audience: general',
+      '---',
+      '```', // webview-only fence (stripped on save)
+      '',
+      '# The Heading',
+      '',
+      'Paragraph text.',
+    ].join('\n');
+    // codeBlock:true so the ```yaml block lands as a real node (see factory).
+    const editor = createRealEditor(wrapped, { codeBlock: true });
+
+    // Sanity: the frontmatter really parsed as a leading code block.
+    const blockTypes: string[] = [];
+    editor.state.doc.content.forEach((node: { type: { name: string } }) => {
+      blockTypes.push(node.type.name);
+    });
+    expect(blockTypes[0]).toBe('codeBlock');
+
+    // Place the cursor inside the heading.
+    let headingOffset = -1;
+    editor.state.doc.content.forEach((node: { type: { name: string } }, offset: number) => {
+      if (node.type.name === 'heading' && headingOffset < 0) headingOffset = offset + 2;
+    });
+    expect(headingOffset).toBeGreaterThan(0);
+    editor.commands.setTextSelection(headingOffset);
+
+    const result = computeSelectionBlockRange(editor, 'preserve');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // On disk, after the host strips the two ```yaml fence lines:
+      //   1:---  2:title  3:platform  4:audience  5:---  6:(blank)  7:# The Heading
+      // The CORRECT on-disk line for the heading is 7.
+      //
+      // This assertion FAILS before the fix: computeBlockLineRanges counts the
+      // fenced webview form (7-line code block + 2 separators) and reports
+      // line 9. The Phase 4 fix subtracts the 2 fence lines, so this turns
+      // green with NO change to the test — a true red→green reproduction.
+      expect(result.range.startLine).toBe(7);
+    }
+    editor.destroy();
   });
 });

@@ -180,6 +180,50 @@ describe('isMarkdownStructurallyEquivalent', () => {
 });
 
 describe('isMarkdownRendererEquivalent', () => {
+  test.each([
+    ['italic soft wrap', '*One\ntwo*\n', '*One*  \n*two*\n'],
+    ['bold soft wrap', '**One\ntwo**\n', '**One**  \n**two**\n'],
+    ['italic hard break', '*One  \ntwo*\n', '*One*  \n*two*\n'],
+    ['nested marks', '***One\ntwo***\n', '***One***  \n***two***\n'],
+    ['partial nesting', '*One\n**two***\n', '*One*  \n***two***\n'],
+    ['three lines', '*One\ntwo\nthree*\n', '*One*  \n*two*  \n*three*\n'],
+    [
+      'marked link label',
+      '[*One\ntwo*](https://example.com)\n',
+      '[*One*  \n*two*](https://example.com)\n',
+    ],
+  ])('accepts equivalent %s only for Feedback', (_name, source, renderer) => {
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+    expect(isMarkdownRendererEquivalent(source, renderer)).toBe(true);
+    expect(isMarkdownStructurallyEquivalent(renderer, source)).toBe(false);
+  });
+
+  test.each([
+    ['text', '*One\ntwo*\n', '*One*  \n*changed*\n'],
+    ['removed italic', '*One\ntwo*\n', '*One*  \ntwo\n'],
+    ['changed mark', '*One\ntwo*\n', '*One*  \n**two**\n'],
+    ['removed nested mark', '***One\ntwo***\n', '***One***  \n*two*\n'],
+    ['removed break', '*One\ntwo*\n', '*One two*\n'],
+    ['paragraph boundary', '*One\ntwo*\n', '*One*\n\n*two*\n'],
+    ['literal markers', '\\*One\ntwo\\*\n', '*One*  \n*two*\n'],
+    [
+      'link target',
+      '*[One](https://old.example)\ntwo*\n',
+      '*[One](https://new.example)*  \n*two*\n',
+    ],
+    [
+      'link title',
+      '[*One\ntwo*](https://example.com "Old")\n',
+      '[*One*  \n*two*](https://example.com "New")\n',
+    ],
+    ['code whitespace', '*One\n`a  b`*\n', '*One*  \n*`a b`*\n'],
+    ['fenced code', '```\n*One\ntwo*\n```\n', '```\n*One*  \n*two*\n```\n'],
+    ['raw HTML context', '<span>*One\ntwo*</span>\n', '<span>*One*  \n*two*</span>\n'],
+  ])('rejects changed %s while comparing marks across breaks', (_name, source, renderer) => {
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+    expect(isMarkdownRendererEquivalent(source, renderer)).toBe(false);
+  });
+
   test('accepts the angle-bracket form of a standalone image path containing spaces', () => {
     const source = '![Diagram](assets/local image ünicode.png)\n';
     const renderer = '![Diagram](<assets/local image ünicode.png>)\n';

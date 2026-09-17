@@ -55,7 +55,11 @@ import { showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
-import { copyAiContextReference, type SelectionBlockRange } from './utils/aiContextReference';
+import {
+  copyAiContextReference,
+  shouldIncludeLineRange,
+  type SelectionBlockRange,
+} from './utils/aiContextReference';
 import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
@@ -629,14 +633,19 @@ function openLinkDialogWhenEditable(editorInstance: Editor): boolean {
 async function runCopyAiContextRef(): Promise<void> {
   if (!editor) return;
 
-  // Snapshot focus synchronously, before any await. ProseMirror keeps a stale
-  // selection in place after the editor blurs, so if the user clicked outside
-  // the editor (another panel, the toolbar) we'd otherwise copy `#N` pointing
-  // at whatever line was last touched. The toolbar's AI-Ref button uses
-  // `mousedown` preventDefault so clicking it doesn't blur the editor — meaning
-  // `isFocused` here accurately answers "is the user currently engaged with
-  // the document?". When false, we copy `@file` without a line range.
-  const selectionIsActive = editor.isFocused;
+  // Snapshot focus AND selection synchronously, before any await. Two distinct
+  // signals matter, and either one alone is wrong:
+  //   - `isFocused` covers the user clicking the button (or hitting the
+  //     shortcut) while editing — the button's `mousedown` preventDefault keeps
+  //     focus, so even a bare cursor should yield the block's line range.
+  //   - `!selection.empty` covers the user selecting a range, then clicking
+  //     OUTSIDE the editor (another panel) before clicking the button. Focus is
+  //     gone, but ProseMirror preserves `state.selection`, so the deliberate
+  //     selection still maps to a line range. (This is the bug `isFocused`-only
+  //     missed: it dropped the range and copied a bare `@file`.)
+  // When BOTH are false (blurred with only a stale cursor) we copy `@file`
+  // without a line range. See shouldIncludeLineRange for the full truth table.
+  const selectionIsActive = shouldIncludeLineRange(editor.isFocused, editor.state.selection.empty);
 
   const { showToast } = await import('./features/auditOverlay');
 
