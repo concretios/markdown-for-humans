@@ -9335,6 +9335,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       const normalizedPath = normalizeImagePath(imagePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
 
+      // SECURITY: never report on / disclose paths outside the document or
+      // workspace roots, even for a merely read-only existence check.
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, root))) {
+        webview.postMessage({
+          type: 'imageWorkspaceCheck',
+          requestId,
+          inWorkspace: false,
+          absolutePath: undefined,
+        });
+        return;
+      }
+
       // Check if file exists
       const imageUri = vscode.Uri.file(absolutePath);
       let fileExists = false;
@@ -9409,6 +9422,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       const normalizedPath = normalizeImagePath(imagePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
+
+      // SECURITY: never disclose metadata for files outside the document or
+      // workspace roots (a hostile image src could otherwise probe the disk).
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, root))) {
+        webview.postMessage({
+          type: 'imageMetadata',
+          requestId,
+          metadata: null,
+        });
+        return;
+      }
+
       const imageUri = vscode.Uri.file(absolutePath);
 
       // Check if file exists
@@ -9485,6 +9511,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       const normalizedPath = normalizeImagePath(imagePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
+
+      // SECURITY: reject paths that escape the document/workspace roots. Without
+      // this a hostile markdown image src (e.g. ![](../../../../etc/passwd))
+      // could reveal arbitrary files in the OS file manager on one user click.
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, root))) {
+        vscode.window.showErrorMessage(
+          `Refusing to reveal an image outside the document/workspace: ${imagePath}`
+        );
+        return;
+      }
+
       const fileUri = vscode.Uri.file(absolutePath);
 
       // Check if file exists
@@ -9533,6 +9571,17 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       const normalizedPath = normalizeImagePath(imagePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
+
+      // SECURITY: reject paths that escape the document/workspace roots (see
+      // handleRevealImageInOS). Defends against a hostile markdown image src.
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, root))) {
+        vscode.window.showErrorMessage(
+          `Refusing to reveal an image outside the document/workspace: ${imagePath}`
+        );
+        return;
+      }
+
       const fileUri = vscode.Uri.file(absolutePath);
 
       // Check if file exists
