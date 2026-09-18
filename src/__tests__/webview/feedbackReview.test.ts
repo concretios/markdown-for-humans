@@ -522,6 +522,45 @@ describe('Feedback review controller', () => {
     expect(editor.view.dom.getAttribute('tabindex')).toBeNull();
   });
 
+  it('rejects a screenshot add the host never acknowledges after a timeout', async () => {
+    const SCREENSHOT_ADD_TIMEOUT_MS = 15000;
+    jest.useFakeTimers();
+    try {
+      const editor = createEditorFixture();
+      const controller = createFeedbackReviewController({ editor, host });
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        items: [],
+      });
+
+      const pending = controller.addScreenshotFeedback({
+        startOrdinal: 0,
+        endOrdinal: 0,
+        imageDataUrl: 'data:image/png;base64,AAAA',
+        feedback: 'Please fix this.',
+      });
+      const outcome = jest.fn();
+      pending.then(
+        () => outcome('resolved'),
+        () => outcome('rejected')
+      );
+
+      // The host never replies; before the timeout the promise stays pending.
+      await Promise.resolve();
+      expect(outcome).not.toHaveBeenCalled();
+
+      jest.advanceTimersByTime(SCREENSHOT_ADD_TIMEOUT_MS);
+      await expect(pending).rejects.toThrow(/timed out/i);
+
+      controller.deactivate();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('acknowledges transition recovery while keeping the owner locked until peer unlock', () => {
     const editor = createEditorFixture();
     const dynamicEditor = editor as unknown as {

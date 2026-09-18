@@ -950,6 +950,16 @@ export function getFeedbackSelectionTarget(
 }
 
 /** Create one document-scoped review controller. */
+/**
+ * Upper bound for how long a screenshot add/replace waits on the host round-trip
+ * before it is treated as failed. Without this a lost host acknowledgement would
+ * leave the annotation modal stuck on "Saving…" with all controls disabled until
+ * the session is torn down. On timeout the pending mutation is dropped so a late
+ * host reply is ignored, and the caller (annotation modal) re-enables its
+ * controls with the feedback text intact so the user can retry or cancel.
+ */
+const FEEDBACK_SCREENSHOT_ADD_TIMEOUT_MS = 15000;
+
 export function createFeedbackReviewController(options: {
   editor: Editor;
   host: FeedbackReviewHost;
@@ -5121,7 +5131,30 @@ export function createFeedbackReviewController(options: {
       }
       const requestId = nextRequestId();
       const completion = new Promise<void>((resolve, reject) => {
-        pendingMutations.set(requestId, { kind: 'screenshot', resolve, reject });
+        let settled = false;
+        const timeoutHandle = window.setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          pendingMutations.delete(requestId);
+          reject(
+            new Error('Saving this screenshot timed out. Check your connection and try again.')
+          );
+        }, FEEDBACK_SCREENSHOT_ADD_TIMEOUT_MS);
+        pendingMutations.set(requestId, {
+          kind: 'screenshot',
+          resolve: () => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeoutHandle);
+            resolve();
+          },
+          reject: (error: Error) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timeoutHandle);
+            reject(error);
+          },
+        });
       });
       if (input.replaceId) {
         post({
