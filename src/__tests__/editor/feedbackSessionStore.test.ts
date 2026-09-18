@@ -2708,6 +2708,32 @@ describe('FeedbackSessionStore', () => {
     expect(activeBytes + tombstoneBytes).toBeLessThanOrEqual(SCREENSHOT_QUOTA_BYTES);
   });
 
+  it('enforces the tombstone screenshot budget on the v1 delete path', async () => {
+    const store = await createStore('q03b');
+    // A real screenshot we will delete to exercise the v1 delete path.
+    const item = await store.addScreenshotFeedback({
+      startLine: 1,
+      endLine: 1,
+      feedback: 'Delete me.',
+      pngData: ONE_PIXEL_PNG_BASE64,
+    });
+
+    // Simulate prior deletes whose retained Undo bytes were never evicted (the
+    // bug): 18 MiB across three tombstones, over the 16 MiB sub-cap. Seeded
+    // synthetically to isolate the delete path from the add path's eviction.
+    setSyntheticScreenshotTombstone(store, 'T1', 101, 6 * 1024 * 1024);
+    setSyntheticScreenshotTombstone(store, 'T2', 102, 6 * 1024 * 1024);
+    setSyntheticScreenshotTombstone(store, 'T3', 103, 6 * 1024 * 1024);
+    expect(residentTombstoneBytes(store)).toBeGreaterThan(TOMBSTONE_QUOTA_BYTES);
+
+    // Deleting must run quota eviction (previously the v1 path did not), freeing
+    // the oldest tombstone bytes so the 16 MiB sub-cap holds again.
+    await store.deleteFeedback(item.id);
+
+    expect(asMutableTombstoneStore(store)._tombstones.get('T1')?.evicted).toBe(true);
+    expect(residentTombstoneBytes(store)).toBeLessThanOrEqual(TOMBSTONE_QUOTA_BYTES);
+  });
+
   it('frees tombstoned screenshot bytes so a new small screenshot succeeds once active content is well under the ceiling', async () => {
     const store = await createStore('q004');
 

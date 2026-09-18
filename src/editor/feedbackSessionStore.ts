@@ -2029,15 +2029,23 @@ export class FeedbackSessionStore {
           screenshotBytes = validatedAsset.bytes;
         }
         const nextItems = currentItems.filter(item => item.id !== id);
+        let pendingEvictedTombstoneIds: readonly string[] = [];
         await this.persistReport(
           this._snapshot,
           nextItems,
           this._nextSequence,
           beforeCommit,
-          deletedItem.kind === 'screenshot'
-            ? () => this.validateScreenshotAsset(deletedItem)
-            : undefined
+          async () => {
+            // Bound the retained Undo (tombstone) screenshot bytes on the delete
+            // path too. Without this a v1 delete-only sequence grows tombstone
+            // memory without limit (the v2 delete path already evicts here).
+            pendingEvictedTombstoneIds = await this.computeScreenshotAssetQuotaEviction(nextItems);
+            if (deletedItem.kind === 'screenshot') {
+              await this.validateScreenshotAsset(deletedItem);
+            }
+          }
         );
+        this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._items = nextItems;
         this._tombstones.set(id, {
           item: cloneFeedbackItem(deletedItem),
