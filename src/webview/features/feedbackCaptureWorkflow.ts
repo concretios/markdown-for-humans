@@ -81,13 +81,34 @@ function visibleEditorViewport(root: HTMLElement): CaptureRectangle | null {
 }
 
 /**
- * Builds source-authoritative block handles without forcing layout. Detailed
- * geometry is deferred to the crop-bounded search in `captureVisibleArea`.
+ * Non-widget direct children of the editor root, in document order. ProseMirror
+ * can insert widgets — e.g. a GapCursor, which stays possible because Feedback
+ * keeps the surface contenteditable — as DIRECT children of the root. A raw
+ * `root.children.item(ordinal)` lookup then drifts by one per widget and can
+ * even return the widget itself, so capture crops/anchors land on the wrong
+ * block. Top-level document blocks are always direct children, so filtering the
+ * widgets out yields a correct ordinal→element map. This mirrors the widget
+ * filtering used by `createFeedbackBlockElementIndex` / `createTopLevelDomIndex`
+ * elsewhere in the review path.
  */
-function mappedBlocks(root: HTMLElement, session: FeedbackSessionView): CaptureBlock[] {
+function topLevelBlockElements(root: HTMLElement): HTMLElement[] {
+  return Array.from(root.children).filter(
+    (element): element is HTMLElement =>
+      element instanceof HTMLElement &&
+      !element.classList.contains('ProseMirror-widget') &&
+      !element.classList.contains('ProseMirror-gapcursor')
+  );
+}
+
+/**
+ * Resolve each anchored ordinal to its live top-level block element via
+ * {@link topLevelBlockElements}. Exported for regression coverage.
+ */
+export function collectCaptureBlocks(editor: Editor, session: FeedbackSessionView): CaptureBlock[] {
   const blocks: CaptureBlock[] = [];
+  const elements = topLevelBlockElements(editor.view.dom as HTMLElement);
   for (const anchor of session.anchors ?? []) {
-    const element = root.children.item(anchor.ordinal);
+    const element = elements[anchor.ordinal];
     if (element instanceof HTMLElement) blocks.push({ index: anchor.ordinal, element });
   }
   return blocks;
@@ -356,7 +377,7 @@ async function captureRectangle(
     start,
     end,
     viewport,
-    blocks: mappedBlocks(root, session),
+    blocks: collectCaptureBlocks(options.editor, session),
     rasterize: options.rasterize,
     minimumSize: 8,
     signal,
@@ -835,8 +856,12 @@ function prepareBlockCaptureRectangle(
       'The selected Markdown blocks are not rendered.'
     );
   }
+  // Resolve ordinals against non-widget direct children rather than raw
+  // `root.children.item(ordinal)`, which drifts when a GapCursor/widget is a
+  // direct child of the still-contenteditable Feedback surface.
+  const blockElements = topLevelBlockElements(root);
   for (const ordinal of selectedOrdinals) {
-    const element = root.children.item(ordinal);
+    const element = blockElements[ordinal];
     if (!(element instanceof HTMLElement)) {
       throw new FeedbackCaptureError(
         'MD4H-FB-ANCHOR-001',
