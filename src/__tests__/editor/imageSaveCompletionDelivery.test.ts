@@ -131,4 +131,35 @@ describe('ImageSaveCompletionDelivery', () => {
 
     warnSpy.mockRestore();
   });
+
+  it('notifies onExhausted exactly once when the attempt cap is reached', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const postMessage = jest.fn().mockResolvedValue(false);
+    const onExhausted = jest.fn();
+    const delivery = new ImageSaveCompletionDelivery({
+      message: completion,
+      postMessage,
+      ackTimeoutMs: 20,
+      retryDelayMs: 5,
+      maxRetryDelayMs: 20,
+      maxAttempts: 1,
+      onExhausted,
+    });
+
+    delivery.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(5);
+    await Promise.resolve();
+
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+    expect(onExhausted).toHaveBeenCalledWith(completion);
+    // A late ACK after giving up is ignored and never re-invokes onExhausted.
+    expect(delivery.acceptAcknowledgement(createPendingImageSaveCompletionAck(completion))).toBe(
+      'ignored'
+    );
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+
+    warnSpy.mockRestore();
+  });
 });

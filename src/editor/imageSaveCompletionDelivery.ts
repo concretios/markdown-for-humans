@@ -40,6 +40,12 @@ export interface ImageSaveCompletionDeliveryOptions {
   readonly maxRetryDelayMs: number;
   /** Maximum number of delivery attempts before giving up. */
   readonly maxAttempts: number;
+  /**
+   * Invoked at most once when every attempt is exhausted without an
+   * acknowledgement. Lets the owner surface a terminal state (e.g. a stuck
+   * placeholder) instead of leaving the renderer silently unresolved.
+   */
+  readonly onExhausted?: (message: PendingImageSaveCompletion) => void;
   /** Optional deterministic timer implementation. */
   readonly timers?: ImageSaveCompletionDeliveryTimers;
 }
@@ -165,8 +171,16 @@ export class ImageSaveCompletionDelivery {
     this.activeAttemptToken = undefined;
     this.clearTimer();
     if (this.attempts >= this.options.maxAttempts) {
+      const exhaustedMessage = this.options.message;
       this.dispose();
       console.warn('[MD4H] Image-save completion delivery gave up after reaching the attempt cap.');
+      // Fire after teardown so the owner can surface a terminal state; guard so
+      // a throwing listener cannot break the delivery lifecycle.
+      try {
+        this.options.onExhausted?.(exhaustedMessage);
+      } catch {
+        // best effort
+      }
       return;
     }
     const exponent = Math.min(Math.max(this.attempts - 1, 0), 20);

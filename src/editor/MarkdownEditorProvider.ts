@@ -8306,7 +8306,36 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       retryDelayMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_RETRY_DELAY_MS,
       maxRetryDelayMs: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_MAX_RETRY_DELAY_MS,
       maxAttempts: MarkdownEditorProvider.IMAGE_SAVE_COMPLETION_MAX_ATTEMPTS,
+      onExhausted: exhausted => this.surfaceExhaustedImageCompletion(webview, exhausted),
     });
+  }
+
+  /**
+   * When a successful image-save completion can never be delivered to a live
+   * renderer, its inline placeholder would otherwise stay stuck until the next
+   * document sync. Surface a best-effort, one-shot terminal error so the UI can
+   * reflect the failure. A failed (`imageError`) completion that itself
+   * exhausts is only logged — re-posting an error would risk an endless loop.
+   */
+  private surfaceExhaustedImageCompletion(
+    webview: vscode.Webview,
+    exhausted: PendingImageSaveCompletion
+  ): void {
+    if (exhausted.type !== 'imageSaved') return;
+    const terminalError: PendingImageSaveCompletion = {
+      type: 'imageError',
+      protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+      completionId: crypto.randomBytes(16).toString('hex'),
+      placeholderId: exhausted.placeholderId,
+      viewGeneration: exhausted.viewGeneration,
+      error: 'The saved image could not be delivered to the editor. Reload the document to see it.',
+    };
+    // One-shot, fire-and-forget: do not start another retrying delivery.
+    try {
+      void Promise.resolve(webview.postMessage(terminalError)).catch(() => undefined);
+    } catch {
+      // best effort
+    }
   }
 
   /** Retain and start a delivery so provider disposal can cancel its timer. */
