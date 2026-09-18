@@ -4370,6 +4370,7 @@ export function createFeedbackReviewController(options: {
       annotationsSuspended = false;
       captureState = 'idle';
       unresolvedRenderedRangeIds = new Set();
+      unresolvedCellTargetIds = new Set();
       blockFallbackBracketIds = new Set();
       setReadOnly(false);
       session = null;
