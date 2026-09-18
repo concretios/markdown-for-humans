@@ -8,14 +8,17 @@
  * This reducer is specified in roadmap/pipeline/task-feedback-reliability-architecture.md's
  * "Remaining architecture and acceptance gaps" section as the target authority for lifecycle
  * state. However, it is not yet wired into production as that authority; that work remains
- * tracked and intended. Before wiring either this reducer or its sibling webview reducer into
- * production, note that HostRecoveryTarget ('Idle' | 'DraftAvailable') and RendererRecoveryTarget
- * ('Editing' | 'DraftAvailable') must be reconciled. The two types share 'DraftAvailable' but
- * diverge on the other recovery target ('Idle' vs 'Editing'), and that gap must be resolved
- * before either reducer becomes the production lifecycle authority.
+ * tracked and intended.
+ *
+ * The host and renderer reducers now share one recovery-target vocabulary
+ * (`FeedbackRecoveryTarget`, see src/shared/feedbackLifecycleRecovery.ts). This
+ * reducer maps `'NoDraft'` to its local `Idle` rest state and `'DraftAvailable'`
+ * to `DraftAvailable`; the renderer maps `'NoDraft'` to `Editing`.
  */
 
-export type HostRecoveryTarget = 'Idle' | 'DraftAvailable';
+import type { FeedbackRecoveryTarget } from '../shared/feedbackLifecycleRecovery';
+
+export type HostRecoveryTarget = FeedbackRecoveryTarget;
 
 interface HostStateBase<TKind extends string> {
   readonly kind: TKind;
@@ -295,6 +298,12 @@ export function reduceHostFeedbackLifecycle(
   if (invalidStage) return invalidStage;
 
   if (event.type === 'operationFailed') {
+    // `Active` is a completed rest state whose only valid successor is a new
+    // `closeRequested` operation (handled above). A late/spurious failure for
+    // the already-committed activation must not drive it back into recovery.
+    if (state.kind === 'Active') {
+      return reject(machine, 'unexpected-event');
+    }
     if (state.kind === 'Recovering' && event.recoveryTarget !== state.recoveryTarget) {
       return reject(machine, 'recovery-target-mismatch');
     }

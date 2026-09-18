@@ -118,7 +118,7 @@ describe('host Feedback lifecycle machine', () => {
       operationEpoch: ACTIVATION_EPOCH,
       sessionEpoch: null,
       stageRevision: 1,
-      recoveryTarget: 'Idle',
+      recoveryTarget: 'NoDraft',
     });
     const skipped = reduceHostFeedbackLifecycle(machine, {
       type: 'quiesceCompleted',
@@ -131,7 +131,7 @@ describe('host Feedback lifecycle machine', () => {
       operationEpoch: ACTIVATION_EPOCH,
       sessionEpoch: null,
       stageRevision: 2,
-      recoveryTarget: 'Idle',
+      recoveryTarget: 'NoDraft',
     });
     const foreign = reduceHostFeedbackLifecycle(machine, {
       type: 'quiesceCompleted',
@@ -217,9 +217,9 @@ describe('host Feedback lifecycle machine', () => {
       operationEpoch: ACTIVATION_EPOCH,
       sessionEpoch: null,
       stageRevision: 5,
-      recoveryTarget: 'Idle',
+      recoveryTarget: 'NoDraft',
     });
-    expect(beforeDraft.state).toMatchObject({ kind: 'Recovering', recoveryTarget: 'Idle' });
+    expect(beforeDraft.state).toMatchObject({ kind: 'Recovering', recoveryTarget: 'NoDraft' });
     beforeDraft = apply(beforeDraft, {
       type: 'recoveryCompleted',
       operationEpoch: ACTIVATION_EPOCH,
@@ -267,5 +267,23 @@ describe('host Feedback lifecycle machine', () => {
 
     expect(result).toMatchObject({ disposition: 'rejected', reason: 'draft-requires-session' });
     expect(result.machine).toBe(machine);
+  });
+
+  it('rejects a spurious operationFailed once the session is Active', () => {
+    let machine = createHostFeedbackLifecycleMachine();
+    for (const event of HAPPY_ACTIVATION) machine = apply(machine, event);
+    expect(machine.state.kind).toBe('Active');
+
+    const result = reduceHostFeedbackLifecycle(machine, {
+      type: 'operationFailed',
+      operationEpoch: ACTIVATION_EPOCH,
+      sessionEpoch: SESSION_EPOCH,
+      stageRevision: 9,
+      recoveryTarget: 'NoDraft',
+    });
+
+    expect(result).toMatchObject({ disposition: 'rejected', reason: 'unexpected-event' });
+    expect(result.machine).toBe(machine);
+    expect(result.machine.state.kind).toBe('Active');
   });
 });

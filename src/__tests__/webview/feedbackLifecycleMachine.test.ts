@@ -104,7 +104,7 @@ describe('renderer Feedback lifecycle machine', () => {
       operationEpoch: ACTIVATION_EPOCH,
       sessionEpoch: null,
       stageRevision: 1,
-      recoveryTarget: 'Editing',
+      recoveryTarget: 'NoDraft',
     });
     const skipped = reduceRendererFeedbackLifecycle(machine, {
       type: 'snapshotApplyRequested',
@@ -168,11 +168,11 @@ describe('renderer Feedback lifecycle machine', () => {
       operationEpoch: 'renderer-close-1',
       sessionEpoch: SESSION_EPOCH,
       stageRevision: 2,
-      recoveryTarget: 'Editing',
+      recoveryTarget: 'NoDraft',
     });
     expect(machine.state).toMatchObject({
       kind: 'ApplyingRecovery',
-      recoveryTarget: 'Editing',
+      recoveryTarget: 'NoDraft',
     });
 
     const recovered: RendererFeedbackLifecycleEvent = {
@@ -197,11 +197,11 @@ describe('renderer Feedback lifecycle machine', () => {
       operationEpoch: ACTIVATION_EPOCH,
       sessionEpoch: null,
       stageRevision: 3,
-      recoveryTarget: 'Editing',
+      recoveryTarget: 'NoDraft',
     });
     expect(withoutDraft.state).toMatchObject({
       kind: 'ApplyingRecovery',
-      recoveryTarget: 'Editing',
+      recoveryTarget: 'NoDraft',
     });
     withoutDraft = apply(withoutDraft, {
       type: 'recoveryApplied',
@@ -246,5 +246,23 @@ describe('renderer Feedback lifecycle machine', () => {
 
     expect(result).toMatchObject({ disposition: 'rejected', reason: 'draft-requires-session' });
     expect(result.machine).toBe(machine);
+  });
+
+  it('rejects a spurious operationFailed once the review is Reviewing', () => {
+    let machine = createRendererFeedbackLifecycleMachine();
+    for (const event of HAPPY_REVIEW) machine = apply(machine, event);
+    expect(machine.state.kind).toBe('Reviewing');
+
+    const result = reduceRendererFeedbackLifecycle(machine, {
+      type: 'operationFailed',
+      operationEpoch: ACTIVATION_EPOCH,
+      sessionEpoch: SESSION_EPOCH,
+      stageRevision: 7,
+      recoveryTarget: 'NoDraft',
+    });
+
+    expect(result).toMatchObject({ disposition: 'rejected', reason: 'unexpected-event' });
+    expect(result.machine).toBe(machine);
+    expect(result.machine.state.kind).toBe('Reviewing');
   });
 });
