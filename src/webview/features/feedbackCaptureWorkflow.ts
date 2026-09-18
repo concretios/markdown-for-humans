@@ -943,9 +943,11 @@ async function captureBlockRange(
     document.body.removeAttribute('data-feedback-capture-state');
     options.review.setCaptureState?.('idle');
   };
+  let removeViewportGuard: () => void = () => {};
   const removeAbortListeners = (): void => {
     window.removeEventListener('feedbackInvalidated', abortCapture);
     window.removeEventListener(FEEDBACK_SESSION_ENDED_EVENT, abortCapture);
+    removeViewportGuard();
   };
   const abortCapture = (): void => {
     if (aborted) return;
@@ -963,6 +965,31 @@ async function captureBlockRange(
   let capture: VisibleAreaCapture | null = null;
   try {
     restoreAnnotations = suspendAnnotations(options);
+    // The crop rectangle is fixed client coordinates captured before this async
+    // rasterization. If the document scrolls/resizes while we rasterize, those
+    // coordinates now cover different content, so abort rather than save a stale
+    // crop. (The area-capture path guards the same way via handleViewportMutation.)
+    const guardedOrdinal = Math.min(startOrdinal, endOrdinal);
+    const guardedElement = topLevelBlockElements(root)[guardedOrdinal] ?? null;
+    const guardedTop = guardedElement?.getBoundingClientRect().top ?? null;
+    const handleViewportShift = (): void => {
+      if (aborted || guardedElement === null || guardedTop === null) return;
+      if (Math.abs(guardedElement.getBoundingClientRect().top - guardedTop) > 0.5) {
+        showCaptureError('The document scrolled during capture. Select the blocks again.');
+        abortCapture();
+      }
+    };
+    window.addEventListener('scroll', handleViewportShift, true);
+    window.addEventListener('resize', handleViewportShift);
+    window.visualViewport?.addEventListener('scroll', handleViewportShift);
+    window.visualViewport?.addEventListener('resize', handleViewportShift);
+    removeViewportGuard = (): void => {
+      window.removeEventListener('scroll', handleViewportShift, true);
+      window.removeEventListener('resize', handleViewportShift);
+      window.visualViewport?.removeEventListener('scroll', handleViewportShift);
+      window.visualViewport?.removeEventListener('resize', handleViewportShift);
+      removeViewportGuard = () => {};
+    };
     capture = await captureRectangle(options, rectangle.start, rectangle.end, rasterAbort.signal);
   } catch (error) {
     if (!aborted) throw error;

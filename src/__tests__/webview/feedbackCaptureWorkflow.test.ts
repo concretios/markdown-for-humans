@@ -1006,6 +1006,93 @@ describe('keyboard Feedback block selector', () => {
     }
   );
 
+  it('aborts the selected-block rasterizer when the document scrolls mid-capture', async () => {
+    const editorDom = document.createElement('div');
+    const block = document.createElement('p');
+    const renderedImage = document.createElement('img');
+    block.append(renderedImage);
+    editorDom.append(block);
+    document.body.append(editorDom);
+    editorDom.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 500, bottom: 300, width: 500, height: 300 }) as DOMRect;
+    let blockTop = 0;
+    block.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: blockTop,
+        right: 500,
+        bottom: blockTop + 100,
+        width: 500,
+        height: 100,
+      }) as DOMRect;
+    renderedImage.getBoundingClientRect = () =>
+      ({
+        left: 0,
+        top: blockTop,
+        right: 200,
+        bottom: blockTop + 100,
+        width: 200,
+        height: 100,
+      }) as DOMRect;
+    const editor = {
+      state: { selection: { empty: true, from: 1, to: 1 } },
+      view: { dom: editorDom },
+    } as unknown as Editor;
+    const setAnnotationsSuspended = jest.fn();
+    const setCaptureState = jest.fn();
+    const addScreenshotFeedback = jest.fn();
+    const review = {
+      getSession: () => ({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
+        items: [],
+      }),
+      isWritable: () => true,
+      setAnnotationsSuspended,
+      setCaptureState,
+      addScreenshotFeedback,
+      reportCaptureError: jest.fn(),
+    } as unknown as FeedbackReviewController;
+    let resolveRasterize!: (capture: { dataUrl: string; width: number; height: number }) => void;
+    const rasterize = jest.fn<
+      Promise<{ dataUrl: string; width: number; height: number }>,
+      [DomRasterizeRequest]
+    >(
+      _request =>
+        new Promise<{ dataUrl: string; width: number; height: number }>(resolve => {
+          resolveRasterize = resolve;
+        })
+    );
+
+    captureSelectedFeedbackBlocks({ editor, review, rasterize });
+    document
+      .querySelector<HTMLFormElement>('.feedback-block-selector')!
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    const rasterSignal = rasterize.mock.calls[0]?.[0]?.signal;
+    expect(rasterSignal?.aborted).toBe(false);
+    expect(setCaptureState.mock.calls).toEqual([['rasterizing']]);
+
+    // The document scrolls: the target block moves under the fixed crop rect.
+    blockTop = 80;
+    window.dispatchEvent(new Event('scroll'));
+
+    expect(rasterSignal?.aborted).toBe(true);
+    expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
+    expect(setCaptureState.mock.calls).toEqual([['rasterizing'], ['idle']]);
+    expect(document.body.hasAttribute('data-feedback-capture-state')).toBe(false);
+
+    // A late rasterizer completion must not open the annotation dialog or save.
+    resolveRasterize({ dataUrl: 'data:image/png;base64,AAAA', width: 100, height: 60 });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(addScreenshotFeedback).not.toHaveBeenCalled();
+    expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+  });
+
   it('closes on Escape and restores focus to the invoking control', () => {
     const trigger = document.createElement('button');
     document.body.append(trigger);
