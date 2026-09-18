@@ -43,7 +43,7 @@ const editorBlockSerializationCaches = new WeakMap<Editor, EditorBlockSerializat
 interface PatchableMarkdownManager {
   encodeTextForMarkdown?: (text: string, node: JSONContent, parentNode?: JSONContent) => string;
   codeTypes?: Set<string>;
-  __md4hAmpersandPatched?: boolean;
+  __md4hEntityPatched?: boolean;
 }
 
 function isEncodedInsideCode(
@@ -60,25 +60,35 @@ function isEncodedInsideCode(
 }
 
 /**
- * @tiptap/markdown@3.30.5 always HTML-entity-encodes "&" in plain text nodes
- * (MarkdownManager#encodeTextForMarkdown), even though Markdown never requires
- * escaping a bare ampersand. Every "&" in prose (e.g. "Q&A") is corrupted to
- * "&amp;" on each save/Feedback snapshot round-trip. Undo just that
- * substitution outside code, where the upstream method already leaves text
- * unencoded, so we don't touch legitimate "&amp;" text inside code samples.
+ * @tiptap/markdown@3.30.5 always HTML-entity-encodes "&", "<", and ">" in plain
+ * text nodes (MarkdownManager#encodeTextForMarkdown → encodeHtmlEntities), even
+ * though Markdown never requires escaping these in prose. Left alone, every
+ * "&" (e.g. "Q&A"), "<"/">" (e.g. "a < b", "List<String>", "x -> y") in prose
+ * is corrupted to "&amp;"/"&lt;"/"&gt;" on each save/Feedback snapshot
+ * round-trip, which mangles common technical prose and poisons the source-
+ * evidence slices + block hashes derived from it.
+ *
+ * The upstream encoder is exactly:
+ *   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+ * so its precise inverse is to undo those substitutions in reverse order
+ * (">", then "<", then "&"). Applying them in this order round-trips even
+ * literal entity text a user typed (e.g. "&lt;" survives), because the "&amp;"
+ * decode runs last. We only do this outside code, where the upstream method
+ * already leaves text unencoded, so legitimate entity text inside code samples
+ * is untouched.
  */
-function patchAmpersandOverEncoding(manager: MarkdownManager): void {
+function patchEntityOverEncoding(manager: MarkdownManager): void {
   const patchable = manager as unknown as PatchableMarkdownManager;
-  if (patchable.__md4hAmpersandPatched || typeof patchable.encodeTextForMarkdown !== 'function') {
+  if (patchable.__md4hEntityPatched || typeof patchable.encodeTextForMarkdown !== 'function') {
     return;
   }
   const original = patchable.encodeTextForMarkdown.bind(manager);
   patchable.encodeTextForMarkdown = (text, node, parentNode) => {
     const encoded = original(text, node, parentNode);
     if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
-    return encoded.replace(/&amp;/g, '&');
+    return encoded.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
   };
-  patchable.__md4hAmpersandPatched = true;
+  patchable.__md4hEntityPatched = true;
 }
 
 function isMeaningfulInlineNode(node: JSONContent): boolean {
@@ -323,7 +333,7 @@ export function getEditorMarkdownForSync(
   };
 
   const markdownManager = editorUnknown.markdown || editorUnknown.storage?.markdown;
-  if (markdownManager) patchAmpersandOverEncoding(markdownManager);
+  if (markdownManager) patchEntityOverEncoding(markdownManager);
 
   const getFallbackMarkdown = (): string => {
     const getMarkdown = editorUnknown.getMarkdown;
