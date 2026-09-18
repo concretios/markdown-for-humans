@@ -229,14 +229,15 @@ Legend — Severity: P1 (data loss/corruption/core-feature broken), P2
 
 ## 6. Work Breakdown
 
-- [ ] **Phase 1 — P1 data integrity (highest value)**
-  - [ ] P1-A failing round-trip test → fix `<`/`>` un-encode → green
-  - [ ] P1-B failing gap-cursor ordinal test → route capture through filtered index → green
-- [ ] **Phase 2 — P2 robustness/security**
-  - [ ] P2-C v1 tombstone budget; P2-D scroll-abort; P2-E submit timeout;
+- [x] **Phase 1 — P1 data integrity (highest value)**
+  - [x] P1-A failing round-trip test → fix `<`/`>` un-encode → green
+  - [x] P1-B failing gap-cursor ordinal test → route capture through filtered index → green
+- [x] **Phase 2 — P2 robustness/security**
+  - [x] P2-C v1 tombstone budget; P2-D scroll-abort; P2-E submit timeout;
         P2-F image give-up error; P2-G path containment; P2-H deactivate reset
 - [ ] **Phase 3 — P3 serialization fidelity**
-  - [ ] P3-I reference links; P3-J autolinks; P3-K literal entities
+  - [ ] P3-I reference links; P3-J autolinks; ~~P3-K literal entities~~ (resolved
+        by P1-A: the inverse-order decode round-trips literal entity text)
 - [ ] **Phase 4 — Latent lifecycle reducers**
   - [ ] Latent-L guards + recovery-target reconciliation (+ tests)
 - [ ] **Verification**
@@ -256,6 +257,26 @@ _(to be filled during implementation)_
   ordinal mismatch) via throwaway real-editor probes (since deleted). Compiled
   the bug list above.
 - **Notes:** No fixes applied yet — this is the plan only, pending TDD execution.
+
+### 2026-09-18 – P1 fixes (TDD)
+- **What:** Fixed P1-A (`markdownSerialization.ts` — decode `&gt;`/`&lt;`/`&amp;`
+  in inverse order outside code) and P1-B (`feedbackCaptureWorkflow.ts` — resolve
+  capture ordinals against non-widget direct children). Each with a real-editor
+  RED→GREEN test. Full suite green, lint clean, `build:release` + `verify-build` ok.
+- **Files:** `markdownSerialization.ts`, `feedbackCaptureWorkflow.ts`, + 2 tests.
+
+### 2026-09-18 – P2 fixes (TDD)
+- **What:** P2-C (`feedbackSessionStore.ts` v1 delete now runs tombstone quota
+  eviction), P2-D (`feedbackCaptureWorkflow.ts` keyboard capture aborts on
+  scroll/resize during raster), P2-E (`feedbackReview.ts` 15s timeout on
+  screenshot add so a lost host ACK no longer hangs the modal), P2-F
+  (`imageSaveCompletionDelivery.ts` + provider `onExhausted` surfaces a terminal
+  error), P2-G (provider image reveal/metadata handlers enforce
+  `isPathContainedWithin`), P2-H (`feedbackReview.ts` `deactivate` resets
+  `unresolvedCellTargetIds`). Each with RED→GREEN tests (P2-H is a defensive
+  symmetry fix with no observable behavior, so no dedicated test).
+- **Result:** Full suite green (2,754 pass), lint clean. P3-K resolved as a
+  by-product of P1-A. Remaining: P3-I/J and Latent-L.
 
 ---
 
