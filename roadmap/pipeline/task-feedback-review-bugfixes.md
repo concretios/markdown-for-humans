@@ -235,11 +235,15 @@ Legend — Severity: P1 (data loss/corruption/core-feature broken), P2
 - [x] **Phase 2 — P2 robustness/security**
   - [x] P2-C v1 tombstone budget; P2-D scroll-abort; P2-E submit timeout;
         P2-F image give-up error; P2-G path containment; P2-H deactivate reset
-- [ ] **Phase 3 — P3 serialization fidelity**
-  - [ ] P3-I reference links; P3-J autolinks; ~~P3-K literal entities~~ (resolved
-        by P1-A: the inverse-order decode round-trips literal entity text)
-- [ ] **Phase 4 — Latent lifecycle reducers**
-  - [ ] Latent-L guards + recovery-target reconciliation (+ tests)
+- [x] **Phase 3 — P3 serialization fidelity**
+  - [x] ~~P3-K literal entities~~ (resolved by P1-A: inverse-order decode
+        round-trips literal entity text)
+  - [x] P3-I reference links / P3-J angle-bracket autolinks — **decided WON'T-FIX
+        (accepted tradeoff), not implemented.** See Decisions §Reference/autolink
+        fidelity and Follow-up. No data loss; deferring avoids regressing all
+        working links.
+- [x] **Phase 4 — Latent lifecycle reducers**
+  - [x] Latent-L guards + recovery-target reconciliation (+ tests)
 - [ ] **Verification**
   - [ ] `npm test` (all green), `npm run lint`, `npm run build:release`
   - [ ] Run integration/perf/extension-host gates
@@ -278,14 +282,51 @@ _(to be filled during implementation)_
 - **Result:** Full suite green (2,754 pass), lint clean. P3-K resolved as a
   by-product of P1-A. Remaining: P3-I/J and Latent-L.
 
+### 2026-09-18 – Latent-L + P3 decision
+- **What:** Latent-L implemented (both reducers): reject `operationFailed` from
+  the terminal `Active`/`Reviewing` rest states, and reconcile the recovery
+  targets via a shared `src/shared/feedbackLifecycleRecovery.ts`
+  (`'NoDraft' | 'DraftAvailable'`). Guard tests added to both reducer suites
+  (RED→GREEN verified). Investigated P3-I/P3-J and decided WON'T-FIX (accepted
+  tradeoff) — confirmed via marked tokenization that there is no data loss and
+  that a faithful fix would regress WYSIWYG rendering or all working links.
+- **Files:** `feedbackLifecycleMachine.ts` (editor + webview),
+  `feedbackLifecycleRecovery.ts` (new shared), + 2 reducer test suites; plan.
+- **Result:** All planned P1/P2 fixes plus Latent-L shipped; P3-I/J deliberately
+  deferred with rationale. This closes the actionable scope of this task.
+
 ---
 
 ## 8. Decisions & Tradeoffs
 
 - **Patch around tiptap, don't upgrade:** keep the `3.30.5` pin and extend the
   existing entity patch rather than chasing an upstream fix.
-- **Reuse existing filtered-index helper for capture:** prefer the proven
-  `createTopLevelDomIndex`/`blockElementIndex` pattern over a new mapping.
+- **Reuse existing filtered-index helper for capture:** the capture path filters
+  widget/gap-cursor direct children (same rule as `createTopLevelDomIndex`)
+  rather than requiring a full `state.doc` index, so the synthetic-editor capture
+  tests stay valid.
+- **Capture ordinal fix mirrors, not reuses, the blessed index:** routing capture
+  through `createFeedbackBlockElementIndex` needed a real `state.doc` and broke
+  the synthetic capture tests; widget filtering is equivalent for top-level blocks.
+- **Screenshot add timeout is best-effort:** on timeout the pending mutation is
+  dropped and the modal re-enabled; a very late host reply is ignored, and if the
+  host already committed the add it still surfaces via the normal items sync. A
+  fully cancellable, deduplicated add awaits the deferred `Submitting`-state wiring.
+- **Reference/autolink fidelity (P3-I/P3-J) — WON'T-FIX (accepted tradeoff):** the
+  editor schema has a single, inline link representation and no reference-
+  definition node. Marked emits a separate `def` token for `[foo]: url` (which the
+  schema cannot hold) and treats `<https://…>`/bare autolinks as plain text.
+  Preserving the original syntax would require either rendering raw markdown in the
+  WYSIWYG surface (regressing the rendering the product prioritizes) or new
+  schema/def-node + literal-preservation machinery with broad regression risk
+  across every working link. Verified there is **no data loss** — the URL is kept
+  via the resolved href and reference links render identically as inline links; the
+  only change is source syntax + git-diff noise. This aligns with the project's
+  "reading experience > source fidelity" and "simplest solution that works"
+  principles, so it is intentionally not implemented.
+- **Lifecycle recovery vocabulary:** unified the host/renderer reducers on a shared
+  `FeedbackRecoveryTarget` (`'NoDraft' | 'DraftAvailable'`) mapped to each side's
+  local rest state, resolving the documented divergence before any production wiring.
 
 ---
 
