@@ -109,6 +109,48 @@ describe('Feedback v2 renderer summary projection', () => {
     });
   });
 
+  it('uses [Empty cells] when every selected cell is blank so host focus validation accepts the item', () => {
+    const locator = {
+      version: 1 as const,
+      tableOrdinal: 0,
+      rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+      tableFingerprint: 'md4h-table/v1:abcdef0123456789',
+      tableBlockSha256: HASH,
+    };
+    const value = item({
+      target: {
+        version: 2,
+        requestedScope: 'table-cells',
+        effectiveScope: 'table-cells',
+        resolution: 'exact',
+        blockSpan: BLOCK_SPAN,
+        locator: { kind: 'table-cells', value: locator },
+      },
+      evidence: {
+        effective: {
+          kind: 'table-cells',
+          fidelity: 'structured-semantic',
+          complete: true,
+          rows: [
+            [
+              { role: 'data', text: '', complete: true },
+              { role: 'data', text: '  ', complete: true },
+            ],
+            [
+              { role: 'data', text: '', complete: true },
+              { role: 'data', text: ' \t ', complete: true },
+            ],
+          ],
+        },
+      },
+    });
+
+    expect(projectFeedbackTextItemSummaryV2(value)).toEqual({
+      focus: '[Empty cells]',
+      cellTarget: locator,
+    });
+  });
+
   it('uses original partial evidence for degraded items without restoring a stale locator', () => {
     const value = item({
       target: {

@@ -42,8 +42,9 @@ const editorBlockSerializationCaches = new WeakMap<Editor, EditorBlockSerializat
 
 interface PatchableMarkdownManager {
   encodeTextForMarkdown?: (text: string, node: JSONContent, parentNode?: JSONContent) => string;
+  escapeMarkdownSyntax?: (text: string) => string;
   codeTypes?: Set<string>;
-  __md4hEntityPatched?: boolean;
+  __md4hSerializationPatched?: boolean;
 }
 
 function isEncodedInsideCode(
@@ -60,35 +61,56 @@ function isEncodedInsideCode(
 }
 
 /**
- * @tiptap/markdown@3.30.5 always HTML-entity-encodes "&", "<", and ">" in plain
- * text nodes (MarkdownManager#encodeTextForMarkdown → encodeHtmlEntities), even
- * though Markdown never requires escaping these in prose. Left alone, every
- * "&" (e.g. "Q&A"), "<"/">" (e.g. "a < b", "List<String>", "x -> y") in prose
- * is corrupted to "&amp;"/"&lt;"/"&gt;" on each save/Feedback snapshot
- * round-trip, which mangles common technical prose and poisons the source-
- * evidence slices + block hashes derived from it.
- *
- * The upstream encoder is exactly:
- *   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
- * so its precise inverse is to undo those substitutions in reverse order
- * (">", then "<", then "&"). Applying them in this order round-trips even
- * literal entity text a user typed (e.g. "&lt;" survives), because the "&amp;"
- * decode runs last. We only do this outside code, where the upstream method
- * already leaves text unencoded, so legitimate entity text inside code samples
- * is untouched.
+ * TipTap 3.30.5 escapes every `\ * _ [ ] ~` in prose. That fights this editor's
+ * model: real emphasis/links are TipTap marks (serialized with their own
+ * delimiters), while marked's autolink tokenizer strips escapes back into URL
+ * text — so `Foo_bar` in a URL grows `\_` → `\\\_` → … on every save. Match
+ * main's TipTap 3.12 behavior: leave prose characters alone.
  */
-function patchEntityOverEncoding(manager: MarkdownManager): void {
+function escapeMarkdownSyntaxForProse(text: string): string {
+  return text;
+}
+
+/**
+ * Undo TipTap's HTML-entity over-encoding outside code, without turning
+ * authored `&lt;div&gt;`-style entity text into real HTML that marked later
+ * drops. Decode `&lt;` only when it cannot start an HTML tag (`a < b`); keep
+ * `&lt;` before `[A-Za-z/!?]` so generics and literal tag examples stay text.
+ *
+ * Upstream encoder: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Decode in
+ * reverse order; `&amp;` last so literal entity spellings survive.
+ */
+function decodeNonTagHtmlEntities(encoded: string): string {
+  return encoded
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;(?![A-Za-z/!?])/g, '<')
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Install TipTap MarkdownManager patches used by every serialize path (sync,
+ * Feedback snapshots, copy-as-markdown). Idempotent.
+ */
+export function patchMarkdownSerialization(manager: MarkdownManager): void {
   const patchable = manager as unknown as PatchableMarkdownManager;
-  if (patchable.__md4hEntityPatched || typeof patchable.encodeTextForMarkdown !== 'function') {
+  if (patchable.__md4hSerializationPatched) {
     return;
   }
-  const original = patchable.encodeTextForMarkdown.bind(manager);
-  patchable.encodeTextForMarkdown = (text, node, parentNode) => {
-    const encoded = original(text, node, parentNode);
-    if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
-    return encoded.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
-  };
-  patchable.__md4hEntityPatched = true;
+
+  if (typeof patchable.escapeMarkdownSyntax === 'function') {
+    patchable.escapeMarkdownSyntax = escapeMarkdownSyntaxForProse;
+  }
+
+  if (typeof patchable.encodeTextForMarkdown === 'function') {
+    const original = patchable.encodeTextForMarkdown.bind(manager);
+    patchable.encodeTextForMarkdown = (text, node, parentNode) => {
+      const encoded = original(text, node, parentNode);
+      if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
+      return decodeNonTagHtmlEntities(encoded);
+    };
+  }
+
+  patchable.__md4hSerializationPatched = true;
 }
 
 function isMeaningfulInlineNode(node: JSONContent): boolean {
@@ -333,7 +355,7 @@ export function getEditorMarkdownForSync(
   };
 
   const markdownManager = editorUnknown.markdown || editorUnknown.storage?.markdown;
-  if (markdownManager) patchEntityOverEncoding(markdownManager);
+  if (markdownManager) patchMarkdownSerialization(markdownManager);
 
   const getFallbackMarkdown = (): string => {
     const getMarkdown = editorUnknown.getMarkdown;

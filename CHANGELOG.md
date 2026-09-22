@@ -31,6 +31,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Kept compact and wide Feedback composers plus tall saved-comment edit forms visible below the sticky toolbar and near viewport edges, remeasured wrapped inputs after responsive width changes, and isolated an active edit from offscreen cards and Undo controls until it closes.
 - Ignored retained GapCursor widgets when resolving opaque selections, refreshed exact locators at Finish without rebuilding decorations, bounded renderer selection evidence before traversal, and capped exact table-cell feedback at 256 cells per item and 4,096 cells per session before an explained whole-table fallback.
 - Aligned host and durable-store exact-cell accounting so restored degraded locators cannot pass host validation and then fail persistence.
+- Stopped TipTap 3.30.5 Markdown serialization from growing backslashes in underscored URLs/emails, escaping ordinary prose (`snake_case`, footnotes, `[WIP]`), converting authored `&lt;tag&gt;` entity text into deletable HTML, or dropping `[x]`/`[ ]` markers from numbered lists.
+- Projected all-empty Feedback table-cell selections as `[Empty cells]` so the host protocol accepts the item instead of bricking the draft session.
 
 ### Changed
 
@@ -38,19 +40,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Upgraded Mermaid to `11.17.2` and esbuild to `0.28.2`.
 - Raised the supported runtime floor to VS Code `1.98.0`, with explicit Node 20 and Chromium 132 build targets.
 - Disabled retained hidden webview contexts and restored bounded selection and scroll state after renderer recreation.
+- Declared `capabilities.virtualWorkspaces.supported: false`. VS Code previously treated an undeclared capability as supported, so the extension is newly unavailable in GitHub Repositories / vscode.dev until disk-backed workspace support lands.
 - Preserved strict rendered-text and table-cell locators beside human-readable Target summaries, while keeping whole-block source evidence distinct from rendered table coordinates and partial-selection evidence.
 - Moved Markdown serialization behind the 500 ms debounce and added minimal edits for documents of at least 32 KiB.
 
 ### Security
 
 - Replaced the vulnerable `image-size` dependency with bounded PNG, JPEG, GIF, and WebP header readers.
-- Refreshed vulnerable compatible transitive dependencies. Production and development audits now report zero known vulnerabilities.
+- Refreshed vulnerable compatible transitive dependencies. Production audits report zero known vulnerabilities; the remaining `js-yaml` advisory is development-only (eslint/mocha/vsce/jest) and does not ship in the VSIX.
 - Updated TipTap to `3.30.5`, which includes the upstream `mergeAttributes` prototype-pollution and Markdown attribute-parsing denial-of-service fixes that the npm audit feed did not surface.
 - Restricted webview local-file access to the exact extension/workspace or document roots, rejected out-of-root image requests, and honored cancelled editor resolution.
 
 ### Testing
 
 - Added deterministic 3,000-word and 10,000-line performance fixtures, renderer fault injection, Windows and Ubuntu Extension Host CI, and minimum/current VS Code coverage.
+- Added TipTap 3.30.5 Markdown escape/entity round-trip regressions for underscored URLs, HTML-entity prose, footnotes, and numbered-list checkboxes.
 
 ---
 
@@ -285,7 +289,7 @@ This release includes several under-the-hood improvements that make the extensio
 ### Added
 
 - Added shouldAutoLink validation utility to prevent unwanted auto-linking of file extensions and bare filenames
-- Added comprehensive test suite for link autolink prevention (src/**tests**/webview/linkAutolink.test.ts)
+- Added comprehensive test suite for link autolink prevention (src/__tests__/webview/linkAutolink.test.ts)
 - Added pre-commit hook that automatically runs npm run lint:fix before each commit
 - Added enhanced test setup files (setup-after-env.ts) for improved test reliability
 - Added GitHub Actions workflow for automated package creation on push to main branch

@@ -11,6 +11,7 @@
  */
 
 import { Editor } from '@tiptap/core';
+import { patchMarkdownSerialization } from './markdownSerialization';
 
 /**
  * Result of a copy operation
@@ -46,6 +47,8 @@ export function getSelectionAsMarkdown(editor: Editor): string | null {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const markdownManager = (editor as any).markdown;
     if (markdownManager?.serialize) {
+      // Same TipTap entity/escape patches as the save path (M2).
+      patchMarkdownSerialization(markdownManager);
       // Convert temp doc to JSON and serialize
       const json = tempDoc.toJSON();
       return markdownManager.serialize(json);

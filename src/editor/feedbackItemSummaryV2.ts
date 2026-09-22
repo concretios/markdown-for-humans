@@ -47,8 +47,16 @@ function feedbackSummaryTextV2(evidence: FeedbackEvidenceV2): string {
         : `Source evidence omitted (${evidence.omittedUtf8Bytes.toLocaleString(
             'en-US'
           )} UTF-8 bytes).`;
-    case 'table-cells':
+    case 'table-cells': {
+      // Host protocol rejects blank focus after trim. Mirror the webview's
+      // '[Empty cells]' fallback so all-empty cell selections stay usable.
+      // Check cell text before TSV escaping: whitespace/control-only cells
+      // still escape to visible `\t`/`\n` sequences that would otherwise pass
+      // a post-render trim check while remaining useless as focus.
+      const allBlank = evidence.rows.every(row => row.every(cell => cell.text.trim().length === 0));
+      if (allBlank) return '[Empty cells]';
       return renderFeedbackTableCellsTsvV2(evidence.rows);
+    }
     case 'visual':
       return `Screenshot evidence (${evidence.width.toLocaleString('en-US')} × ${evidence.height.toLocaleString('en-US')}).`;
     case 'rendered-text':
