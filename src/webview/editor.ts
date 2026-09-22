@@ -55,11 +55,6 @@ import { showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
-import {
-  copyAiContextReference,
-  shouldIncludeLineRange,
-  type SelectionBlockRange,
-} from './utils/aiContextReference';
 import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
@@ -517,28 +512,11 @@ function isPlainFindShortcut(
   const hasPrimaryModifier = Boolean(event.metaKey) !== Boolean(event.ctrlKey);
   return hasPrimaryModifier && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f';
 }
-// Pending AI context reference requests, keyed by requestId. The host saves the
-// document and replies with `aiContextRefResponse`; we look up the resolver here.
-const aiContextRefCallbacks = new Map<
-  string,
-  (response: { ref?: string; relPath?: string; error?: string }) => void
->();
-
-// Webview-only "remember choice for this session" preference for the
-// copy-AI-context save dialog. Cleared whenever the webview is reloaded.
-let aiContextSessionSkipSave = false;
-// Mirrors the user setting `markdownForHumans.copyAiContextRef.skipSaveWarning`,
-// kept in sync via `update` and `settingsUpdate` messages from the host.
-let aiContextSkipSaveWarningSetting = false;
 let blankLineMode: BlankLineMode = 'strip';
 // Mirrors `markdownForHumans.formattingShortcuts.enabled`. When false, the
 // editor stops intercepting Cmd/Ctrl+B/I/U so those chords reach VS Code's own
 // keybindings instead of toggling bold/italic/underline in-editor.
 let formattingShortcutsEnabled = true;
-
-// Pending document-dirty queries, keyed by requestId. The host replies with
-// `documentDirtyResponse`; we look up the resolver here.
-const documentDirtyCallbacks = new Map<string, (isDirty: boolean) => void>();
 
 /** True when this rich view is frozen locally or by a sibling split owner. */
 function isFeedbackEditingLocked(): boolean {
@@ -558,21 +536,6 @@ function announcePeerFeedbackLock(): void {
       },
     })
   );
-}
-
-function queryDocumentDirty(): Promise<boolean> {
-  return new Promise(resolve => {
-    const requestId = `is-dirty-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    documentDirtyCallbacks.set(requestId, resolve);
-    vscode.postMessage({ type: 'queryDocumentDirty', requestId });
-    // Defensive timeout so a missing host reply can't wedge the toolbar.
-    setTimeout(() => {
-      if (documentDirtyCallbacks.delete(requestId)) {
-        // Treat unknown state as "needs confirmation" — safer than silently saving.
-        resolve(true);
-      }
-    }, 2000);
-  });
 }
 
 /**
@@ -628,71 +591,6 @@ function openLinkDialogWhenEditable(editorInstance: Editor): boolean {
   if (isFeedbackEditingLocked()) return false;
   showLinkDialog(editorInstance);
   return true;
-}
-
-async function runCopyAiContextRef(): Promise<void> {
-  if (!editor) return;
-
-  // Snapshot focus AND selection synchronously, before any await. Two distinct
-  // signals matter, and either one alone is wrong:
-  //   - `isFocused` covers the user clicking the button (or hitting the
-  //     shortcut) while editing — the button's `mousedown` preventDefault keeps
-  //     focus, so even a bare cursor should yield the block's line range.
-  //   - `!selection.empty` covers the user selecting a range, then clicking
-  //     OUTSIDE the editor (another panel) before clicking the button. Focus is
-  //     gone, but ProseMirror preserves `state.selection`, so the deliberate
-  //     selection still maps to a line range. (This is the bug `isFocused`-only
-  //     missed: it dropped the range and copied a bare `@file`.)
-  // When BOTH are false (blurred with only a stale cursor) we copy `@file`
-  // without a line range. See shouldIncludeLineRange for the full truth table.
-  const selectionIsActive = shouldIncludeLineRange(editor.isFocused, editor.state.selection.empty);
-
-  const { showToast } = await import('./features/auditOverlay');
-
-  // The reference encodes line numbers from the on-disk file, so a dirty buffer
-  // forces a save before the copy. Ask the user before saving on their behalf —
-  // unless they've already opted out for this session or via the setting.
-  const isDirty = await queryDocumentDirty();
-  const needsConfirmation =
-    isDirty && !aiContextSessionSkipSave && !aiContextSkipSaveWarningSetting;
-
-  if (needsConfirmation) {
-    const { showAiContextSaveWarning } = await import('./features/aiContextSaveWarning');
-    const choice = await showAiContextSaveWarning();
-    if (!choice.confirmed) {
-      showToast('AI reference copy cancelled — file not saved', 'info');
-      return;
-    }
-    if (choice.rememberForSession) {
-      aiContextSessionSkipSave = true;
-    }
-  }
-
-  const result = await copyAiContextReference(
-    editor,
-    blankLineMode,
-    (range: SelectionBlockRange | null) => {
-      return new Promise(resolve => {
-        const requestId = `ai-ref-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        aiContextRefCallbacks.set(requestId, resolve);
-        // A null range means we couldn't map the cursor to any block; the host
-        // replies with the bare workspace-relative path and we paste `@path`
-        // (no `#N`).
-        vscode.postMessage({
-          type: 'getAiContextRef',
-          requestId,
-          startLine: range?.startLine,
-          endLine: range?.endLine,
-        });
-      });
-    },
-    { selectionIsActive }
-  );
-  if (result.success) {
-    showToast(`Copied AI reference: ${result.ref}`, 'success');
-  } else {
-    showToast(result.error || 'Could not copy AI reference', 'info');
-  }
 }
 
 // Global function for resolving image paths (used by CustomImage extension)
@@ -1331,18 +1229,6 @@ function initializeEditor(initialContent: string) {
         }
         return;
       }
-
-      // Cmd/Ctrl+Alt+C — Copy current selection as @file#lines AI context reference.
-      // VS Code keybindings declared in package.json don't fire while focus is
-      // inside a webview iframe, so we have to detect the chord here ourselves.
-      // Match e.code instead of e.key because Ctrl+Alt on Windows is the AltGr
-      // modifier on some layouts and can rewrite e.key to a non-letter glyph.
-      if (isMod && e.altKey && (e.code === 'KeyC' || e.key.toLowerCase() === 'c')) {
-        e.preventDefault();
-        e.stopPropagation();
-        void runCopyAiContextRef();
-        return;
-      }
     };
 
     // Register handlers
@@ -1557,9 +1443,6 @@ window.addEventListener('message', async (event: MessageEvent) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (window as any).skipResizeWarning = message.skipResizeWarning;
         }
-        if (typeof message.skipAiContextSaveWarning === 'boolean') {
-          aiContextSkipSaveWarningSetting = message.skipAiContextSaveWarning;
-        }
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
         }
@@ -1645,9 +1528,6 @@ window.addEventListener('message', async (event: MessageEvent) => {
         if (typeof message.skipResizeWarning === 'boolean') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (window as any).skipResizeWarning = message.skipResizeWarning;
-        }
-        if (typeof message.skipAiContextSaveWarning === 'boolean') {
-          aiContextSkipSaveWarningSetting = message.skipAiContextSaveWarning;
         }
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
@@ -2068,28 +1948,6 @@ window.addEventListener('message', async (event: MessageEvent) => {
         }
         break;
       }
-      case 'aiContextRefResponse': {
-        const requestId = message.requestId as string;
-        const callback = aiContextRefCallbacks.get(requestId);
-        if (callback) {
-          callback({
-            ref: message.ref as string | undefined,
-            relPath: message.relPath as string | undefined,
-            error: message.error as string | undefined,
-          });
-          aiContextRefCallbacks.delete(requestId);
-        }
-        break;
-      }
-      case 'documentDirtyResponse': {
-        const requestId = message.requestId as string;
-        const callback = documentDirtyCallbacks.get(requestId);
-        if (callback) {
-          callback(message.isDirty === true);
-          documentDirtyCallbacks.delete(requestId);
-        }
-        break;
-      }
       case 'flushPendingEdit': {
         // Host needs the latest content NOW (autosave on focus/window change).
         // If a debounced edit is queued, fire it synchronously so the `edit`
@@ -2145,10 +2003,6 @@ window.addEventListener('message', async (event: MessageEvent) => {
           documentVersion: acceptedDocumentVersion,
           ok,
         });
-        break;
-      }
-      case 'triggerCopyAiContextRef': {
-        void runCopyAiContextRef();
         break;
       }
       case 'feedback.drafts.available':
@@ -2805,11 +2659,6 @@ window.addEventListener('auditDocument', async () => {
 window.addEventListener('copyAsMarkdown', () => {
   if (!editor) return;
   copySelectionAsMarkdown(editor);
-});
-
-// Handle copy AI context reference from toolbar button
-window.addEventListener('copyAiContextRef', () => {
-  void runCopyAiContextRef();
 });
 
 // Handle insert-math from toolbar buttons

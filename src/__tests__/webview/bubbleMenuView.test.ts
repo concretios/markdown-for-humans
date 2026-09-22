@@ -133,12 +133,11 @@ describe('BubbleMenuView', () => {
       expect(editor.on).toHaveBeenCalledWith('selectionUpdate', expect.any(Function));
     });
 
-    it('puts LLM feedback first, retires the toolbar @ AI-ref control, and only shows review actions in feedback mode', () => {
+    it('puts LLM feedback first and only shows review actions in feedback mode', () => {
       const editor = createMockEditor();
       const toolbar = createFormattingToolbar(editor);
 
-      // Toolbar chrome: Copy @file#lines stays available via Command Palette / Alt+C,
-      // but the always-visible @ button is retired so Feedback is the first control.
+      // Retired Copy AI Reference toolbar control must stay gone; Feedback is first.
       expect(toolbar.querySelector('.copy-ai-ref-button')).toBeNull();
 
       const start = toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]');
