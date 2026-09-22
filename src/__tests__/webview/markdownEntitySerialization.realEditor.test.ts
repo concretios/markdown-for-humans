@@ -4,7 +4,7 @@
  * Regression: @tiptap/markdown@3.30.5 HTML-entity-encodes `&`, `<`, and `>` in
  * plain-text nodes (MarkdownManager#encodeTextForMarkdown → encodeHtmlEntities),
  * even though Markdown never requires escaping these in prose. The webview
- * neutralises that over-encoding in `patchEntityOverEncoding`. This test
+ * neutralises that over-encoding in `patchMarkdownSerialization`. This test
  * pins the FULL round-trip through the real production serialization path
  * (`getEditorMarkdownForSync`) so all three characters survive outside code and
  * are left untouched inside inline code / code blocks.
@@ -73,9 +73,12 @@ describe('entity over-encoding is neutralised on save (real editor)', () => {
     expect(roundTrip('if x < 5 and y > 3 then done')).toBe('if x < 5 and y > 3 then done');
   });
 
-  it('preserves angle brackets in generics and arrows', () => {
+  it('keeps tag-like angle brackets entity-encoded so they are not dropped as HTML', () => {
+    // `<String>`/`<K,V>` look like HTML tags to marked; leaving bare `<` makes
+    // TipTap drop empty unknown elements on the next open. Entity form is
+    // stable and still renders as angle brackets in Markdown viewers.
     expect(roundTrip('Use List<String> and Map<K,V> with x -> y')).toBe(
-      'Use List<String> and Map<K,V> with x -> y'
+      'Use List&lt;String> and Map&lt;K,V> with x -> y'
     );
   });
 

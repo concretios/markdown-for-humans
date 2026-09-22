@@ -14,6 +14,73 @@ type OrderedListToken = MarkdownToken & {
   items?: MarkdownToken[];
 };
 
+type OrderedListItemToken = MarkdownToken & {
+  type: 'list_item';
+  task?: boolean;
+  checked?: boolean;
+  text?: string;
+  tokens?: MarkdownToken[];
+};
+
+/**
+ * Marked's GFM list tokenizer lifts `[ ]`/`[x]` into `task`/`checked` (and a
+ * leading `checkbox` child) for numbered items. TipTap's `isTaskItem` only
+ * recognizes `- [ ]` bullet tasks, and ListItem.parseMarkdown drops the
+ * checkbox token — so `1. [x] done` silently became `1. done`. Re-prefix the
+ * marker into the item text before ListItem parses, keeping a plain ordered
+ * list (taskItem cannot nest under orderedList in the schema).
+ */
+function restoreOrderedTaskCheckboxPrefix(item: MarkdownToken): MarkdownToken {
+  if (item.type !== 'list_item') return item;
+  const listItem = item as OrderedListItemToken;
+  if (!listItem.task) return item;
+
+  const checked = Boolean(listItem.checked);
+  const prefix = checked ? '[x] ' : '[ ] ';
+  const withoutCheckbox = Array.isArray(listItem.tokens)
+    ? listItem.tokens.filter(child => child.type !== 'checkbox')
+    : [];
+  const bodyText = typeof listItem.text === 'string' ? listItem.text : '';
+  const text = `${prefix}${bodyText}`;
+
+  const first = withoutCheckbox[0] as
+    (MarkdownToken & { text?: string; raw?: string; tokens?: MarkdownToken[] }) | undefined;
+  if (first && first.type === 'text') {
+    const mergedRaw = `${prefix}${first.raw || first.text || ''}`;
+    const mergedText = `${prefix}${first.text || ''}`;
+    const mergedInline: MarkdownToken[] = [
+      { type: 'text', raw: prefix, text: prefix, escaped: false },
+      ...(Array.isArray(first.tokens) ? first.tokens : []),
+    ];
+    return {
+      ...listItem,
+      task: false,
+      checked: undefined,
+      text,
+      tokens: [
+        { ...first, raw: mergedRaw, text: mergedText, tokens: mergedInline },
+        ...withoutCheckbox.slice(1),
+      ],
+    };
+  }
+
+  return {
+    ...listItem,
+    task: false,
+    checked: undefined,
+    text,
+    tokens: [
+      {
+        type: 'text',
+        raw: text,
+        text,
+        tokens: [{ type: 'text', raw: text, text, escaped: false }],
+      },
+      ...withoutCheckbox,
+    ],
+  };
+}
+
 /**
  * OrderedList markdown parsing fix.
  *
@@ -57,7 +124,9 @@ export const OrderedListMarkdownFix = OrderedList.extend({
 
     const start =
       typeof listToken.start === 'number' && Number.isFinite(listToken.start) ? listToken.start : 1;
-    const items = Array.isArray(listToken.items) ? listToken.items : [];
+    const items = Array.isArray(listToken.items)
+      ? listToken.items.map(restoreOrderedTaskCheckboxPrefix)
+      : [];
     const content =
       items.length > 0 && typeof helpers.parseChildren === 'function'
         ? helpers.parseChildren(items)
