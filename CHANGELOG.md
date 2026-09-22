@@ -36,6 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 
+- Retired the Copy AI Context Reference (`@file#lines`) command, `Alt+C` keybinding, setting, toolbar wiring, and implementation. LLM Feedback remains the first toolbar control.
 - Upgraded the complete TipTap family to exact `3.30.5` on one deduplicated ProseMirror dependency graph.
 - Upgraded Mermaid to `11.17.2` and esbuild to `0.28.2`.
 - Raised the supported runtime floor to VS Code `1.98.0`, with explicit Node 20 and Chromium 132 build targets.

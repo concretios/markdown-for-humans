@@ -1104,7 +1104,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     const configChangeSubscription = vscode.workspace.onDidChangeConfiguration(e => {
       if (
         e.affectsConfiguration('markdownForHumans.imageResize.skipWarning') ||
-        e.affectsConfiguration('markdownForHumans.copyAiContextRef.skipSaveWarning') ||
         e.affectsConfiguration('markdownForHumans.imagePath') ||
         e.affectsConfiguration('markdownForHumans.imagePathBase') ||
         e.affectsConfiguration('markdownForHumans.imagePreview.hover.enabled') ||
@@ -1117,10 +1116,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       ) {
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
-        const skipAiContextSaveWarning = config.get<boolean>(
-          'markdownForHumans.copyAiContextRef.skipSaveWarning',
-          false
-        );
         const imagePath = config.get<string>('markdownForHumans.imagePath', 'images');
         const imagePathBase = config.get<string>(
           'markdownForHumans.imagePathBase',
@@ -1162,7 +1157,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         panelWebview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
-          skipAiContextSaveWarning: skipAiContextSaveWarning,
           imagePath: imagePath,
           imagePathBase: imagePathBase,
           showImageHoverOverlay: showImageHoverOverlay,
@@ -1306,10 +1300,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     // Get skip warning setting
     const config = vscode.workspace.getConfiguration();
     const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
-    const skipAiContextSaveWarning = config.get<boolean>(
-      'markdownForHumans.copyAiContextRef.skipSaveWarning',
-      false
-    );
     const imagePath = config.get<string>('markdownForHumans.imagePath', 'images');
     const imagePathBase = config.get<string>(
       'markdownForHumans.imagePathBase',
@@ -1339,7 +1329,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       content: transformedContent,
       ...(force ? { force: true } : {}),
       skipResizeWarning: skipWarning,
-      skipAiContextSaveWarning: skipAiContextSaveWarning,
       imagePath: imagePath,
       imagePathBase: imagePathBase,
       showImageHoverOverlay: showImageHoverOverlay,
@@ -1673,8 +1662,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         // Fire-and-forget: errors are handled inside applyEdit and shown to user.
         // applyEdit only updates the in-memory TextDocument (via WorkspaceEdit) —
         // it never writes to disk. The file is only persisted to disk on an
-        // explicit `save` message (Ctrl+S), when `copyAiContextRef` saves after
-        // user confirmation, or when the autosave bridge fires `document.save()`.
+        // explicit `save` message (Ctrl+S), or when the autosave bridge fires
+        // `document.save()`.
         if (transitionMayFlush && feedbackTransition && typeof message.content === 'string') {
           // The normal host-to-webview echo is suppressed while a transition
           // owns the document. If any later transition step fails, keep the
@@ -1792,10 +1781,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         // Also send settings separately
         const config = vscode.workspace.getConfiguration();
         const skipWarning = config.get<boolean>('markdownForHumans.imageResize.skipWarning', false);
-        const skipAiContextSaveWarning = config.get<boolean>(
-          'markdownForHumans.copyAiContextRef.skipSaveWarning',
-          false
-        );
         const imagePath = config.get<string>('markdownForHumans.imagePath', 'images');
         const imagePathBase = config.get<string>(
           'markdownForHumans.imagePathBase',
@@ -1823,7 +1808,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         webview.postMessage({
           type: 'settingsUpdate',
           skipResizeWarning: skipWarning,
-          skipAiContextSaveWarning: skipAiContextSaveWarning,
           imagePath: imagePath,
           imagePathBase: imagePathBase,
           showImageHoverOverlay: showImageHoverOverlay,
@@ -1939,23 +1923,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       case 'auditPickFile':
         void this.handleAuditPickFile(message, document, webview);
         break;
-      case 'getAiContextRef':
-        void this.handleGetAiContextRef(message, document, webview);
-        break;
-      case 'queryDocumentDirty': {
-        // The webview's pending edits land in the TextDocument via WorkspaceEdit
-        // (see `applyEdit`), so `document.isDirty` is the authoritative answer
-        // even when the user has typed but not yet saved.
-        const requestId = message.requestId as string;
-        if (typeof requestId === 'string') {
-          webview.postMessage({
-            type: 'documentDirtyResponse',
-            requestId,
-            isDirty: document.isDirty,
-          });
-        }
-        break;
-      }
     }
   }
 
@@ -7404,72 +7371,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       });
     } finally {
       await this.endFeedbackTransition(documentKey, transitionToken, document);
-    }
-  }
-
-  /**
-   * Build a Claude-Code-style `@file#startLine-endLine` reference for the active
-   * document. Saves the document first so the line numbers the webview just
-   * computed match the bytes on disk that an AI tool will read.
-   *
-   * Path is workspace-relative (POSIX separators) when the file is inside an
-   * open workspace folder. Files outside any workspace fall back to the absolute
-   * fsPath, also normalized to forward slashes.
-   */
-  private async handleGetAiContextRef(
-    message: { type: string; [key: string]: unknown },
-    document: vscode.TextDocument,
-    webview: vscode.Webview
-  ): Promise<void> {
-    const requestId = message.requestId as string;
-    const rawStart = message.startLine;
-    const rawEnd = message.endLine;
-    // Both line numbers are optional: when the webview couldn't map the
-    // selection to any block (empty doc, all-blank paragraphs, out-of-range
-    // cursor) it omits them and we return the bare `@path`.
-    const hasRange = typeof rawStart === 'number' && typeof rawEnd === 'number';
-
-    const reply = (payload: { ref?: string; relPath?: string; error?: string }) => {
-      webview.postMessage({
-        type: 'aiContextRefResponse',
-        requestId,
-        ...payload,
-      });
-    };
-
-    if (typeof requestId !== 'string') return;
-    if (!hasRange && (rawStart !== undefined || rawEnd !== undefined)) {
-      // Partial line info is always a webview bug — fail loudly rather than
-      // silently dropping it.
-      reply({ error: 'Invalid line range' });
-      return;
-    }
-
-    try {
-      if (document.isDirty) {
-        const saved = await document.save();
-        if (!saved) {
-          reply({ error: 'Could not save document before copying reference' });
-          return;
-        }
-      }
-
-      const filePath = document.uri.fsPath;
-      const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-      const relRaw = workspaceFolder
-        ? path.relative(workspaceFolder.uri.fsPath, filePath)
-        : filePath;
-      const relPath = relRaw.replace(/\\/g, '/');
-      if (!hasRange) {
-        reply({ ref: `@${relPath}`, relPath });
-        return;
-      }
-      const startLine = rawStart as number;
-      const endLine = rawEnd as number;
-      const suffix = startLine === endLine ? `#${startLine}` : `#${startLine}-${endLine}`;
-      reply({ ref: `@${relPath}${suffix}`, relPath });
-    } catch (error) {
-      reply({ error: error instanceof Error ? error.message : String(error) });
     }
   }
 
