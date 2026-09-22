@@ -299,6 +299,18 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
   const buttons: ToolbarItem[] = [
     {
       type: 'button',
+      label: 'Start feedback',
+      title: 'Log feedback for an LLM',
+      icon: { name: 'comment-discussion-sparkle', fallback: '✦' },
+      feedbackData: 'start',
+      className: 'feedback-start-button',
+      action: () => {
+        window.dispatchEvent(new CustomEvent('feedbackStartRequested'));
+      },
+    },
+    { type: 'separator' },
+    {
+      type: 'button',
       label: 'Bold',
       title: `Toggle bold (${modKeyLabel}+B)`,
       icon: { name: 'bold', fallback: 'B' },
@@ -756,33 +768,6 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       },
       isActive: () => false,
       className: 'settings-button',
-    },
-    { type: 'separator' },
-    {
-      type: 'button',
-      label: 'Copy AI reference',
-      title: 'Copy @file#lines reference for AI',
-      icon: { name: 'mention', fallback: '@' },
-      action: () => {
-        window.dispatchEvent(new CustomEvent('copyAiContextRef'));
-      },
-      isActive: () => false,
-      className: 'copy-ai-ref-button',
-      // The handler reads `editor.isFocused` synchronously to decide whether to
-      // include a line range. Without this, clicking the button blurs the
-      // editor first and we'd always emit a filename-only ref.
-      preserveEditorFocus: true,
-    },
-    {
-      type: 'button',
-      label: 'Start feedback',
-      title: 'Log feedback for an LLM',
-      icon: { name: 'comment-discussion-sparkle', fallback: '✦' },
-      feedbackData: 'start',
-      className: 'feedback-start-button',
-      action: () => {
-        window.dispatchEvent(new CustomEvent('feedbackStartRequested'));
-      },
     },
   ];
 
