@@ -133,24 +133,22 @@ describe('BubbleMenuView', () => {
       expect(editor.on).toHaveBeenCalledWith('selectionUpdate', expect.any(Function));
     });
 
-    it('groups neutral AI handoff actions and only shows review actions in feedback mode', () => {
+    it('puts LLM feedback first, retires the toolbar @ AI-ref control, and only shows review actions in feedback mode', () => {
       const editor = createMockEditor();
       const toolbar = createFormattingToolbar(editor);
 
-      const copyReference = toolbar.querySelector<HTMLButtonElement>('.copy-ai-ref-button');
+      // Toolbar chrome: Copy @file#lines stays available via Command Palette / Alt+C,
+      // but the always-visible @ button is retired so Feedback is the first control.
+      expect(toolbar.querySelector('.copy-ai-ref-button')).toBeNull();
+
       const start = toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]');
-      expect(copyReference).toBeTruthy();
-      expect(copyReference?.getAttribute('aria-label')).toBe('Copy @file#lines reference for AI');
-      expect(copyReference?.title).toBe('Copy @file#lines reference for AI');
-      expect(copyReference?.querySelector('.codicon-mention')).not.toBeNull();
-      expect(copyReference?.querySelector('.codicon-sparkle')).toBeNull();
       expect(start).toBeTruthy();
+      expect(toolbar.firstElementChild).toBe(start);
       expect(start?.getAttribute('aria-label')).toBe('Log feedback for an LLM');
       expect(start?.title).toBe('Log feedback for an LLM');
       expect(start?.querySelector('.codicon-comment-discussion-sparkle')).not.toBeNull();
       expect(start?.querySelector('.toolbar-button-label')).toBeNull();
       expect(start?.textContent).not.toContain('Start feedback');
-      expect(copyReference?.nextElementSibling).toBe(start);
       expect(toolbar.querySelector('[data-feedback-finish]')).toBeNull();
 
       setFeedbackToolbarState({ active: true, count: 3, commentsVisible: true });
