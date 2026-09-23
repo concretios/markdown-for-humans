@@ -125,6 +125,28 @@ describe('BubbleMenuView', () => {
       expect(buttons.length).toBeGreaterThan(0);
     });
 
+    it('exposes Insert image with a picture SVG icon and tooltip', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      const imageButton = Array.from(toolbar.querySelectorAll('button')).find(
+        button => button.getAttribute('aria-label') === 'Insert image'
+      );
+
+      expect(imageButton).toBeTruthy();
+      expect(imageButton?.title).toBe('Insert image');
+      expect(imageButton?.getAttribute('aria-label')).toBe('Insert image');
+      // Prefer a purpose-drawn picture glyph over codicon-file-media, which
+      // reads as a document/upload badge next to link and chart icons.
+      expect(imageButton?.querySelector('.codicon-file-media')).toBeNull();
+      const icon = imageButton?.querySelector('.toolbar-icon.uses-svg-icon');
+      expect(icon).not.toBeNull();
+      const svg = icon?.querySelector('svg');
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute('stroke')).toBe('currentColor');
+      expect(svg?.innerHTML.toLowerCase()).toMatch(/rect|circle|polyline|path/);
+    });
+
     it('registers selection update listener', () => {
       const editor = createMockEditor();
       createFormattingToolbar(editor);

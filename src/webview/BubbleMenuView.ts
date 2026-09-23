@@ -139,6 +139,11 @@ type ToolbarIcon = {
 // visually distinct from every other toolbar icon.
 const MATH_RADICAL_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="2,12 5,12 8,20 12,4 23,4"></polyline><line x1="14.5" y1="10.5" x2="20" y2="16.5"></line><line x1="20" y1="10.5" x2="14.5" y2="16.5"></line></svg>`;
 
+// Picture / mountain-sun glyph for Insert image. `codicon-file-media` reads as a
+// dog-eared document with an upload badge next to link and chart icons; this
+// conventional framed landscape uses `currentColor` so it stays theme-aware.
+const INSERT_IMAGE_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21,15 16,10 5,21"></polyline></svg>`;
+
 type ToolbarActionButton = {
   type: 'button';
   label: string;
@@ -629,7 +634,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       type: 'button',
       label: 'Image',
       title: 'Insert image',
-      icon: { name: 'file-media', fallback: '📷' },
+      icon: { svg: INSERT_IMAGE_ICON_SVG, fallback: '📷' },
       action: () => {
         // Get vscode API from window (set in editor.ts)
         const vscodeApi = window.vscode;

@@ -1679,7 +1679,7 @@
     margin: 0 6px;
   }
 
-  /* Custom inline-SVG toolbar glyphs (e.g. the Math √x icon). The SVG uses
+  /* Custom inline-SVG toolbar glyphs (e.g. Math √x, Insert image). The SVG uses
      currentColor, so it inherits the button's text colour and active state. */
   .toolbar-icon.uses-svg-icon {
     display: inline-flex;
