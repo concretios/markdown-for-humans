@@ -26,7 +26,9 @@
  * HTML-bearing token contexts are compared source-exactly before normalization
  * because HTML and CSS can make otherwise collapsible whitespace significant.
  * Feedback additionally tolerates generated emphasis/strong spans split around
- * a line break. Ordinary document-write equivalence keeps its stricter contract.
+ * a line break, and TipTap's mark-outside-link serialization (`*[text](url)*`)
+ * of an authored mark-inside-label link (`[*text*](url)`). Ordinary
+ * document-write equivalence keeps its stricter contract.
  */
 
 import MarkdownIt from 'markdown-it';
@@ -94,6 +96,29 @@ function normalizeRenderedHtml(html: string): string {
   }
   parts.push(html.slice(cursor).replace(/\s+/g, ' '));
   return parts.join('').trim();
+}
+
+/**
+ * TipTap serializes transparent marks outside links (`*[text](url)*`) while
+ * authors often write marks inside the label (`[*text*](url)`). Markdown-it
+ * renders those as `<em><a>…</a></em>` vs `<a><em>…</em></a>` — same visible
+ * italic link, different nesting. Feedback snapshot parity must accept the
+ * round-trip; peel formatting that solely wraps a link into the link so both
+ * forms compare equal. Mixed content (`*see [x](u) now*`) is left alone.
+ */
+function canonicalizeMarkLinkNesting(html: string): string {
+  const formatTags = 'em|strong|s|del';
+  const markOutsideLink = new RegExp(
+    `<(${formatTags})>(\\s*)<a(\\s[^>]*)>([\\s\\S]*?)<\\/a>\\s*<\\/\\1>`,
+    'gi'
+  );
+  let previous = '';
+  let current = html;
+  while (current !== previous) {
+    previous = current;
+    current = current.replace(markOutsideLink, '<a$3><$1>$4</$1></a>');
+  }
+  return current;
 }
 
 /**
@@ -270,8 +295,12 @@ function isEquivalentWhenRendered(
       normalizeInlineMarksAtBreaks(tokensA);
       normalizeInlineMarksAtBreaks(tokensB);
       return (
-        normalizeRenderedHtml(renderer.renderer.render(tokensA, renderer.options, {})) ===
-        normalizeRenderedHtml(renderer.renderer.render(tokensB, renderer.options, {}))
+        canonicalizeMarkLinkNesting(
+          normalizeRenderedHtml(renderer.renderer.render(tokensA, renderer.options, {}))
+        ) ===
+        canonicalizeMarkLinkNesting(
+          normalizeRenderedHtml(renderer.renderer.render(tokensB, renderer.options, {}))
+        )
       );
     }
     return normalizeRenderedHtml(renderedA) === normalizeRenderedHtml(renderedB);

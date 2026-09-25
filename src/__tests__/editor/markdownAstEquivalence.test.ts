@@ -313,6 +313,46 @@ describe('isMarkdownRendererEquivalent', () => {
     expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
   });
 
+  test.each([
+    [
+      'italic inside link label',
+      'See [*Thinking, Fast and Slow*](https://en.wikipedia.org/wiki/Thinking,_Fast_and_Slow).\n',
+      'See *[Thinking, Fast and Slow](https://en.wikipedia.org/wiki/Thinking,_Fast_and_Slow)*.\n',
+    ],
+    [
+      'bold inside link label',
+      'Uses [**RLCD**](https://docs.typesafe.ai/introduction/machine-learning-primer).\n',
+      'Uses **[RLCD](https://docs.typesafe.ai/introduction/machine-learning-primer)**.\n',
+    ],
+    [
+      'bold+italic inside link label',
+      '[***text***](https://example.com/x)\n',
+      '***[text](https://example.com/x)***\n',
+    ],
+  ])(
+    'accepts TipTap mark-outside-link canonicalization for %s',
+    (_name, source, renderer) => {
+      expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+      expect(isMarkdownRendererEquivalent(source, renderer)).toBe(true);
+      // Document-write equivalence stays strict: nesting order is a real HTML difference.
+      expect(isMarkdownStructurallyEquivalent(renderer, source)).toBe(false);
+    }
+  );
+
+  test('still rejects a changed link target when marks wrap the link', () => {
+    const source = 'See [*Thinking*](https://old.example).\n';
+    const renderer = 'See *[Thinking](https://new.example)*.\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+  });
+
+  test('still rejects when only part of the emphasized span is the link', () => {
+    const source = '*See [Thinking](https://example.com) now*\n';
+    const renderer = 'See *[Thinking](https://example.com)* now\n';
+
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(false);
+  });
+
   test('still rejects whitespace changes inside raw HTML that survives on both sides', () => {
     const twoSpaces = '<span style="white-space: pre">a  b</span>\n';
     const oneSpace = '<span style="white-space: pre">a b</span>\n';
