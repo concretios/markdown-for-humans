@@ -329,15 +329,12 @@ describe('isMarkdownRendererEquivalent', () => {
       '[***text***](https://example.com/x)\n',
       '***[text](https://example.com/x)***\n',
     ],
-  ])(
-    'accepts TipTap mark-outside-link canonicalization for %s',
-    (_name, source, renderer) => {
-      expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
-      expect(isMarkdownRendererEquivalent(source, renderer)).toBe(true);
-      // Document-write equivalence stays strict: nesting order is a real HTML difference.
-      expect(isMarkdownStructurallyEquivalent(renderer, source)).toBe(false);
-    }
-  );
+  ])('accepts TipTap mark-outside-link canonicalization for %s', (_name, source, renderer) => {
+    expect(isMarkdownRendererEquivalent(renderer, source)).toBe(true);
+    expect(isMarkdownRendererEquivalent(source, renderer)).toBe(true);
+    // Document-write equivalence stays strict: nesting order is a real HTML difference.
+    expect(isMarkdownStructurallyEquivalent(renderer, source)).toBe(false);
+  });
 
   test('still rejects a changed link target when marks wrap the link', () => {
     const source = 'See [*Thinking*](https://old.example).\n';
