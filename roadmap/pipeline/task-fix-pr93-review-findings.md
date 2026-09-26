@@ -87,13 +87,15 @@ Codex pre-merge review of PR #93 found eleven confirmed defects. Two P1s can los
 | ID | Tests | Fix | Verified |
 | --- | --- | --- | --- |
 | F01 | done | done | unit |
-| F02 | done | done | real TipTap |
-| F03 | done | done | real TipTap |
-| F04 | done | done | real TipTap |
+| F02 | done | done | real TipTap + Ext Host GUI smoke |
+| F03 | done | done | real TipTap + Ext Host GUI smoke |
+| F04 | done | done | real TipTap (link semantics retained) |
 | F05 | done | done | snapshot service |
 | F06 | done | done | code + helpers |
 | F07 | done | done | review controller |
 | F08 | done | done | store resume |
 | F09 | done | done | annotation modal |
-| F10 | done | done | pending Ext Host |
+| F10 | done | done | Ext Host shared-doc test |
 | F11 | done | done | unit |
+
+**Gates:** `npm test` 2712 passed; Ext Host 4 passing; GUI smoke for F02/F03.
