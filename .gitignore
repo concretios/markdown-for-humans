@@ -45,6 +45,7 @@ CLAUDE.md
 .cursorrules
 .claude/
 .cursor/zoho-*.json
+.concret.io/findings/
 
 # Editor backup files
 *~
