@@ -23,8 +23,20 @@
   },
   "homepage": "https://github.com/concretios/markdown-for-humans#readme",
   "engines": {
-    "vscode": "^1.85.0",
-    "node": ">=22"
+    "vscode": "^1.98.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Markdown for Humans currently requires a disk-backed workspace for document-adjacent images, exports, and Feedback drafts."
+    },
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Trust is required because the extension reads, writes, renders, and exports workspace content."
+    }
   },
   "categories": [
     "Other",
@@ -110,21 +122,55 @@
         "icon": "$(close)"
       },
       {
-        "command": "markdownForHumans.copyAiContextRef",
-        "title": "Markdown for Humans: Copy AI Context Reference (@file#lines)"
-      },
-      {
         "command": "markdownForHumans.toggleFormattingShortcuts",
         "title": "Markdown for Humans: Toggle Formatting Shortcuts (Cmd/Ctrl+B/I/U)"
+      },
+      {
+        "command": "markdownForHumans.feedback.start",
+        "title": "Markdown for Humans: Start Feedback"
+      },
+      {
+        "command": "markdownForHumans.feedback.commentSelection",
+        "title": "Markdown for Humans: Add Feedback to Selection"
+      },
+      {
+        "command": "markdownForHumans.feedback.chooseScope",
+        "title": "Markdown for Humans: Choose Feedback Scope"
+      },
+      {
+        "command": "markdownForHumans.feedback.captureArea",
+        "title": "Markdown for Humans: Capture Feedback Area"
+      },
+      {
+        "command": "markdownForHumans.feedback.captureSelectedBlocks",
+        "title": "Markdown for Humans: Capture Selected Blocks"
+      },
+      {
+        "command": "markdownForHumans.feedback.toggleComments",
+        "title": "Markdown for Humans: Toggle Feedback Comments"
+      },
+      {
+        "command": "markdownForHumans.feedback.next",
+        "title": "Markdown for Humans: Next Feedback"
+      },
+      {
+        "command": "markdownForHumans.feedback.previous",
+        "title": "Markdown for Humans: Previous Feedback"
+      },
+      {
+        "command": "markdownForHumans.feedback.finish",
+        "title": "Markdown for Humans: Finish Feedback and Copy Prompt"
+      },
+      {
+        "command": "markdownForHumans.feedback.reveal",
+        "title": "Markdown for Humans: Reveal Feedback File"
+      },
+      {
+        "command": "markdownForHumans.feedback.discard",
+        "title": "Markdown for Humans: Discard Feedback Draft"
       }
     ],
     "keybindings": [
-      {
-        "command": "markdownForHumans.copyAiContextRef",
-        "key": "alt+c",
-        "mac": "alt+c",
-        "when": "activeCustomEditorId == 'markdownForHumans.editor'"
-      },
       {
         "command": "markdownForHumans.toggleFormattingShortcuts",
         "key": "ctrl+alt+b",
@@ -201,10 +247,13 @@
           "default": false,
           "description": "Skip the warning dialog when resizing images. When enabled, images will be resized immediately without confirmation."
         },
-        "markdownForHumans.copyAiContextRef.skipSaveWarning": {
-          "type": "boolean",
-          "default": false,
-          "description": "Skip the warning dialog when 'Copy AI Context Reference' needs to save the file first. When enabled, the document is saved silently before copying the reference."
+        "markdownForHumans.feedback.handoffPromptTemplate": {
+          "type": "string",
+          "default": "Implement the sealed feedback bundle at {{feedbackFile}}. First verify the source SHA-256. Inspect every referenced image. Edit the workspace files required by the feedback, but do not modify or delete the feedback bundle. Address every feedback ID, run appropriate checks, report the outcome per ID, and stop if the source hash differs.",
+          "markdownDescription": "Prompt copied after a feedback bundle is sealed. `{{feedbackFile}}` is required and expands as Markdown inline code. Optional placeholders are `{{source}}` (also Markdown inline code), `{{sourceSha256}}`, `{{itemCount}}`, and `{{round}}`. Invalid or oversized templates safely fall back to this built-in prompt.",
+          "scope": "resource",
+          "editPresentation": "multilineText",
+          "maxLength": 16384
         },
         "markdownForHumans.blankLines.mode": {
           "type": "string",
@@ -274,6 +323,9 @@
     "lint": "eslint src --ext ts --max-warnings 0",
     "lint:fix": "eslint src --ext ts --fix",
     "test": "jest",
+    "test:integration": "npm run build:release && vscode-test",
+    "test:feedback-capture": "node scripts/feedback-capture-fixture/run.mjs",
+    "test:feedback-annotations": "node --test scripts/feedback-annotation-fixture/verification.test.mjs && node scripts/feedback-annotation-fixture/run.mjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "precommit": "npm run lint && npm run test",
@@ -284,16 +336,22 @@
     "install-hooks": "bash ./scripts/install-git-hooks.sh"
   },
   "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/plugin-transform-modules-commonjs": "7.29.7",
     "@eslint/eslintrc": "^3.3.3",
-    "@types/image-size": "^0.7.0",
+    "@eslint/js": "^9.39.5",
     "@types/jest": "^30.0.0",
-    "@types/node": "^20.10.6",
-    "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^8.48.1",
-    "@typescript-eslint/parser": "^8.48.1",
+    "@types/markdown-it": "14.2.0",
+    "@types/node": "20.17.58",
+    "@types/vscode": "1.98.0",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
+    "@vscode/test-cli": "0.0.15",
+    "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "^3.9.2",
-    "concurrently": "^8.2.2",
-    "esbuild": "^0.28.1",
+    "babel-jest": "30.4.1",
+    "concurrently": "^9.2.4",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
@@ -304,24 +362,34 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
-    "@tiptap/core": "^3.0.0",
-    "@tiptap/extension-code-block-lowlight": "^3.0.0",
-    "@tiptap/extension-image": "^3.0.0",
-    "@tiptap/extension-link": "^3.0.0",
-    "@tiptap/extension-list": "^3.0.0",
-    "@tiptap/extension-table": "^3.0.0",
-    "@tiptap/markdown": "^3.0.0",
-    "@tiptap/pm": "^3.0.0",
-    "@tiptap/starter-kit": "^3.0.0",
+    "@tiptap/core": "3.30.5",
+    "@tiptap/extension-code": "3.30.5",
+    "@tiptap/extension-code-block-lowlight": "3.30.5",
+    "@tiptap/extension-image": "3.30.5",
+    "@tiptap/extension-link": "3.30.5",
+    "@tiptap/extension-list": "3.30.5",
+    "@tiptap/extension-paragraph": "3.30.5",
+    "@tiptap/extension-table": "3.30.5",
+    "@tiptap/markdown": "3.30.5",
+    "@tiptap/pm": "3.30.5",
+    "@tiptap/starter-kit": "3.30.5",
     "@types/turndown": "^5.0.4",
     "cheerio": "^1.1.2",
     "docx": "^9.5.1",
     "highlight.js": "^11.11.1",
-    "image-size": "^2.0.2",
     "katex": "^0.16.9",
     "lowlight": "^2.9.0",
     "markdown-it": "^14.0.0",
-    "mermaid": "^11.16.0",
+    "mermaid": "^11.17.2",
+    "modern-screenshot": "4.7.0",
     "turndown": "^7.1.2"
+  },
+  "overrides": {
+    "@vscode/test-cli": {
+      "mocha": {
+        "diff": "8.0.3",
+        "serialize-javascript": "7.1.0"
+      }
+    }
   }
 }

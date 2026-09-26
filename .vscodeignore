@@ -21,13 +21,13 @@ KNOWN_ISSUES.md
 EULA.md
 PRIVACY_POLICY.md
 TERMS_OF_USE.md
-THIRD_PARTY_LICENSES.md
 CLAUDE.md
 TODOs.md
 
 # Development files
 src/**
 scripts/**
+test/**
 temp/**
 test-docs/**
 coverage/**
@@ -40,6 +40,7 @@ tsconfig.tsbuildinfo
 .git/**
 .github/**
 .gitignore
+.gitmodules
 
 # Build configuration
 eslint.config.js
@@ -48,6 +49,7 @@ eslint.config.js
 .npmrc
 tsconfig.json
 jest.config.js
+.vscode-test.*
 
 # VS Code dev configuration
 .vscode/**
@@ -69,17 +71,22 @@ Desktop.ini
 
 # Extension-specific temp files
 .md4h/**
+# Local scratch that vsce would otherwise pack from the repo root
+test.md
+images/**
 
 # AI coding assistant files
 .claude/**
 .windsurf/**
 .cursor/**
 .agent/**
+.chetana/**
+.concret.io/**
 
 # Include only essential files for marketplace
-!dist/**
 !README.md
 !LICENSE
+!THIRD_PARTY_LICENSES.md
 !package.json
 !CHANGELOG.md
 !icon.png

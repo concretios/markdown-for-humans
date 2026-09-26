@@ -296,5 +296,38 @@ describe('normalizeImagePath', () => {
         relativePath: 'file:///test/assets/My%20Diagram.png',
       });
     });
+
+    it('rejects a local image path outside the document and workspace roots', () => {
+      const provider = createProvider();
+      const document = createMockTextDocument('');
+      const webview = createMockWebview();
+
+      (
+        provider as unknown as {
+          handleResolveImageUri: (
+            message: unknown,
+            doc: vscode.TextDocument,
+            webview: vscode.Webview
+          ) => void;
+        }
+      ).handleResolveImageUri(
+        {
+          type: 'resolveImageUri',
+          requestId: 'req-outside',
+          relativePath: 'file:///private/secrets/tracker.png',
+        },
+        document,
+        webview as unknown as vscode.Webview
+      );
+
+      expect(webview.asWebviewUri).not.toHaveBeenCalled();
+      expect(webview.postMessage).toHaveBeenCalledWith({
+        type: 'imageUriResolved',
+        requestId: 'req-outside',
+        webviewUri: '',
+        relativePath: 'file:///private/secrets/tracker.png',
+        error: expect.stringMatching(/outside|allowed/i),
+      });
+    });
   });
 });

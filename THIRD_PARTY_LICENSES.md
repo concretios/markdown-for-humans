@@ -16,7 +16,7 @@ This document lists the third-party open source software components used in Mark
 - **Repository:** https://github.com/ueberdosis/tiptap
 - **License URL:** https://github.com/ueberdosis/tiptap/blob/main/LICENSE
 
-### @tiptap/extension-image, @tiptap/extension-link, @tiptap/extension-list, @tiptap/extension-table
+### @tiptap/extension-code, @tiptap/extension-image, @tiptap/extension-link, @tiptap/extension-list, @tiptap/extension-paragraph, @tiptap/extension-table
 - **License:** MIT
 - **Copyright:** © 2024 Tiptap Inc.
 - **Repository:** https://github.com/ueberdosis/tiptap
@@ -39,12 +39,6 @@ This document lists the third-party open source software components used in Mark
 - **Copyright:** © 2006-2024, Ivan Sagalaev
 - **Repository:** https://github.com/highlightjs/highlight.js
 - **License URL:** https://github.com/highlightjs/highlight.js/blob/main/LICENSE
-
-### image-size
-- **License:** MIT
-- **Copyright:** © 2014-2024 Aditya Yadav
-- **Repository:** https://github.com/image-size/image-size
-- **License URL:** https://github.com/image-size/image-size/blob/main/LICENSE
 
 ### katex
 - **License:** MIT
@@ -70,6 +64,13 @@ This document lists the third-party open source software components used in Mark
 - **Repository:** https://github.com/mermaidjs/mermaid
 - **License URL:** https://github.com/mermaidjs/mermaid/blob/develop/LICENSE
 
+### modern-screenshot 4.7.0
+
+- **License:** MIT
+- **Copyright:** © 2021-present wxm
+- **Repository:** https://github.com/qq15725/modern-screenshot
+- **License URL:** https://github.com/qq15725/modern-screenshot/blob/main/LICENSE
+
 ### turndown
 - **License:** MIT
 - **Copyright:** © 2024 Dom Christie
@@ -78,7 +79,7 @@ This document lists the third-party open source software components used in Mark
 
 ## Development Dependencies
 
-### @types/node, @types/vscode, @types/jest, @types/image-size, @types/turndown
+### @types/node, @types/vscode, @types/jest, @types/markdown-it, @types/turndown
 - **License:** MIT
 - **Copyright:** © Microsoft Corporation and contributors
 - **Repository:** https://github.com/DefinitelyTyped/DefinitelyTyped
@@ -89,6 +90,12 @@ This document lists the third-party open source software components used in Mark
 - **Copyright:** © OpenJS Foundation and contributors
 - **Repository:** https://github.com/eslint/eslintrc
 - **License URL:** https://github.com/eslint/eslintrc/blob/main/LICENSE
+
+### @eslint/js
+- **License:** MIT
+- **Copyright:** © OpenJS Foundation and contributors
+- **Repository:** https://github.com/eslint/eslint
+- **License URL:** https://github.com/eslint/eslint/blob/main/LICENSE
 
 ### @typescript-eslint/eslint-plugin, @typescript-eslint/parser
 - **License:** MIT
@@ -101,6 +108,24 @@ This document lists the third-party open source software components used in Mark
 - **Copyright:** © Microsoft Corporation
 - **Repository:** https://github.com/microsoft/vscode-vsce
 - **License URL:** https://github.com/microsoft/vscode-vsce/blob/main/LICENSE
+
+### @vscode/test-cli
+- **License:** MIT
+- **Copyright:** © Microsoft Corporation
+- **Repository:** https://github.com/microsoft/vscode-test-cli
+- **License URL:** https://github.com/microsoft/vscode-test-cli/blob/main/LICENSE
+
+### @vscode/test-electron
+- **License:** MIT
+- **Copyright:** © Microsoft Corporation
+- **Repository:** https://github.com/microsoft/vscode-test
+- **License URL:** https://github.com/microsoft/vscode-test/blob/main/LICENSE
+
+### @babel/core, @babel/plugin-transform-modules-commonjs
+- **License:** MIT
+- **Copyright:** © 2014-present Sebastian McKenzie and other contributors
+- **Repository:** https://github.com/babel/babel
+- **License URL:** https://github.com/babel/babel/blob/main/LICENSE
 
 ### concurrently
 - **License:** MIT
@@ -123,7 +148,7 @@ This document lists the third-party open source software components used in Mark
   - https://github.com/prettier/eslint-plugin-prettier
 - **License URLs:** See respective package repositories
 
-### jest, jest-environment-jsdom, ts-jest
+### jest, babel-jest, jest-environment-jsdom, ts-jest
 - **License:** MIT
 - **Copyright:** © Meta Platforms, Inc. and affiliates, Facebook, Inc.
 - **Repositories:**

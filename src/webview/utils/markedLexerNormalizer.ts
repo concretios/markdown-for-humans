@@ -24,6 +24,8 @@
 
 type RawToken = { type?: string; raw?: string } & Record<string, unknown>;
 
+export const PRESERVED_MARKDOWN_LITERAL_TOKEN = 'preservedMarkdownLiteral';
+
 /**
  * Detect link/image inline tokens whose VISIBLE text is empty.
  *
@@ -35,10 +37,10 @@ type RawToken = { type?: string; raw?: string } & Record<string, unknown>;
  * (`[]()`), next to a soft break (`Even deeper.\n[]()`), in the middle of
  * other text (`foo []() bar`), or inside a list item / blockquote.
  *
- * We catch each empty link/image at the lexer layer and rewrite it to a
- * literal-text token carrying its own raw markdown. The text node round-trips
- * losslessly: on save it serialises back to its original raw form and
- * re-lexing routes through this same normaliser to keep the cycle stable.
+ * We catch each empty link/image at the lexer layer and rewrite it to a token
+ * handled by PreservedMarkdownLiteral. The resulting text remains visible in
+ * the editor, but TipTap does not escape its already-validated raw markdown on
+ * save. Re-lexing routes through this same normaliser to keep the cycle stable.
  */
 function isInlineRenderEmpty(tok: RawToken | undefined): boolean {
   if (!tok || typeof tok.type !== 'string') return true;
@@ -87,19 +89,29 @@ function isEmptyLinkLike(tok: RawToken): boolean {
 }
 
 /**
+ * Marked emits a few empty-link-shaped forms as plain text rather than link or
+ * image tokens. Preserve only the exact forms the editor historically kept;
+ * ordinary text remains subject to TipTap 3.30's Markdown escaping.
+ */
+function isPlainEmptyLinkLike(tok: RawToken): boolean {
+  if (tok.type !== 'text' || typeof tok.raw !== 'string') return false;
+  return /^(?:\[\]|\[\]\[\]|!\[\]\(\s*\))$/.test(tok.raw);
+}
+
+/**
  * Walk a paragraph's inline-token array and replace every empty link/image
- * with a literal-text token carrying that link's raw markdown. Mutates the
- * array in place. Returns whether any rewrite happened.
+ * with an internal raw-literal token. Mutates the array in place. Returns
+ * whether any rewrite happened.
  */
 function rewriteEmptyInlines(inlines: RawToken[]): boolean {
   let changed = false;
   for (let i = 0; i < inlines.length; i++) {
     const tok = inlines[i];
     if (!tok) continue;
-    if (isEmptyLinkLike(tok)) {
+    if (isEmptyLinkLike(tok) || isPlainEmptyLinkLike(tok)) {
       const raw = typeof tok.raw === 'string' ? tok.raw : '';
       if (raw.length > 0) {
-        inlines[i] = { type: 'text', raw, text: raw } as RawToken;
+        inlines[i] = { type: PRESERVED_MARKDOWN_LITERAL_TOKEN, raw, text: raw } as RawToken;
         changed = true;
       }
     }
@@ -376,7 +388,7 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
   // Rewrite empty link/image inlines at every depth before the greedy-newline
   // split runs — that way both whole-empty paragraphs (`[]()`) and mixed
   // paragraphs (`Even deeper.\n[]()`) carry the original markdown forward as
-  // literal text instead of letting the inline get stripped on parse.
+  // preserved text instead of letting the inline get stripped on parse.
   normalizeEmptyInlinesDeep(tokens);
 
   // Re-join HTML blocks marked cut at a blank line before the greedy-newline
@@ -404,22 +416,46 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
 }
 
 /**
- * Wrap a marked instance's `lexer` function so every parse pass routes
- * through `normalizeBlankLineGreedyTokens`. Idempotent: re-installing on the
- * same instance is a no-op.
+ * Wrap a marked instance's lexer entry points so every parse pass routes
+ * through `normalizeBlankLineGreedyTokens`. TipTap 3.30 constructs `Lexer`
+ * directly for top-level parsing and calls `lexer()` for nested reparses, so
+ * both public paths are covered. Idempotent on the same marked instance.
  */
 export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
+  interface LexerInstance {
+    lex(src: string): RawToken[];
+  }
+  type LexerConstructor = new (options?: unknown) => LexerInstance;
+
   const inst = markedInstance as {
+    Lexer?: LexerConstructor;
     lexer?: (src: string, options?: unknown) => RawToken[];
     __mdh_blankLineNormalizerInstalled?: boolean;
   };
-  if (!inst || typeof inst.lexer !== 'function') return;
+  if (!inst) return;
   if (inst.__mdh_blankLineNormalizerInstalled) return;
 
-  const original = inst.lexer.bind(inst);
-  inst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
-    const tokens = original(src, options);
-    return normalizeBlankLineGreedyTokens(tokens);
-  };
-  inst.__mdh_blankLineNormalizerInstalled = true;
+  let installed = false;
+
+  if (typeof inst.Lexer === 'function') {
+    const OriginalLexer = inst.Lexer;
+    inst.Lexer = class NormalizingLexer extends OriginalLexer {
+      lex(src: string): RawToken[] {
+        return normalizeBlankLineGreedyTokens(super.lex(src));
+      }
+    };
+    installed = true;
+  }
+
+  if (typeof inst.lexer === 'function') {
+    const original = inst.lexer.bind(inst);
+    inst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
+      return normalizeBlankLineGreedyTokens(original(src, options));
+    };
+    installed = true;
+  }
+
+  if (installed) {
+    inst.__mdh_blankLineNormalizerInstalled = true;
+  }
 }

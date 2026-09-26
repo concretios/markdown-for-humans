@@ -32,6 +32,7 @@ import {
  * VS Code API type
  */
 interface VsCodeApi {
+  readonly viewGeneration: string;
   postMessage: (message: unknown) => void;
 }
 

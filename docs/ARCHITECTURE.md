@@ -1,1152 +1,377 @@
-# Markdown for Humans - Technical Architecture
+# Markdown for Humans Technical Architecture
 
-**Complete technical documentation: architecture, implementation, and key technical decisions**
+This document describes the implementation that exists in the repository. Code and tests remain the source of truth.
 
-> This document provides comprehensive technical context for developers working on or understanding the extension.
+**Runtime floor:** VS Code 1.98.0
 
----
+**Extension host target:** Node.js 20
 
-## Table of Contents
+**Webview target:** Chromium 132
 
-1. [Architecture Overview](#architecture-overview)
-2. [Technology Stack](#technology-stack)
-3. [Project Structure](#project-structure)
-4. [Core Components](#core-components)
-5. [Document Synchronization](#document-synchronization)
-6. [WebView Implementation](#webview-implementation)
-7. [Feature Implementation](#feature-implementation)
-8. [Performance Optimizations](#performance-optimizations)
-9. [Current Implementation Status](#current-implementation-status)
-10. [Key Technical Decisions](#key-technical-decisions)
-11. [Security Considerations](#security-considerations)
-12. [Testing Strategy](#testing-strategy)
-13. [Build & Deployment](#build--deployment)
+**Last verified against the code:** September 26, 2026
 
----
+## Architecture at a Glance
 
-## Architecture Overview
-
-### High-Level Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    VS Code Extension Host                   │
-│                                                             │
-│  ┌─────────────────────────────────────────────────────┐  │
-│  │         MarkdownEditorProvider                      │  │
-│  │  (CustomTextEditorProvider Implementation)          │  │
-│  │                                                      │  │
-│  │  • Registers custom editor for .md files           │  │
-│  │  • Manages webview lifecycle                        │  │
-│  │  • Handles two-way document sync                    │  │
-│  └──────────────┬──────────────────────┬───────────────┘  │
-│                 │                      │                    │
-│                 ↓                      ↓                    │
-│     ┌──────────────────┐    ┌─────────────────┐          │
-│     │  TextDocument    │    │  Webview Panel  │          │
-│     │  (Markdown text) │    │  (Visual editor)│          │
-│     └──────────────────┘    └────────┬────────┘          │
-│                                      │                     │
-└──────────────────────────────────────┼─────────────────────┘
-                                       │
-                    ┌──────────────────▼──────────────────┐
-                    │         WebView Context             │
-                    │                                     │
-                    │  ┌──────────────────────────────┐  │
-                    │  │    TipTap Editor             │  │
-                    │  │  (ProseMirror-based)         │  │
-                    │  │                              │  │
-                    │  │  Extensions:                 │  │
-                    │  │  • StarterKit (formatting)   │  │
-                    │  │  • Markdown (serialization)  │  │
-                    │  │  • Tables (advanced editing) │  │
-                    │  │  • Mermaid (diagrams)        │  │
-                    │  │  • Code highlighting         │  │
-                    │  └──────────────────────────────┘  │
-                    │                                     │
-                    │  ┌──────────────────────────────┐  │
-                    │  │    BubbleMenuView            │  │
-                    │  │  (Compact formatting toolbar) │  │
-                    │  └──────────────────────────────┘  │
-                    └─────────────────────────────────────┘
+```text
+VS Code desktop
+┌──────────────────────────────────────────────────────────────────┐
+│ Extension host, Node.js 20                                      │
+│                                                                  │
+│ extension.ts                                                     │
+│   ├─ commands, outline and status integrations                   │
+│   └─ MarkdownEditorProvider, CustomTextEditorProvider             │
+│        ├─ TextDocument, authoritative editable source             │
+│        ├─ per-document DocumentEditCoordinator                    │
+│        ├─ Feedback snapshot, transport and durable bundle store   │
+│        └─ WebviewPanel lifecycle                                  │
+│                         ⇅ validated messages                      │
+│ Webview, Chromium 132                                             │
+│   ├─ TipTap 3.30.5 on ProseMirror                                 │
+│   ├─ DocumentSyncController                                       │
+│   ├─ editing, tables, images, math and Mermaid                    │
+│   ├─ Feedback review and capture modules                          │
+│   └─ small VS Code presentation-state checkpoint                  │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Communication Flow
+Markdown stays a text document. `CustomTextEditorProvider` lets VS Code own save, dirty-state, undo, redo and Git integration while the webview provides the rich editing surface.
 
-```
-User Types in Editor
-        ↓
-TipTap onChange event (debounced 500ms)
-        ↓
-Convert to markdown text
-        ↓
-postMessage to Extension
-        ↓
-Extension applies edit to TextDocument
-        ↓
-VS Code saves, updates undo stack
-```
+## Supported Runtime Boundary
 
-```
-External File Change (Git, other editor)
-        ↓
-VS Code TextDocument updates
-        ↓
-onDidChangeTextDocument event
-        ↓
-Extension sends new content to webview
-        ↓
-WebView updates TipTap editor
-        ↓
-Cursor position restored
-```
+`package.json` declares `engines.vscode: ^1.98.0`. The release build targets the runtimes embedded by that floor:
 
----
+- `node20` for `dist/extension.js`
+- `chrome132` for `dist/webview.js`
+- exact `@types/vscode@1.98.0` and Node 20 types for compile-time compatibility
 
-## Technology Stack
+The extension is a workspace extension. It deliberately declares virtual workspaces and untrusted workspaces unsupported because images, exports and Feedback bundles read or write workspace files. The automated Extension Development Host suite is a desktop suite. Remote-host variants need separate qualification before they are advertised as supported.
 
-### Extension Side (Node.js)
+Development CI uses newer Node.js releases to run tooling. That does not change the Node 20 extension-host target.
 
-**Core Framework:**
-- **VS Code Extension API** v1.85.0+ - Official extension development API
-- **TypeScript** 5.3 - Type-safe development with strict mode
-- **Node.js** 20+ - Extension host runtime
+## Ownership and Sources of Truth
 
-**Build Tools:**
-- **esbuild** - Ultra-fast bundler (extension bundle)
-- **ESLint** + **Prettier** - Code quality and formatting
-- **Jest** 29.x - Testing framework
-- **concurrently** - Run watch tasks in parallel
+| Concern                 | Owner                  | Rule                                                                          |
+| ----------------------- | ---------------------- | ----------------------------------------------------------------------------- |
+| Editable Markdown       | VS Code `TextDocument` | The webview proposes edits; the host accepts or rejects them.                 |
+| Rich editor state       | TipTap                 | ProseMirror state is transient and must reconcile with the host.              |
+| Save, undo and redo     | VS Code                | All source mutations use `WorkspaceEdit`.                                     |
+| Feedback session        | Extension host         | The host owns the frozen snapshot, anchors, lifecycle and durable store.      |
+| Feedback presentation   | Webview                | Decorations, cards, selection and capture UI are disposable views.            |
+| Hidden-webview recovery | VS Code webview state  | Only selection and scroll are persisted, never Markdown or session authority. |
 
-### WebView Side (Browser)
-
-**Editor Framework:**
-- **TipTap** 2.1.13 - Modern ProseMirror-based WYSIWYG editor
-- **ProseMirror** - Underlying editor state management (via TipTap)
-- **@tiptap/markdown** ^3.0.0 - Official bidirectional markdown conversion (replaced unmaintained tiptap-markdown)
-
-**Rendering Libraries:**
-- **highlight.js** 11.11 - Syntax highlighting for code blocks
-- **lowlight** 2.9 - highlight.js integration for TipTap
-- **Mermaid** 10.6 - Diagram rendering
-- **KaTeX** 0.16 - Math typesetting (configured, not yet active)
-- **markdown-it** 14.0 - Fallback markdown parser
-
-**Bundle Size:**
-- **webview.js**: ~4.3MB (includes all dependencies)
-- **extension.js**: ~1.8MB (includes Node.js dependencies)
-- **webview.css**: ~67KB (all styles)
-
----
-
-## Project Structure
-
-### Directory Layout
-
-```
-md-human/
-├── src/
-│   ├── extension.ts                    # Extension entry point (53 lines)
-│   │
-│   ├── editor/
-│   │   └── MarkdownEditorProvider.ts   # Custom editor provider (160 lines)
-│   │       • registerCustomEditorProvider
-│   │       • resolveCustomTextEditor
-│   │       • HTML generation
-│   │       • Message handling
-│   │
-│   └── webview/
-│       ├── editor.ts                   # TipTap setup (412 lines)
-│       │   • Editor initialization
-│       │   • Extension configuration
-│       │   • Message handling
-│       │   • Document sync logic
-│       │
-│       ├── BubbleMenuView.ts           # Toolbar implementation (367 lines)
-│       │   • Compact formatting toolbar
-│       │   • Formatting buttons
-│       │   • Dropdowns (headings, tables, code)
-│       │   • Context menus
-│       │
-│       ├── extensions/
-│       │   └── mermaid.ts              # Custom Mermaid node (105 lines)
-│       │       • Diagram rendering
-│       │       • Toggle code/preview
-│       │       • Error handling
-│       │
-│       ├── editor.css                  # All styles (851 lines)
-│       │   • Typography
-│       │   • Theme support
-│       │   • Component styles
-│       │
-│       └── tsconfig.json               # WebView-specific config
-│
-├── dist/                               # Build output
-│   ├── extension.js                    # Bundled extension (~1.8MB)
-│   ├── webview.js                      # Bundled webview (~4.3MB)
-│   └── webview.css                     # Copied CSS (~67KB)
-│
-├── docs/                               # Documentation
-│   ├── ARCHITECTURE.md                 # This file - technical implementation
-│   └── DEVELOPMENT.md                  # Roadmap, design principles, philosophy
-│
-├── README.md                           # User-facing documentation
-├── CONTRIBUTING.md                     # Contributing guidelines
-│
-├── package.json                        # Extension manifest + dependencies
-├── tsconfig.json                       # TypeScript config (extension)
-├── .eslintrc.js                        # ESLint configuration
-├── .prettierrc                         # Prettier configuration
-└── .gitignore
-```
-
-**Code Statistics:**
-- **Total TypeScript/CSS**: 1,948 lines in src/
-- **Extension code**: 213 lines (extension.ts + MarkdownEditorProvider.ts)
-- **WebView code**: 884 lines (editor.ts + BubbleMenuView.ts + mermaid.ts)
-- **CSS**: 851 lines (editor.css)
-
----
-
-## Core Components
-
-### 1. Extension Entry Point (`extension.ts`)
-
-**Purpose**: Activate extension and register custom editor provider
-
-**Key Functions:**
-
-```typescript
-export function activate(context: vscode.ExtensionContext) {
-  // Register custom text editor provider
-  const provider = MarkdownEditorProvider.register(context);
-  context.subscriptions.push(provider);
-
-  // Register commands
-  context.subscriptions.push(
-    vscode.commands.registerCommand('markdownForHumans.openFile', ...)
-  );
-}
-```
-
-**Registration:**
-- Activates on `onCustomEditor:markdownForHumans.editor` event
-- Registers for `.md` and `.markdown` files
-- Priority: `"option"` (user can choose this editor via right-click)
-
----
-
-### 2. Custom Editor Provider (`MarkdownEditorProvider.ts`)
-
-**Purpose**: Implement VS Code's CustomTextEditorProvider interface
-
-**Why CustomTextEditorProvider?**
-- VS Code offers two custom editor types:
-  - `CustomEditorProvider` - For binary formats (images, PDFs)
-  - `CustomTextEditorProvider` ✅ - For text formats (markdown)
-- Benefits:
-  - VS Code handles save/undo/redo automatically
-  - TextDocument is source of truth
-  - Simpler implementation
-  - Better integration (Git, diff, etc.)
-
-**Key Responsibilities:**
-
-```typescript
-class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
-
-  async resolveCustomTextEditor(
-    document: vscode.TextDocument,
-    webviewPanel: vscode.WebviewPanel,
-    token: vscode.CancellationToken
-  ): Promise<void> {
-
-    // 1. Configure webview
-    webviewPanel.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.context.extensionUri]
-    };
-
-    // 2. Generate HTML with CSP headers, nonce injection
-    webviewPanel.webview.html = this.getWebviewContent(webviewPanel.webview, document);
-
-    // 3. Listen for external document changes
-    const changeSubscription = vscode.workspace.onDidChangeTextDocument(e => {
-      if (e.document.uri.toString() === document.uri.toString()) {
-        this.updateWebview(document, webviewPanel.webview);
-      }
-    });
-
-    // 4. Listen for webview messages (user edits and startup handshake)
-    webviewPanel.webview.onDidReceiveMessage(message => {
-      switch (message.type) {
-        case 'edit':
-          this.handleEdit(document, message.content);
-          break;
-        case 'save':
-          document.save();
-          break;
-        case 'ready':
-          // Retry after the webview listener exists, even if the optimistic
-          // startup post already populated the content-deduplication cache.
-          this.updateWebview(document, webviewPanel.webview, true);
-          break;
-      }
-    });
-
-    // 5. Optimistically send initial content. The ready handshake retries it
-    // after the webview installs its listener.
-    this.updateWebview(document, webviewPanel.webview);
-
-    // Cleanup
-    webviewPanel.onDidDispose(() => changeSubscription.dispose());
-  }
-}
-```
-
-**Message Types:**
-- `edit` - User changed content, update TextDocument
-- `save` - User pressed Cmd/Ctrl+S, trigger VS Code save
-- `ready` - WebView listener initialized, force delivery of initial content
-
----
-
-### 3. TipTap Editor (`webview/editor.ts`)
-
-**Purpose**: Initialize and manage WYSIWYG editor in webview
-
-**Editor Configuration:**
-
-```typescript
-const editor = new Editor({
-  element: document.querySelector('#editor'),
-
-  extensions: [
-    StarterKit,              // Core formatting (bold, italic, headings, lists, etc.)
-    CodeBlockLowlight,       // Syntax highlighting
-    Markdown,                // Markdown serialization
-    Table, TableRow, TableCell, TableHeader,  // Tables
-    TaskList, TaskItem,      // Checkboxes
-    Link,                    // Hyperlinks
-    Image,                   // Images
-    MermaidExtension         // Custom Mermaid diagrams
-  ],
-
-  content: '',  // Set from VS Code
-
-  onUpdate: ({ editor }) => {
-    // Convert to markdown and send to extension (debounced)
-    const markdown = editor.storage.markdown.getMarkdown();
-    debouncedSendUpdate(markdown);
-  }
-});
-```
-
-**Debouncing Strategy:**
-- User edits trigger `onUpdate` immediately
-- Updates are debounced (500ms) before sending to extension
-- Prevents excessive sync overhead
-- Last edit timestamp tracked to skip stale updates
-
-**Cursor Preservation:**
-- Before content update, save cursor position (`editor.state.selection`)
-- After content update, restore cursor position
-- Critical for smooth UX (prevents jarring cursor jumps)
-
-**Keyboard Shortcuts:**
-- `Cmd/Ctrl+S` - Immediate save (bypasses debounce)
-- `Cmd/Ctrl+B, I, U` - Standard formatting
-- `Cmd/Ctrl+K Cmd/Ctrl+L` - Insert link
-
----
-
-### 4. Formatting Toolbar (`webview/BubbleMenuView.ts`)
-
-**Purpose**: Compact formatting toolbar for markdown editing
-
-**Design:**
-- Sticky positioning at top of editor
-- Compact button layout with separators
-- Dropdowns for advanced options (H4-H6, tables, code languages)
-- Active state tracking (bold/italic/etc. reflect current selection)
-
-**Button Groups:**
-
-1. **Basic Formatting**: Bold, Italic, Strike, Code
-2. **Headings**: H1, H2, H3 buttons + dropdown for H4-H6
-3. **Lists**: Bullet list, Ordered list, Task list
-4. **Advanced**: Link, Table dropdown, Code block dropdown
-5. **Special**: Mermaid diagram, Settings (theme)
-
-**Table Context Menu:**
-- Right-click on table cells shows floating menu
-- Operations: Add/delete rows, add/delete columns, delete table
-- Positioned at cursor location
-
-**Implementation:**
-- Pure JavaScript (no framework)
-- Manual DOM creation and event binding
-- Active state sync via TipTap's transaction updates
-
----
+This separation is important. A queued `Webview.postMessage()` is not proof that the receiver applied it, a hidden webview can be destroyed, and two splits can briefly hold different unsent content. Protocols therefore carry explicit identity and application acknowledgements where correctness depends on delivery.
 
 ## Document Synchronization
 
-### The Synchronization Challenge
+### Renderer to host
 
-**Problem:** Two sources of truth must stay in sync:
-1. **VS Code TextDocument** - Markdown text (authoritative)
-2. **TipTap Editor** - Visual representation
+`src/shared/documentSyncProtocol.ts` defines document sync protocol v2. Each renderer lifetime creates a `viewGeneration`. Every versioned edit includes:
 
-**Challenges:**
-- **Feedback loops** - Update from extension triggers webview update, which triggers extension update...
-- **Cursor preservation** - User's cursor must not jump during updates
-- **Performance** - Excessive updates degrade UX
-- **External changes** - Git pull, other editors, etc.
+- `editId`
+- `viewGeneration`
+- monotonic `localRevision`
+- `baseDocumentVersion`
+- normalized Markdown content
+- an edit reason
 
-### Synchronization Strategy
+`DocumentSyncController` keeps serialization off the keystroke path. `markDirty()` records a dirty bit and owns at most one 500 ms timer. Markdown is serialized only when the timer drains or an explicit flush/save boundary runs. It does not retain an eager serialized snapshot while images or other prerequisites are pending.
 
-#### TextDocument → WebView (External Changes)
+Only one emitted renderer edit can remain unacknowledged at a time. The host returns `document.edit.ack` with the exact edit identity, acceptance result and resulting document version. A replayable ID is bound to an immutable hash of its generation, revisions, reason, predecessor, and content, so conflicting reuse is rejected instead of replaying an unrelated success. A rejection causes an authoritative host replay before later dirty work is sent.
 
-```
-Git pull / Other editor modifies file
-        ↓
-VS Code TextDocument changes
-        ↓
-onDidChangeTextDocument event fires
-        ↓
-Extension: Check if content actually changed
-        ↓
-Extension: postMessage({ type: 'update', content: markdown })
-        ↓
-WebView: Receive message
-        ↓
-WebView: Check if user edited recently (last 2 seconds)
-        ↓
-WebView: If not, update editor content
-        ↓
-WebView: Restore cursor position
-```
+The extension validates the envelope and the current renderer generation, then submits the mutation to `DocumentEditCoordinator`. The coordinator:
 
-**Safeguards:**
-- Skip update if content hasn't changed (string comparison)
-- Skip update if user edited within last 2 seconds (avoid interrupting typing)
-- Save and restore cursor position
+- serializes asynchronous work independently for each document URI
+- assigns monotonic queue revisions
+- coalesces only adjacent, not-yet-started typing edits with the same generation and base version
+- never coalesces explicit operations or barriers
+- contains failures and cancellation so later queued work can continue
 
-#### WebView → TextDocument (User Edits)
+Save, autosave and Feedback snapshot boundaries drain the same queue rather than waiting on an unrelated "latest promise". Explicit save then sends a correlated generation-and-host-version flush barrier to the current renderer, requires accepted application results for any newer revision it emits, drains again, and only then invokes VS Code save. Closing the final panel converts an already-armed custom autosave into a host-owned drain and save rather than cancelling it with the panel timer.
 
-```
-User types in TipTap editor
-        ↓
-TipTap onUpdate event fires
-        ↓
-Convert editor state to markdown
-        ↓
-Debounce (500ms) - wait for typing to pause
-        ↓
-postMessage({ type: 'edit', content: markdown })
-        ↓
-Extension receives message
-        ↓
-Extension: Set ignoreNextUpdate flag (prevent feedback loop)
-        ↓
-Extension: Apply WorkspaceEdit to TextDocument
-        ↓
-Extension: VS Code handles save, undo, etc.
+### Applying source edits
+
+For small documents the provider retains the simple whole-document replacement. At 32 KiB and above, it computes one minimal prefix/suffix replacement and applies only that range. Boundaries expand when needed so a range never splits a UTF-16 surrogate pair or CRLF delimiter.
+
+The large-document path reduces undo and diff work without introducing a general-purpose diff engine.
+
+Cosmetic Markdown normalization can suppress a write only after raw HTML-bearing token contexts match source-exactly. This conservative rule preserves edits where inline HTML or CSS makes whitespace significant.
+
+### Host to renderer
+
+Host updates carry the authoritative document version and are tracked per webview split. The host distinguishes the currently pending delivery from the last delivery whose post completed successfully, so an A to B to A document race cannot reuse stale proof that A reached the renderer. Any renderer-origin edit invalidates both delivery proofs. Source-specific echo suppression prevents the originating split from processing its own immediate echo without starving sibling splits.
+
+The renderer also protects an active cursor from an ordinary update for a short recent-edit window. It requests later host reconciliation instead of silently treating its local state as authoritative. Forced recovery and Feedback lifecycle messages bypass these ordinary echo guards.
+
+Do not reintroduce a shared `ignoreNextUpdate` boolean. It cannot identify which asynchronous edit, renderer generation or split produced a change.
+
+## Webview Lifecycle and State Restoration
+
+The custom editor uses `retainContextWhenHidden: false`. Hidden panels may therefore release their DOM, TipTap instance, Mermaid output and screenshot state instead of keeping a full renderer alive for every tab.
+
+Before teardown, the renderer flushes pending document sync and writes a small versioned payload through `vscode.setState()`:
+
+```text
+version + documentVersion + { selection.from, selection.to } + scrollTop
 ```
 
-**Safeguards:**
-- 500ms debounce to batch rapid edits
-- `ignoreNextUpdate` flag prevents feedback loop
-- `lastEditTimestamp` tracks recent user activity
-
-### Implementation Details
-
-**Extension Side (Applying Edits):**
-
-```typescript
-private handleEdit(document: vscode.TextDocument, markdown: string) {
-  const edit = new vscode.WorkspaceEdit();
-
-  // Replace entire document content
-  const fullRange = new vscode.Range(
-    document.positionAt(0),
-    document.positionAt(document.getText().length)
-  );
-
-  edit.replace(document.uri, fullRange, markdown);
-
-  // Set flag to ignore the resulting change event
-  this.ignoreNextUpdate = true;
-
-  vscode.workspace.applyEdit(edit);
-}
-```
-
-**WebView Side (Receiving Updates):**
-
-```typescript
-window.addEventListener('message', event => {
-  const message = event.data;
-
-  if (message.type === 'update') {
-    // Skip if user edited recently
-    if (Date.now() - lastEditTimestamp < 2000) {
-      return;
-    }
-
-    // Skip if content unchanged
-    const currentMarkdown = editor.storage.markdown.getMarkdown();
-    if (currentMarkdown === message.content) {
-      return;
-    }
-
-    // Save cursor position
-    const selection = editor.state.selection;
-
-    // Update content
-    editor.commands.setContent(message.content);
-
-    // Restore cursor (best effort)
-    try {
-      editor.commands.setTextSelection(selection);
-    } catch (e) {
-      // Cursor position invalid, ignore
-    }
-  }
-});
-```
-
----
-
-## WebView Implementation
-
-### HTML Structure
-
-**Template:**
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="...">
-  <link rel="stylesheet" href="${cssUri}">
-</head>
-<body>
-  <div id="editor"></div>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
-</body>
-</html>
-```
-
-**Security:**
-- Content Security Policy (CSP) restricts resource loading
-- Nonce-based script injection prevents XSS
-- Local resource roots restrict file access
-
----
-
-## Feature Implementation
-
-### 1. Tables
-
-**Implementation:**
-- Uses TipTap's `@tiptap/extension-table` suite
-- Custom CSS for clean, professional appearance
-- JavaScript for context menu and column resizing
-
-**Features:**
-- Tab navigation between cells
-- Drag column borders to resize
-- Right-click context menu
-- Toolbar dropdown for operations
-- Cell merging (not yet implemented)
-- Alignment controls (not yet implemented)
-
-### 2. Code Blocks with Syntax Highlighting
-
-**Implementation:**
-- `@tiptap/extension-code-block-lowlight`
-- `highlight.js` via `lowlight` wrapper
-- 11+ languages configured
-
-**Supported Languages:**
-javascript, typescript, python, bash, json, markdown, css, html, xml, sql, java, go, rust
-
-**Features:**
-- ✅ Syntax highlighting
-- ✅ Language selection dropdown
-- ❌ Line numbers (not yet implemented)
-- ❌ Copy button (not yet implemented)
-
-### 3. Mermaid Diagrams
+Writes are coalesced to one animation frame. Restoration happens only after host content initializes, only for the saved document version or the immediate version increment caused by the teardown flush, and with positions clamped to the live document. A second animation-frame scroll correction accounts for layout settling.
 
-**Implementation:**
-- Custom TipTap node (`extensions/mermaid.ts`)
-- Detects ```mermaid code blocks
-- Renders using Mermaid library
-
-**Features:**
-- ✅ Flowcharts, sequence diagrams, class diagrams, etc.
-- ✅ Toggle between code and rendered view
-- ✅ Error handling with user-friendly messages
-- ❌ Interactive editing UI (not yet implemented)
-
-### 4. Math Support (KaTeX)
+If one edit is still awaiting its application ACK while a newer renderer revision is dirty, teardown uses a correlated `document.teardown.edit` instead of dropping the newer revision. The host queues it behind the exact predecessor and accepts it only if that predecessor succeeded and its resulting `TextDocument.version` is still current.
 
-**Status:** ⚠️ Configured but not fully integrated
-
-**What's Done:**
-- KaTeX library included in dependencies
-- Package.json config for enabling/disabling
-
-**What's Missing:**
-- TipTap extension for inline math (`$...$`)
-- TipTap extension for display math (`$$...$$`)
-- Toolbar buttons for inserting equations
-
-**Planned Implementation:**
-- Custom TipTap node for math blocks
-- Parse `$` and `$$` delimiters
-- Render with KaTeX in read mode
-- Show LaTeX source in edit mode
-
-### 5. Task Lists
+Image insertion uses compact pending destinations instead of retaining a serialized base64 document. The renderer reserves at most 128 concurrent operations before conversion, and the host caps unresolved image state at 128 entries and 64 MiB per view. Image bytes cross the VS Code bridge as a typed array and are copied once into an exact-size host buffer, so a small view cannot retain a larger backing allocation. The host never evicts an unresolved marker to admit new work and releases retained bytes when the write settles.
 
-**Implementation:**
-- `@tiptap/extension-task-list` and `task-item`
-- Supports nesting
+An `imageSaved` or `imageError` post is not treated as applied until the exact renderer generation atomically updates or removes every matching ProseMirror node and returns a correlated application ACK. False, rejected, or unacknowledged posts retry the same immutable completion. Disposal cancels provider-owned retry timers, while teardown still resolves an exact pending marker to the saved path or bounded data-URI fallback. Unknown or wrong-generation markers reject the edit instead of entering Markdown.
 
-**Features:**
-- ✅ Checkboxes render correctly
-- ✅ Click to toggle checked state
-- ✅ Nesting supported
+The state parser projects only the fields above. It must not persist document content, Feedback sessions, peer locks, draft data or other host-owned state. Feedback recovery takes precedence over ordinary cursor and scroll restoration.
 
-### 6. Links and Images
-
-**Links:**
-- `@tiptap/extension-link`
-- Ctrl/Cmd+K to insert link
-- Clickable links in editor
-
-**Images:**
-- `CustomImage` (extends `@tiptap/extension-image`)
-- Supports local, remote, and workspace images
-- Drag-and-drop from desktop and VS Code explorer
-- Paste from clipboard
-- Relative paths saved in markdown; webview URIs resolved via extension
-- ❌ Resize handles (not yet implemented)
-
----
-
-## Performance Optimizations
-
-### 1. Debounced Updates (500ms)
-
-**Problem:** User types → TipTap fires onChange → Send to extension → Apply edit → Repeat
-- This happens on EVERY keystroke
-- Causes lag and excessive processing
-
-**Solution:**
-```typescript
-let updateTimeout: number | null = null;
-
-function debouncedUpdate(markdown: string) {
-  if (updateTimeout) {
-    clearTimeout(updateTimeout);
-  }
-
-  updateTimeout = window.setTimeout(() => {
-    // Skip sync while images are being saved to avoid race condition
-    if (hasPendingImageSaves()) {
-      debouncedUpdate(markdown);
-      return;
-    }
-
-    vscode.postMessage({ type: 'edit', content: markdown });
-  }, 500);
-}
-
-editor.on('update', ({ editor }) => {
-  const markdown = editor.storage.markdown.getMarkdown();
-  debouncedUpdate(markdown);
-});
-```
-
-**Result:**
- Updates batched, sent only after 500ms of inactivity
-
-### 2. Skip Redundant Updates
-
-**Problem:** Extension sends update to webview, but content is identical
-
-**Solution:**
-```typescript
-const currentMarkdown = editor.storage.markdown.getMarkdown();
-if (currentMarkdown === message.content) {
-  return; // Skip update
-}
-```
-
-### 3. Respect User Editing State
-
-**Problem:** External update arrives while user is typing, interrupts flow
-
-**Solution:**
-```typescript
-if (Date.now() - lastEditTimestamp < 2000) {
-  return; // Skip update if user edited recently
-}
-```
-
-### 4. Large Document Handling (Future)
-
-**Planned Optimizations:**
-- **Virtual scrolling** - Only render visible paragraphs
-- **Lazy image loading** - Load images on scroll
-- **Web Workers** - Parse markdown in background thread
-- **Code splitting** - Load extensions on demand (Math, Mermaid)
-
-**Current Status:** ⚠️ Not yet implemented
-
----
-
-## Current Implementation Status
-
-### ✅ Fully Implemented (MVP Complete)
-
-**Core Editing:**
-- WYSIWYG markdown editing
-- Headers (H1-H6)
-- Bold, italic, strikethrough, inline code
-- Unordered, ordered, and task lists
-- Links and images
-- Blockquotes
-- Horizontal rules
-- Code blocks with syntax highlighting (11 languages)
-
-**Advanced Features:**
-- Tables with resize, context menu, toolbar dropdown
-- Mermaid diagrams with toggle view, template dropdown, double-click editing
-- Compact formatting toolbar
-- Theme support (light, dark, system)
-- Document outline sidebar with navigation
-- Image resize handles with modal editor
-- PDF/HTML export functionality
-- Source view button (opens VS Code native editor)
-
-**VS Code Integration:**
-- Custom text editor registration
-- Command palette commands
-- Keyboard shortcuts
-- Context menu (right-click .md files)
-- Save functionality with visual feedback
-- Document outline view in Explorer sidebar
-- Word count status bar with detailed stats
-- In-memory file support (untitled files)
-- Git integration (text-based diffs work correctly)
+## Editor Stack and Dependency Policy
 
-**Synchronization:**
-- Two-way sync (TextDocument ↔ WebView)
-- Cursor position preservation
-- Debounced updates (500ms)
-- Feedback loop prevention
+### TipTap and ProseMirror
 
-### ⚠️ Partially Implemented
+Every direct `@tiptap/*` runtime package is pinned to exactly `3.30.5`, including `@tiptap/core`, `@tiptap/markdown`, `@tiptap/pm`, `@tiptap/starter-kit` and the direct extensions. This is the one-family rule:
 
-**Math Support:**
-- KaTeX library included
-- Configuration options defined
-- ❌ No TipTap extension for rendering math yet
-- ❌ No toolbar buttons for inserting equations
+1. Upgrade all direct TipTap packages as one tested set.
+2. Import ProseMirror APIs through `@tiptap/pm/*`.
+3. Do not add a second direct ProseMirror or mixed TipTap version family.
+4. Verify serialization, selection mapping, tables, custom NodeViews, bundle output and the full test suite before accepting an upgrade.
 
-**Settings System:**
-- Configuration schema defined in package.json
-- ❌ Not wired up to webview yet
-- ❌ No UI for changing settings in editor
+TipTap supplies the editor framework, not document authority. Custom extensions preserve Markdown constructs and editor behaviors that the stock schema does not cover by itself.
 
-### ❌ Not Yet Implemented
+### Other key libraries
 
-**Missing Features:**
-- Source view toggle with scroll sync (basic source view button exists)
-- Math equation editing UI (KaTeX library included but not integrated)
-- Frontmatter editor UI (frontmatter rendering exists)
-- Find and replace (VS Code find widget enabled but may need enhancement)
-- Spell check integration
-- Code block execution
+| Library                                       | Current role                                                                  |
+| --------------------------------------------- | ----------------------------------------------------------------------------- |
+| `mermaid@^11.17.2`                            | Render diagrams inside a custom TipTap node.                                  |
+| `modern-screenshot@4.7.0`                     | Rasterize bounded Feedback DOM clones.                                        |
+| `markdown-it@^14.0.0`                         | Parse saved source for exact Feedback line mapping and semantic verification. |
+| `highlight.js@^11.11.1` and `lowlight@^2.9.0` | Code-block highlighting.                                                      |
+| `katex@^0.16.9`                               | Inline and display math rendering.                                            |
+| `esbuild@^0.28.2`                             | Produce extension-host and browser bundles.                                   |
 
-**Missing Optimizations:**
-- Virtual scrolling for large docs
-- Lazy image loading
-- Web Workers for parsing
-- Code splitting
+All webview runtime dependencies are bundled. The webview does not depend on a CDN.
 
-**Missing Tests:**
-- Unit tests (Jest configured, but no test files)
-- Integration tests
-- E2E tests
+### Upgrade posture
 
----
+The TipTap family is on the reviewed 3.30.5 security patch. Other available major versions are deliberately separate migrations, not safe mechanical bumps:
 
-## Key Technical Decisions
+| Candidate       | Posture                       | Validation required before adoption                                                          |
+| --------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| Babel 8         | Defer                         | Jest transform compatibility, supported tooling Node version and full unit suite.            |
+| ESLint 10       | Defer                         | TypeScript ESLint compatibility, configuration migration and zero-warning lint.              |
+| TypeScript 7    | Defer                         | VS Code 1.98 API/types compatibility, declaration behavior and full compile/build gates.     |
+| KaTeX 0.18      | Defer to an independent slice | Inline/display parsing, malformed formulas, light/dark rendering and CSS/font bundle output. |
+| lowlight 3      | Evaluate independently        | CodeBlockLowlight integration, configured languages, round trips and bundle size.            |
+| markdown-it 15  | High-risk evaluation          | Feedback raw-token line mapping, semantic block fingerprints, frontmatter and HTML cases.    |
+| concurrently 10 | Defer; 9.2.4 is installed     | Version 10 requires Node 22 and ESM. Recheck watch scripts on Windows and Unix separately.   |
 
-### 1. Why CustomTextEditorProvider (Not CustomEditorProvider)?
+Keep `@types/node` on the Node 20 line and `@types/vscode` at 1.98.0 while those are the declared runtime floors. Upgrading either type baseline without raising and retesting the runtime contract can compile code that the minimum host cannot run.
 
-**Decision:** Use `CustomTextEditorProvider` instead of `CustomEditorProvider`
+## Feature Modules
 
-**Reasoning:**
-- Markdown is text-based (not binary)
-- VS Code handles save/undo/redo automatically
-- TextDocument is source of truth (simple mental model)
-- Better Git integration (diffs work correctly)
-- Simpler implementation (less code)
+The webview entry point is `src/webview/editor.ts`. It composes focused modules rather than putting feature logic into the provider:
 
-**Trade-off:** Less control over save behavior (acceptable for our use case)
+- `src/webview/extensions/` contains TipTap extensions for Markdown compatibility, tables, images, math, code blocks, Mermaid and interaction behavior.
+- `src/webview/features/` contains dialogs, overlays, export helpers and Feedback controllers.
+- `src/webview/utils/` contains serialization, paste, outline and rich-view state helpers.
+- `src/webview/BubbleMenuView.ts` owns the visible formatting controls.
 
----
+The extension side is partway through the same split. Focused modules own document queues, Feedback anchors, snapshot proofs, transport primitives and persistence, while `MarkdownEditorProvider` still contains the production Feedback lifecycle adapter and remains too large. The pure host and renderer lifecycle machines are tested migration models, not yet the production authority.
 
-### 2. Why TipTap (Not ProseMirror Directly)?
+## Feedback Architecture
 
-**Decision:** Use TipTap instead of raw ProseMirror
+Feedback mode reviews one saved source snapshot. It does not create a second editable document model.
 
-**Reasoning:**
-- **Easier API** - TipTap abstracts ProseMirror's complexity
-- **Extension ecosystem** - Many plugins available (tables, markdown, etc.)
-- **Markdown support** - `@tiptap/markdown` handles serialization
-- **Active development** - Regular updates, good documentation
-- **Used in production** - Battle-tested by many apps
+### Authoritative snapshot boundary
 
-**Trade-off:** Slightly larger bundle size (acceptable given ~4.3MB is mostly highlight.js + Mermaid)
+For snapshot-capable renderers, a new Start and a durable-draft Resume use a two-stage protocol:
 
----
+1. Every open split reports whether it is dirty and, on this explicit user action, serializes its current Markdown for inspection.
+2. If dirty splits have different digests, the host fails before flushing either one.
+3. The host flushes all splits, drains the document queue, saves and reads the exact file bytes.
+4. `FeedbackSnapshotService` binds the captured `TextDocument` version and UTF-8 text digest to the saved-byte digest.
+5. The host applies that same authoritative source to every split. Only the owning split enumerates fresh canonical TipTap blocks after the apply.
+6. The service verifies renderer identity, canonical descriptor revision, raw-source block mapping and per-block semantic content fingerprints before a session can start.
 
-### 3. Why 500ms Debounce (Not 300ms or 1s)?
+Any ambiguity fails closed with `MD4H-FB-SNAPSHOT-001`. An external source change later invalidates the active round, preserves its draft and blocks new mutations and sealing.
 
-**Decision:** Debounce updates by 500ms
+### Delivery and lifecycle recovery
 
-**Reasoning:**
-- **300ms** - Too aggressive, still many updates during normal typing
-- **500ms** - Good balance, users typically pause for punctuation/thinking
-- **1000ms** - Too slow, feels laggy on slower machines
+`feedback.started` uses an application-level delivery envelope. It is correlated by message, operation, session and stage identities. Delivery retries are idempotent and bounded. If application acknowledgements are lost, the host queries the renderer's actual `applied`, `inactive` or `mismatch` state before deciding whether activation succeeded.
 
-**Trade-off:** 500ms delay before external changes appear (acceptable, users rarely notice)
+Renderer activation is transactional. Every UI, transaction-filter and DOM effect registers cleanup before the next effect runs; review mode becomes active only after commit, and a preparation or commit failure rolls the complete activation back before the renderer acknowledges it.
 
----
+Pure host and renderer lifecycle reducers reject stale stage revisions and duplicate transitions in deterministic tests. Production Start, close, recovery and split-lock paths currently use provider and renderer adapters rather than those reducers as their sole authority. Close and recovery handshakes keep peers locked until the authoritative source is applied and released. If a webview reloads, volatile session ownership is not recovered from `setState`; the durable draft remains the recovery authority.
 
-### 4. Why Full Document Replacement (Not Incremental Diffs)?
+Transferring an already-active round does not freeze a new source. It reapplies the existing frozen source to the proposed owner and reuses the host's verified canonical snapshot. The handoff is generation-bound and application-acknowledged: the new owner stages first, the old owner freezes second, and the host revalidates the exact document version and source digest before sending commit. The host session remains `resuming` until both owners and every peer lock confirm commit, then becomes `active`.
 
-**Decision:** Replace entire document content on sync, not incremental diffs
+If pre-commit validation changes or fails, both staged renderers receive an idempotent abort and the old owner becomes active only after rollback ACKs. Exhausted apply, commit, or abort delivery terminates the user request without unlocking an ambiguous renderer, while retaining the exact identity for late-ACK recovery. The legacy `feedback.session.transferred` parser remains only for compatibility with an older renderer already alive across an extension-host restart; production no longer sends it.
 
-**Reasoning:**
-- **Simplicity** - Much easier to implement and debug
-- **Reliability** - No complex diff logic that could have bugs
-- **Performance** - Most markdown docs are <1MB, full replacement is fast
-- **VS Code optimization** - VS Code's TextDocument handles diffs internally
+### Anchors and typed table cells
 
-**Trade-off:** Potential performance hit on huge docs (10,000+ lines), but acceptable for MVP
+The host builds one exact map between canonical rich blocks and raw Markdown line spans. Text selections may carry a versioned half-open ProseMirror range. Table selections may instead carry a typed cell target:
 
-**Future Optimization:** Could implement incremental diffs for large documents if needed
+- containing table ordinal
+- zero-based rectangular row and column coordinates
+- renderer table fingerprint
+- host-enriched SHA-256 for the containing canonical table block
 
----
+The host validates that the target is one canonical table block, checks the rectangle shape, and enriches it with that block's SHA-256. The renderer validates the table fingerprint, live row and column bounds, and merged or irregular geometry before drawing cell decorations. Exact per-cell work is capped at 256 cells per item and 4,096 cells per session; larger or later-overflow selections coarsen to whole-table source evidence before cell traversal, fingerprinting, preview, or geometry, with a visible explanation. Per-cell extraction and aggregate structured evidence are independently bounded before traversal. Persisted locators continue to consume the host and store budget until degradation is durably written at seal. A stale cell target becomes a host-origin `stale-locator` degradation with requested scope and original evidence preserved. It is never fuzzy-matched to a similar table. Exact range and cell locators remain in sealed reports only while Finish-time frozen-document validation still proves them. `feedback.finish` may carry a bounded, unique list of degraded item IDs without document content; the host unions that signal with its own fresh validation and the store writes the canonical degraded v2 envelope atomically. Source path, source SHA-256, containing source lines, target metadata, and typed evidence remain distinct authorities. Table coordinates describe the frozen rendered model, not proven raw Markdown cell columns, and cell TSV is a derived projection rather than a literal quote or canonical table representation.
 
-### 5. Why esbuild (Not Webpack)?
+The highlighted document is the canonical Feedback preview. The composer and expanded cards derive bounded renderer-local descriptions from the frozen ProseMirror document: literal excerpts for exact text and partial code, a fixed-size semantic grid for valid cell rectangles, and structural summaries for whole tables, code blocks, opaque NodeViews, and multi-block targets. Renderer-side selection evidence is bounded before traversal. The previews do not parse Markdown or rerun Mermaid, KaTeX, image, or syntax renderers. Complex targets select a stable wide composer preset, ordinary prose stays compact, and an accessible override changes that preset. The feedback input grows only to a viewport-relative cap before scrolling internally and is remeasured after responsive width changes. Wide composers first prefer a collision-free edge of full-width targets; every measured active composer and tall saved-comment edit form clamps below the sticky toolbar and inside the current viewport when its visible target would otherwise leave the form unreachable. While a saved comment is being edited, its card is the only card in the layout and pending Undo controls return after Save or Cancel, so keyboard focus cannot move to an offscreen packed surface.
 
-**Decision:** Use esbuild for bundling
+### Durable bundle
 
-**Reasoning:**
-- **Speed** - 10-100x faster than Webpack
-- **Simplicity** - Minimal configuration
-- **Modern** - Handles TypeScript natively
-- **Growing ecosystem** - Increasingly popular for VS Code extensions
+Drafts are written atomically below `.md4h/feedback/` in the workspace folder that contains the source. New rounds use the strict `md4h-feedback/v2` grammar and screenshot items use hash-bound `assets/F<n>.png` files. V2 separates requested and effective target scope from evidence fidelity. Complete source-addressable blocks carry a bounded host-derived source slice when exact source mapping and embedding budgets permit it; otherwise the item records an explicit omission or degradation. Native drags carry exact rendered text plus a rendered locator, regular cell rectangles carry a typed matrix plus derived escaped TSV, and visual sub-regions carry a PNG plus a containing-source reference. Whole tables never use TSV as canonical evidence. Parity-proven GFM and HTML table shapes retain authored source, while unsupported raw-HTML shapes fail closed instead of emitting inaccurate evidence.
 
-**Trade-off:** Less mature plugin ecosystem than Webpack (acceptable, we don't need complex plugins)
+The v2 parser validates canonical metadata, block hashes, fingerprints, evidence bodies, byte and cell budgets, screenshot paths, and writer-derived summaries. IDs are monotonic, sealed bundles are immutable, and Resume reparses and revalidates the complete bundle against the retained source and frozen rich model. Sealed v1 bundles remain byte-immutable. A v1 draft migrates atomically only on its first explicit mutation or seal; locator-free Focus remains labelled legacy evidence and is never promoted to exact text or table structure.
 
----
+Automatic draft discovery is metadata-first. It reads the bounded report, checks exact source identity, contained regular screenshot files, individual size, and cumulative quota, but does not read and hash every PNG during editor startup. Explicit Resume performs full PNG structure and SHA-256 validation before restoring a writable store.
 
-### 6. Why Embed All Dependencies (Not CDN)?
+Only fenced `### Feedback` text is an instruction to an agent. Target summaries, selected source, rendered text, typed cells, legacy Focus, and screenshot pixels are untrusted evidence. See the user-facing bundle contract in `README.md` for the complete grammar.
 
-**Decision:** Bundle all dependencies in webview.js (~4.3MB)
+### Bounded, cancelable capture
 
-**Reasoning:**
-- **Offline support** - Works without internet
-- **Security** - No external resource loading (CSP restrictions)
-- **Reliability** - No CDN downtime issues
-- **Simplicity** - No asset management complexity
+Feedback screenshot capture uses a DOM clone, not an Electron compositor:
 
-**Trade-off:** Large bundle size (~4.3MB), but one-time download and cached by VS Code
+- the crop must intersect mapped, visible top-level blocks
+- annotation UI and editor controls are filtered from the clone
+- fonts, images and intersecting Mermaid output must settle before rasterization
+- cancellation or session invalidation propagates through an `AbortSignal`
+- staging is capped at 4,096 rendered nodes and 1,024 resource references
+- large intersecting tables and nested lists are shallow-cloned to intersecting rows, cells and items, with fixed-size spacers preserving crop geometry and ordered-list numbering
+- row-span tables use the existing bounded fail-closed path rather than producing an invalid partial table
+- resources outside the VS Code webview boundary fail closed
+- output is capped at 12 megapixels and 10 MiB
+- the host performs a bounded PNG structure, dimension, path and hash validation
 
-**Future Optimization:** Could implement code splitting for Mermaid/Math if needed
+Every success, error, retry, Retake, Cancel and invalidation path must restore suspended annotations and release temporary resources.
 
----
+## Performance Architecture
 
-### 7. Why Inherit VS Code Fonts (Not Hardcoded Fonts)?
+Performance is controlled by work-count contracts first, then measured on target hardware.
 
-**Decision:** Inherit VS Code's editor font settings instead of hardcoding font families
+Implemented hot-path protections include:
 
-**Reasoning:**
-- **User preferences** - Respects user's VS Code font configuration
-- **OS optimization** - VS Code picks fonts optimized for each operating system
-- **Accessibility** - Respects system font size and accessibility settings
-- **Theme consistency** - Fonts adapt to light/dark/high-contrast themes automatically
-- **Simplicity** - Less code to maintain, fewer font-related issues
+- zero Markdown serialization in the immediate typing transaction path
+- one debounce timer and one serialization/send when a burst drains
+- immutable ProseMirror top-level node caching, so an edit can reserialize only changed blocks after the initial pass
+- serialized host edits with compatible pending typing coalescing
+- minimal source ranges for documents of at least 32 KiB
+- one source-line index per Feedback snapshot finalization instead of one full-document split per canonical block
+- metadata-first draft discovery with screenshot bytes deferred to explicit Resume
+- annotation layout indexed once by source line, with geometry reads bounded to annotated targets
+- no annotation layout work on ordinary document scroll
+- bounded screenshot DOM and resource traversal
+- hidden-webview teardown with small presentation-state restoration
 
-**What We Keep:**
-- **Readability optimizations** - Line-height (1.58), letter-spacing (-0.003em), font-smoothing, text-rendering
-- **Size multipliers** - Paragraphs 20% larger, header hierarchy (2.4x, 2x, 1.6x, etc.)
-- **Code blocks** - Monospace fonts (ensures code is always readable)
+The deterministic harness in `scripts/feedback-performance-fixture/` exercises production sync and layout code against 3,000-word and 10,000-line corpora, 500 Feedback items and 10,000 typing transactions. It gates algorithmic work counts on Ubuntu and Windows CI. It deliberately does not use shared-runner milliseconds as a proxy for an i5/16 GB machine.
 
-**Trade-off:** Less control over exact font choice, but better user experience and platform integration
+The product budgets remain:
 
-See [DEVELOPMENT.md](./DEVELOPMENT.md) for full design principles
+| Metric                             |                        Budget |
+| ---------------------------------- | ----------------------------: |
+| Editor initialization              |                  under 500 ms |
+| Typing latency                     |                   under 16 ms |
+| Cursor and formatting interactions |                   under 50 ms |
+| Menu and toolbar actions           |                  under 300 ms |
+| Large-document target              | 10,000 or more lines smoothly |
 
----
+Physical Windows p95 timings, memory snapshots, long-form reading and high-DPI capture checks remain manual release evidence.
 
-## Security Considerations
+## Security and Resource Boundaries
 
-### Content Security Policy
+- Webview HTML uses a nonce-based Content Security Policy and explicit `localResourceRoots`.
+- Extension and renderer message boundaries parse untrusted data before dispatch. Feedback protocols reject unknown fields rather than spreading arbitrary objects.
+- Workspace paths are resolved and checked for containment before file operations.
+- Screenshot data, identifiers, item counts and source sizes are bounded.
+- Release builds bundle runtime dependencies and exclude development fixtures, source and test assets from the VSIX.
+- Virtual and untrusted workspaces are explicitly unsupported.
 
-**CSP Headers:**
+Local file access is limited to the extension and the exact containing workspace folder, or the document directory for a standalone file. Image URI requests are resolved and containment-checked against those roots before `asWebviewUri` is called. A custom-editor request cancelled before resolution initializes no panel state. Reviewing whether every broad remote, data, and blob image CSP source is still required remains a security follow-up.
 
-```typescript
-const csp = `
-  default-src 'none';
-  script-src ${webview.cspSource} 'nonce-${nonce}';
-  style-src ${webview.cspSource} 'unsafe-inline';
-  font-src ${webview.cspSource};
-  img-src ${webview.cspSource} https: data:;
-`;
-```
+## Testing and CI
 
-**What This Prevents:**
-- ❌ Loading scripts from external URLs
-- ❌ Inline scripts without nonce (prevents XSS)
-- ❌ Arbitrary resource loading
+The repository has a substantial automated suite, not a test placeholder.
 
-**What This Allows:**
-- ✅ Scripts from extension (with nonce)
-- ✅ Styles from extension
-- ✅ Images (local, HTTPS, data URIs)
-- ✅ Fonts from extension
+| Layer                              | What it covers                                                                       |
+| ---------------------------------- | ------------------------------------------------------------------------------------ |
+| Jest unit tests                    | Pure reducers, protocols, queues, stores, path rules and serializers.                |
+| jsdom webview tests                | Dialogs, capture, toolbar, message boundaries and lifecycle cleanup.                 |
+| Real TipTap/ProseMirror tests      | Selection mapping, decorations, table cells, serialization and transaction behavior. |
+| Fixture runners                    | Feedback capture, annotation geometry and deterministic performance contracts.       |
+| VS Code Extension Development Host | Real activation, command registration and `TabInputCustom` behavior.                 |
+| Release build verification         | Runtime targets, artifact boundaries, source-map policy and size ceilings.           |
 
-### User Content Sanitization
+CI runs:
 
-**Current Approach:**
-- Markdown-it has built-in HTML sanitization
-- Links are validated (basic URL parsing)
-- Images are validated (URL or local path)
+- unit, coverage, lint and release build jobs on Ubuntu
+- deterministic performance gates on Ubuntu and Windows
+- real Extension Development Host smoke tests on Ubuntu and Windows against VS Code 1.98.0 and current stable
+- VSIX packaging only after those jobs pass
 
-**Potential Risks:**
-- User markdown could contain `<script>` tags
-- Malicious links could be `javascript:` URLs
+These automated matrices do not replace a physical Windows i5/16 GB performance pass, a 10-minute read of a 3,000-word document in light and dark themes, or physical DPI/accessibility checks.
 
-**Mitigation:**
-- VS Code webview is sandboxed (separate context)
-- CSP prevents inline scripts from executing
-- Link validation prevents `javascript:` URLs
+## Build and Packaging
 
----
-
-## Testing Strategy
-
-### Current Status: ⚠️ Minimal Testing
-
-**Configured:**
-- Jest 29.x installed
-- `test` script in package.json
-
-**Missing:**
-- No test files written yet
-- No test coverage
-
-### Planned Testing Approach
-
-#### Unit Tests (Jest)
-**What to test:**
-- Markdown parsing/serialization
-- Document sync logic (debounce, cursor preservation)
-- Utility functions
-
-**Example:**
-```typescript
-describe('Document Sync', () => {
-  it('should debounce rapid updates', async () => {
-    // Test debounce logic
-  });
-
-  it('should skip redundant updates', () => {
-    // Test update skipping
-  });
-});
-```
-
-#### Integration Tests
-**What to test:**
-- Extension activation
-- Custom editor registration
-- WebView communication (message passing)
-
-#### E2E Tests (VS Code Extension Test Runner)
-**What to test:**
-- Full editing workflow (type, save, reload)
-- Multi-file scenarios
-- Git integration (commit, diff)
-
-#### Manual Testing Checklist
-- Large documents (10,000+ lines)
-- Math rendering accuracy
-- Table editing UX (drag, context menu)
-- Image loading (local, remote, relative paths)
-- Source ↔ WYSIWYG switching
-- Theme switching
-- Keyboard shortcuts
-
----
-
-## Build & Deployment
-
-### Development Workflow
-
-```bash
-# Install dependencies
-npm install
-
-# Start watch mode (extension + webview)
-npm run watch
-
-# In VS Code: Press F5 to launch Extension Development Host
-
-# Run tests
-npm test
-
-# Lint code
+```sh
+npm ci
 npm run lint
-npm run lint:fix
+npm test -- --runInBand
+npm run build:release
+npm run test:integration
+npm run package:release
 ```
 
-### Build Process
+`build:release` creates minified bundles without source maps and runs `scripts/verify-build.js`. The extension bundle is CommonJS with `vscode` externalized. The webview is a self-contained browser IIFE with bundled styles and font assets.
 
-**Extension Bundle:**
-```bash
-npm run build:extension
-# → esbuild src/extension.ts → dist/extension.js (~1.8MB)
-```
+Never publish directly from an unverified working tree. The repository instructions also prohibit agents from committing or pushing.
 
-**WebView Bundle:**
-```bash
-npm run build:webview
-# → esbuild src/webview/editor.ts → dist/webview.js (~4.3MB)
-# → cp src/webview/editor.css → dist/webview.css (~67KB)
-```
+## Key Files
 
-**Production Build:**
-```bash
-npm run build
-# → Runs both build:extension and build:webview
-# → Minifies, tree-shakes, generates source maps
-```
+| Concern                            | File                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------- |
+| Activation and commands            | `src/extension.ts`                                                                           |
+| VS Code custom editor adapter      | `src/editor/MarkdownEditorProvider.ts`                                                       |
+| Per-document edit serialization    | `src/editor/documentEditCoordinator.ts`                                                      |
+| Minimal large-document edit        | `src/editor/minimalTextEdit.ts`                                                              |
+| Document sync protocol             | `src/shared/documentSyncProtocol.ts`                                                         |
+| Renderer debounce and ACK state    | `src/webview/documentSyncController.ts`                                                      |
+| TipTap composition                 | `src/webview/editor.ts`                                                                      |
+| Markdown sync serialization        | `src/webview/utils/markdownSerialization.ts`                                                 |
+| Hidden-view presentation state     | `src/webview/utils/richViewState.ts`                                                         |
+| Feedback request/response contract | `src/shared/feedbackProtocol.ts`                                                             |
+| Feedback snapshot protocol         | `src/shared/feedbackSnapshotProtocol.ts`                                                     |
+| Feedback delivery protocol         | `src/shared/feedbackDeliveryProtocol.ts`                                                     |
+| Snapshot proof                     | `src/editor/feedbackSnapshotService.ts`                                                      |
+| Feedback transport                 | `src/editor/feedbackTransport.ts`                                                            |
+| Feedback durable store             | `src/editor/feedbackSessionStore.ts`                                                         |
+| Feedback renderer                  | `src/webview/features/feedbackReview.ts`                                                     |
+| Feedback activation transaction    | `src/webview/features/feedbackActivationController.ts`                                       |
+| Host and renderer lifecycle        | `src/editor/feedbackLifecycleMachine.ts`, `src/webview/features/feedbackLifecycleMachine.ts` |
+| Typed Feedback selection mapping   | `src/webview/features/feedbackSelectionMapping.ts`                                           |
+| Feedback snapshot client           | `src/webview/features/feedbackSnapshotClient.ts`                                             |
+| Feedback capture                   | `src/webview/features/feedbackCapture*.ts`, `feedbackDomCapture.ts`                          |
+| Runtime build targets              | `scripts/runtime-targets.js`                                                                 |
+| Deterministic performance fixture  | `scripts/feedback-performance-fixture/`                                                      |
+| Desktop host tests                 | `.vscode-test.mjs`, `test/integration/`                                                      |
 
-### Packaging for Marketplace
+## Change Rules
 
-This is the canonical way to build the `.vsix` file that you can either share with other developers on the team or publish to the VS Code Marketplace.
+- Treat the `TextDocument` and host-owned Feedback snapshot as authority.
+- Add protocol fields through a versioned shared parser and cover malformed, stale and duplicate messages.
+- Keep every direct TipTap dependency on one exact version family.
+- Do not serialize Markdown from a keystroke callback.
+- Put every document mutation and ordering barrier through the coordinator.
+- Keep webview state presentation-only and bounded.
+- Add performance work-count tests before adding a new loop over document nodes, blocks, annotations or resources.
+- Verify behavior at VS Code 1.98.0 as well as current stable.
 
-```bash
-# Create .vsix file (for local install or marketplace upload)
-npm run package
-# → Uses vsce (VS Code Extension CLI)
-# → Outputs markdown-for-humans-0.1.0.vsix in the project root
+## Known Qualification Gaps
 
-# Publish to marketplace (requires publisher account)
-vsce publish patch  # Auto-bumps version and publishes
-```
+The architecture has automated cross-platform gates, but the following evidence is still physical or manual:
 
-### Build Configuration
-
-**esbuild settings:**
-- **Extension:**
-  - Format: CommonJS (required by VS Code)
-  - Platform: Node
-  - External: `vscode` module (provided by VS Code)
-  - Minify, tree-shake, source maps
-
-- **WebView:**
-  - Format: IIFE (self-contained browser bundle)
-  - Platform: Browser
-  - Bundle all dependencies
-  - Minify, tree-shake, source maps
-
----
-
-## Future Architecture Considerations
-
-### Planned Improvements
-
-#### 1. Virtual Scrolling (Phase 2)
-**Problem:** Large documents (10,000+ lines) slow down editor
-**Solution:** Only render visible content, lazy-load off-screen content
-
-#### 2. Code Splitting (Phase 2)
-**Problem:** ~4.3MB initial bundle is large
-**Solution:** Split Mermaid, Math into separate bundles, load on demand
-
-#### 3. Web Workers (Phase 3)
-**Problem:** Markdown parsing blocks main thread
-**Solution:** Parse markdown in background thread
-
-#### 4. Collaborative Editing (Phase 4)
-**Problem:** No real-time collaboration
-**Solution:** Integrate VS Code Live Share API + Operational Transform (OT)
-
-#### 5. Plugin System (Phase 4)
-**Problem:** Limited extensibility
-**Solution:** API for community extensions (custom nodes, themes)
-
----
-
-## Quick Reference
-
-### Key Files
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `src/extension.ts` | 53 | Extension activation, command registration |
-| `src/editor/MarkdownEditorProvider.ts` | 160 | Custom editor provider, document sync |
-| `src/webview/editor.ts` | 412 | TipTap setup, editor initialization |
-| `src/webview/BubbleMenuView.ts` | 367 | Compact formatting toolbar |
-| `src/webview/extensions/mermaid.ts` | 105 | Mermaid diagram rendering |
-| `src/webview/editor.css` | 851 | All styles |
-
-### Important Constants
-
-| Constant | Value | Reasoning |
-|----------|-------|-----------|
-| Debounce delay | 500ms | Balance responsiveness vs. performance |
-| Recent edit threshold | 2000ms | Skip external updates if user typed recently |
-| Max content width | 80% (max 1400px) | Optimal reading line length |
-| Body font size | 18-21px | Comfortable long-form reading |
-| Line height | 1.58-1.6 | Breathing room for text |
-
-### Dependencies Overview
-
-| Dependency | Size | Purpose |
-|------------|------|---------|
-| TipTap + ProseMirror | ~500KB | Core editor framework |
-| highlight.js | ~3MB | Syntax highlighting (11 languages) |
-| Mermaid | ~4MB | Diagram rendering |
-| KaTeX | ~1MB | Math typesetting (not yet active) |
-| markdown-it | ~500KB | Markdown parsing (fallback) |
-| Other | ~500KB | Utilities, polyfills |
-
----
-
-## Related Documentation
-
-- **[DEVELOPMENT.md](./DEVELOPMENT.md)** - Roadmap, design principles, philosophy
-- **[README.md](../README.md)** - User-facing documentation
-- **[CONTRIBUTING.md](../CONTRIBUTING.md)** - How to contribute
-
----
-
-**Last Updated**: December 26, 2025
-**Document Version**: 2.0 (Consolidated from technical-architecture.md + codebase analysis)
+- p95 startup, typing, formatting and capture timings on the reference Windows i5/16 GB machine
+- memory and long-session profiling on that machine
+- 3,000-word, 10-minute reading checks in light and dark themes
+- high-DPI, zoom, keyboard-only and assistive-technology review
+- remote extension-host qualification if remote use becomes a supported product target

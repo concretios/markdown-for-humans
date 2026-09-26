@@ -19,6 +19,7 @@ const PreservedCodeBlock = CodeBlock.extend({
     return {
       ...this.parent?.(),
       'indent-prefix': { default: null },
+      'fence-marker': { default: null },
     };
   },
   parseMarkdown: parsePreservedCodeBlock,
@@ -121,6 +122,26 @@ describe('PreservedCodeBlock: indent-prefix round-trip', () => {
     expect(codeBlock?.attrs?.language).toBe('js');
 
     expect(manager.serialize(doc)).toBe('```js\nconst x = 1\n```');
+  });
+
+  it('preserves an authored four-backtick fence around nested triple backticks', () => {
+    const manager = createMarkdownManager();
+    const markdown = ['````markdown', '```ts', 'const value = true;', '```', '````'].join('\n');
+
+    const doc = manager.parse(markdown);
+
+    expect(doc.content?.[0]?.attrs?.['fence-marker']).toBe('````');
+    expect(manager.serialize(doc)).toBe(markdown);
+  });
+
+  it('preserves an authored tilde fence instead of rewriting it as backticks', () => {
+    const manager = createMarkdownManager();
+    const markdown = ['~~~~JavaScript', 'const fence = "```";', '~~~~'].join('\n');
+
+    const doc = manager.parse(markdown);
+
+    expect(doc.content?.[0]?.attrs?.['fence-marker']).toBe('~~~~');
+    expect(manager.serialize(doc)).toBe(markdown);
   });
 
   it('non-image indented code block still falls back to codeBlock', () => {

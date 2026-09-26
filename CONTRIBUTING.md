@@ -46,14 +46,14 @@ npm run watch:debug
 |-------------|---------|-------|
 | **Node.js** | 22+ LTS | Required for build tooling |
 | **npm** | 10+ | Comes with Node.js |
-| **VS Code** | 1.85.0+ | Extension host for development |
+| **VS Code** | 1.98.0+ | Minimum supported extension host |
 | **Git** | Latest | Version control |
 
 **Verify your setup:**
 ```bash
 node --version   # Should be v22+
 npm --version    # Should be 10+
-code --version   # Should be 1.85+
+code --version   # Should be 1.98+
 ```
 
 ---

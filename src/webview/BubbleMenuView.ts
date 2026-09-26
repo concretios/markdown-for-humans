@@ -21,6 +21,51 @@ import type { Transaction } from '@tiptap/pm/state';
 
 // Store reference to refresh function so it can be called externally
 let toolbarRefreshFunction: (() => void) | null = null;
+let feedbackToolbarRenderFunction: ((state: FeedbackToolbarState) => void) | null = null;
+
+/** Visual and accessible disclosure state for the Feedback comments surface. */
+export type FeedbackCommentsState = 'hidden' | 'collapsed' | 'expanded';
+
+/** Local UI phase for the pointer-enhanced Feedback area capture. */
+export type FeedbackCaptureUiState = 'idle' | 'armed' | 'rasterizing';
+
+/** Stable target for saved-comment markers that disclose detail cards. */
+export const FEEDBACK_COMMENTS_PANEL_ID = 'feedback-comments-panel';
+/** Stable target for the toolbar control that shows or hides the comments rail. */
+export const FEEDBACK_COMMENTS_RAIL_ID = 'feedback-comments-rail';
+
+/**
+ * Resolve the positioning context for the Feedback overflow menu.
+ *
+ * @param trigger - Current More feedback actions control, when mounted.
+ * @param fallback - Toolbar used before or outside the grouped Feedback layout.
+ * @returns The dedicated menu host, centered Feedback group, or toolbar fallback.
+ */
+export function getFeedbackToolbarMenuHost(
+  trigger: HTMLElement | null,
+  fallback: HTMLElement
+): HTMLElement {
+  return (
+    trigger?.closest<HTMLElement>('[data-feedback-menu-host]') ??
+    trigger?.closest<HTMLElement>('[data-feedback-toolbar-group]') ??
+    fallback
+  );
+}
+
+export interface FeedbackToolbarState {
+  active: boolean;
+  count?: number;
+  commentsState?: FeedbackCommentsState;
+  commentsLocked?: boolean;
+  /** @deprecated Pass commentsState so collapsed and expanded remain distinct. */
+  commentsVisible?: boolean;
+  invalidated?: boolean;
+  starting?: boolean;
+  closing?: boolean;
+  captureState?: FeedbackCaptureUiState;
+}
+
+let feedbackToolbarState: FeedbackToolbarState = { active: false };
 
 /**
  * Normalize selection and create a code block
@@ -94,6 +139,11 @@ type ToolbarIcon = {
 // visually distinct from every other toolbar icon.
 const MATH_RADICAL_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="2,12 5,12 8,20 12,4 23,4"></polyline><line x1="14.5" y1="10.5" x2="20" y2="16.5"></line><line x1="20" y1="10.5" x2="14.5" y2="16.5"></line></svg>`;
 
+// Picture / mountain-sun glyph for Insert image. `codicon-file-media` reads as a
+// dog-eared document with an upload badge next to link and chart icons; this
+// conventional framed landscape uses `currentColor` so it stays theme-aware.
+const INSERT_IMAGE_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21,15 16,10 5,21"></polyline></svg>`;
+
 type ToolbarActionButton = {
   type: 'button';
   label: string;
@@ -108,6 +158,8 @@ type ToolbarActionButton = {
   // runs against an unfocused editor. Buttons that read live editor state
   // (selection, focus) at click time should set this to true.
   preserveEditorFocus?: boolean;
+  visibleText?: string;
+  feedbackData?: 'start';
 };
 
 type ToolbarDropdownItem = {
@@ -211,6 +263,30 @@ export function updateToolbarStates() {
 }
 
 /**
+ * Swap the formatting toolbar between normal editing and the focused Feedback
+ * action set. Normal controls are detached, not merely visually hidden, so
+ * they cannot receive focus or be announced during a frozen review.
+ *
+ * @param state - Current Feedback session, count, and comments disclosure state.
+ */
+export function setFeedbackToolbarState(state: FeedbackToolbarState): void {
+  const commentsState =
+    state.commentsState ?? (state.commentsVisible === false ? 'hidden' : 'collapsed');
+  feedbackToolbarState = {
+    active: state.active,
+    count: Math.max(0, state.count ?? 0),
+    commentsState,
+    commentsLocked: state.commentsLocked ?? false,
+    commentsVisible: commentsState !== 'hidden',
+    invalidated: state.invalidated ?? false,
+    starting: state.starting ?? false,
+    closing: state.closing ?? false,
+    captureState: state.captureState ?? 'idle',
+  };
+  feedbackToolbarRenderFunction?.(feedbackToolbarState);
+}
+
+/**
  * Create compact formatting toolbar with clean, minimal design.
  *
  * @param editor - TipTap editor instance
@@ -226,6 +302,18 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
   const modKeyLabel = isMac ? 'Cmd' : 'Ctrl';
 
   const buttons: ToolbarItem[] = [
+    {
+      type: 'button',
+      label: 'Start feedback',
+      title: 'Log feedback for an LLM',
+      icon: { name: 'comment-discussion-sparkle', fallback: '✦' },
+      feedbackData: 'start',
+      className: 'feedback-start-button',
+      action: () => {
+        window.dispatchEvent(new CustomEvent('feedbackStartRequested'));
+      },
+    },
+    { type: 'separator' },
     {
       type: 'button',
       label: 'Bold',
@@ -546,7 +634,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       type: 'button',
       label: 'Image',
       title: 'Insert image',
-      icon: { name: 'file-media', fallback: '📷' },
+      icon: { svg: INSERT_IMAGE_ICON_SVG, fallback: '📷' },
       action: () => {
         // Get vscode API from window (set in editor.ts)
         const vscodeApi = window.vscode;
@@ -641,21 +729,6 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       className: 'copy-button',
     },
     {
-      type: 'button',
-      label: 'Copy AI Ref',
-      title: 'Copy as AI Context',
-      icon: { name: 'sparkle', fallback: '✨' },
-      action: () => {
-        window.dispatchEvent(new CustomEvent('copyAiContextRef'));
-      },
-      isActive: () => false,
-      className: 'copy-ai-ref-button',
-      // The handler reads `editor.isFocused` synchronously to decide whether to
-      // include a line range. Without this, clicking the button blurs the
-      // editor first and we'd always emit a filename-only ref.
-      preserveEditorFocus: true,
-    },
-    {
       type: 'dropdown',
       label: 'Export',
       title: 'Export document',
@@ -708,6 +781,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
   const dropdownItems: Array<{ config: ToolbarDropdownItem; element: HTMLButtonElement }> = [];
 
   const refreshActiveStates = () => {
+    const feedbackTransitionLocked = Boolean(feedbackToolbarState.starting);
+
     // Update action buttons active and enabled states
     actionButtons.forEach(({ config, element }) => {
       const active = config.isActive ? config.isActive() : false;
@@ -715,13 +790,15 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       element.setAttribute('aria-pressed', String(Boolean(active)));
 
       // Check if button requires focus
-      const enabled = config.requiresFocus ? isEditorFocused : true;
+      const enabled = !feedbackTransitionLocked && (config.requiresFocus ? isEditorFocused : true);
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
 
       // Update title to explain why disabled
-      if (!enabled && config.requiresFocus) {
+      if (feedbackTransitionLocked) {
+        element.title = (config.title || config.label) + ' (Feedback transition in progress)';
+      } else if (!enabled && config.requiresFocus) {
         element.title = (config.title || config.label) + ' (Click in document to edit)';
       } else {
         element.title = config.title || config.label;
@@ -734,13 +811,15 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       element.classList.toggle('active', Boolean(active));
       element.setAttribute('aria-pressed', String(Boolean(active)));
 
-      const enabled = config.requiresFocus ? isEditorFocused : true;
+      const enabled = !feedbackTransitionLocked && (config.requiresFocus ? isEditorFocused : true);
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
 
       // Update title to explain why disabled
-      if (!enabled && config.requiresFocus) {
+      if (feedbackTransitionLocked) {
+        element.title = (config.title || config.label) + ' (Feedback transition in progress)';
+      } else if (!enabled && config.requiresFocus) {
         element.title = (config.title || config.label) + ' (Click in document to edit)';
       } else {
         element.title = config.title || config.label;
@@ -749,7 +828,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
 
     // Update dropdown item disabled states
     dropdownItems.forEach(({ config, element }) => {
-      const enabled = config.isEnabled ? config.isEnabled() : true;
+      const enabled = !feedbackTransitionLocked && (config.isEnabled ? config.isEnabled() : true);
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
@@ -859,6 +938,15 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     const icon = createIconElement(btn.icon, 'toolbar-icon');
 
     button.append(icon);
+    if (btn.visibleText) {
+      const text = document.createElement('span');
+      text.className = 'toolbar-button-label';
+      text.textContent = btn.visibleText;
+      button.append(text);
+    }
+    if (btn.feedbackData === 'start') {
+      button.setAttribute('data-feedback-start', '');
+    }
 
     if (btn.preserveEditorFocus) {
       // Suppress the default mousedown blur so the editor stays focused while
@@ -878,6 +966,213 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     actionButtons.push({ config: btn, element: button });
     toolbar.appendChild(button);
   });
+
+  const normalToolbarNodes = Array.from(toolbar.childNodes);
+  const createFeedbackAction = (options: {
+    label: string;
+    visibleLabel?: string;
+    eventName: string;
+    icon: ToolbarIcon;
+    dataName: 'finish' | 'capture' | 'comments' | 'more' | 'discard';
+    disabled?: boolean;
+    pressed?: boolean;
+    expanded?: boolean;
+    controls?: string;
+    active?: boolean;
+    busy?: boolean;
+    commentsState?: FeedbackCommentsState;
+  }): HTMLButtonElement => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `toolbar-button feedback-toolbar-button feedback-${options.dataName}-button`;
+    button.classList.toggle('active', Boolean(options.active));
+    button.setAttribute('data-feedback-action', '');
+    button.setAttribute('data-feedback-control', options.dataName);
+    button.setAttribute(`data-feedback-${options.dataName}`, '');
+    button.setAttribute('aria-label', options.label);
+    button.title = options.label;
+    button.disabled = Boolean(options.disabled);
+    button.setAttribute('aria-disabled', String(Boolean(options.disabled)));
+    if (options.busy !== undefined) {
+      button.setAttribute('aria-busy', String(options.busy));
+    }
+    if (options.dataName === 'more') {
+      button.setAttribute('aria-haspopup', 'menu');
+      button.setAttribute('aria-expanded', 'false');
+    }
+    if (options.pressed !== undefined) {
+      button.setAttribute('aria-pressed', String(options.pressed));
+    }
+    if (options.expanded !== undefined) {
+      button.setAttribute('aria-expanded', String(options.expanded));
+    }
+    if (options.controls) {
+      button.setAttribute('aria-controls', options.controls);
+    }
+    if (options.commentsState) {
+      button.setAttribute('data-feedback-comments-state', options.commentsState);
+    }
+
+    const icon = createIconElement(options.icon, 'toolbar-icon');
+    const label = document.createElement('span');
+    label.className = 'toolbar-button-label';
+    label.textContent = options.visibleLabel ?? options.label;
+    button.append(icon, label);
+    button.addEventListener('click', () => {
+      if (!button.disabled) {
+        window.dispatchEvent(new CustomEvent(options.eventName));
+      }
+    });
+    return button;
+  };
+
+  let feedbackControlsMounted = false;
+  feedbackToolbarRenderFunction = state => {
+    if (!state.active) {
+      if (feedbackControlsMounted) {
+        toolbar.replaceChildren(...normalToolbarNodes);
+        feedbackControlsMounted = false;
+      }
+      toolbar.classList.remove('feedback-toolbar-active');
+      const starting = Boolean(state.starting);
+      toolbar.setAttribute('aria-busy', String(starting));
+      refreshActiveStates();
+      const start = toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]');
+      if (start) {
+        start.disabled = starting;
+        start.setAttribute('aria-disabled', String(starting));
+        start.setAttribute('aria-busy', String(starting));
+      }
+      return;
+    }
+
+    const invalidated = Boolean(state.invalidated);
+    const closing = Boolean(state.closing);
+    const captureState = state.captureState ?? 'idle';
+    const captureArmed = captureState === 'armed';
+    const captureRasterizing = captureState === 'rasterizing';
+    const toolbarBusy = closing || captureRasterizing;
+    toolbar.setAttribute('aria-busy', String(toolbarBusy));
+    const count = Math.max(0, state.count ?? 0);
+    const commentsState =
+      state.commentsState ?? (state.commentsVisible === false ? 'hidden' : 'collapsed');
+    const commentsVisible = commentsState !== 'hidden';
+    const commentsExpanded = commentsState === 'expanded';
+    const commentsLocked = commentsExpanded && Boolean(state.commentsLocked);
+    const commentsLabel = `Comments · ${count}`;
+    const commentsDescription = commentsLocked
+      ? `Comments remain open while adding feedback, ${count} saved`
+      : commentsState === 'hidden'
+        ? `Show comments, ${count} saved`
+        : commentsExpanded
+          ? `Hide expanded comments, ${count} saved`
+          : `Hide comments rail, ${count} saved`;
+    const commentsIcon: ToolbarIcon =
+      commentsState === 'hidden'
+        ? { name: 'layout-sidebar-right-off', fallback: '◌' }
+        : { name: 'comment-discussion-sparkle', fallback: commentsExpanded ? '●' : '○' };
+    const focusedControl =
+      document.activeElement instanceof HTMLButtonElement &&
+      toolbar.contains(document.activeElement)
+        ? document.activeElement.getAttribute('data-feedback-control')
+        : null;
+    const startHadFocus =
+      document.activeElement instanceof HTMLButtonElement &&
+      toolbar.contains(document.activeElement) &&
+      document.activeElement.hasAttribute('data-feedback-start');
+    const controls = [
+      createFeedbackAction({
+        label: 'Finish & copy',
+        eventName: 'feedbackFinishRequested',
+        icon: { name: 'check', fallback: '✓' },
+        dataName: 'finish',
+        disabled:
+          invalidated || closing || captureState !== 'idle' || Boolean(state.commentsLocked),
+      }),
+      createFeedbackAction({
+        label: captureArmed
+          ? 'Cancel area capture'
+          : captureRasterizing
+            ? 'Preparing capture…'
+            : 'Capture area',
+        visibleLabel: captureArmed
+          ? 'Cancel capture'
+          : captureRasterizing
+            ? 'Preparing capture…'
+            : 'Capture area',
+        eventName: captureArmed ? 'feedbackCaptureCancelRequested' : 'feedbackCaptureRequested',
+        icon: captureArmed
+          ? { name: 'close', fallback: '×' }
+          : { name: 'screen-full', fallback: '▣' },
+        dataName: 'capture',
+        disabled: invalidated || closing || captureRasterizing,
+        pressed: captureArmed,
+        active: captureArmed,
+        busy: captureRasterizing,
+      }),
+      createFeedbackAction({
+        label: commentsDescription,
+        visibleLabel: commentsLabel,
+        eventName: 'feedbackCommentsToggleRequested',
+        icon: commentsIcon,
+        dataName: 'comments',
+        pressed: commentsVisible,
+        expanded: commentsExpanded,
+        controls: FEEDBACK_COMMENTS_RAIL_ID,
+        active: commentsExpanded,
+        commentsState,
+        disabled: closing || captureState !== 'idle',
+      }),
+      createFeedbackAction({
+        label: 'More feedback actions',
+        eventName: 'feedbackMoreRequested',
+        icon: { name: 'ellipsis', fallback: '…' },
+        dataName: 'more',
+        disabled: closing || captureState !== 'idle',
+      }),
+      createFeedbackAction({
+        label: 'Discard Feedback draft (moves it to Trash)',
+        visibleLabel: 'Discard draft…',
+        eventName: 'feedbackDiscardRequested',
+        icon: { name: 'trash', fallback: '×' },
+        dataName: 'discard',
+        disabled: closing || captureState !== 'idle',
+      }),
+    ];
+
+    const feedbackGroup = document.createElement('div');
+    feedbackGroup.className = 'feedback-toolbar-group';
+    feedbackGroup.setAttribute('data-feedback-toolbar-group', '');
+    feedbackGroup.setAttribute('role', 'group');
+    feedbackGroup.setAttribute('aria-label', 'Feedback session actions');
+    feedbackGroup.setAttribute('aria-busy', String(toolbarBusy));
+    const moreMenuHost = document.createElement('div');
+    moreMenuHost.className = 'feedback-more-menu-host';
+    moreMenuHost.setAttribute('data-feedback-menu-host', '');
+    moreMenuHost.append(controls[3]);
+
+    const discardDivider = document.createElement('div');
+    discardDivider.className = 'feedback-toolbar-divider';
+    discardDivider.setAttribute('data-feedback-toolbar-divider', '');
+    discardDivider.setAttribute('role', 'separator');
+    discardDivider.setAttribute('aria-orientation', 'vertical');
+
+    feedbackGroup.append(...controls.slice(0, 3), moreMenuHost, discardDivider, controls[4]);
+    toolbar.replaceChildren(feedbackGroup);
+    toolbar.classList.add('feedback-toolbar-active');
+    feedbackControlsMounted = true;
+    if (focusedControl) {
+      toolbar
+        .querySelector<HTMLButtonElement>(`[data-feedback-control="${focusedControl}"]`)
+        ?.focus({ preventScroll: true });
+    } else if (startHadFocus) {
+      toolbar.querySelector<HTMLButtonElement>('[data-feedback-finish]')?.focus({
+        preventScroll: true,
+      });
+    }
+  };
+
+  feedbackToolbarRenderFunction(feedbackToolbarState);
 
   toolbarRefreshFunction = refreshActiveStates;
 
@@ -932,6 +1227,9 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     if (typeof editor.off === 'function') {
       editor.off('transaction', refreshForEditorEvent);
       editor.off('selectionUpdate', refreshForEditorEvent);
+    }
+    if (feedbackToolbarRenderFunction) {
+      feedbackToolbarRenderFunction = null;
     }
   });
 

@@ -5,7 +5,7 @@
  */
 
 import { Extension } from '@tiptap/core';
-import { NodeSelection } from 'prosemirror-state';
+import { NodeSelection } from '@tiptap/pm/state';
 
 function outdentIndentPrefix(indentPrefix: unknown): string | null {
   if (typeof indentPrefix !== 'string' || indentPrefix.length === 0) {
