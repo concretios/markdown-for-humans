@@ -553,7 +553,7 @@ ls -lh dist/
 
    ```bash
    npm run package:release
-   code --install-extension markdown-for-humans-0.1.0.vsix
+   code --install-extension markdown-for-humans-0.3.0.vsix
    ```
 
 2. Check browser console in webview (Help > Toggle Developer Tools)
@@ -567,7 +567,7 @@ ls -lh dist/
 ```bash
 # Download your published .vsix
 # Extract and check bundle
-unzip markdown-for-humans-0.1.0.vsix
+unzip markdown-for-humans-0.3.0.vsix
 grep "myBrokenFeature" extension/dist/webview.js
 ```
 

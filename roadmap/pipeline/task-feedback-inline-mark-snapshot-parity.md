@@ -16,7 +16,7 @@ italic text across source newlines. TipTap closes and reopens formatting marks
 around hard breaks. The Feedback comparator compares the resulting HTML nesting
 literally, falsely rejecting equivalent text and formatting. Bold is affected too.
 
-Source QA report: `/private/tmp/deck-feedback-investigation/qa-report-llm-feedback-deck-feature-qa-162426.md`.
+The source QA report was a local investigation artifact and is not in the repository.
 The original deck stays outside the repository; regression fixtures use synthetic text.
 
 ## 3. Desired Outcome & Scope
@@ -76,7 +76,7 @@ caused the mismatch. No pre-existing worktree changes were present.
   medians: 3,000 words 1.10 ms patched vs 1.13 ms baseline; 10,000 marked lines
   17.87 ms patched vs 17.78 ms baseline. These are local observations, not a
   cross-platform performance claim.
-- Native host prepared at `/private/tmp/md4h-inline-mark-native/`. Computer Use
+- Native host was prepared locally and is not in the repository. Computer Use
   reported the Mac locked; requested unlock before native UI and reading checks.
 
 References checked: [Markdown-it token architecture](https://github.com/markdown-it/markdown-it/blob/master/docs/architecture.md)
@@ -96,13 +96,11 @@ related upstream issue describes a different soft-break contract.
   cases: original deck, current deck copy, repeat original, wrapped italic,
   wrapped bold. Each persisted the correct source hash, completed a session-bound
   renderer-to-host Reveal request, and preserved the source bytes.
-- Native evidence: `/private/tmp/feedback-native-api-xesg5nix/installed-results.json`.
-- Packaged build: `/private/tmp/markdown-for-humans-0.3.0-inline-mark-fix.vsix`.
+- Native evidence and the packaged VSIX were local artifacts and are not in the repository.
 - The only incomplete gate is the visual 3,000-word, ten-minute light/dark
   reading check. Computer Use cannot inspect the locked Mac. Keep this plan in
   pipeline until that gate is completed or the user explicitly accepts the gap.
-- The user's installed extension and original deck were not edited. Changes are
-  uncommitted on the recorded feature branch; no push was performed.
+- The user's installed extension and original deck were not edited. The fix is on `feature/llm-feedback`.
 
 ## 8. Decisions & Tradeoffs
 
@@ -129,10 +127,8 @@ host's variable-length fence handling. Two new long-fence regression cases
 failed before that compatibility adjustment; all 75 AI-context tests then passed.
 
 All tracked changes from the preceding snapshot fix were compared byte-for-byte
-against a recovery patch and preserved. No commit, push, remote branch deletion,
-or unrelated worktree cleanup was performed. Combined changes are unstaged and
-ready for review. A recovery snapshot of branch refs and pre-existing changes is
-at `/var/folders/np/5fgmkwvs4hd84stjfp2pr78c0000gn/T/llm-feedback-consolidation-lxmfv7kx`.
+against a recovery patch and preserved. A local recovery snapshot of branch refs
+was kept outside the repository.
 
 Combined package: `markdown-for-humans-0.3.0-llm-feedback.vsix` in the repository root.
 Final consolidation verification: 145 suites and **2,739 tests passed**, with the
@@ -146,10 +142,9 @@ to fixtures or rewrite the original document to work around the defect.
 
 ## 9. Follow-up & Future Work
 
-The user subsequently requested review and commit. Review of the consolidated
-production changes, regression tests, and verification evidence found no blocking
-issues. The reviewed changes are authorized for a local commit; no push is
-authorized. The generated VSIX remains an ignored local build artifact.
+Review of the consolidated production changes, regression tests, and
+verification evidence found no blocking issues. The generated VSIX remains an
+ignored local build artifact.
 
 Complete the pending 3,000-word, ten-minute light/dark reading check before
 marking this plan shipped. Automated verification does not replace that gate.

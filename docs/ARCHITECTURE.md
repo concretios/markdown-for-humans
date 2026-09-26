@@ -8,7 +8,7 @@ This document describes the implementation that exists in the repository. Code a
 
 **Webview target:** Chromium 132
 
-**Last verified against the code:** August 26, 2026
+**Last verified against the code:** September 26, 2026
 
 ## Architecture at a Glance
 

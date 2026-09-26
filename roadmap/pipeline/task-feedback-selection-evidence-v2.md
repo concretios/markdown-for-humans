@@ -682,7 +682,6 @@ intended missing-v2 reason and the existing v1 suites remain green.
   wrappers, styling, alternate attributes, or inline HTML can fail Start rather
   than silently emit inaccurate evidence. Universal HTML fidelity remains out
   of scope.
-- All work remains uncommitted and unpushed for user review.
 
 ---
 

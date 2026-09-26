@@ -4,9 +4,9 @@
 
 - **Task name:** Feedback reliability architecture, VS Code compatibility, and dependency modernization
 - **Slug:** `feedback-reliability-architecture`
-- **Status:** in-progress
+- **Status:** implemented; reading review and physical Windows gates still open
 - **Created:** 2026-08-26
-- **Last updated:** 2026-08-26
+- **Last updated:** 2026-09-26
 - **Shipped:** _(pending)_
 - **Related plan:** `roadmap/pipeline/task-rich-view-feedback.md`
 - **Primary feedback source:** `Feedback for feature Log Feedback for LLM.docx`
@@ -987,6 +987,10 @@ At minimum, cover:
 ## 16. Implementation Log
 
 Implementation agents are finished. Final local automated results are recorded below. Physical Windows profiling, CI execution, memory profiling, packaged real-webview fault injection, and manual reading remain separate acceptance gates.
+
+### 2026-09-26 - Audit posture
+
+Production `npm audit --omit=dev` is clean. The remaining `js-yaml` advisory is development-only (eslint/mocha/vsce/jest) and does not ship in the VSIX.
 
 ### 2026-08-26 - Security, dependencies, and runtime
 

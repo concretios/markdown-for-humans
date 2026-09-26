@@ -7,9 +7,7 @@
 - **Created:** 2026-09-11
 - **Base commit:** `82b8bfa`
 - **Branch:** `feature/feedback-list-snapshot-parity`
-- **Worktree:** `/Users/abhinav/code/markdown-for-humans-public`
-- **Pre-existing changes:** untracked `.concret.io/` findings only; preserve them.
-- **Constraint:** keep `CONTRIBUTING.md` byte-identical. Implementation was initially uncommitted for review; the user subsequently authorized committing the 18 fix files. No pushing or publishing.
+- **Constraint:** keep `CONTRIBUTING.md` byte-identical.
 
 ## 2. Context & Problem
 
@@ -45,7 +43,7 @@ Start/cancel works in one and multiple rich editors. An actual mismatch reports 
 
 - Baseline CONTRIBUTING.md SHA-256: `24aa33d8b5eb77cab80401c4340f2ec395c91584f3474a0da723c7989fd5f885`.
 - Planned tests: exact source; ordered parents 1/4/10 and 9-to-10; mixed/deep nested lists; paragraphs and code blocks; loose/tight equivalence; reject real text/link/nesting/code/raw-HTML changes; preserve-mode policy; provider success, both failures, and recovery.
-- Evidence directory: `/tmp/md4h-feedback-list-parity`.
+- Evidence directory was local and is not in the repository.
 - RED: 16 failures and 206 passes in three focused suites, recorded in `red.log`.
 - First implementation passed the exact guide but exposed upstream numeric-list tokenizer defects in the planned deep-nesting, code and checkbox cases. Standard numeric lists now defer to marked's built-in CommonMark lexer; nonnumeric upstream handling is retained.
 - Code-containing list items need the same single-paragraph token normalization as nested lists. Code bodies continue to compare verbatim; changed-code tests remain negative.
@@ -53,12 +51,12 @@ Start/cancel works in one and multiple rich editors. An actual mismatch reports 
 - Final full Jest run: 145 suites passed, one existing suite skipped; 2,699 tests passed, 27 existing skips and 120 existing TODOs. No failing tests. See `full-tests.log`.
 - Lint and release build verification passed (`lint.log`, `build.log`). Deterministic Feedback performance contract and production fixture passed (`performance-contract.log`, `performance.log`): 10,000-line document, 500 annotations, 10,000 typing transactions, zero typing-path serializations.
 - Extension Host: all three tests passed on both VS Code 1.98.0 and stable (resolved to 1.137.0), on macOS arm64. See `host-1.98.0.log` and `host-stable.log`.
-- Packaged `/tmp/md4h-feedback-list-parity/markdown-for-humans-0.3.0-feedback-list-fix.vsix`. Installed only in isolated `/tmp/md4h-feedback-list-parity/user-data` and `extensions` directories. Installed extension/webview SHA-256 values match the tested release bundles.
+- Packaged a local VSIX and installed it only in isolated user-data and extensions directories. Installed extension/webview SHA-256 values match the tested release bundles.
 - Native toolbar QA passed on the unchanged original CONTRIBUTING.md: start reported snapshot saved, discard returned to normal editing, source hash stayed identical.
 - Disposable nested-list QA passed: nested child selection saved as exact rendered text; close/reopen offered the draft; Resume restored F1 with its original quote. A second editor joined an active snapshot read-only. Finish restored editing; starting with two existing editors and discarding released both. A later edit synchronized to the peer and saved.
 - Reading review: README.md (3,409 rendered words), native UI inspection from 06:58:39 to 07:08:48 UTC (10 minutes 9 seconds), Default Light Modern and Default Dark Modern. Reviewed prose, list indentation, tables, code, images and footer with scrolling and stationary checks. No clipping, overlapping blocks, unexpected reflow or scroll movement observed. This was an agent visual review, not a human comfort assessment.
 - Final `git diff --check` passed; HEAD remains `82b8bfa17ffe2f4118581cecbffd3744887b65f6`. CONTRIBUTING.md remains at the baseline SHA-256. README.md, dependency manifests, configuration and stored Feedback schema were not changed.
-- Detailed GUI evidence: `/tmp/md4h-feedback-list-parity/ui-qa.json`. Final stability report is in `.concret.io/findings/2026-09-11/` with slug `feedback-list-snapshot-parity` and kind `stability-report`.
+- Detailed GUI evidence and the stability report were local artifacts and are not in the repository.
 
 ## 8. Decisions & Tradeoffs
 
