@@ -71,6 +71,9 @@ Desktop.ini
 
 # Extension-specific temp files
 .md4h/**
+# Local scratch that vsce would otherwise pack from the repo root
+test.md
+images/**
 
 # AI coding assistant files
 .claude/**

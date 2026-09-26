@@ -55,7 +55,11 @@ CLAUDE.md
 *.iml
 
 # Extension-specific
+# Image-resize backups stay out of git. Local Feedback drafts created while
+# developing in this repo stay out too. User workspaces are unchanged: the
+# product still does not add .md4h/feedback/ to a project's gitignore.
 .md4h/image-backups/
+.md4h/
 
 # Package manager cache
 .npm-cache/
