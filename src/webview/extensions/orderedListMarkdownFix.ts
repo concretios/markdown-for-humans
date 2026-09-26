@@ -44,7 +44,16 @@ function restoreOrderedTaskCheckboxPrefix(item: MarkdownToken): MarkdownToken {
   const text = `${prefix}${bodyText}`;
 
   const first = withoutCheckbox[0] as
-    (MarkdownToken & { text?: string; raw?: string; tokens?: MarkdownToken[] }) | undefined;
+    | (MarkdownToken & {
+        type?: string;
+        text?: string;
+        raw?: string;
+        tokens?: MarkdownToken[];
+      })
+    | undefined;
+
+  // Tight items: first child is an inline `text` token — merge the checkbox
+  // prefix into that token so ListItem.parseMarkdown keeps a single paragraph.
   if (first && first.type === 'text') {
     const mergedRaw = `${prefix}${first.raw || first.text || ''}`;
     const mergedText = `${prefix}${first.text || ''}`;
@@ -64,6 +73,48 @@ function restoreOrderedTaskCheckboxPrefix(item: MarkdownToken): MarkdownToken {
     };
   }
 
+  // Loose items: first child is a `paragraph` (or other block). Prefix the
+  // existing first paragraph's inline content instead of inserting another
+  // copy of the whole item text (which would duplicate on serialize).
+  if (first && first.type === 'paragraph' && Array.isArray(first.tokens)) {
+    const paragraphChildren = first.tokens;
+    const leading = paragraphChildren[0] as
+      | (MarkdownToken & { type?: string; text?: string; raw?: string; tokens?: MarkdownToken[] })
+      | undefined;
+    let prefixedParagraph: MarkdownToken;
+    if (leading && leading.type === 'text') {
+      const mergedRaw = `${prefix}${leading.raw || leading.text || ''}`;
+      const mergedText = `${prefix}${leading.text || ''}`;
+      const mergedInline: MarkdownToken[] = [
+        { type: 'text', raw: prefix, text: prefix, escaped: false },
+        ...(Array.isArray(leading.tokens) ? leading.tokens : []),
+      ];
+      prefixedParagraph = {
+        ...first,
+        tokens: [
+          { ...leading, raw: mergedRaw, text: mergedText, tokens: mergedInline },
+          ...paragraphChildren.slice(1),
+        ],
+      };
+    } else {
+      prefixedParagraph = {
+        ...first,
+        tokens: [
+          { type: 'text', raw: prefix, text: prefix, escaped: false },
+          ...paragraphChildren,
+        ],
+      };
+    }
+    return {
+      ...listItem,
+      task: false,
+      checked: undefined,
+      text,
+      tokens: [prefixedParagraph, ...withoutCheckbox.slice(1)],
+    };
+  }
+
+  // No children yet — emit a single prefixed text token.
   return {
     ...listItem,
     task: false,
@@ -76,7 +127,6 @@ function restoreOrderedTaskCheckboxPrefix(item: MarkdownToken): MarkdownToken {
         text,
         tokens: [{ type: 'text', raw: text, text, escaped: false }],
       },
-      ...withoutCheckbox,
     ],
   };
 }

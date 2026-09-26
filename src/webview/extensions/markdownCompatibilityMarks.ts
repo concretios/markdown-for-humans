@@ -28,7 +28,12 @@ export const MarkdownLink = Link.extend({
    * as plain, unmarked text so they round-trip unchanged.
    */
   parseMarkdown: (token, helpers) => {
-    const isExplicitLinkSyntax = typeof token.raw === 'string' && token.raw.startsWith('[');
+    const raw = typeof token.raw === 'string' ? token.raw : '';
+    // Explicit CommonMark links use `[…](…)` or `<…>` autolink syntax. Bare
+    // GFM autolinks (`user@host`, `https://…`) share the same token type but
+    // their `raw` is just the bare text — keep those unmarked so they do not
+    // re-serialize as bracketed links.
+    const isExplicitLinkSyntax = raw.startsWith('[') || raw.startsWith('<');
     if (!isExplicitLinkSyntax) {
       return helpers.parseInline(token.tokens || []);
     }

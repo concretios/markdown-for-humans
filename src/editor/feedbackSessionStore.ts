@@ -1686,12 +1686,14 @@ export class FeedbackSessionStore {
             this._location.workspaceRoot,
             this._location.assetsDirectory
           );
+          await writePreviousScreenshotBackup(assetPath, previousAsset.bytes);
           await writeFileAtomically(assetPath, validatedPng.bytes);
           let reportWritten = false;
           try {
             pendingEvictedTombstoneIds = await this.computeScreenshotAssetQuotaEviction(nextItems);
             await writeFileAtomically(this._location.feedbackFilePath, nextReportBytes);
             reportWritten = true;
+            await clearPreviousScreenshotBackup(assetPath);
             await beforeCommit?.();
           } catch (error) {
             const rollbackErrors: string[] = [];
@@ -1701,6 +1703,7 @@ export class FeedbackSessionStore {
                 this._location.assetsDirectory
               );
               await writeFileAtomically(assetPath, previousAsset.bytes);
+              await clearPreviousScreenshotBackup(assetPath);
             } catch (rollbackError) {
               rollbackErrors.push(`asset: ${getErrorMessage(rollbackError)}`);
             }
@@ -1841,12 +1844,14 @@ export class FeedbackSessionStore {
             this._location.workspaceRoot,
             this._location.assetsDirectory
           );
+          await writePreviousScreenshotBackup(assetPath, previousAsset.bytes);
           await writeFileAtomically(assetPath, validatedPng.bytes);
           let reportWritten = false;
           try {
             pendingEvictedTombstoneIds = await this.validateScreenshotAssetsForItems(nextItems);
             await writeFileAtomically(this._location.feedbackFilePath, nextReportBytes);
             reportWritten = true;
+            await clearPreviousScreenshotBackup(assetPath);
             await options.beforeCommit?.();
           } catch (error) {
             const rollbackErrors: string[] = [];
@@ -1856,6 +1861,7 @@ export class FeedbackSessionStore {
                 this._location.assetsDirectory
               );
               await writeFileAtomically(assetPath, previousAsset.bytes);
+              await clearPreviousScreenshotBackup(assetPath);
             } catch (rollbackError) {
               rollbackErrors.push(`asset: ${getErrorMessage(rollbackError)}`);
             }
@@ -3207,6 +3213,7 @@ async function readAndValidateDraft(
     if (screenshotValidation === 'full') {
       await validateResumedScreenshotAssetBytes(location, parsed.items);
     }
+    await reconcileOrphanScreenshotAssets(location, parsed.items);
     return { ...parsed, reportSha256: computeFeedbackSourceSha256(reportBytes) };
   } catch (error) {
     if (error instanceof FeedbackDraftValidationError) {
@@ -3260,7 +3267,7 @@ async function validateResumedScreenshotAssetBytes(
     }
     try {
       const assetPath = resolveFeedbackAssetPath(location, item.assetRelativePath);
-      const validatedAsset = await readValidatedFeedbackPngFile(
+      let validatedAsset = await readValidatedFeedbackPngFile(
         location.workspaceRoot,
         location.assetsDirectory,
         assetPath
@@ -3270,7 +3277,22 @@ async function validateResumedScreenshotAssetBytes(
         (isFeedbackItemV2(item) &&
           (validatedAsset.width !== item.width || validatedAsset.height !== item.height))
       ) {
-        throw new Error('asset SHA-256 does not match the feedback report');
+        const restored = await tryRestoreScreenshotFromPreviousBackup(location, item);
+        if (!restored) {
+          throw new Error('asset SHA-256 does not match the feedback report');
+        }
+        validatedAsset = await readValidatedFeedbackPngFile(
+          location.workspaceRoot,
+          location.assetsDirectory,
+          assetPath
+        );
+        if (
+          computeFeedbackSourceSha256(validatedAsset.bytes) !== item.assetSha256 ||
+          (isFeedbackItemV2(item) &&
+            (validatedAsset.width !== item.width || validatedAsset.height !== item.height))
+        ) {
+          throw new Error('asset SHA-256 does not match the feedback report');
+        }
       }
     } catch (error) {
       throw new FeedbackDraftValidationError(
@@ -4871,6 +4893,88 @@ async function writeFileAtomically(targetPath: string, contents: Uint8Array): Pr
   } catch (error) {
     await unlink(temporaryPath).catch(() => undefined);
     throw error;
+  }
+}
+
+/** Durable previous-bytes sidecar kept across the asset/report commit boundary. */
+function previousScreenshotBackupPath(assetPath: string): string {
+  return `${assetPath}.prev`;
+}
+
+async function writePreviousScreenshotBackup(
+  assetPath: string,
+  previousBytes: Uint8Array
+): Promise<void> {
+  await writeFileAtomically(previousScreenshotBackupPath(assetPath), previousBytes);
+}
+
+async function clearPreviousScreenshotBackup(assetPath: string): Promise<void> {
+  await unlink(previousScreenshotBackupPath(assetPath)).catch(() => undefined);
+}
+
+/**
+ * When the live PNG no longer matches the report (host crash between asset
+ * replace and report commit), restore the durable `.prev` sidecar if it still
+ * matches the report's expected SHA-256.
+ */
+async function tryRestoreScreenshotFromPreviousBackup(
+  location: FeedbackBundleLocation,
+  item: ScreenshotFeedbackItem | FeedbackScreenshotItemV2
+): Promise<boolean> {
+  const assetPath = resolveFeedbackAssetPath(location, item.assetRelativePath);
+  const backupPath = previousScreenshotBackupPath(assetPath);
+  try {
+    const backup = await readValidatedFeedbackPngFile(
+      location.workspaceRoot,
+      location.assetsDirectory,
+      backupPath
+    );
+    if (computeFeedbackSourceSha256(backup.bytes) !== item.assetSha256) {
+      return false;
+    }
+    if (
+      isFeedbackItemV2(item) &&
+      (backup.width !== item.width || backup.height !== item.height)
+    ) {
+      return false;
+    }
+    await assertSafeFeedbackDirectoryChain(location.workspaceRoot, location.assetsDirectory);
+    await writeFileAtomically(assetPath, backup.bytes);
+    await clearPreviousScreenshotBackup(assetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Remove PNG assets (and stale `.prev` sidecars) that the report no longer owns. */
+async function reconcileOrphanScreenshotAssets(
+  location: FeedbackBundleLocation,
+  items: readonly FeedbackStoredItem[]
+): Promise<void> {
+  let entries: string[];
+  try {
+    entries = await readdir(location.assetsDirectory);
+  } catch (error) {
+    if (isNodeErrorCode(error, 'ENOENT')) return;
+    throw error;
+  }
+  const owned = new Set(
+    items
+      .filter((item): item is ScreenshotFeedbackItem | FeedbackScreenshotItemV2 => item.kind === 'screenshot')
+      .map(item => path.basename(item.assetRelativePath))
+  );
+  for (const entry of entries) {
+    if (!entry.endsWith('.png') && !entry.endsWith('.png.prev')) continue;
+    const baseName = entry.endsWith('.png.prev') ? entry.slice(0, -'.prev'.length) : entry;
+    if (owned.has(baseName)) {
+      if (entry.endsWith('.png.prev')) {
+        // Leftover sidecar after a successful commit — safe to drop.
+        await unlink(path.join(location.assetsDirectory, entry)).catch(() => undefined);
+      }
+      continue;
+    }
+    await unlink(path.join(location.assetsDirectory, entry)).catch(() => undefined);
   }
 }
 

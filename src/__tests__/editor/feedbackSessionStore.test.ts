@@ -1964,6 +1964,63 @@ describe('FeedbackSessionStore', () => {
     expect(report).not.toContain('Original feedback.');
   });
 
+  it('resumes after a crash between screenshot replace and report commit using the .prev sidecar', async () => {
+    const store = await createStore('cprv');
+    const originalPng = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64');
+    const replacementPng = makeRgbaPng(11, 22, 33);
+    await store.addScreenshotFeedback({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Original feedback.',
+      pngData: originalPng,
+    });
+    const assetPath = path.join(store.bundleDirectory, 'assets', 'F1.png');
+    const previousPath = `${assetPath}.prev`;
+    const originalSha = computeFeedbackSourceSha256(originalPng);
+
+    // Simulate host death after the PNG was overwritten but before the report
+    // recorded the new SHA: durable .prev still holds the report's bytes.
+    await writeFile(previousPath, originalPng);
+    await writeFile(assetPath, replacementPng);
+    expect(computeFeedbackSourceSha256(await readFile(assetPath))).not.toBe(originalSha);
+
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: store.snapshot.round,
+    });
+    expect(resumed.items).toHaveLength(1);
+    expect((resumed.items[0] as { assetSha256: string }).assetSha256).toBe(originalSha);
+    expect(await readFile(assetPath)).toEqual(originalPng);
+    await expect(stat(previousPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reclaims an orphan screenshot PNG left by a crash before the report recorded it', async () => {
+    const store = await createStore('corp');
+    const orphanPath = path.join(store.bundleDirectory, 'assets', 'F1.png');
+    await mkdir(path.dirname(orphanPath), { recursive: true });
+    await writeFile(orphanPath, Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64'));
+
+    // Resume sweeps orphan assets that the report does not own.
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: store.snapshot.round,
+    });
+    await expect(stat(orphanPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const item = await resumed.addScreenshotFeedback({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'First real screenshot.',
+      pngData: makeRgbaPng(9, 8, 7),
+    });
+    expect(item.id).toBe('F1');
+    expect(await readFile(orphanPath)).toEqual(makeRgbaPng(9, 8, 7));
+  });
+
   it('locks the report and asset as one replacement transaction across resumed stores', async () => {
     const first = await createStore('c001');
     const originalPng = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64');

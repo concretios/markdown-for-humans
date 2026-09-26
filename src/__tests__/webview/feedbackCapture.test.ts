@@ -846,6 +846,9 @@ describe('feedback annotation modal', () => {
     expect(retake.disabled).toBe(false);
     expect(tool.disabled).toBe(false);
     expect(color.disabled).toBe(false);
+    const validation = controller.element.querySelector('.feedback-annotation-validation');
+    expect(validation?.textContent).toBe('Could not add this screenshot. Your feedback is still here.');
+    expect(input.getAttribute('aria-invalid')).toBe('true');
   });
 
   it('restores focus to the logical toolbar control after Add rerenders it', async () => {

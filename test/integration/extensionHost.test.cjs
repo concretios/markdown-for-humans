@@ -96,7 +96,6 @@ suite('Markdown for Humans Extension Development Host', () => {
     assert.ok(workspaceFolder, 'Expected the integration fixture workspace to be open');
     const smokeUri = vscode.Uri.joinPath(workspaceFolder.uri, 'smoke.md');
     const originalContent = new TextDecoder().decode(await vscode.workspace.fs.readFile(smokeUri));
-    const persistedMarker = '\n\nExtension Host workspace edit persisted.\n';
 
     try {
       await vscode.commands.executeCommand('vscode.openWith', smokeUri, CUSTOM_EDITOR_VIEW_TYPE, {
@@ -131,6 +130,10 @@ suite('Markdown for Humans Extension Development Host', () => {
 
       const sharedDocument = await vscode.workspace.openTextDocument(smokeUri);
       assert.equal(sharedDocument.isClosed, false);
+      // VS Code normalizes inserted line endings to the document's EOL. Build the
+      // marker with that convention so CRLF workspaces (Windows CI) assert correctly.
+      const eol = sharedDocument.eol === vscode.EndOfLine.CRLF ? '\r\n' : '\n';
+      const persistedMarker = `${eol}${eol}Extension Host workspace edit persisted.${eol}`;
       const edit = new vscode.WorkspaceEdit();
       edit.insert(
         sharedDocument.uri,

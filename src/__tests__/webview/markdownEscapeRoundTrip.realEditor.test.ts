@@ -115,6 +115,15 @@ describe('markdown syntax escape round-trips (real editor)', () => {
   it('still serializes real emphasis marks', () => {
     expect(roundTrip('Say **bold** and *italic* words.')).toBe('Say **bold** and *italic* words.');
   });
+
+  it('preserves loose numbered checklist items without duplicating paragraphs', () => {
+    const source = ['1. [x] finished', '', '   continued'].join('\n');
+    const out = roundTrip(source);
+    expect((out.match(/finished/g) || []).length).toBe(1);
+    expect((out.match(/continued/g) || []).length).toBe(1);
+    expect(out).toMatch(/^1\. \[x\] finished/);
+    expect(out).toContain('continued');
+  });
 });
 
 describe('HTML entity prose round-trips (real editor)', () => {
@@ -126,6 +135,14 @@ describe('HTML entity prose round-trips (real editor)', () => {
     expect(save2).toBe(save1);
     expect(save3).toBe(save1);
     expect(save2).not.toBe('Use the  element.');
+  });
+
+  it('preserves nested HTML entity spellings across saves', () => {
+    const source = 'The token is &amp;amp;.';
+    const [save1, save2, save3] = multiRoundTrip(source, 3);
+    expect(save1).toBe(source);
+    expect(save2).toBe(source);
+    expect(save3).toBe(source);
   });
 
   it('still allows comparison operators in prose', () => {
@@ -143,5 +160,32 @@ describe('ordered-list task checkboxes (real editor)', () => {
     // Authoring with `)` is CommonMark-valid; the serializer emits `. `.
     const source = ['10) [ ] pending', '11) [x] shipped'].join('\n');
     expect(roundTrip(source)).toBe(['10. [ ] pending', '11. [x] shipped'].join('\n'));
+  });
+
+  it('preserves loose numbered checklist items without duplicating paragraphs', () => {
+    const source = ['1. [x] finished', '', '   continued'].join('\n');
+    const out = roundTrip(source);
+    expect((out.match(/finished/g) || []).length).toBe(1);
+    expect((out.match(/continued/g) || []).length).toBe(1);
+    expect(out).toContain('[x] finished');
+    expect(out).toContain('continued');
+  });
+});
+
+describe('explicit angle-bracket autolinks (real editor)', () => {
+  it('keeps mailto and tel angle-bracket autolinks as links', () => {
+    const mailto = 'Email <mailto:help@example.com> please.';
+    const tel = 'Call <tel:+12345> now.';
+    const mailtoEditor = createRealEditor(mailto);
+    const telEditor = createRealEditor(tel);
+    try {
+      expect(mailtoEditor.getHTML()).toContain('href="mailto:help@example.com"');
+      expect(telEditor.getHTML()).toContain('href="tel:+12345"');
+      expect(getEditorMarkdownForSync(mailtoEditor).trim()).toContain('mailto:help@example.com');
+      expect(getEditorMarkdownForSync(telEditor).trim()).toContain('tel:+12345');
+    } finally {
+      mailtoEditor.destroy();
+      telEditor.destroy();
+    }
   });
 });

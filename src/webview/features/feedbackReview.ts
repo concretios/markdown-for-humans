@@ -4210,6 +4210,9 @@ export function createFeedbackReviewController(options: {
         controller.activate(message.session);
       } else if (message.role === 'old-owner') {
         if (session?.sessionId !== message.oldSessionId) return false;
+        // Refuse to stage ownership loss while a comment/edit draft is open —
+        // local cancel/finish paths already gate on the same draft surface.
+        if (draftSurfaceGate.focusActive()) return false;
       } else {
         if (session?.sessionId === message.oldSessionId) {
           controller.activate(message.session);
@@ -4293,6 +4296,7 @@ export function createFeedbackReviewController(options: {
       }
       if (message.role === 'old-owner') {
         if (session?.sessionId !== message.oldSessionId) return false;
+        if (draftSurfaceGate.focusActive()) return false;
         controller.deactivate();
         return session === null;
       }
