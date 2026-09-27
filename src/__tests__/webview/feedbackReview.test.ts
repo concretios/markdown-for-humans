@@ -2559,6 +2559,57 @@ describe('Feedback review controller', () => {
     expect(document.activeElement).toBe(editor.view.dom);
   });
 
+  it.each(['review', 'finish', 'edit'] as const)(
+    'does not take external editor focus when invalidated from %s',
+    surface => {
+      const editor = createEditorFixture();
+      const controller = createFeedbackReviewController({ editor, host });
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'b'.repeat(64),
+        round: 'round-1',
+        feedbackFile: '.md4h/feedback/docs/guide.md--round-1/feedback.md',
+        items: createSavedFeedbackItems(1),
+      });
+      if (surface === 'finish') controller.finish();
+      else if (surface === 'edit') {
+        document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+        const edit = Array.from(
+          document.querySelectorAll<HTMLButtonElement>('[data-feedback-card="F1"] button')
+        ).find(button => button.textContent === 'Edit');
+        expect(edit).toBeDefined();
+        edit?.click();
+        expect(document.activeElement?.hasAttribute('data-feedback-edit-input')).toBe(true);
+      } else editor.view.dom.focus();
+
+      // An unfocused iframe retains its last activeElement. Native source-editor
+      // focus therefore cannot be inferred from activeElement alone (U04).
+      const documentFocus = jest.spyOn(document, 'hasFocus').mockReturnValue(false);
+      const focus = jest.spyOn(HTMLElement.prototype, 'focus');
+      try {
+        controller.invalidate('MD4H-FB-SNAPSHOT-001');
+
+        expect(controller.isInvalidated()).toBe(true);
+        expect(controller.isWritable()).toBe(false);
+        expect(document.querySelector('.feedback-invalidated-alert')?.textContent).toContain(
+          'source changed'
+        );
+        if (surface === 'finish') {
+          expect(
+            document.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')
+              ?.disabled
+          ).toBe(true);
+          expect(document.querySelector('[data-feedback-completion-dialog]')).not.toBeNull();
+        }
+        expect(focus).not.toHaveBeenCalled();
+      } finally {
+        focus.mockRestore();
+        documentFocus.mockRestore();
+      }
+    }
+  );
+
   it('falls back to the editor when an invalidated checkpoint return target is aria-disabled', () => {
     const editor = createEditorFixture();
     const finishInvoker = document.createElement('div');
@@ -6879,6 +6930,77 @@ describe('Feedback review controller', () => {
     expect(refreshedEdit).not.toBe(originalEdit);
     expect(document.activeElement === refreshedEdit).toBe(true);
   });
+
+  it.each([
+    { ownsFocus: false, invalidates: false },
+    { ownsFocus: false, invalidates: true },
+    { ownsFocus: true, invalidates: false },
+  ])(
+    'respects focus ownership during deferred marker regrouping (local: $ownsFocus, invalidated: $invalidates)',
+    ({ ownsFocus, invalidates }) => {
+      const frames: FrameRequestCallback[] = [];
+      const requestFrame = jest
+        .spyOn(window, 'requestAnimationFrame')
+        .mockImplementation(callback => {
+          frames.push(callback);
+          return frames.length;
+        });
+      const flushFrames = (): void => {
+        while (frames.length > 0) frames.shift()?.(0);
+      };
+      const editor = createEditorFixture();
+      const controller = createFeedbackReviewController({ editor, host });
+      let secondTop = 55;
+      const rectangle = (top: number): DOMRect =>
+        ({
+          top,
+          bottom: top + 20,
+          left: 32,
+          right: 720,
+          width: 688,
+          height: 20,
+        }) as DOMRect;
+      editor.view.dom.children[0].getBoundingClientRect = () => rectangle(50);
+      editor.view.dom.children[1].getBoundingClientRect = () => rectangle(secondTop);
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'c'.repeat(64),
+        round: 'round-1',
+        items: createSavedFeedbackItems(2),
+      });
+      flushFrames();
+      const clusteredMarker = document.querySelector<HTMLButtonElement>(
+        '[data-feedback-marker][data-feedback-ids="F1,F2"]'
+      );
+      expect(clusteredMarker).not.toBeNull();
+      clusteredMarker?.focus();
+      const documentFocus = jest.spyOn(document, 'hasFocus').mockReturnValue(ownsFocus);
+      const focus = jest.spyOn(HTMLElement.prototype, 'focus');
+      try {
+        // Resizing a split or loading a font can change marker clusters after
+        // native source-editor focus has left the webview (U04).
+        secondTop = 220;
+        window.dispatchEvent(new Event('resize'));
+        if (invalidates) controller.invalidate('MD4H-FB-SNAPSHOT-001');
+        expect(focus).not.toHaveBeenCalled();
+
+        flushFrames();
+
+        expect(document.querySelectorAll('[data-feedback-marker]')).toHaveLength(2);
+        const firstMarker = document.querySelector<HTMLButtonElement>(
+          '[data-feedback-marker][data-feedback-ids="F1"]'
+        );
+        if (ownsFocus) expect(document.activeElement).toBe(firstMarker);
+        else expect(focus).not.toHaveBeenCalled();
+      } finally {
+        focus.mockRestore();
+        documentFocus.mockRestore();
+        controller.deactivate();
+        requestFrame.mockRestore();
+      }
+    }
+  );
 
   it('preserves focus on the equivalent marker after a collapsed host refresh', () => {
     const editor = createEditorFixture();

@@ -1466,48 +1466,45 @@ export class FeedbackSessionStore {
         const nextSnapshot = toDraftSnapshotV2(this._snapshot);
         const assetPath = this.resolveContainedAssetPath(assetRelativePath);
 
-        // Publish the PNG inside the report lock (validateBeforeWrite) so a
-        // concurrent full Resume cannot treat it as an orphan (T01).
+        // Keep publication and rollback under the report lock so Resume cannot
+        // sweep this PNG or reuse its name while failed cleanup is pending.
         let pendingEvictedTombstoneIds: readonly string[] = [];
         let assetWritten = false;
-        try {
-          await this.persistReport(
-            nextSnapshot,
-            nextItems,
-            sequence + 1,
-            options.beforeCommit,
-            async () => {
-              await assertSafeFeedbackDirectoryChain(
-                this._location.workspaceRoot,
-                this._location.assetsDirectory
-              );
-              try {
-                await writeNewFileAtomically(assetPath, validatedPng.bytes);
-              } catch (error) {
-                if (isNodeErrorCode(error, 'EEXIST')) {
-                  throw new FeedbackSessionError(
-                    'MD4H-FB-STORE-002',
-                    `The screenshot asset ${id}.png already exists; it was not overwritten.`
-                  );
-                }
-                throw error;
-              }
-              assetWritten = true;
-              pendingEvictedTombstoneIds =
-                await this.computeScreenshotAssetQuotaEviction(nextItems);
-              await this.validateScreenshotAsset(candidate);
-            }
-          );
-        } catch (error) {
-          if (assetWritten) {
-            await safeUnlinkFeedbackAsset(
+        await this.persistReport(
+          nextSnapshot,
+          nextItems,
+          sequence + 1,
+          options.beforeCommit,
+          async () => {
+            await assertSafeFeedbackDirectoryChain(
               this._location.workspaceRoot,
-              this._location.assetsDirectory,
-              assetPath
-            ).catch(() => undefined);
+              this._location.assetsDirectory
+            );
+            try {
+              await writeNewFileAtomically(assetPath, validatedPng.bytes);
+            } catch (error) {
+              if (isNodeErrorCode(error, 'EEXIST')) {
+                throw new FeedbackSessionError(
+                  'MD4H-FB-STORE-002',
+                  `The screenshot asset ${id}.png already exists; it was not overwritten.`
+                );
+              }
+              throw error;
+            }
+            assetWritten = true;
+            pendingEvictedTombstoneIds = await this.computeScreenshotAssetQuotaEviction(nextItems);
+            await this.validateScreenshotAsset(candidate);
+          },
+          async () => {
+            if (assetWritten) {
+              await safeUnlinkFeedbackAsset(
+                this._location.workspaceRoot,
+                this._location.assetsDirectory,
+                assetPath
+              ).catch(() => undefined);
+            }
           }
-          throw error;
-        }
+        );
         this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._snapshot = nextSnapshot;
         this._items = nextItems;
@@ -1564,49 +1561,46 @@ export class FeedbackSessionStore {
           assetSha256: computeFeedbackSourceSha256(validatedPng.bytes),
         };
 
-        // Publish the PNG inside the report lock so concurrent Resume cannot
-        // orphan-delete it before the report references it (T01).
+        // Keep publication and rollback under the report lock so Resume cannot
+        // sweep this PNG or reuse its name while failed cleanup is pending.
         const nextItems = [...currentItems, item];
         let pendingEvictedTombstoneIds: readonly string[] = [];
         let assetWritten = false;
-        try {
-          await this.persistReport(
-            this._snapshot,
-            nextItems,
-            sequence + 1,
-            beforeCommit,
-            async () => {
-              await assertSafeFeedbackDirectoryChain(
-                this._location.workspaceRoot,
-                this._location.assetsDirectory
-              );
-              try {
-                await writeNewFileAtomically(assetPath, validatedPng.bytes);
-              } catch (error) {
-                if (isNodeErrorCode(error, 'EEXIST')) {
-                  throw new FeedbackSessionError(
-                    'MD4H-FB-STORE-002',
-                    `The screenshot asset ${id}.png already exists; it was not overwritten.`
-                  );
-                }
-                throw error;
-              }
-              assetWritten = true;
-              pendingEvictedTombstoneIds =
-                await this.computeScreenshotAssetQuotaEviction(nextItems);
-              await this.validateScreenshotAsset(item);
-            }
-          );
-        } catch (error) {
-          if (assetWritten) {
-            await safeUnlinkFeedbackAsset(
+        await this.persistReport(
+          this._snapshot,
+          nextItems,
+          sequence + 1,
+          beforeCommit,
+          async () => {
+            await assertSafeFeedbackDirectoryChain(
               this._location.workspaceRoot,
-              this._location.assetsDirectory,
-              assetPath
-            ).catch(() => undefined);
+              this._location.assetsDirectory
+            );
+            try {
+              await writeNewFileAtomically(assetPath, validatedPng.bytes);
+            } catch (error) {
+              if (isNodeErrorCode(error, 'EEXIST')) {
+                throw new FeedbackSessionError(
+                  'MD4H-FB-STORE-002',
+                  `The screenshot asset ${id}.png already exists; it was not overwritten.`
+                );
+              }
+              throw error;
+            }
+            assetWritten = true;
+            pendingEvictedTombstoneIds = await this.computeScreenshotAssetQuotaEviction(nextItems);
+            await this.validateScreenshotAsset(item);
+          },
+          async () => {
+            if (assetWritten) {
+              await safeUnlinkFeedbackAsset(
+                this._location.workspaceRoot,
+                this._location.assetsDirectory,
+                assetPath
+              ).catch(() => undefined);
+            }
           }
-          throw error;
-        }
+        );
         this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
         this._items = nextItems;
         this._nextSequence = sequence + 1;
@@ -2941,12 +2935,26 @@ export class FeedbackSessionStore {
     return assetPath;
   }
 
+  /**
+   * Commits a report and any prepared assets under one exclusive report lock.
+   * Failed commits restore the previous report before rolling back assets. If
+   * report restoration fails, preserve assets for the report still on disk.
+   *
+   * @param snapshot - Session metadata to persist
+   * @param items - Canonical items to persist
+   * @param nextSequence - Next unallocated item sequence
+   * @param beforeCommit - Host guard checked before and after report replacement
+   * @param validateBeforeWrite - Validation or asset publication inside the lock
+   * @param rollbackBeforeUnlock - Cleanup after a failed, safely reverted commit
+   * @throws FeedbackSessionError when validation, persistence, or rollback fails
+   */
   private async persistReport(
     snapshot: Readonly<FeedbackSessionSnapshot>,
     items: readonly FeedbackStoredItem[],
     nextSequence: number = this._nextSequence,
     beforeCommit?: FeedbackCommitGuard,
-    validateBeforeWrite?: () => Promise<void>
+    validateBeforeWrite?: () => Promise<void>,
+    rollbackBeforeUnlock?: () => Promise<void>
   ): Promise<void> {
     try {
       const nextBytes = encodeFeedbackReport(snapshot, items, nextSequence);
@@ -2956,15 +2964,21 @@ export class FeedbackSessionStore {
       );
       await withExclusiveReportLock(this._location.feedbackFilePath, async () => {
         const currentBytes = await this.readVerifiedCurrentReport();
-        await validateBeforeWrite?.();
-        await beforeCommit?.();
-        await writeFileAtomically(this._location.feedbackFilePath, nextBytes);
+        let reportWritten = false;
         try {
+          await validateBeforeWrite?.();
+          await beforeCommit?.();
+          await writeFileAtomically(this._location.feedbackFilePath, nextBytes);
+          reportWritten = true;
           await beforeCommit?.();
         } catch (error) {
-          if (currentBytes !== undefined) {
+          if (reportWritten) {
+            // An initial report or failed restoration may still reference the
+            // new assets. Preserve them instead of making recovery impossible.
+            if (currentBytes === undefined) throw error;
             await writeFileAtomically(this._location.feedbackFilePath, currentBytes);
           }
+          await rollbackBeforeUnlock?.();
           throw error;
         }
         this._persistedReportSha256 = computeFeedbackSourceSha256(nextBytes);

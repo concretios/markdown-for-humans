@@ -2674,6 +2674,7 @@ export function createFeedbackReviewController(options: {
     // unrelated host update refreshes saved items.
     if (activeComposer && panel.contains(activeComposer)) return;
     const focusedEditField =
+      document.hasFocus() &&
       document.activeElement instanceof HTMLTextAreaElement &&
       document.activeElement.hasAttribute('data-feedback-edit-input')
         ? document.activeElement
@@ -3658,8 +3659,12 @@ export function createFeedbackReviewController(options: {
 
   const renderMarkers = (): void => {
     if (!markerLayer || !rail || !session) return;
+    // Deferred layout can run after focus moved to another editor group. The
+    // iframe's retained activeElement must not reclaim external focus (U04).
     const focusedElement =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      document.hasFocus() && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     const focusedMarkerIds = focusedElement
       ?.closest<HTMLElement>('[data-feedback-marker]')
       ?.getAttribute('data-feedback-ids');
@@ -4415,6 +4420,9 @@ export function createFeedbackReviewController(options: {
 
     invalidate(code) {
       if (!session) return;
+      // An unfocused webview retains its last activeElement. Invalidation can
+      // originate from typing in a source split, which must keep focus (U04).
+      const restoreLocalFocus = document.hasFocus();
       invalidated = true;
       hideBlockAction(true);
       clearAnnotationAnchorAlert();
@@ -4449,6 +4457,7 @@ export function createFeedbackReviewController(options: {
           ? 'The source changed outside this snapshot. Resume to reveal or discard the preserved draft.'
           : 'The source changed while finishing. Waiting for the locked operation to stop safely.'
       );
+      if (!restoreLocalFocus) return;
       if (completionDialog) {
         focusElementWithoutScroll(
           completionResumeButton?.isConnected ? completionResumeButton : completionDialog
