@@ -315,6 +315,59 @@ describe('Feedback session transfer client', () => {
     );
   });
 
+  it('acknowledges abort after an apply refusal without staging ownership loss', () => {
+    const postMessage = jest.fn();
+    const sessionId: string | null = 'session-old';
+    const client = createFeedbackSessionTransferClient({
+      viewGeneration: 'view-old',
+      getSessionId: () => sessionId,
+      getPeerLockId: () => null,
+      prepareIncoming: () => false,
+      prepareOutgoing: () => false,
+      prepareSameOwner: () => false,
+      commitIncoming: () => false,
+      commitOutgoing: () => false,
+      commitSameOwner: () => false,
+      abortOutgoing: () => {
+        throw new Error('refused apply never staged — abort must be a retained no-op');
+      },
+      lockPeer: jest.fn(),
+      unlockPeer: jest.fn(),
+      postMessage,
+    });
+    const outgoingApply: SessionTransferMessage = {
+      ...incomingApply,
+      role: 'old-owner',
+      viewGeneration: 'view-old',
+    };
+    const outgoingAbort: SessionTransferMessage = {
+      type: 'feedback.session.transfer',
+      phase: 'abort',
+      role: 'old-owner',
+      transferId: outgoingApply.transferId,
+      requestId: outgoingApply.requestId,
+      oldSessionId: outgoingApply.oldSessionId,
+      newSessionId: outgoingApply.newSessionId,
+      viewGeneration: outgoingApply.viewGeneration,
+      revision: outgoingApply.revision,
+      documentVersion: outgoingApply.documentVersion,
+      sourceSha256: outgoingApply.sourceSha256,
+      peerLockMessage: outgoingApply.peerLockMessage,
+    };
+
+    expect(client.handle(outgoingApply)).toBe('failed');
+    expect(client.handle(outgoingAbort)).toBe('replayed');
+    expect(sessionId).toBe('session-old');
+    expect(postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: 'feedback.session.transfer.ack',
+        phase: 'abort',
+        role: 'old-owner',
+        applied: true,
+      })
+    );
+  });
+
   it('rejects conflicting transfer reuse and evicted stale revisions', () => {
     let sessionId: string | null = null;
     const prepareIncoming = jest.fn(() => {

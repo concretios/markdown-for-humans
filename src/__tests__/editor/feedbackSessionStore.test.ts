@@ -2097,6 +2097,56 @@ describe('FeedbackSessionStore', () => {
     expect(await readFile(assetPath)).toEqual(originalPng);
   });
 
+  it('does not delete an in-flight screenshot PNG during concurrent full Resume', async () => {
+    const writer = await createStore('t01a');
+    const png = makeRgbaPng(4, 5, 6);
+    let releaseCommit!: () => void;
+    const holdCommit = new Promise<void>(resolve => {
+      releaseCommit = resolve;
+    });
+    let published!: () => void;
+    const assetPublished = new Promise<void>(resolve => {
+      published = resolve;
+    });
+
+    const writePromise = writer.addScreenshotFeedback(
+      {
+        startLine: 3,
+        endLine: 3,
+        feedback: 'In-flight screenshot under Resume race.',
+        pngData: png,
+      },
+      async () => {
+        published();
+        await holdCommit;
+      }
+    );
+    await assetPublished;
+
+    const assetPath = path.join(writer.bundleDirectory, 'assets', 'F1.png');
+    await expect(stat(assetPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+
+    // Full Resume must serialize with the writer — not delete the published PNG.
+    const resumePromise = FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: writer.snapshot.round,
+    });
+
+    releaseCommit();
+    await writePromise;
+    const resumed = await resumePromise;
+    await expect(readFile(assetPath)).resolves.toEqual(png);
+    expect(resumed.items).toEqual([
+      expect.objectContaining({
+        id: 'F1',
+        kind: 'screenshot',
+        assetSha256: computeFeedbackSourceSha256(png),
+      }),
+    ]);
+  });
+
   it('locks the report and asset as one replacement transaction across resumed stores', async () => {
     const first = await createStore('c001');
     const originalPng = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64');

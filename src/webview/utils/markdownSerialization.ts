@@ -6,6 +6,7 @@
 
 import type { Editor, JSONContent } from '@tiptap/core';
 import type { BlankLineMode } from '../../shared/blankLinePolicy';
+import { restoreLiteralAmpEntities } from './markedLexerNormalizer';
 
 type MarkdownManager = {
   serialize?: (json: JSONContent) => string;
@@ -82,12 +83,24 @@ function escapeMarkdownSyntaxForProse(text: string): string {
  * ampersand escaped only when it encodes TipTap's own escape targets (`amp`,
  * `lt`, `gt`, `quot`) so nested spellings do not lose a layer on every save,
  * while common named/numeric entities (`&copy;`, `&nbsp;`, `&#160;`) round-trip.
+ *
+ * Do not decode `&gt;` at a CommonMark blockquote position (start of line,
+ * optional 0–3 spaces) — that turns literal greater-than prose into a quote (T04).
  */
 function decodeNonTagHtmlEntities(encoded: string): string {
-  return encoded
-    .replace(/&gt;/g, '>')
+  const decoded = encoded
+    .replace(/&gt;/g, (match, offset, full: string) => {
+      const lineStart = full.lastIndexOf('\n', offset - 1) + 1;
+      const prefix = full.slice(lineStart, offset);
+      if (/^[ \t]{0,3}$/.test(prefix)) {
+        return match;
+      }
+      return '>';
+    })
     .replace(/&lt;(?![A-Za-z/!?])/g, '<')
     .replace(/&amp;(?!(?:amp|lt|gt|quot);)/g, '&');
+  // Restore parse-time sentinels for intentionally literal `&amp;entity;` (T03).
+  return restoreLiteralAmpEntities(decoded);
 }
 
 /**
