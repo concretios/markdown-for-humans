@@ -77,6 +77,9 @@ Prior F01–F11 fixes (#94/#95) partially closed several items; R01–R07 are th
 | R02 | done | done | store concurrency (discovery during write) |
 | R03 | done | done | discovery then resume restores `.prev` |
 | R04 | done | done | digest contract + transfer second guard |
-| R05 | done | done | transfer client applied:false + host rollback |
+| R05 | done | done | transfer client + provider rollback |
 | R06 | done | done | real TipTap entity round-trips |
 | R07 | done | done | real TipTap quoted-title link round-trip |
+
+**Gates:** `npm test` 2720 passed; Ext Host 4/4 passed @ VS Code 1.139.1  
+**PR:** [#96](https://github.com/concretios/markdown-for-humans/pull/96) → `feature/llm-feedback`
