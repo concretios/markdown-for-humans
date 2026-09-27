@@ -3212,8 +3212,11 @@ async function readAndValidateDraft(
     await validateResumedScreenshotAssetMetadata(location, parsed.items);
     if (screenshotValidation === 'full') {
       await validateResumedScreenshotAssetBytes(location, parsed.items);
+      // Orphan cleanup can delete in-flight PNGs or `.prev` recovery sidecars when
+      // run from metadata-only discovery without the write lock (R02/R03). Keep it
+      // on the full resume path after byte validation/restore.
+      await reconcileOrphanScreenshotAssets(location, parsed.items);
     }
-    await reconcileOrphanScreenshotAssets(location, parsed.items);
     return { ...parsed, reportSha256: computeFeedbackSourceSha256(reportBytes) };
   } catch (error) {
     if (error instanceof FeedbackDraftValidationError) {

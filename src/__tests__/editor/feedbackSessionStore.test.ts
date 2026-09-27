@@ -2021,6 +2021,82 @@ describe('FeedbackSessionStore', () => {
     expect(await readFile(orphanPath)).toEqual(makeRgbaPng(9, 8, 7));
   });
 
+  it('does not delete an in-flight screenshot PNG during concurrent draft discovery', async () => {
+    const writer = await createStore('r02a');
+    const png = makeRgbaPng(1, 2, 3);
+    let releaseCommit!: () => void;
+    const holdCommit = new Promise<void>(resolve => {
+      releaseCommit = resolve;
+    });
+    let published!: () => void;
+    const assetPublished = new Promise<void>(resolve => {
+      published = resolve;
+    });
+
+    const writePromise = writer.addScreenshotFeedback(
+      {
+        startLine: 3,
+        endLine: 3,
+        feedback: 'In-flight screenshot.',
+        pngData: png,
+      },
+      async () => {
+        // Asset is on disk; report not yet committed. Discovery must not unlink it.
+        published();
+        await holdCommit;
+      }
+    );
+    await assetPublished;
+
+    const assetPath = path.join(writer.bundleDirectory, 'assets', 'F1.png');
+    await expect(stat(assetPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+
+    const discovery = await FeedbackSessionStore.findMatchingDrafts({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+    });
+    expect(discovery.drafts.some(draft => draft.round === writer.snapshot.round)).toBe(true);
+    await expect(stat(assetPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+
+    releaseCommit();
+    await writePromise;
+    await expect(readFile(assetPath)).resolves.toEqual(png);
+  });
+
+  it('retains .prev recovery backups during metadata-only draft discovery', async () => {
+    const store = await createStore('r03a');
+    const originalPng = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64');
+    const replacementPng = makeRgbaPng(11, 22, 33);
+    await store.addScreenshotFeedback({
+      startLine: 3,
+      endLine: 3,
+      feedback: 'Original feedback.',
+      pngData: originalPng,
+    });
+    const assetPath = path.join(store.bundleDirectory, 'assets', 'F1.png');
+    const previousPath = `${assetPath}.prev`;
+    await writeFile(previousPath, originalPng);
+    await writeFile(assetPath, replacementPng);
+
+    const discovery = await FeedbackSessionStore.findMatchingDrafts({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+    });
+    expect(discovery.drafts.some(draft => draft.round === store.snapshot.round)).toBe(true);
+    await expect(stat(previousPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: store.snapshot.round,
+    });
+    expect(resumed.items).toHaveLength(1);
+    expect(await readFile(assetPath)).toEqual(originalPng);
+  });
+
   it('locks the report and asset as one replacement transaction across resumed stores', async () => {
     const first = await createStore('c001');
     const originalPng = Buffer.from(ONE_PIXEL_PNG_BASE64, 'base64');

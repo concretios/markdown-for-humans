@@ -145,8 +145,47 @@ describe('HTML entity prose round-trips (real editor)', () => {
     expect(save3).toBe(source);
   });
 
+  it('preserves common named and numeric HTML entities across saves', () => {
+    const cases = [
+      'Copyright &copy; 2026.',
+      'Text&nbsp;text',
+      'Spaces &#160; and &#xA0; here.',
+      'Literal &amp;#X41; stays escaped.',
+    ];
+    for (const source of cases) {
+      const [save1, save2] = multiRoundTrip(source, 2);
+      expect(save1).not.toMatch(/&amp;copy;|&amp;nbsp;|&amp;#160;|&amp;#xA0;/i);
+      expect(save2).toBe(save1);
+      // Authored entity spellings must not become double-escaped literal text.
+      if (source.includes('&copy;')) expect(save1).toMatch(/©|&copy;/);
+      if (source.includes('&nbsp;')) expect(save1).toMatch(/\u00a0|&nbsp;/);
+    }
+  });
+
   it('still allows comparison operators in prose', () => {
     expect(roundTrip('if x < 5 and y > 3 then done')).toBe('if x < 5 and y > 3 then done');
+  });
+});
+
+describe('link title serialization (real editor)', () => {
+  it('preserves hyperlinks whose titles contain double quotes', () => {
+    const source = `[spec](https://example.com 'A "quoted" title')`;
+    const editor = createRealEditor(source);
+    try {
+      expect(editor.getHTML()).toContain('href="https://example.com"');
+      const saved = getEditorMarkdownForSync(editor).trim();
+      expect(saved).toMatch(/\[spec\]\(https:\/\/example\.com/);
+      // Reopen must keep a real link mark, not plain Markdown text.
+      const reopened = createRealEditor(saved);
+      try {
+        expect(reopened.getHTML()).toContain('href="https://example.com"');
+        expect(reopened.getHTML()).not.toContain('[spec](https://example.com');
+      } finally {
+        reopened.destroy();
+      }
+    } finally {
+      editor.destroy();
+    }
   });
 });
 

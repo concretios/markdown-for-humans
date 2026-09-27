@@ -79,14 +79,15 @@ function escapeMarkdownSyntaxForProse(text: string): string {
  *
  * Upstream encoder: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Decode in
  * reverse order; `&amp;` last so literal entity spellings survive. Keep an
- * ampersand escaped when it introduces another entity (`&amp;amp;`, `&amp;lt;`)
- * so nested spellings do not lose a layer on every save.
+ * ampersand escaped only when it encodes TipTap's own escape targets (`amp`,
+ * `lt`, `gt`, `quot`) so nested spellings do not lose a layer on every save,
+ * while common named/numeric entities (`&copy;`, `&nbsp;`, `&#160;`) round-trip.
  */
 function decodeNonTagHtmlEntities(encoded: string): string {
   return encoded
     .replace(/&gt;/g, '>')
     .replace(/&lt;(?![A-Za-z/!?])/g, '<')
-    .replace(/&amp;(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[\da-fA-F]+);)/g, '&');
+    .replace(/&amp;(?!(?:amp|lt|gt|quot);)/g, '&');
 }
 
 /**

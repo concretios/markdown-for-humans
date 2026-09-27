@@ -42,6 +42,27 @@ export const MarkdownLink = Link.extend({
       title: token.title || null,
     });
   },
+
+  /**
+   * TipTap's inherited renderer wraps titles in double quotes without escaping.
+   * Titles that contain `"` (or come from single-quoted source) must round-trip
+   * as valid Markdown or the hyperlink is destroyed on the next open (R07).
+   */
+  renderMarkdown: (node, helpers) => {
+    const href =
+      typeof node.attrs?.href === 'string' ? node.attrs.href : ((node.attrs?.href as string) ?? '');
+    const title =
+      typeof node.attrs?.title === 'string' && node.attrs.title.length > 0 ? node.attrs.title : '';
+    const text = helpers.renderChildren(node);
+    if (!title) {
+      return `[${text}](${href})`;
+    }
+    if (title.includes('"') && !title.includes("'")) {
+      return `[${text}](${href} '${title.replace(/\\/g, '\\\\')}')`;
+    }
+    const escapedTitle = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    return `[${text}](${href} "${escapedTitle}")`;
+  },
 });
 
 /**
