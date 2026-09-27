@@ -4328,7 +4328,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     expect(messagesOfType(peer, 'feedback.started')).toHaveLength(0);
   });
 
-  it('keeps old ownership through rejected, stale, and dropped transfer ACKs, then accepts a delayed exact ACK once', async () => {
+  it('keeps old ownership through stale transfer ACKs, then accepts a delayed exact ACK once', async () => {
     const provider = createProvider(workspaceRoot);
     const document = createDocument(sourcePath, SOURCE_TEXT);
     const owner = createWebview(provider, document, true, { transfer: false });
@@ -4371,7 +4371,7 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     );
     expect(messagesOfType(owner, 'feedback.session.transfer')).toHaveLength(0);
 
-    acknowledgeFeedbackSessionTransfer(provider, document, peer, incomingApply, false);
+    // Stale / mismatched ACKs must not advance the transfer.
     acknowledgeFeedbackSessionTransfer(provider, document, peer, {
       ...incomingApply,
       revision: (incomingApply.revision as number) + 1,
@@ -4423,6 +4423,72 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       expect.objectContaining({ ownerWebview: peer, phase: 'active' })
     );
     expect(messagesOfType(owner, 'feedback.session.transferred')).toHaveLength(0);
+  });
+
+  it('rolls back a staged transfer when an apply ACK reports applied:false', async () => {
+    const provider = createProvider(workspaceRoot);
+    const document = createDocument(sourcePath, SOURCE_TEXT);
+    const owner = createWebview(provider, document, true, { transfer: false });
+    const peer = createWebview(provider, document, true, { transfer: false });
+    sendStart(provider, document, owner, 'start-before-busy-refusal');
+    const started = await waitForMessage(owner, 'feedback.started', 'start-before-busy-refusal');
+    internals(provider).registerFeedbackWebview(
+      document.uri.toString(),
+      peer as unknown as vscode.Webview
+    );
+    sendStart(provider, document, peer, 'offer-busy-refusal');
+    await waitForMessage(peer, 'feedback.resume.available', 'offer-busy-refusal');
+
+    internals(provider).handleWebviewMessage(
+      {
+        type: 'feedback.draft.resume',
+        requestId: 'resume-busy-refusal',
+        round: started.round,
+        blocks: START_BLOCKS,
+      },
+      document as unknown as vscode.TextDocument,
+      peer as unknown as vscode.Webview
+    );
+    const incomingApply = await waitForSessionTransferPhase(
+      peer,
+      'apply',
+      'new-owner',
+      'resume-busy-refusal'
+    );
+    acknowledgeFeedbackSessionTransfer(provider, document, peer, incomingApply);
+    const outgoingApply = await waitForSessionTransferPhase(
+      owner,
+      'apply',
+      'old-owner',
+      'resume-busy-refusal'
+    );
+
+    // Draft-busy refusal ACKs applied:false — host must roll back instead of
+    // leaving the transfer pending until delivery exhaustion (R05).
+    acknowledgeFeedbackSessionTransfer(provider, document, owner, outgoingApply, false);
+    const incomingAbort = await waitForSessionTransferPhase(
+      peer,
+      'abort',
+      'new-owner',
+      'resume-busy-refusal'
+    );
+    const outgoingAbort = await waitForSessionTransferPhase(
+      owner,
+      'abort',
+      'old-owner',
+      'resume-busy-refusal'
+    );
+    acknowledgeFeedbackSessionTransfer(provider, document, peer, incomingAbort);
+    acknowledgeFeedbackSessionTransfer(provider, document, owner, outgoingAbort);
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    expect(internals(provider).feedbackSessions.get(document.uri.toString())).toEqual(
+      expect.objectContaining({
+        ownerWebview: owner,
+        sessionId: started.sessionId,
+        phase: 'active',
+      })
+    );
   });
 
   it.each(['apply', 'commit'] as const)(

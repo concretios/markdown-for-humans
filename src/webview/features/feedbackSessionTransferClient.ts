@@ -267,7 +267,25 @@ export function createFeedbackSessionTransferClient(
       } catch {
         return 'failed';
       }
-      if (!prepared) return 'failed';
+      if (!prepared) {
+        // ACK with applied:false so the host can roll back staged peers instead of
+        // retrying an unacknowledged delivery until fail-closed (R05).
+        options.postMessage({
+          type: 'feedback.session.transfer.ack',
+          phase: message.phase,
+          role: message.role,
+          transferId: message.transferId,
+          requestId: message.requestId,
+          oldSessionId: message.oldSessionId,
+          newSessionId: message.newSessionId,
+          viewGeneration: message.viewGeneration,
+          revision: message.revision,
+          documentVersion: message.documentVersion,
+          sourceSha256: message.sourceSha256,
+          applied: false,
+        });
+        return 'failed';
+      }
 
       retain(message);
       options.postMessage(acknowledgement(message));

@@ -2641,7 +2641,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       target.message.revision,
       message.applied
     );
-    if (!message.applied) return;
+    if (!message.applied) {
+      // Explicit refusal (e.g. outgoing draft busy) must roll back staged peers
+      // instead of leaving the transfer pending until fail-closed (R05).
+      if (message.phase === 'apply' && pending.phase !== 'aborting') {
+        this.beginFeedbackSessionTransferRollback(documentKey, pending);
+      }
+      return;
+    }
 
     if (message.phase === 'apply') {
       target.applied = true;
@@ -2745,8 +2752,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         pending.oldSession.phase !== 'resuming' ||
         pending.oldSession.invalidated ||
         this.getDocumentVersion(pending.document) !== pending.documentVersion ||
+        // Reuse the BOM-stripped text digest — not pending.sourceSha256 (saved bytes).
         crypto.createHash('sha256').update(pending.document.getText(), 'utf8').digest('hex') !==
-          pending.sourceSha256
+          expectedTextSha256
       ) {
         this.beginFeedbackSessionTransferRollback(documentKey, pending);
         return;
@@ -10625,10 +10633,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           ) {
             return false;
           }
+          // Carry the accepted predecessor version through pending-image await so a
+          // newer external/source edit cannot be overwritten by this teardown (R01).
           return this.applyEditNow(edit.content, document, {
             editReason: 'typing',
             sourceWebview: webview,
             pendingImageViewGeneration: edit.viewGeneration,
+            baseDocumentVersion: predecessorAck.documentVersion,
             signal: context.signal,
           });
         },

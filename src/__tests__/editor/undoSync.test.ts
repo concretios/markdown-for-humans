@@ -1292,6 +1292,123 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(content).toBe('newer source edit from external change\n');
   });
 
+  it('rejects a pending-image teardown when the document version advances during image persistence', async () => {
+    const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+    let content = 'accepted predecessor\n';
+    let version = 2;
+    const document = {
+      getText: jest.fn(() => content),
+      uri: { toString: () => 'file://teardown-stale-after-image.md', scheme: 'file' },
+      get version() {
+        return version;
+      },
+      positionAt: jest.fn((offset: number) => new Position(0, offset)),
+      save: jest.fn(async () => true),
+    };
+    const webview = { postMessage: jest.fn(async () => true) };
+    const internal = provider as unknown as {
+      handleWebviewMessage: (
+        message: { type: string; [key: string]: unknown },
+        doc: vscode.TextDocument,
+        source: vscode.Webview
+      ) => void;
+      trackPendingImageSave: (
+        message: { type: string; [key: string]: unknown },
+        doc: vscode.TextDocument,
+        source: vscode.Webview
+      ) => void;
+      persistImage: jest.Mock<Promise<{ kind: 'saved'; destination: string }>>;
+      documentEditAckHistory: WeakMap<
+        vscode.Webview,
+        Map<
+          string,
+          {
+            accepted: boolean;
+            documentVersion: number;
+            editId: string;
+            viewGeneration: string;
+            localRevision: number;
+          }
+        >
+      >;
+    };
+    let resolvePersistence: ((result: { kind: 'saved'; destination: string }) => void) | undefined;
+    internal.persistImage = jest.fn(
+      () =>
+        new Promise(resolve => {
+          resolvePersistence = resolve;
+        })
+    );
+
+    internal.handleWebviewMessage(
+      {
+        type: 'ready',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        viewGeneration: 'teardown-stale-image-view',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    // Seed an accepted predecessor so teardown can authorize against it.
+    const predecessorAck = {
+      type: 'document.edit.ack' as const,
+      protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+      accepted: true,
+      documentVersion: 2,
+      editId: 'teardown-stale-image-view:1:1',
+      viewGeneration: 'teardown-stale-image-view',
+      localRevision: 1,
+    };
+    let ackMap = internal.documentEditAckHistory.get(webview as unknown as vscode.Webview);
+    if (!ackMap) {
+      ackMap = new Map();
+      internal.documentEditAckHistory.set(webview as unknown as vscode.Webview, ackMap);
+    }
+    ackMap.set(predecessorAck.editId, predecessorAck);
+
+    internal.trackPendingImageSave(
+      {
+        type: 'saveImage',
+        protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+        viewGeneration: 'teardown-stale-image-view',
+        placeholderId: 'img-teardown-stale',
+        name: 'saved.png',
+        data: new Uint8Array([1, 2, 3]),
+        mimeType: 'image/png',
+        targetFolder: 'images',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+    internal.handleWebviewMessage(
+      {
+        type: 'document.teardown.edit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        editId: 'teardown-stale-image-view:2:2',
+        viewGeneration: 'teardown-stale-image-view',
+        localRevision: 2,
+        baseDocumentVersion: 2,
+        predecessorEditId: 'teardown-stale-image-view:1:1',
+        predecessorLocalRevision: 1,
+        content: '![Pending](md4h-pending-image:img-teardown-stale)\nstale teardown body',
+      },
+      document as unknown as vscode.TextDocument,
+      webview as unknown as vscode.Webview
+    );
+
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    // Newer source wins while the teardown image write is still in flight.
+    content = 'NEW EXTERNAL SOURCE\n';
+    version = 3;
+    resolvePersistence?.({ kind: 'saved', destination: './images/saved.png' });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    await new Promise<void>(resolve => setImmediate(resolve));
+
+    expect(workspace.applyEdit).not.toHaveBeenCalled();
+    expect(content).toBe('NEW EXTERNAL SOURCE\n');
+  });
+
   it('never calls vscode.workspace.applyEdit for a renderer edit cancelled while active', async () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('base\n', 'file://cancelled-active-edit.md');

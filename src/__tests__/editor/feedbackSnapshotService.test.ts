@@ -157,6 +157,21 @@ describe('FeedbackSnapshotService', () => {
     expect(result.source.sourceByteCount).toBe(savedBytes.byteLength);
   });
 
+  it('documents that Feedback ownership transfer must compare TextDocument digests to sourceTextSha256', () => {
+    // R04: after disk byte validation, the second transfer guard must still use the
+    // BOM-stripped text digest. Comparing getText() to savedBytesSha256 rejects
+    // unchanged UTF-8 BOM documents.
+    const sourceText = '# Heading\n';
+    const savedBytes = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]),
+      Buffer.from(sourceText, 'utf8'),
+    ]);
+    const textDigest = computeFeedbackTextSha256(sourceText);
+    const byteDigest = computeFeedbackBytesSha256(savedBytes);
+    expect(textDigest).not.toBe(byteDigest);
+    expect(computeFeedbackTextSha256(sourceText)).toBe(textDigest);
+  });
+
   it('accepts split inline marks while binding fingerprints and anchors to the saved source', () => {
     const service = new FeedbackSnapshotService();
     const sourceText =

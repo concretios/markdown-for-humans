@@ -273,7 +273,46 @@ describe('Feedback session transfer client', () => {
       postMessage,
     });
     expect(failed.handle(incomingApply)).toBe('failed');
-    expect(postMessage).not.toHaveBeenCalled();
+    // Refusal must ACK with applied:false so the host can roll back staged peers
+    // instead of retrying until fail-closed (R05).
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'feedback.session.transfer.ack',
+        phase: 'apply',
+        applied: false,
+      })
+    );
+  });
+
+  it('ACKs an outgoing draft-busy refusal with applied:false', () => {
+    const postMessage = jest.fn();
+    const client = createFeedbackSessionTransferClient({
+      viewGeneration: 'view-old',
+      getSessionId: () => 'session-old',
+      getPeerLockId: () => null,
+      prepareIncoming: () => false,
+      prepareOutgoing: () => false,
+      prepareSameOwner: () => false,
+      commitIncoming: () => false,
+      commitOutgoing: () => false,
+      commitSameOwner: () => false,
+      lockPeer: jest.fn(),
+      unlockPeer: jest.fn(),
+      postMessage,
+    });
+    const outgoingApply: SessionTransferMessage = {
+      ...incomingApply,
+      role: 'old-owner',
+      viewGeneration: 'view-old',
+    };
+    expect(client.handle(outgoingApply)).toBe('failed');
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'feedback.session.transfer.ack',
+        role: 'old-owner',
+        applied: false,
+      })
+    );
   });
 
   it('rejects conflicting transfer reuse and evicted stale revisions', () => {
