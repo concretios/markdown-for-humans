@@ -560,11 +560,7 @@ export class FeedbackSnapshotService {
         canonicalFingerprint === null ||
         (sourceFingerprint !== canonicalFingerprint &&
           (anchor.kind === 'frontmatter' ||
-            !isMarkdownRendererEquivalent(
-              sourceMarkdown,
-              descriptor.markdown,
-              sourceReferences
-            )))
+            !isMarkdownRendererEquivalent(sourceMarkdown, descriptor.markdown, sourceReferences)))
       ) {
         return failure(
           'block-content-mismatch',

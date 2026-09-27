@@ -847,7 +847,9 @@ describe('feedback annotation modal', () => {
     expect(tool.disabled).toBe(false);
     expect(color.disabled).toBe(false);
     const validation = controller.element.querySelector('.feedback-annotation-validation');
-    expect(validation?.textContent).toBe('Could not add this screenshot. Your feedback is still here.');
+    expect(validation?.textContent).toBe(
+      'Could not add this screenshot. Your feedback is still here.'
+    );
     expect(input.getAttribute('aria-invalid')).toBe('true');
   });
 

@@ -562,9 +562,12 @@ describe('FeedbackSnapshotService', () => {
 
   it('accepts soft-wrapped reference links via the renderer-equivalence fallback', () => {
     const service = new FeedbackSnapshotService();
-    const sourceText = ['See [our docs][docs]', 'for details.', '', '[docs]: https://example.com'].join(
-      '\n'
-    );
+    const sourceText = [
+      'See [our docs][docs]',
+      'for details.',
+      '',
+      '[docs]: https://example.com',
+    ].join('\n');
     const source = requirePrepared(service, sourceText);
     // TipTap serializes the visible soft break as a hard-break (`  \n`) while
     // keeping the authored reference-link syntax. Fingerprints differ; the

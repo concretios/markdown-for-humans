@@ -4932,10 +4932,7 @@ async function tryRestoreScreenshotFromPreviousBackup(
     if (computeFeedbackSourceSha256(backup.bytes) !== item.assetSha256) {
       return false;
     }
-    if (
-      isFeedbackItemV2(item) &&
-      (backup.width !== item.width || backup.height !== item.height)
-    ) {
+    if (isFeedbackItemV2(item) && (backup.width !== item.width || backup.height !== item.height)) {
       return false;
     }
     await assertSafeFeedbackDirectoryChain(location.workspaceRoot, location.assetsDirectory);
@@ -4961,7 +4958,10 @@ async function reconcileOrphanScreenshotAssets(
   }
   const owned = new Set(
     items
-      .filter((item): item is ScreenshotFeedbackItem | FeedbackScreenshotItemV2 => item.kind === 'screenshot')
+      .filter(
+        (item): item is ScreenshotFeedbackItem | FeedbackScreenshotItemV2 =>
+          item.kind === 'screenshot'
+      )
       .map(item => path.basename(item.assetRelativePath))
   );
   for (const entry of entries) {
