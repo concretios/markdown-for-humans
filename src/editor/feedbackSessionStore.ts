@@ -174,6 +174,9 @@ const MAX_SCREENSHOT_BYTES_PER_BUNDLE = 64 * 1024 * 1024;
 // the 64 MiB combined ceiling above.
 const MAX_TOMBSTONE_SCREENSHOT_BYTES_PER_BUNDLE = 16 * 1024 * 1024;
 const MAX_REPORT_LOCK_BYTES = 256;
+/** Poll briefly when another window holds the report lock (screenshot commit / Resume). */
+const REPORT_LOCK_WAIT_ATTEMPTS = 100;
+const REPORT_LOCK_WAIT_MS = 20;
 // Feedback writes normally finish in milliseconds. Five minutes avoids taking
 // over a legitimately slow owner while allowing recovery after a host crash.
 const REPORT_LOCK_STALE_AFTER_MS = 5 * 60 * 1_000;
@@ -1462,23 +1465,11 @@ export class FeedbackSessionStore {
         const nextItems = this.canonicalizeV2Items([...existingItems, candidate]);
         const nextSnapshot = toDraftSnapshotV2(this._snapshot);
         const assetPath = this.resolveContainedAssetPath(assetRelativePath);
-        try {
-          await assertSafeFeedbackDirectoryChain(
-            this._location.workspaceRoot,
-            this._location.assetsDirectory
-          );
-          await writeNewFileAtomically(assetPath, validatedPng.bytes);
-        } catch (error) {
-          if (isNodeErrorCode(error, 'EEXIST')) {
-            throw new FeedbackSessionError(
-              'MD4H-FB-STORE-002',
-              `The screenshot asset ${id}.png already exists; it was not overwritten.`
-            );
-          }
-          throw error;
-        }
 
+        // Publish the PNG inside the report lock (validateBeforeWrite) so a
+        // concurrent full Resume cannot treat it as an orphan (T01).
         let pendingEvictedTombstoneIds: readonly string[] = [];
+        let assetWritten = false;
         try {
           await this.persistReport(
             nextSnapshot,
@@ -1486,17 +1477,35 @@ export class FeedbackSessionStore {
             sequence + 1,
             options.beforeCommit,
             async () => {
+              await assertSafeFeedbackDirectoryChain(
+                this._location.workspaceRoot,
+                this._location.assetsDirectory
+              );
+              try {
+                await writeNewFileAtomically(assetPath, validatedPng.bytes);
+              } catch (error) {
+                if (isNodeErrorCode(error, 'EEXIST')) {
+                  throw new FeedbackSessionError(
+                    'MD4H-FB-STORE-002',
+                    `The screenshot asset ${id}.png already exists; it was not overwritten.`
+                  );
+                }
+                throw error;
+              }
+              assetWritten = true;
               pendingEvictedTombstoneIds =
                 await this.computeScreenshotAssetQuotaEviction(nextItems);
               await this.validateScreenshotAsset(candidate);
             }
           );
         } catch (error) {
-          await safeUnlinkFeedbackAsset(
-            this._location.workspaceRoot,
-            this._location.assetsDirectory,
-            assetPath
-          ).catch(() => undefined);
+          if (assetWritten) {
+            await safeUnlinkFeedbackAsset(
+              this._location.workspaceRoot,
+              this._location.assetsDirectory,
+              assetPath
+            ).catch(() => undefined);
+          }
           throw error;
         }
         this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
@@ -1555,24 +1564,11 @@ export class FeedbackSessionStore {
           assetSha256: computeFeedbackSourceSha256(validatedPng.bytes),
         };
 
-        try {
-          await assertSafeFeedbackDirectoryChain(
-            this._location.workspaceRoot,
-            this._location.assetsDirectory
-          );
-          await writeNewFileAtomically(assetPath, validatedPng.bytes);
-        } catch (error) {
-          if (isNodeErrorCode(error, 'EEXIST')) {
-            throw new FeedbackSessionError(
-              'MD4H-FB-STORE-002',
-              `The screenshot asset ${id}.png already exists; it was not overwritten.`
-            );
-          }
-          throw error;
-        }
-
+        // Publish the PNG inside the report lock so concurrent Resume cannot
+        // orphan-delete it before the report references it (T01).
         const nextItems = [...currentItems, item];
         let pendingEvictedTombstoneIds: readonly string[] = [];
+        let assetWritten = false;
         try {
           await this.persistReport(
             this._snapshot,
@@ -1580,17 +1576,35 @@ export class FeedbackSessionStore {
             sequence + 1,
             beforeCommit,
             async () => {
+              await assertSafeFeedbackDirectoryChain(
+                this._location.workspaceRoot,
+                this._location.assetsDirectory
+              );
+              try {
+                await writeNewFileAtomically(assetPath, validatedPng.bytes);
+              } catch (error) {
+                if (isNodeErrorCode(error, 'EEXIST')) {
+                  throw new FeedbackSessionError(
+                    'MD4H-FB-STORE-002',
+                    `The screenshot asset ${id}.png already exists; it was not overwritten.`
+                  );
+                }
+                throw error;
+              }
+              assetWritten = true;
               pendingEvictedTombstoneIds =
                 await this.computeScreenshotAssetQuotaEviction(nextItems);
               await this.validateScreenshotAsset(item);
             }
           );
         } catch (error) {
-          await safeUnlinkFeedbackAsset(
-            this._location.workspaceRoot,
-            this._location.assetsDirectory,
-            assetPath
-          ).catch(() => undefined);
+          if (assetWritten) {
+            await safeUnlinkFeedbackAsset(
+              this._location.workspaceRoot,
+              this._location.assetsDirectory,
+              assetPath
+            ).catch(() => undefined);
+          }
           throw error;
         }
         this.applyScreenshotAssetQuotaEviction(pendingEvictedTombstoneIds);
@@ -3176,48 +3190,56 @@ async function readAndValidateDraft(
       );
     }
 
-    const reportBytes = await readBoundedRegularFile(
-      location.feedbackFilePath,
-      MAX_REPORT_BYTES,
-      'MD4H-FB-STORE-001',
-      'feedback report'
-    );
-    const report = reportBytes.toString('utf8');
-    const parsed = parseFeedbackReport(report);
-    if (parsed.snapshot.state !== 'draft') {
-      throw new FeedbackDraftValidationError(
-        'not-draft',
-        'Only draft feedback bundles can be resumed.'
+    const loadValidatedReport = async (): Promise<ValidatedFeedbackReport> => {
+      const reportBytes = await readBoundedRegularFile(
+        location.feedbackFilePath,
+        MAX_REPORT_BYTES,
+        'MD4H-FB-STORE-001',
+        'feedback report'
       );
-    }
-    if (parsed.snapshot.round !== expectedRound) {
-      throw new FeedbackDraftValidationError(
-        'malformed-report',
-        'The report round does not match its bundle directory.'
-      );
-    }
-    if (parsed.snapshot.source !== expectedSource) {
-      throw new FeedbackDraftValidationError(
-        'source-mismatch',
-        'The report source does not match this Markdown file.'
-      );
-    }
-    if (parsed.snapshot.sourceSha256 !== expectedSourceSha256) {
-      throw new FeedbackDraftValidationError(
-        'hash-mismatch',
-        'The Markdown source changed after this feedback draft was created.'
-      );
-    }
+      const report = reportBytes.toString('utf8');
+      const parsed = parseFeedbackReport(report);
+      if (parsed.snapshot.state !== 'draft') {
+        throw new FeedbackDraftValidationError(
+          'not-draft',
+          'Only draft feedback bundles can be resumed.'
+        );
+      }
+      if (parsed.snapshot.round !== expectedRound) {
+        throw new FeedbackDraftValidationError(
+          'malformed-report',
+          'The report round does not match its bundle directory.'
+        );
+      }
+      if (parsed.snapshot.source !== expectedSource) {
+        throw new FeedbackDraftValidationError(
+          'source-mismatch',
+          'The report source does not match this Markdown file.'
+        );
+      }
+      if (parsed.snapshot.sourceSha256 !== expectedSourceSha256) {
+        throw new FeedbackDraftValidationError(
+          'hash-mismatch',
+          'The Markdown source changed after this feedback draft was created.'
+        );
+      }
 
-    await validateResumedScreenshotAssetMetadata(location, parsed.items);
+      await validateResumedScreenshotAssetMetadata(location, parsed.items);
+      if (screenshotValidation === 'full') {
+        await validateResumedScreenshotAssetBytes(location, parsed.items);
+        // Full Resume restores and sweeps under the report lock (acquired by the
+        // caller) so concurrent screenshot publishers cannot lose in-flight PNGs (T01).
+        await reconcileOrphanScreenshotAssets(location, parsed.items);
+      }
+      return { ...parsed, reportSha256: computeFeedbackSourceSha256(reportBytes) };
+    };
+
+    // Metadata-only discovery stays unlocked (R02/R03). Full Resume shares the
+    // report lock with screenshot asset+report commits (T01).
     if (screenshotValidation === 'full') {
-      await validateResumedScreenshotAssetBytes(location, parsed.items);
-      // Orphan cleanup can delete in-flight PNGs or `.prev` recovery sidecars when
-      // run from metadata-only discovery without the write lock (R02/R03). Keep it
-      // on the full resume path after byte validation/restore.
-      await reconcileOrphanScreenshotAssets(location, parsed.items);
+      return await withExclusiveReportLock(location.feedbackFilePath, loadValidatedReport);
     }
-    return { ...parsed, reportSha256: computeFeedbackSourceSha256(reportBytes) };
+    return await loadValidatedReport();
   } catch (error) {
     if (error instanceof FeedbackDraftValidationError) {
       throw error;
@@ -5043,20 +5065,23 @@ interface ParsedReportLock {
 }
 
 async function acquireReportLock(lockPath: string, lockContents: Buffer): Promise<void> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await writeFile(lockPath, lockContents, { flag: 'wx' });
-      return;
-    } catch (error) {
-      if (!isNodeErrorCode(error, 'EEXIST')) {
-        throw error;
+  for (let waitAttempt = 0; waitAttempt < REPORT_LOCK_WAIT_ATTEMPTS; waitAttempt += 1) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await writeFile(lockPath, lockContents, { flag: 'wx' });
+        return;
+      } catch (error) {
+        if (!isNodeErrorCode(error, 'EEXIST')) {
+          throw error;
+        }
+        const recovery = await recoverStaleReportLock(lockPath);
+        if (recovery === 'recovered' || recovery === 'missing') {
+          continue;
+        }
+        break;
       }
-      const recovery = await recoverStaleReportLock(lockPath);
-      if (recovery === 'recovered' || recovery === 'missing') {
-        continue;
-      }
-      break;
     }
+    await new Promise<void>(resolve => setTimeout(resolve, REPORT_LOCK_WAIT_MS));
   }
   throw new FeedbackSessionError(
     'MD4H-FB-STORE-002',

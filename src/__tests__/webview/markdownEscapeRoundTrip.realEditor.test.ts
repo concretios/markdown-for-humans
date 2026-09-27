@@ -146,20 +146,44 @@ describe('HTML entity prose round-trips (real editor)', () => {
   });
 
   it('preserves common named and numeric HTML entities across saves', () => {
-    const cases = [
-      'Copyright &copy; 2026.',
-      'Text&nbsp;text',
-      'Spaces &#160; and &#xA0; here.',
-      'Literal &amp;#X41; stays escaped.',
-    ];
+    const cases = ['Copyright &copy; 2026.', 'Text&nbsp;text', 'Spaces &#160; and &#xA0; here.'];
     for (const source of cases) {
       const [save1, save2] = multiRoundTrip(source, 2);
       expect(save1).not.toMatch(/&amp;copy;|&amp;nbsp;|&amp;#160;|&amp;#xA0;/i);
       expect(save2).toBe(save1);
-      // Authored entity spellings must not become double-escaped literal text.
       if (source.includes('&copy;')) expect(save1).toMatch(/©|&copy;/);
       if (source.includes('&nbsp;')) expect(save1).toMatch(/\u00a0|&nbsp;/);
     }
+  });
+
+  it('preserves intentionally literal escaped entity spellings across saves', () => {
+    const cases = [
+      'Keep &amp;copy; literal.',
+      'Keep &amp;nbsp; literal.',
+      'Keep &amp;#160; and &amp;#xA0; literal.',
+      'Keep &amp;#X41; uppercase hex literal.',
+    ];
+    for (const source of cases) {
+      const [save1, save2, save3] = multiRoundTrip(source, 3);
+      expect(save1).toBe(source);
+      expect(save2).toBe(source);
+      expect(save3).toBe(source);
+    }
+  });
+
+  it('does not turn line-leading greater-than text into a blockquote', () => {
+    const source = '&gt; This is literal text.';
+    const [save1, save2] = multiRoundTrip(source, 2);
+    expect(save1).toMatch(/^(&gt;|>) This is literal text\./);
+    // Must remain a paragraph of greater-than text, not a blockquote node.
+    const editor = createRealEditor(save1);
+    try {
+      expect(editor.getHTML()).not.toMatch(/<blockquote\b/i);
+      expect(editor.getText()).toMatch(/^>? This is literal text\./);
+    } finally {
+      editor.destroy();
+    }
+    expect(save2).toBe(save1);
   });
 
   it('still allows comparison operators in prose', () => {

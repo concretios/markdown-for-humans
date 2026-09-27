@@ -268,6 +268,11 @@ export function createFeedbackSessionTransferClient(
         return 'failed';
       }
       if (!prepared) {
+        // Retain identity so a following host abort can be acknowledged as a
+        // no-op (T02). Mark aborted immediately — prepare never staged ownership.
+        retain(message);
+        const refused = applied.get(message.transferId);
+        if (refused) refused.aborted = true;
         // ACK with applied:false so the host can roll back staged peers instead of
         // retrying an unacknowledged delivery until fail-closed (R05).
         options.postMessage({

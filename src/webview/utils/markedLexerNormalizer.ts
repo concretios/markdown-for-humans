@@ -27,6 +27,26 @@ type RawToken = { type?: string; raw?: string } & Record<string, unknown>;
 export const PRESERVED_MARKDOWN_LITERAL_TOKEN = 'preservedMarkdownLiteral';
 
 /**
+ * TipTap/marked decode a leading `&amp;` before named/numeric entities, so
+ * authored `&amp;copy;` collapses to the same editor text as `&copy;`. Protect
+ * those literal spellings before lexing (T03) and restore them on serialize.
+ */
+const LITERAL_AMP_ENTITY_RE = /&amp;([a-zA-Z][a-zA-Z0-9]*|#\d+|#x[\da-fA-F]+);/gi;
+const LITERAL_AMP_SENTINEL_RE = /\uE000amp\uE001([a-zA-Z][a-zA-Z0-9]*|#\d+|#x[\da-fA-F]+)\uE002/gi;
+
+/** Replace `&amp;entity;` with private-use sentinels that survive TipTap parse. */
+export function protectLiteralAmpEntities(src: string): string {
+  return src.replace(
+    LITERAL_AMP_ENTITY_RE,
+    (_match, body: string) => `\uE000amp\uE001${body}\uE002`
+  );
+}
+
+/** Restore parse sentinels to `&amp;entity;` Markdown spellings. */
+export function restoreLiteralAmpEntities(src: string): string {
+  return src.replace(LITERAL_AMP_SENTINEL_RE, '&amp;$1;');
+}
+/**
  * Detect link/image inline tokens whose VISIBLE text is empty.
  *
  * A `link` or `image` with empty visible content (no inner tokens, or all
@@ -441,7 +461,7 @@ export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
     const OriginalLexer = inst.Lexer;
     inst.Lexer = class NormalizingLexer extends OriginalLexer {
       lex(src: string): RawToken[] {
-        return normalizeBlankLineGreedyTokens(super.lex(src));
+        return normalizeBlankLineGreedyTokens(super.lex(protectLiteralAmpEntities(src)));
       }
     };
     installed = true;
@@ -450,7 +470,7 @@ export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
   if (typeof inst.lexer === 'function') {
     const original = inst.lexer.bind(inst);
     inst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
-      return normalizeBlankLineGreedyTokens(original(src, options));
+      return normalizeBlankLineGreedyTokens(original(protectLiteralAmpEntities(src), options));
     };
     installed = true;
   }
