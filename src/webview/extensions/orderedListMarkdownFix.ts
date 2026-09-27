@@ -99,10 +99,7 @@ function restoreOrderedTaskCheckboxPrefix(item: MarkdownToken): MarkdownToken {
     } else {
       prefixedParagraph = {
         ...first,
-        tokens: [
-          { type: 'text', raw: prefix, text: prefix, escaped: false },
-          ...paragraphChildren,
-        ],
+        tokens: [{ type: 'text', raw: prefix, text: prefix, escaped: false }, ...paragraphChildren],
       };
     }
     return {
