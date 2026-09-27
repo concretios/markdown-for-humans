@@ -6,7 +6,7 @@
 
 import type { Editor, JSONContent } from '@tiptap/core';
 import type { BlankLineMode } from '../../shared/blankLinePolicy';
-import { restoreLiteralAmpEntities } from './markedLexerNormalizer';
+import { PRESERVED_MARKDOWN_LITERAL_TOKEN } from './markedLexerNormalizer';
 
 type MarkdownManager = {
   serialize?: (json: JSONContent) => string;
@@ -79,16 +79,16 @@ function escapeMarkdownSyntaxForProse(text: string): string {
  * `&lt;` before `[A-Za-z/!?]` so generics and literal tag examples stay text.
  *
  * Upstream encoder: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Decode in
- * reverse order; `&amp;` last so literal entity spellings survive. Keep an
- * ampersand escaped only when it encodes TipTap's own escape targets (`amp`,
- * `lt`, `gt`, `quot`) so nested spellings do not lose a layer on every save,
- * while common named/numeric entities (`&copy;`, `&nbsp;`, `&#160;`) round-trip.
+ * reverse order; `&amp;` last. Authored entities are decoded by the inline
+ * entity tokenizer and retain their source spelling in mark attributes. An
+ * entity-shaped ampersand in ordinary editor text is therefore literal and
+ * must remain escaped, including after HTML paste or editing an entity.
  *
  * Do not decode `&gt;` at a CommonMark blockquote position (start of line,
  * optional 0–3 spaces) — that turns literal greater-than prose into a quote (T04).
  */
 function decodeNonTagHtmlEntities(encoded: string): string {
-  const decoded = encoded
+  return encoded
     .replace(/&gt;/g, (match, offset, full: string) => {
       const lineStart = full.lastIndexOf('\n', offset - 1) + 1;
       const prefix = full.slice(lineStart, offset);
@@ -98,9 +98,7 @@ function decodeNonTagHtmlEntities(encoded: string): string {
       return '>';
     })
     .replace(/&lt;(?![A-Za-z/!?])/g, '<')
-    .replace(/&amp;(?!(?:amp|lt|gt|quot);)/g, '&');
-  // Restore parse-time sentinels for intentionally literal `&amp;entity;` (T03).
-  return restoreLiteralAmpEntities(decoded);
+    .replace(/&amp;(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#[xX][\da-fA-F]+);)/g, '&');
 }
 
 /**
@@ -120,6 +118,19 @@ export function patchMarkdownSerialization(manager: MarkdownManager): void {
   if (typeof patchable.encodeTextForMarkdown === 'function') {
     const original = patchable.encodeTextForMarkdown.bind(manager);
     patchable.encodeTextForMarkdown = (text, node, parentNode) => {
+      const entity = node.marks?.find(
+        mark =>
+          mark.type === PRESERVED_MARKDOWN_LITERAL_TOKEN &&
+          typeof mark.attrs?.entitySource === 'string' &&
+          typeof mark.attrs?.entityText === 'string'
+      );
+      if (entity) {
+        if (text === entity.attrs?.entityText) return entity.attrs.entitySource as string;
+        // An edit/formatting split can leave a fragment with the old mark.
+        // Serialize its real text, never resurrect the original entity. Numeric
+        // references keep any newly entered Markdown syntax literal as well.
+        return Array.from(text, character => `&#${character.codePointAt(0)};`).join('');
+      }
       const encoded = original(text, node, parentNode);
       if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
       return decodeNonTagHtmlEntities(encoded);

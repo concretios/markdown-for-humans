@@ -1237,8 +1237,10 @@ export function createFeedbackAnnotationModal(
   }
 
   function handleFeedbackLifecycleEnd(): void {
+    // Source edits in another editor can invalidate this capture (U04).
+    const restoreLocalFocus = document.hasFocus();
     document.body.classList.remove('feedback-capture-active');
-    close();
+    close(restoreLocalFocus);
   }
 
   function setTool(tool: AnnotationTool): void {

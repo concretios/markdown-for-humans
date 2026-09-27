@@ -6,6 +6,7 @@
  */
 
 import { createHash } from 'crypto';
+import { promises as fsPromises } from 'fs';
 import {
   mkdtemp,
   mkdir,
@@ -2144,6 +2145,189 @@ describe('FeedbackSessionStore', () => {
         kind: 'screenshot',
         assetSha256: computeFeedbackSourceSha256(png),
       }),
+    ]);
+  });
+
+  it.each([
+    { schemaVersion: 1 as const, rejectGuardCall: 1 },
+    { schemaVersion: 1 as const, rejectGuardCall: 2 },
+    { schemaVersion: 2 as const, rejectGuardCall: 1 },
+    { schemaVersion: 2 as const, rejectGuardCall: 2 },
+  ])(
+    'keeps failed screenshot cleanup locked through concurrent Resume (v$schemaVersion, guard $rejectGuardCall)',
+    async ({ schemaVersion, rejectGuardCall }) => {
+      const writer = await FeedbackSessionStore.create({
+        workspaceRoot,
+        sourcePath,
+        sourceBytes: SOURCE_BYTES,
+        now: NOW,
+        roundSuffix: 'u02a',
+        schemaVersion,
+      });
+      const failedPng = makeRgbaPng(4, 5, 6);
+      const committedPng = makeRgbaPng(40, 50, 60);
+      const assetPath = path.join(writer.bundleDirectory, 'assets', 'F1.png');
+      const reportPath = path.join(writer.bundleDirectory, 'feedback.md');
+      const lockPath = `${reportPath}.lock`;
+      const originalReport = await readFile(reportPath);
+      const addCapture = (
+        store: FeedbackSessionStore,
+        pngData: Buffer,
+        beforeCommit?: () => void
+      ) => {
+        const input = {
+          startLine: 3,
+          endLine: 3,
+          feedback: 'Screenshot rollback and reuse across windows.',
+          pngData,
+        };
+        return schemaVersion === 1
+          ? store.addScreenshotFeedback(input, beforeCommit)
+          : store.addScreenshotFeedbackV2(
+              {
+                ...input,
+                target: {
+                  version: 2,
+                  requestedScope: 'visual-region',
+                  effectiveScope: 'visual-region',
+                  resolution: 'exact',
+                  blockSpan: {
+                    startOrdinal: 1,
+                    endOrdinal: 1,
+                    startKind: 'paragraph',
+                    endKind: 'paragraph',
+                    startBlockSha256: FIRST_PARAGRAPH_RENDERED_RANGE.startBlockSha256,
+                    endBlockSha256: FIRST_PARAGRAPH_RENDERED_RANGE.endBlockSha256,
+                  },
+                },
+                sourceReference: {
+                  relationship: 'containing-blocks',
+                  format: 'markdown',
+                  normalization: 'lf',
+                  sourceSliceSha256: FIRST_PARAGRAPH_RENDERED_RANGE.startBlockSha256,
+                },
+              },
+              { beforeCommit }
+            );
+      };
+      let releaseCleanup!: () => void;
+      const holdCleanup = new Promise<void>(resolve => {
+        releaseCleanup = resolve;
+      });
+      let cleanupStarted!: () => void;
+      const cleanupPending = new Promise<void>(resolve => {
+        cleanupStarted = resolve;
+      });
+      let cleanupHeld = false;
+      const realUnlink = fsPromises.unlink;
+      const unlinkSpy = jest.spyOn(fsPromises, 'unlink').mockImplementation(async file => {
+        if (file === assetPath && !cleanupHeld) {
+          cleanupHeld = true;
+          cleanupStarted();
+          await holdCleanup;
+        }
+        return realUnlink(file);
+      });
+      let reportResumeLockAttempt!: (result: string | undefined) => void;
+      const resumeLockAttempt = new Promise<string | undefined>(resolve => {
+        reportResumeLockAttempt = resolve;
+      });
+      let observeResume = false;
+      const realWriteFile = fsPromises.writeFile;
+      const writeSpy = jest.spyOn(fsPromises, 'writeFile').mockImplementation(async (...args) => {
+        try {
+          await realWriteFile(...args);
+          if (observeResume && args[0] === lockPath) reportResumeLockAttempt('acquired');
+        } catch (error) {
+          if (observeResume && args[0] === lockPath) {
+            reportResumeLockAttempt((error as NodeJS.ErrnoException).code);
+          }
+          throw error;
+        }
+      });
+      let guardCalls = 0;
+      const failedWrite = addCapture(writer, failedPng, () => {
+        guardCalls += 1;
+        if (guardCalls === rejectGuardCall) throw new Error('Reject the screenshot commit.');
+      }).catch((error: unknown) => error);
+      let resumePromise: Promise<FeedbackSessionStore> | undefined;
+      try {
+        await cleanupPending;
+        observeResume = true;
+        resumePromise = FeedbackSessionStore.resume({
+          workspaceRoot,
+          sourcePath,
+          sourceBytes: SOURCE_BYTES,
+          round: writer.snapshot.round,
+        });
+        // Observe the actual filesystem attempt, without a timing-based sleep.
+        // Resume must not acquire the lock while rollback can still unlink F1.
+        expect(await resumeLockAttempt).toBe('EEXIST');
+        await expect(readFile(reportPath)).resolves.toEqual(originalReport);
+        await expect(readFile(assetPath)).resolves.toEqual(failedPng);
+      } finally {
+        releaseCleanup();
+        try {
+          await failedWrite;
+          await resumePromise;
+        } finally {
+          unlinkSpy.mockRestore();
+          writeSpy.mockRestore();
+        }
+      }
+      expect(await failedWrite).toMatchObject({ message: expect.stringContaining('Reject') });
+      const resumed = await resumePromise!;
+      expect(resumed.items).toHaveLength(0);
+      const committed = await addCapture(resumed, committedPng);
+      expect(committed.id).toBe('F1');
+      expect(committed.assetSha256).toBe(computeFeedbackSourceSha256(committedPng));
+      await expect(readFile(assetPath)).resolves.toEqual(committedPng);
+      const reopened = await FeedbackSessionStore.resume({
+        workspaceRoot,
+        sourcePath,
+        sourceBytes: SOURCE_BYTES,
+        round: writer.snapshot.round,
+      });
+      expect(reopened.items).toEqual([committed]);
+    }
+  );
+
+  it('retains the screenshot if restoring the previous report fails during rollback', async () => {
+    const writer = await createStore('u02b');
+    const png = makeRgbaPng(40, 50, 60);
+    const reportPath = path.join(writer.bundleDirectory, 'feedback.md');
+    const assetPath = path.join(writer.bundleDirectory, 'assets', 'F1.png');
+    const realRename = fsPromises.rename;
+    let reportRenames = 0;
+    const renameSpy = jest.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+      if (to === reportPath && ++reportRenames === 2) {
+        throw new Error('Could not restore the previous report.');
+      }
+      return realRename(from, to);
+    });
+    let guardCalls = 0;
+    try {
+      await expect(
+        writer.addScreenshotFeedback(
+          { startLine: 3, endLine: 3, feedback: 'Retain recoverable evidence.', pngData: png },
+          () => {
+            if (++guardCalls === 2) throw new Error('Reject the screenshot commit.');
+          }
+        )
+      ).rejects.toThrow('Could not restore the previous report.');
+    } finally {
+      renameSpy.mockRestore();
+    }
+    // The report still references this PNG. Deleting it would make recovery fail.
+    await expect(readFile(assetPath)).resolves.toEqual(png);
+    const resumed = await FeedbackSessionStore.resume({
+      workspaceRoot,
+      sourcePath,
+      sourceBytes: SOURCE_BYTES,
+      round: writer.snapshot.round,
+    });
+    expect(resumed.items).toEqual([
+      expect.objectContaining({ id: 'F1', assetSha256: computeFeedbackSourceSha256(png) }),
     ]);
   });
 

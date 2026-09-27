@@ -1036,34 +1036,45 @@ describe('feedback annotation modal', () => {
     expect(controller.element.isConnected).toBe(false);
   });
 
-  it('closes annotation and discard dialogs immediately on snapshot invalidation', () => {
-    const previousFocus = document.createElement('button');
-    document.body.append(previousFocus);
-    previousFocus.focus();
-    const onAdd = jest.fn();
-    const onCancel = jest.fn();
-    const controller = createFeedbackAnnotationModal({
-      image: { dataUrl: 'data:image/png;base64,base', width: 800, height: 600 },
-      onAdd,
-      onRetake: jest.fn(),
-      onCancel,
-    });
-    const input = controller.element.querySelector<HTMLTextAreaElement>('textarea')!;
-    input.value = 'Unsaved screenshot feedback';
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    controller.cancel();
-    expect(document.querySelector('[data-feedback-discard-dialog]')).not.toBeNull();
-    document.body.classList.add('feedback-capture-active');
+  it.each([true, false])(
+    'closes invalidated capture dialogs without stealing external focus (local: %s)',
+    ownsFocus => {
+      const previousFocus = document.createElement('button');
+      document.body.append(previousFocus);
+      previousFocus.focus();
+      const onAdd = jest.fn();
+      const onCancel = jest.fn();
+      const controller = createFeedbackAnnotationModal({
+        image: { dataUrl: 'data:image/png;base64,base', width: 800, height: 600 },
+        onAdd,
+        onRetake: jest.fn(),
+        onCancel,
+      });
+      const input = controller.element.querySelector<HTMLTextAreaElement>('textarea')!;
+      input.value = 'Unsaved screenshot feedback';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      controller.cancel();
+      expect(document.querySelector('[data-feedback-discard-dialog]')).not.toBeNull();
+      document.body.classList.add('feedback-capture-active');
 
-    window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
+      const documentFocus = jest.spyOn(document, 'hasFocus').mockReturnValue(ownsFocus);
+      const focus = jest.spyOn(HTMLElement.prototype, 'focus');
+      try {
+        window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
 
-    expect(controller.element.isConnected).toBe(false);
-    expect(document.querySelector('[data-feedback-discard-dialog]')).toBeNull();
-    expect(document.body.classList.contains('feedback-capture-active')).toBe(false);
-    expect(document.activeElement).toBe(previousFocus);
-    expect(onAdd).not.toHaveBeenCalled();
-    expect(onCancel).not.toHaveBeenCalled();
-  });
+        expect(controller.element.isConnected).toBe(false);
+        expect(document.querySelector('[data-feedback-discard-dialog]')).toBeNull();
+        expect(document.body.classList.contains('feedback-capture-active')).toBe(false);
+        if (ownsFocus) expect(document.activeElement).toBe(previousFocus);
+        else expect(focus).not.toHaveBeenCalled();
+        expect(onAdd).not.toHaveBeenCalled();
+        expect(onCancel).not.toHaveBeenCalled();
+      } finally {
+        focus.mockRestore();
+        documentFocus.mockRestore();
+      }
+    }
+  );
 
   it('closes once on Feedback session end and rejects later submissions', async () => {
     const previousFocus = document.createElement('button');

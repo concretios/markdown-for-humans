@@ -37,6 +37,8 @@ The extension declares virtual and untrusted workspaces unsupported because imag
 
 ## Document Sync Contract
 
+Markdown entities are decoded only in inline text contexts. Authored entity spellings are retained in nonvisual mark attributes while their decoded text is unchanged; code, destinations and raw HTML use their own parsers. Never replace whole-source substrings with visible placeholder characters.
+
 - Protocol v2 envelopes use `editId`, renderer `viewGeneration`, `localRevision` and `baseDocumentVersion`.
 - A 500 ms controller debounce stores only a dirty bit. It serializes the latest TipTap state only at a timer drain or explicit flush boundary.
 - One emitted edit waits for its exact `document.edit.ack` before another derives from the accepted host version.
@@ -75,8 +77,14 @@ normal content deduplication is not safe at this boundary.
 - Restored item line endpoints use the frozen anchor index with logarithmic lookup. Do not reintroduce an `items x blocks` scan.
 - `feedback.started` is not considered applied because `postMessage()` returned true. It uses bounded idempotent delivery, an application ACK and an authoritative status query fallback.
 - Active ownership transfer uses generation-bound apply, commit, and abort stages. The proposed host session remains `resuming` until both owners and every peer lock ACK commit. Ambiguous delivery remains fail-closed, while definitive disposal is reinitialized from host authority on the next `ready`.
+- Refused transfer applies retain their negative result for exact retry ACKs until an explicit abort. Refusal does not mean the abort stage has completed.
 - Pure host and renderer lifecycle reducers reject stale stages in deterministic tests. Production still routes lifecycle effects through provider and renderer adapters, so do not treat those reducers as the sole authority until that migration is completed. Durable drafts, not webview state, are the recovery authority after reload.
 - Any later source change invalidates the frozen round, preserves the draft, and blocks new writes and sealing.
+- Invalidation and deferred annotation layout preserve focus in another editor group. The webview's stale `activeElement` is not proof of focus; check `document.hasFocus()` before restoring local controls.
+
+Screenshot publication, report commit, and failed-asset rollback share the report
+lock with Resume. Restore the previous report before deleting an unpublished
+asset; if restoration fails, preserve assets referenced by the report still on disk.
 
 Feedback structural choices are indexed once per frozen document. Top-level heading sections use complete v2 source block spans. Nested scopes use existing exact rendered-text locators, with source lines labelled as containing context; they do not assert exact nested authored-source regions. Ancestor choices use parent pointers, and table matrices are built only when the user opens Change scope. Ordinary text drags never capture the pointer. Frozen indexes are disposed with their session, and the host source-format index is reset during ownership transfer.
 

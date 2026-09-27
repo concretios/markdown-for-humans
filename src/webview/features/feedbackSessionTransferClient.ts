@@ -5,7 +5,8 @@
  *
  * @fileoverview Idempotent renderer half of a generation-bound Feedback
  * ownership handoff. Apply stages stay frozen. Commit changes ownership and
- * acknowledges only after the old peer guard is replaced atomically.
+ * acknowledges only after the old peer guard is replaced atomically. Refused
+ * applies replay their rejection until the host aborts the transfer.
  */
 
 import type { FeedbackHostMessage, FeedbackWebviewMessage } from '../../shared/feedbackProtocol';
@@ -33,6 +34,7 @@ interface AppliedSessionTransferIdentity {
   readonly sourceSha256: string;
   readonly peerLockMessage: string;
   readonly sessionJson: string;
+  readonly applyRefused: boolean;
   committed: boolean;
   aborted: boolean;
 }
@@ -82,7 +84,8 @@ function sameIdentity(
 }
 
 function acknowledgement(
-  message: FeedbackSessionTransferMessage
+  message: FeedbackSessionTransferMessage,
+  applied = true
 ): FeedbackSessionTransferAcknowledgement {
   return {
     type: 'feedback.session.transfer.ack',
@@ -96,11 +99,11 @@ function acknowledgement(
     revision: message.revision,
     documentVersion: message.documentVersion,
     sourceSha256: message.sourceSha256,
-    applied: true,
+    applied,
   };
 }
 
-/** Create one transfer replay cache for a single renderer lifetime. */
+/** Retain exact apply outcomes and terminal stages for a single renderer lifetime. */
 export function createFeedbackSessionTransferClient(
   options: FeedbackSessionTransferClientOptions
 ): FeedbackSessionTransferClient {
@@ -117,7 +120,7 @@ export function createFeedbackSessionTransferClient(
   const lineageKey = (message: FeedbackSessionTransferMessage): string =>
     `${message.viewGeneration}\u0000${message.oldSessionId}\u0000${message.role}`;
 
-  const retain = (message: FeedbackSessionTransferApply): void => {
+  const retain = (message: FeedbackSessionTransferApply, applyRefused = false): void => {
     applied.delete(message.transferId);
     applied.set(message.transferId, {
       role: message.role,
@@ -130,6 +133,7 @@ export function createFeedbackSessionTransferClient(
       sourceSha256: message.sourceSha256,
       peerLockMessage: message.peerLockMessage,
       sessionJson: JSON.stringify(message.session),
+      applyRefused,
       committed: false,
       aborted: false,
     });
@@ -158,7 +162,7 @@ export function createFeedbackSessionTransferClient(
         applied.set(message.transferId, retained);
         if (message.phase === 'apply') {
           if (retained.committed || retained.aborted) return 'stale';
-          options.postMessage(acknowledgement(message));
+          options.postMessage(acknowledgement(message, !retained.applyRefused));
           return 'replayed';
         }
         if (
@@ -169,6 +173,15 @@ export function createFeedbackSessionTransferClient(
           return 'replayed';
         }
         if (retained.committed || retained.aborted) return 'stale';
+
+        if (retained.applyRefused) {
+          if (message.phase !== 'abort') return 'stale';
+          // Refusal staged no ownership change. Acknowledge the exact abort
+          // without touching a live draft or invoking an unstaged rollback.
+          retained.aborted = true;
+          options.postMessage(acknowledgement(message));
+          return 'replayed';
+        }
 
         if (message.phase === 'abort') {
           let aborted = false;
@@ -268,27 +281,10 @@ export function createFeedbackSessionTransferClient(
         return 'failed';
       }
       if (!prepared) {
-        // Retain identity so a following host abort can be acknowledged as a
-        // no-op (T02). Mark aborted immediately — prepare never staged ownership.
-        retain(message);
-        const refused = applied.get(message.transferId);
-        if (refused) refused.aborted = true;
-        // ACK with applied:false so the host can roll back staged peers instead of
-        // retrying an unacknowledged delivery until fail-closed (R05).
-        options.postMessage({
-          type: 'feedback.session.transfer.ack',
-          phase: message.phase,
-          role: message.role,
-          transferId: message.transferId,
-          requestId: message.requestId,
-          oldSessionId: message.oldSessionId,
-          newSessionId: message.newSessionId,
-          viewGeneration: message.viewGeneration,
-          revision: message.revision,
-          documentVersion: message.documentVersion,
-          sourceSha256: message.sourceSha256,
-          applied: false,
-        });
+        // Keep refusal separate from completed abort so a lost negative ACK
+        // can be replayed and the host can still roll back its staged peers.
+        retain(message, true);
+        options.postMessage(acknowledgement(message, false));
         return 'failed';
       }
 

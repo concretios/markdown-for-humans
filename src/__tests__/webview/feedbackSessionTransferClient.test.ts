@@ -1,4 +1,5 @@
-import type { FeedbackHostMessage } from '../../shared/feedbackProtocol';
+import type { FeedbackHostMessage, FeedbackWebviewMessage } from '../../shared/feedbackProtocol';
+import { FeedbackTransport } from '../../editor/feedbackTransport';
 import { createFeedbackSessionTransferClient } from '../../webview/features/feedbackSessionTransferClient';
 
 type SessionTransferMessage = Extract<FeedbackHostMessage, { type: 'feedback.session.transfer' }>;
@@ -367,6 +368,170 @@ describe('Feedback session transfer client', () => {
       })
     );
   });
+
+  it('recovers a lost refusal ACK through transport retry and a no-op rollback', async () => {
+    jest.useFakeTimers();
+    const outgoingApply: SessionTransferMessage = {
+      ...incomingApply,
+      role: 'old-owner',
+      viewGeneration: 'view-old',
+    };
+    const identity = (message: {
+      transferId: string;
+      role: SessionTransferMessage['role'];
+      phase: SessionTransferMessage['phase'];
+      newSessionId: string;
+      revision: number;
+    }) => ({
+      messageId: `${message.transferId}:${message.role}:${message.phase}`,
+      operationEpoch: message.transferId,
+      sessionEpoch: message.newSessionId,
+      stageRevision: message.revision,
+    });
+    const prepareOutgoing = jest.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const abortOutgoing = jest.fn(() => false);
+    const queryStatus = jest.fn(() => Promise.reject(new Error('Unconfirmed transfer')));
+    const acknowledgements: Array<
+      Extract<FeedbackWebviewMessage, { type: 'feedback.session.transfer.ack' }>
+    > = [];
+    const client = createFeedbackSessionTransferClient({
+      viewGeneration: 'view-old',
+      getSessionId: () => 'session-old',
+      getPeerLockId: () => null,
+      prepareIncoming: () => false,
+      prepareOutgoing,
+      prepareSameOwner: () => false,
+      commitIncoming: () => false,
+      commitOutgoing: () => false,
+      commitSameOwner: () => false,
+      abortOutgoing,
+      lockPeer: jest.fn(),
+      unlockPeer: jest.fn(),
+      postMessage: message => {
+        acknowledgements.push(message);
+        // Drop only the first refusal. All later messages are delivered normally.
+        if (acknowledgements.length === 1) return;
+        transport.acceptAcknowledgement({
+          ...identity(message),
+          outcome: message.applied
+            ? { kind: 'applied', value: undefined }
+            : { kind: 'rejected', code: 'application-failed' },
+        });
+      },
+    });
+    const transport = new FeedbackTransport<SessionTransferMessage, void, never, never, never>({
+      sendCommand: command => {
+        client.handle(command.payload);
+        return true;
+      },
+      sendAcknowledgement: () => false,
+      queryStatus,
+      timers: {
+        setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+        clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      },
+      maxAttempts: 4,
+      ackTimeoutMs: 20,
+      retryDelayMs: 5,
+      maxRetainedEntries: 8,
+    });
+
+    try {
+      const delivery = transport.send({ ...identity(outgoingApply), payload: outgoingApply });
+      await jest.runAllTimersAsync();
+      await expect(delivery).resolves.toMatchObject({
+        kind: 'acknowledged',
+        attempts: 2,
+        acknowledgement: { outcome: { kind: 'rejected', code: 'application-failed' } },
+      });
+      expect(acknowledgements).toHaveLength(2);
+      expect(acknowledgements[1]).toEqual(acknowledgements[0]);
+      expect(prepareOutgoing).toHaveBeenCalledTimes(1);
+      expect(queryStatus).not.toHaveBeenCalled();
+
+      const abort: SessionTransferMessage = {
+        ...incomingCommit,
+        phase: 'abort',
+        role: 'old-owner',
+        viewGeneration: 'view-old',
+      };
+      await expect(transport.send({ ...identity(abort), payload: abort })).resolves.toMatchObject({
+        kind: 'acknowledged',
+        attempts: 1,
+        acknowledgement: { outcome: { kind: 'applied' } },
+      });
+      expect(client.handle(abort)).toBe('replayed');
+      expect(abortOutgoing).not.toHaveBeenCalled();
+      expect(client.handle(outgoingApply)).toBe('stale');
+    } finally {
+      transport.dispose();
+      jest.useRealTimers();
+    }
+  });
+
+  it.each(['new-owner', 'old-owner', 'same-owner'] as const)(
+    'binds %s refusal to its exact identity and rejects commit without preparation',
+    role => {
+      const prepare = jest.fn(() => false);
+      const abort = jest.fn(() => false);
+      const commit = jest.fn(() => false);
+      const postMessage = jest.fn();
+      const lockPeer = jest.fn();
+      const unlockPeer = jest.fn();
+      const client = createFeedbackSessionTransferClient({
+        viewGeneration: 'view-new',
+        getSessionId: () => (role === 'new-owner' ? null : 'session-old'),
+        getPeerLockId: () => (role === 'new-owner' ? 'session-old' : null),
+        prepareIncoming: prepare,
+        prepareOutgoing: prepare,
+        prepareSameOwner: prepare,
+        commitIncoming: commit,
+        commitOutgoing: commit,
+        commitSameOwner: commit,
+        abortIncoming: abort,
+        abortOutgoing: abort,
+        abortSameOwner: abort,
+        lockPeer,
+        unlockPeer,
+        postMessage,
+        maxRetainedTransfers: 1,
+      });
+      const apply = { ...incomingApply, role };
+      const commitMessage = { ...incomingCommit, role };
+      expect(client.handle(apply)).toBe('failed');
+      postMessage.mockClear();
+      expect(client.handle({ ...apply, viewGeneration: 'stale' })).toBe('stale');
+      expect(client.handle({ ...apply, sourceSha256: 'b'.repeat(64) })).toBe('conflict');
+      expect(client.handle({ ...apply, session: { ...session, source: 'other.md' } })).toBe(
+        'conflict'
+      );
+      expect(client.handle(commitMessage)).toBe('stale');
+      expect(postMessage).not.toHaveBeenCalled();
+
+      expect(client.handle(apply)).toBe('replayed');
+      expect(postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ applied: false }));
+      const abortMessage = { ...commitMessage, phase: 'abort' as const };
+      expect(client.handle(abortMessage)).toBe('replayed');
+      expect(client.handle(abortMessage)).toBe('replayed');
+      expect(postMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: 'abort', applied: true })
+      );
+      expect(client.handle(apply)).toBe('stale');
+      expect(client.handle(commitMessage)).toBe('stale');
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(abort).not.toHaveBeenCalled();
+      expect(commit).not.toHaveBeenCalled();
+      expect(lockPeer).not.toHaveBeenCalled();
+      expect(unlockPeer).not.toHaveBeenCalled();
+
+      // A fresh transfer can proceed after the draft is resolved, even at the
+      // history limit. The evicted refusal cannot resurrect an older revision.
+      prepare.mockReturnValue(true);
+      expect(client.handle({ ...apply, transferId: 'transfer-2', revision: 2 })).toBe('applied');
+      expect(client.handle(apply)).toBe('stale');
+      expect(prepare).toHaveBeenCalledTimes(2);
+    }
+  );
 
   it('rejects conflicting transfer reuse and evicted stale revisions', () => {
     let sessionId: string | null = null;

@@ -557,7 +557,8 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
     }
   };
   const cancelCapture = (): void => applyCaptureEvent({ type: 'cancelRequested' }, true);
-  const handleFeedbackLifecycleEnd = (): void => cancelCapture();
+  const handleFeedbackLifecycleEnd = (): void =>
+    applyCaptureEvent({ type: 'cancelRequested' }, document.hasFocus());
   const handleToolbarCancel = (): void => cancelCapture();
   const handleWindowBlur = (): void => applyCaptureEvent({ type: 'windowBlurred' });
   const handleVisibilityChange = (): void => {
@@ -1054,11 +1055,12 @@ function openKeyboardBlockSelector(options: FeedbackCaptureWorkflowOptions): voi
   dialog.append(title, startLabel, endLabel, validation, submit, cancel);
   const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const close = (): void => {
+    const restoreLocalFocus = document.hasFocus();
     window.removeEventListener('feedbackInvalidated', close);
     window.removeEventListener(FEEDBACK_SESSION_ENDED_EVENT, close);
     dialog.remove();
     releaseCaptureWorkflow(workflow);
-    if (returnFocus?.isConnected) returnFocus.focus();
+    if (restoreLocalFocus && returnFocus?.isConnected) returnFocus.focus();
   };
   const workflow: ActiveCaptureWorkflow = {
     kind: 'capture-block-selector',

@@ -319,38 +319,49 @@ describe('keyboard Feedback block selector', () => {
       ?.click();
   });
 
-  it('cancels an active crop and restores focus when the snapshot is invalidated', () => {
-    const invoker = document.createElement('button');
-    const editorDom = document.createElement('div');
-    editorDom.append(document.createElement('p'));
-    document.body.append(invoker, editorDom);
-    invoker.focus();
-    editorDom.getBoundingClientRect = () =>
-      ({ left: 0, top: 0, right: 500, bottom: 300, width: 500, height: 300 }) as DOMRect;
-    const editor = {
-      state: { selection: { empty: true, from: 1, to: 1 } },
-      view: { dom: editorDom },
-    } as unknown as Editor;
-    const review = {
-      getSession: () => ({
-        sessionId: 'session-1',
-        source: 'docs/guide.md',
-        sourceSha256: 'a'.repeat(64),
-        round: '20260821T093000Z-k4p9',
-        anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
-        items: [],
-      }),
-      isWritable: () => true,
-    } as unknown as FeedbackReviewController;
+  it.each([true, false])(
+    'cancels an invalidated crop without stealing external focus (local: %s)',
+    ownsFocus => {
+      const invoker = document.createElement('button');
+      const editorDom = document.createElement('div');
+      editorDom.append(document.createElement('p'));
+      document.body.append(invoker, editorDom);
+      invoker.focus();
+      editorDom.getBoundingClientRect = () =>
+        ({ left: 0, top: 0, right: 500, bottom: 300, width: 500, height: 300 }) as DOMRect;
+      const editor = {
+        state: { selection: { empty: true, from: 1, to: 1 } },
+        view: { dom: editorDom },
+      } as unknown as Editor;
+      const review = {
+        getSession: () => ({
+          sessionId: 'session-1',
+          source: 'docs/guide.md',
+          sourceSha256: 'a'.repeat(64),
+          round: '20260821T093000Z-k4p9',
+          anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
+          items: [],
+        }),
+        isWritable: () => true,
+      } as unknown as FeedbackReviewController;
 
-    startFeedbackAreaCapture({ editor, review, rasterize: jest.fn() });
-    expect(document.body.classList.contains('feedback-capture-active')).toBe(true);
-    window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
+      startFeedbackAreaCapture({ editor, review, rasterize: jest.fn() });
+      expect(document.body.classList.contains('feedback-capture-active')).toBe(true);
+      const documentFocus = jest.spyOn(document, 'hasFocus').mockReturnValue(ownsFocus);
+      const focus = jest.spyOn(HTMLElement.prototype, 'focus');
+      try {
+        window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
 
-    expect(document.querySelector('.feedback-area-capture')).toBeNull();
-    expect(document.body.classList.contains('feedback-capture-active')).toBe(false);
-    expect(document.activeElement).toBe(invoker);
-  });
+        expect(document.querySelector('.feedback-area-capture')).toBeNull();
+        expect(document.body.classList.contains('feedback-capture-active')).toBe(false);
+        if (ownsFocus) expect(document.activeElement).toBe(invoker);
+        else expect(focus).not.toHaveBeenCalled();
+      } finally {
+        focus.mockRestore();
+        documentFocus.mockRestore();
+      }
+    }
+  );
 
   it('cancels an active crop once when the Feedback session ends', () => {
     const invoker = document.createElement('button');
@@ -1104,6 +1115,24 @@ describe('keyboard Feedback block selector', () => {
     expect(document.querySelector('.feedback-block-selector')).toBeNull();
     expect(document.body.classList).not.toContain('feedback-capture-active');
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it('closes an invalidated block selector without taking external editor focus', () => {
+    const trigger = document.createElement('button');
+    document.body.append(trigger);
+    trigger.focus();
+    openSelector();
+    const documentFocus = jest.spyOn(document, 'hasFocus').mockReturnValue(false);
+    const focus = jest.spyOn(HTMLElement.prototype, 'focus');
+    try {
+      window.dispatchEvent(new CustomEvent('feedbackInvalidated'));
+
+      expect(document.querySelector('.feedback-block-selector')).toBeNull();
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      focus.mockRestore();
+      documentFocus.mockRestore();
+    }
   });
 
   describe('explicit area capture state', () => {
