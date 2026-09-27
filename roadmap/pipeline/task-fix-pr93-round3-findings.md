@@ -60,3 +60,5 @@ Third read-only audit found four remaining defects (T01–T04). T01 is P1 screen
 | T02 | done | done | transfer client abort after refusal |
 | T03 | done | done | real TipTap literal `&amp;entity;` |
 | T04 | done | done | real TipTap line-leading `&gt;` |
+
+**Gates:** `npm test` 2724 passed; Ext Host 4/4 passed @ VS Code 1.139.1
