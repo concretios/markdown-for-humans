@@ -16,12 +16,13 @@ name: AI Code Review
 #   1. Every third-party action below is pinned to a full commit SHA, not a
 #      moveable tag. A maintainer can update the SHA deliberately when bumping
 #      versions; an attacker who only controls the tag namespace cannot
-#      hijack the run.
+#      hijack the run. Do not use floating `@v2` here.
 #   2. The top-level `permissions:` block is set to the minimum required
-#      (read repo contents, write PR comments). `id-token`, `actions`, etc.
-#      are explicitly not granted.
-#   3. We do NOT execute PR code (no `npm install`, no `node …`, no shell
-#      that interprets PR content). The AI reviewer reads files only.
+#      (read repo contents, write PR comments, read actions for result ordering).
+#      `id-token` is explicitly not granted.
+#   3. We do NOT check out or execute PR code. concretios/ai-pr-reviewer@v2
+#      captures committed source itself (Node 24 action); no `npm install` and
+#      no shell that interprets PR content.
 #
 # When updating action versions, look up the new commit SHA and pin to it,
 # e.g. `gh api repos/<owner>/<repo>/git/refs/tags/<tag> --jq .object.sha`.
@@ -40,20 +41,23 @@ concurrency:
 jobs:
   review:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
+      actions: read
       contents: read
       pull-requests: write
     steps:
-      # actions/checkout@v4 — pinned to commit SHA (tag v4)
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      # concretios/ai-pr-reviewer@v2.0.0 — pinned to immutable release SHA
+      # (do not use floating @v2 with pull_request_target / secrets).
+      - uses: concretios/ai-pr-reviewer@486ca9faf54287d4ac29c5c7bff5d20b2f53d558 # v2.0.0
+        id: review
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
-          fetch-depth: 0
-          persist-credentials: false
-
-      # concretios/ai-pr-reviewer@v1 — pinned to commit SHA (tag v1)
-      - uses: concretios/ai-pr-reviewer@7d151e668dce51de3022b95ecfab53b0a69cc5a2
-        with:
+          github_token: ${{ github.token }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
-          context_depth: changed-files
-          submit_review_verdict: true
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.review.outputs.report_directory != ''
+        with:
+          name: ai-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.review.outputs.report_directory }}
+          retention-days: 7
