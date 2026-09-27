@@ -559,4 +559,27 @@ describe('FeedbackSnapshotService', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.reason).toBe('block-content-mismatch');
   });
+
+  it('accepts soft-wrapped reference links via the renderer-equivalence fallback', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText = ['See [our docs][docs]', 'for details.', '', '[docs]: https://example.com'].join(
+      '\n'
+    );
+    const source = requirePrepared(service, sourceText);
+    // TipTap serializes the visible soft break as a hard-break (`  \n`) while
+    // keeping the authored reference-link syntax. Fingerprints differ; the
+    // fallback must still resolve `[docs]` against whole-document references.
+    const result = service.finalize({
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+      descriptors: {
+        revision: 3,
+        blocks: [block(0, 'paragraph', 'See [our docs][docs]  \nfor details.')],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
 });

@@ -78,13 +78,15 @@ function escapeMarkdownSyntaxForProse(text: string): string {
  * `&lt;` before `[A-Za-z/!?]` so generics and literal tag examples stay text.
  *
  * Upstream encoder: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Decode in
- * reverse order; `&amp;` last so literal entity spellings survive.
+ * reverse order; `&amp;` last so literal entity spellings survive. Keep an
+ * ampersand escaped when it introduces another entity (`&amp;amp;`, `&amp;lt;`)
+ * so nested spellings do not lose a layer on every save.
  */
 function decodeNonTagHtmlEntities(encoded: string): string {
   return encoded
     .replace(/&gt;/g, '>')
     .replace(/&lt;(?![A-Za-z/!?])/g, '<')
-    .replace(/&amp;/g, '&');
+    .replace(/&amp;(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[\da-fA-F]+);)/g, '&');
 }
 
 /**

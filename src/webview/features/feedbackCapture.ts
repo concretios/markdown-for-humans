@@ -1137,6 +1137,8 @@ export function createFeedbackAnnotationModal(
     );
   }
 
+  let stickySubmissionError = false;
+
   function updateSubmissionState(): void {
     addButton.disabled = busy || feedbackInput.value.trim().length === 0;
     feedbackInput.readOnly = busy;
@@ -1146,7 +1148,10 @@ export function createFeedbackAnnotationModal(
     for (const button of colorButtons.values()) button.disabled = busy;
     updateHistoryButtons();
     updateCancelState();
-    if (feedbackInput.value.trim().length > 0) {
+    // Keep a failed submit/retake message visible until the user edits the
+    // feedback text (or succeeds). Clearing here whenever feedback is nonempty
+    // made Save failures look like a silent no-op.
+    if (feedbackInput.value.trim().length > 0 && !stickySubmissionError) {
       feedbackInput.removeAttribute('aria-invalid');
       validation.textContent = '';
     }
@@ -1159,6 +1164,7 @@ export function createFeedbackAnnotationModal(
   }
 
   function reportError(error: unknown, userMessage: string): void {
+    stickySubmissionError = true;
     validation.textContent = userMessage;
     feedbackInput.setAttribute('aria-invalid', 'true');
     options.onError?.(error);
@@ -1475,7 +1481,10 @@ export function createFeedbackAnnotationModal(
   undoButton.addEventListener('click', undo);
   redoButton.addEventListener('click', redo);
   clearButton.addEventListener('click', clear);
-  feedbackInput.addEventListener('input', updateSubmissionState);
+  feedbackInput.addEventListener('input', () => {
+    stickySubmissionError = false;
+    updateSubmissionState();
+  });
   retakeButton.addEventListener('click', () => void retake());
   cancelButton.addEventListener('click', cancel);
   addButton.addEventListener('click', () => void submit());

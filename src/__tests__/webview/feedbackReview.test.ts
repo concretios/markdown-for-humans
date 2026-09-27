@@ -9141,6 +9141,54 @@ describe('Feedback review controller', () => {
     expect(controller.getSession()).toBeNull();
   });
 
+  it('refuses outgoing ownership transfer while a text composer draft is open', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-old',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-k4p9',
+      items: [],
+    });
+    controller.openTextComposer({
+      startOrdinal: 0,
+      endOrdinal: 0,
+      focus: 'Guide',
+      startLine: 1,
+      endLine: 1,
+    });
+    expect(controller.draftSurfaceGate.activeKind()).toBe('text-composer');
+
+    const apply = {
+      type: 'feedback.session.transfer' as const,
+      phase: 'apply' as const,
+      role: 'old-owner' as const,
+      transferId: 'transfer-draft-guard',
+      requestId: 'resume-draft-guard',
+      oldSessionId: 'session-old',
+      newSessionId: 'session-new',
+      viewGeneration: 'view-old',
+      revision: 1,
+      documentVersion: 7,
+      sourceSha256: 'a'.repeat(64),
+      peerLockMessage: 'Feedback is active in another editor split.',
+      session: {
+        sessionId: 'session-new',
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [],
+        items: [],
+      },
+    };
+
+    expect(controller.prepareSessionTransfer(apply)).toBe(false);
+    expect(controller.getSession()?.sessionId).toBe('session-old');
+    expect(controller.draftSurfaceGate.activeKind()).toBe('text-composer');
+  });
+
   it('rolls back staged incoming and outgoing transfers to their prior review state', () => {
     const incomingEditor = createEditorFixture();
     const incoming = createFeedbackReviewController({ editor: incomingEditor, host });

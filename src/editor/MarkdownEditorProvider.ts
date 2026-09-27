@@ -2726,12 +2726,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         .createHash('sha256')
         .update(pending.document.getText(), 'utf8')
         .digest('hex');
+      const expectedTextSha256 = this.feedbackSessionSourceTextSha256(pending.oldSession);
       if (
         current !== pending.oldSession ||
         current.phase !== 'resuming' ||
         current.invalidated ||
         this.getDocumentVersion(pending.document) !== pending.documentVersion ||
-        documentSha256 !== pending.sourceSha256
+        documentSha256 !== expectedTextSha256
       ) {
         this.beginFeedbackSessionTransferRollback(documentKey, pending);
         return;
@@ -4588,6 +4589,27 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   }
 
   /**
+   * TextDocument text digest for an active Feedback session's frozen source.
+   * VS Code strips a leading UTF-8 BOM from `getText()`, while
+   * `store.snapshot.sourceSha256` hashes saved bytes including that BOM — so
+   * TextDocument comparisons must use this text digest, not the byte digest.
+   */
+  private feedbackSessionSourceTextSha256(session: ActiveFeedbackSession): string {
+    return computeFeedbackTextSha256(this.decodeFeedbackSourceText(session.sourceBytes));
+  }
+
+  /** Decode frozen source bytes the same way snapshot preparation omits a UTF-8 BOM. */
+  private decodeFeedbackSourceText(sourceBytes: Buffer): string {
+    const hasUtf8Bom =
+      sourceBytes.byteLength >= 3 &&
+      sourceBytes[0] === 0xef &&
+      sourceBytes[1] === 0xbb &&
+      sourceBytes[2] === 0xbf;
+    const payload = hasUtf8Bom ? sourceBytes.subarray(3) : sourceBytes;
+    return new TextDecoder('utf-8', { fatal: true }).decode(payload);
+  }
+
+  /**
    * Returns a commit guard that re-reads the exact source before and after an
    * atomic report write. VS Code change events improve responsiveness, but the
    * filesystem hash remains authoritative across external tools and races.
@@ -6027,7 +6049,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         .createHash('sha256')
         .update(document.getText(), 'utf8')
         .digest('hex');
-      if (documentSha256 !== session.store.snapshot.sourceSha256) {
+      if (documentSha256 !== this.feedbackSessionSourceTextSha256(session)) {
         throw new FeedbackSessionError(
           'MD4H-FB-SNAPSHOT-001',
           'The Markdown source changed outside the frozen feedback snapshot.'
@@ -7130,7 +7152,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
             .createHash('sha256')
             .update(document.getText(), 'utf8')
             .digest('hex');
-          if (currentSha256 !== current.store.snapshot.sourceSha256 && !current.invalidated) {
+          if (
+            currentSha256 !== this.feedbackSessionSourceTextSha256(current) &&
+            !current.invalidated
+          ) {
             current.invalidated = true;
             this.postFeedbackMessage(current.ownerWebview, {
               type: 'feedback.invalidated',
@@ -10878,6 +10903,23 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
             this.getEditViewGeneration(options.sourceWebview)
         )
       : content;
+
+    // Image persistence is asynchronous. A concurrent source change (or
+    // renderer replacement) during that wait must not overwrite newer bytes.
+    if (
+      options?.sourceWebview &&
+      options.viewGeneration !== undefined &&
+      this.editViewGenerations.get(options.sourceWebview) !== options.viewGeneration
+    ) {
+      return false;
+    }
+    if (
+      options?.baseDocumentVersion !== undefined &&
+      this.getDocumentVersion(document) !== options.baseDocumentVersion
+    ) {
+      return false;
+    }
+    if (options?.signal?.aborted) return false;
 
     // Skip if content unchanged (avoid redundant edits)
     const unwrappedContent = this.unwrapFrontmatterFromWebview(effectiveContent);

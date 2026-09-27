@@ -260,12 +260,22 @@ export function isMarkdownStructurallyEquivalent(a: string, b: string): boolean 
  * and matching italic/bold spans split at that break, plus single-paragraph
  * list tightness, without losing content, formatting or real block structure.
  */
-export function isMarkdownRendererEquivalent(a: string, b: string): boolean {
+export type MarkdownReferenceMap = Record<
+  string,
+  { readonly title: string; readonly href: string }
+>;
+
+export function isMarkdownRendererEquivalent(
+  a: string,
+  b: string,
+  references?: MarkdownReferenceMap
+): boolean {
   return isEquivalentWhenRendered(
     normalizeSpaceFriendlyImagePaths(a),
     normalizeSpaceFriendlyImagePaths(b),
     rendererMd,
-    true
+    true,
+    references
   );
 }
 
@@ -274,14 +284,17 @@ function isEquivalentWhenRendered(
   a: string,
   b: string,
   renderer: MarkdownIt,
-  useRendererNormalization: boolean
+  useRendererNormalization: boolean,
+  references?: MarkdownReferenceMap
 ): boolean {
   if (a === b) return true;
   try {
-    const tokensA = renderer.parse(a, {});
-    const tokensB = renderer.parse(b, {});
-    const renderedA = renderer.renderer.render(tokensA, renderer.options, {});
-    const renderedB = renderer.renderer.render(tokensB, renderer.options, {});
+    const envA = references ? { references } : {};
+    const envB = references ? { references } : {};
+    const tokensA = renderer.parse(a, envA);
+    const tokensB = renderer.parse(b, envB);
+    const renderedA = renderer.renderer.render(tokensA, renderer.options, envA);
+    const renderedB = renderer.renderer.render(tokensB, renderer.options, envB);
     // An exact match before any whitespace normalization is the strongest
     // possible proof of equivalence: nothing was collapsed away, so a tag
     // TipTap converts to equivalent native syntax (e.g. <strong> -> **bold**)
@@ -296,10 +309,10 @@ function isEquivalentWhenRendered(
       normalizeInlineMarksAtBreaks(tokensB);
       return (
         canonicalizeMarkLinkNesting(
-          normalizeRenderedHtml(renderer.renderer.render(tokensA, renderer.options, {}))
+          normalizeRenderedHtml(renderer.renderer.render(tokensA, renderer.options, envA))
         ) ===
         canonicalizeMarkLinkNesting(
-          normalizeRenderedHtml(renderer.renderer.render(tokensB, renderer.options, {}))
+          normalizeRenderedHtml(renderer.renderer.render(tokensB, renderer.options, envB))
         )
       );
     }
