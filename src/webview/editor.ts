@@ -28,6 +28,7 @@ import { TabIndentation } from './extensions/tabIndentation';
 import { GitHubAlerts } from './extensions/githubAlerts';
 import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
+import { SoftBreak } from './extensions/softBreak';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
@@ -246,6 +247,16 @@ let aiContextSessionSkipSave = false;
 // kept in sync via `update` and `settingsUpdate` messages from the host.
 let aiContextSkipSaveWarningSetting = false;
 let blankLineMode: BlankLineMode = 'strip';
+// Mirrors the user setting `markdownForHumans.render.singleLineBreaks`, kept in
+// sync via `update` and `settingsUpdate` messages from the host. Controls the
+// marked `breaks` option: true renders a single newline as a hard break (<br>),
+// false treats it as a CommonMark soft break (a space). Defaults to true so the
+// out-of-the-box behavior is unchanged. Because `breaks` is a parse-time option,
+// the value is read when the editor is constructed (see initializeEditor).
+let renderSingleLineBreaks = true;
+// Reference to the marked instance owned by the @tiptap/markdown extension,
+// captured in initializeEditor so a live setting change can update its options.
+let markedInstanceRef: { setOptions?: (options: Record<string, unknown>) => void } | null = null;
 // Mirrors `markdownForHumans.formattingShortcuts.enabled`. When false, the
 // editor stops intercepting Cmd/Ctrl+B/I/U so those chords reach VS Code's own
 // keybindings instead of toggling bold/italic/underline in-editor.
@@ -611,6 +622,7 @@ function initializeEditor(initialContent: string) {
           },
         }),
         MarkdownParagraph, // Custom paragraph with empty-paragraph filtering in renderMarkdown
+        SoftBreak, // CommonMark soft break node, used when render.singleLineBreaks is off
         CodeBlockWithCopy.configure({
           lowlight,
           HTMLAttributes: {
@@ -624,7 +636,10 @@ function initializeEditor(initialContent: string) {
         Markdown.configure({
           markedOptions: {
             gfm: true, // GitHub Flavored Markdown for tables, task lists
-            breaks: true, // Preserve single newlines as <br>
+            // When true, a single newline becomes a hard break (<br>). When false,
+            // it is a CommonMark soft break (a space), so hard-wrapped paragraphs
+            // flow into one line. Controlled by markdownForHumans.render.singleLineBreaks.
+            breaks: renderSingleLineBreaks,
           },
         }),
         HtmlPreservingTable.configure({
@@ -754,7 +769,14 @@ function initializeEditor(initialContent: string) {
       const markedInstance =
         markdownStorage.markdown?.instance ?? markdownStorage.storage?.markdown?.instance;
       if (markedInstance) {
-        installBlankLineLexerNormalizer(markedInstance);
+        // The predicate reads the module flag live, so a settings change is
+        // picked up on the next parse without reinstalling the wrapper.
+        installBlankLineLexerNormalizer(markedInstance, () => !renderSingleLineBreaks);
+        // Keep a reference so a live change to markdownForHumans.render.singleLineBreaks
+        // can update the marked `breaks` option without rebuilding the editor.
+        markedInstanceRef = markedInstance as {
+          setOptions?: (options: Record<string, unknown>) => void;
+        };
       }
     } catch (error) {
       console.warn('[MD4H] Failed to install blank-line lexer normalizer:', error);
@@ -1113,6 +1135,11 @@ window.addEventListener('message', (event: MessageEvent) => {
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
         }
+        if (typeof message.renderSingleLineBreaks === 'boolean') {
+          // On the initial payload this runs before initializeEditor (below), so
+          // the editor is constructed with the correct marked `breaks` option.
+          renderSingleLineBreaks = message.renderSingleLineBreaks;
+        }
         // Store imagePath setting if present
         if (typeof message.imagePath === 'string') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1153,6 +1180,9 @@ window.addEventListener('message', (event: MessageEvent) => {
         }
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
+        }
+        if (typeof message.renderSingleLineBreaks === 'boolean') {
+          applyRenderSingleLineBreaks(message.renderSingleLineBreaks);
         }
         // Update imagePath setting
         if (typeof message.imagePath === 'string') {
@@ -1920,6 +1950,27 @@ function shouldSuppressFormattingShortcut(
   return (
     isMod && !formattingShortcutsEnabled && FORMATTING_SHORTCUT_KEYS.includes(key.toLowerCase())
   );
+}
+
+/**
+ * Apply a live change to `markdownForHumans.render.singleLineBreaks`.
+ *
+ * `breaks` is a marked parse-time option, so its effect is baked into the
+ * document when the source is parsed. We update the module flag and the live
+ * marked instance so the new value is used the next time content is parsed
+ * (when the document is reopened or the host re-sends content). We deliberately
+ * do not re-parse the current in-memory document: once it was parsed with
+ * breaks:true, single newlines already became explicit hard-break nodes, so
+ * re-parsing the serialized output would not merge them back. The setting
+ * description tells users the change takes effect on (re)open.
+ */
+function applyRenderSingleLineBreaks(next: boolean): void {
+  renderSingleLineBreaks = next;
+  try {
+    markedInstanceRef?.setOptions?.({ breaks: next });
+  } catch (error) {
+    console.warn('[MD4H] Failed to update marked breaks option:', error);
+  }
 }
 
 /**

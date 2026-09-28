@@ -8,6 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### What's New
+
+#### CommonMark Soft Line Breaks (opt-in)
+Choose how a single newline in the Markdown source is rendered:
+- New `markdownForHumans.render.singleLineBreaks` setting: enabled by default (a single newline becomes a hard line break `<br>`, matching previous behavior)
+- Disable it to follow the CommonMark/GFM specification, where a single newline is a *soft* break (a space) so hard-wrapped paragraphs flow back into one continuous line, matching VS Code's built-in Markdown preview
+- Helpful when reading or editing hard-wrapped documents such as product documentation
+- Soft breaks are kept as their own node (rendered as a space, saved as a newline), so an untouched hard-wrapped paragraph is saved back with its original wrapping instead of a trailing two-space break on every wrapped line
+- Explicit hard breaks (two trailing spaces or a backslash) are still honoured, and blank-line paragraph separation is unaffected
+- Because `breaks` is a parse-time option, the change takes effect when a document is (re)opened
+
 ---
 
 ## [0.3.0] - 2026-08-07

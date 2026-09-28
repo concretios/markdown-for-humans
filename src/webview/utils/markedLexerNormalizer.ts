@@ -403,23 +403,130 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
   return out as T;
 }
 
+/** Token type consumed by the SoftBreak node extension. */
+export const SOFT_BREAK_TOKEN = 'softbreak';
+
+const NEWLINE = '\n';
+
+function softBreakToken(): RawToken {
+  return { type: SOFT_BREAK_TOKEN, raw: NEWLINE };
+}
+
+function isBareNewlineBreak(token: RawToken): boolean {
+  return token.type === 'br' && token.raw === NEWLINE;
+}
+
+/**
+ * Split an inline `text` token on bare newlines, interleaving `softbreak`
+ * tokens. `raw` on each piece is set to that piece's text: the tiptap text
+ * handler reads `text`, and nothing downstream reads `raw` on inline text.
+ */
+function splitTextTokenOnNewlines(token: RawToken): RawToken[] {
+  const text = token.text as string;
+  if (!text.includes(NEWLINE)) return [token];
+  return text.split(NEWLINE).flatMap((piece, index) => {
+    const pieces: RawToken[] = index > 0 ? [softBreakToken()] : [];
+    if (piece.length > 0) pieces.push({ ...token, raw: piece, text: piece });
+    return pieces;
+  });
+}
+
+type TokenMapper = (tokens: RawToken[]) => RawToken[];
+
+function mapCellTokens(cell: RawToken, map: TokenMapper): RawToken {
+  return Array.isArray(cell.tokens) ? { ...cell, tokens: map(cell.tokens as RawToken[]) } : cell;
+}
+
+function hasChildTokens(token: RawToken): boolean {
+  return (
+    Array.isArray(token.tokens) ||
+    Array.isArray(token.items) ||
+    Array.isArray(token.header) ||
+    Array.isArray(token.rows)
+  );
+}
+
+/**
+ * Return a copy of `token` with `map` applied to every child token array:
+ * `tokens` (paragraph/heading/blockquote/list_item inlines), `items` (lists),
+ * and table cells (`header` is a cell array, `rows` an array of cell arrays).
+ */
+function mapChildTokens(token: RawToken, map: TokenMapper): RawToken {
+  const next: RawToken = { ...token };
+  if (Array.isArray(token.tokens)) next.tokens = map(token.tokens as RawToken[]);
+  if (Array.isArray(token.items)) next.items = map(token.items as RawToken[]);
+  if (Array.isArray(token.header)) {
+    next.header = (token.header as RawToken[]).map(cell => mapCellTokens(cell, map));
+  }
+  if (Array.isArray(token.rows)) {
+    next.rows = (token.rows as RawToken[][]).map(row =>
+      Array.isArray(row) ? row.map(cell => mapCellTokens(cell, map)) : row
+    );
+  }
+  return next;
+}
+
+/**
+ * Give CommonMark soft line breaks (spec §6.8) their own token so the
+ * SoftBreak node can render them as a space on screen while serialising them
+ * back to "\n" on save.
+ *
+ * With the marked `breaks` option off, a single source newline stays as a
+ * literal `\n` inside the inline `text` token. That `\n` would flow into the
+ * ProseMirror text node unchanged and, because prosemirror-view renders the
+ * editable surface with `white-space: break-spaces`, still display as a line
+ * break. This pass:
+ *
+ * - splits inline `text` tokens on `\n`, inserting a `softbreak` token at
+ *   each newline;
+ * - demotes `br` tokens whose raw is exactly a bare newline to `softbreak`.
+ *   Explicit hard breaks (trailing two spaces `"  \n"` or a backslash
+ *   `"\\\n"`) have a different raw and are preserved, matching CommonMark;
+ * - never touches `code`/`codespan` tokens (distinct types; newlines there
+ *   are content); recurses through `tokens`/`items`/table cells.
+ *
+ * Pure: returns a new token array and never mutates the input.
+ */
+export function emitSoftBreakTokens<T extends RawToken[]>(tokens: T): T {
+  const out = tokens.flatMap((token): RawToken[] => {
+    if (!token || typeof token.type !== 'string') return [token];
+    if (isBareNewlineBreak(token)) return [softBreakToken()];
+    if (hasChildTokens(token)) return [mapChildTokens(token, emitSoftBreakTokens)];
+    if (token.type === 'text' && typeof token.text === 'string') {
+      return splitTextTokenOnNewlines(token);
+    }
+    return [token];
+  });
+  return out as T;
+}
+
 /**
  * Wrap a marked instance's `lexer` function so every parse pass routes
- * through `normalizeBlankLineGreedyTokens`. Idempotent: re-installing on the
- * same instance is a no-op.
+ * through `normalizeBlankLineGreedyTokens`, and, while `shouldEmitSoftBreaks`
+ * returns true (markdownForHumans.render.singleLineBreaks off), through
+ * `emitSoftBreakTokens`.
+ *
+ * The wrapper is installed once per instance; re-installing only swaps in the
+ * latest predicate. marked is a module-level singleton, so a predicate frozen
+ * from the first install would pin the setting for the life of the webview.
  */
-export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
+export function installBlankLineLexerNormalizer(
+  markedInstance: unknown,
+  shouldEmitSoftBreaks?: () => boolean
+): void {
   const inst = markedInstance as {
     lexer?: (src: string, options?: unknown) => RawToken[];
     __mdh_blankLineNormalizerInstalled?: boolean;
+    __mdh_shouldEmitSoftBreaks?: () => boolean;
   };
   if (!inst || typeof inst.lexer !== 'function') return;
+  inst.__mdh_shouldEmitSoftBreaks = shouldEmitSoftBreaks;
   if (inst.__mdh_blankLineNormalizerInstalled) return;
 
   const original = inst.lexer.bind(inst);
   inst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
-    const tokens = original(src, options);
-    return normalizeBlankLineGreedyTokens(tokens);
+    const tokens = normalizeBlankLineGreedyTokens(original(src, options));
+    return inst.__mdh_shouldEmitSoftBreaks?.() ? emitSoftBreakTokens(tokens) : tokens;
   };
   inst.__mdh_blankLineNormalizerInstalled = true;
 }

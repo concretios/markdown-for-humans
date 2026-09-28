@@ -165,6 +165,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
     return value === 'preserve' ? 'preserve' : 'strip';
   }
 
+  private getRenderSingleLineBreaks(): boolean {
+    const config = vscode.workspace.getConfiguration();
+    return config.get<boolean>('markdownForHumans.render.singleLineBreaks', true);
+  }
+
   private async syncMarkdownlintMd012(mode: BlankLineMode): Promise<void> {
     const markdownlintConfig = vscode.workspace.getConfiguration('markdownlint');
     const existing =
@@ -515,6 +520,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
         e.affectsConfiguration('markdownForHumans.imagePathBase') ||
         e.affectsConfiguration('markdownForHumans.imagePreview.hover.enabled') ||
         e.affectsConfiguration('markdownForHumans.blankLines.mode') ||
+        e.affectsConfiguration('markdownForHumans.render.singleLineBreaks') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
@@ -550,6 +556,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           true
         );
         const blankLineMode = this.getBlankLineMode();
+        const renderSingleLineBreaks = this.getRenderSingleLineBreaks();
         const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         if (e.affectsConfiguration('markdownForHumans.blankLines.mode')) {
           void this.syncMarkdownlintMd012(blankLineMode).catch(error => {
@@ -577,6 +584,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
           zoom: zoom,
           formattingShortcutsEnabled,
           blankLineMode,
+          renderSingleLineBreaks,
           enableMath: enableMath,
         });
       }
@@ -692,6 +700,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       true
     );
     const blankLineMode = this.getBlankLineMode();
+    const renderSingleLineBreaks = this.getRenderSingleLineBreaks();
     const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
 
     webview.postMessage({
@@ -707,6 +716,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider {
       zoom: zoom,
       formattingShortcutsEnabled,
       blankLineMode,
+      renderSingleLineBreaks,
       enableMath: enableMath,
     });
   }
