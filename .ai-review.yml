@@ -3,8 +3,5 @@
 comment_severity_threshold: low
 post_inline_comments: true
 rules_paths:
-  - review-rules.md
-  - CLAUDE.md
   - AGENTS.md
-  - GEMINI.md
   - vibe-coding-rules/
