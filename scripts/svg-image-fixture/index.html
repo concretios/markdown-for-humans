@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="/editor.css" />
+    <style>
+      :root {
+        --vscode-editor-background: #fff;
+        --vscode-editor-foreground: #242424;
+        --vscode-foreground: #242424;
+        --vscode-font-family: Arial, sans-serif;
+        --vscode-editorWidget-background: #eee;
+        --vscode-panel-border: #999;
+        --vscode-button-background: #0564c1;
+        --vscode-button-foreground: #fff;
+        --vscode-focusBorder: #0564c1;
+      }
+      .vscode-dark {
+        --vscode-editor-background: #1e1e1e;
+        --vscode-editor-foreground: #eee;
+        --vscode-foreground: #eee;
+        --vscode-editorWidget-background: #333;
+        --vscode-panel-border: #777;
+      }
+      .vscode-high-contrast {
+        --vscode-editor-background: #000;
+        --vscode-editor-foreground: #fff;
+        --vscode-foreground: #fff;
+        --vscode-editorWidget-background: #000;
+        --vscode-panel-border: #fff;
+        --vscode-contrastBorder: #ffff00;
+      }
+      body {
+        margin: 0;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+      }
+    </style>
+  </head>
+  <body class="vscode-light">
+    <main id="editor" class="markdown-editor"></main>
+    <script src="/renderer.js"></script>
+  </body>
+</html>

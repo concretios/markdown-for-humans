@@ -2493,6 +2493,67 @@
   .image-wrapper + .image-wrapper {
     margin-top: 0.25em;
   }
+
+  .image-load-failed .markdown-image {
+    display: none;
+  }
+
+  .image-load-error:not([hidden]) {
+    display: block;
+    padding: 0.5em;
+    border: 1px solid var(--vscode-inputValidation-errorBorder);
+    color: var(--vscode-errorForeground);
+    overflow-wrap: anywhere;
+    font: inherit;
+  }
+
+  .svg-display-size-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--vscode-widget-shadow);
+  }
+
+  .svg-display-size {
+    max-width: min(420px, calc(100vw - 32px));
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid var(--vscode-panel-border);
+    color: var(--vscode-foreground);
+    background: var(--vscode-editorWidget-background);
+    box-shadow: 0 8px 24px var(--vscode-widget-shadow);
+    font-family: var(--vscode-font-family);
+  }
+
+  .svg-display-size h2 { margin-top: 0; }
+  .svg-display-size label { display: grid; gap: 8px; }
+  .svg-display-size input {
+    padding: 8px;
+    color: var(--vscode-input-foreground);
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+  }
+  .svg-display-size-error { color: var(--vscode-errorForeground); }
+  .svg-display-size-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+  .svg-display-size button {
+    padding: 6px 12px;
+    color: var(--vscode-button-secondaryForeground);
+    background: var(--vscode-button-secondaryBackground);
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .svg-display-size button[type="submit"] {
+    color: var(--vscode-button-foreground);
+    background: var(--vscode-button-background);
+  }
+  .svg-display-size :focus-visible {
+    outline: 2px solid var(--vscode-focusBorder);
+    outline-offset: 2px;
+  }
   
   /* Image menu button - three-dots menu (replaces resize icon) */
   .image-menu-button {

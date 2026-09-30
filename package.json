@@ -325,6 +325,7 @@
     "test": "jest",
     "test:integration": "npm run build:release && vscode-test",
     "test:feedback-capture": "node scripts/feedback-capture-fixture/run.mjs",
+    "test:svg-browser": "node scripts/svg-image-fixture/run.mjs",
     "test:feedback-annotations": "node --test scripts/feedback-annotation-fixture/verification.test.mjs && node scripts/feedback-annotation-fixture/run.mjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",

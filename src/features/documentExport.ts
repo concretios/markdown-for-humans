@@ -8,6 +8,7 @@
  * @file documentExport.ts - PDF and Word document export
  * @description Handles exporting markdown documents to PDF (via local Chrome) and Word (via docx).
  * Applies export theme settings, embeds Mermaid diagrams as high-quality images,
+ * restores authored image destinations for PDF in an isolated Chrome session,
  * and reads dimensions from a small, bounded set of explicitly supported formats.
  */
 
@@ -16,6 +17,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
+import { pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
 
 type SafeDimensionImageFormat = 'png' | 'jpeg' | 'gif' | 'webp' | 'bmp' | 'ico' | 'svg';
@@ -1221,7 +1223,24 @@ async function promptForChromePathInlineResolver(
 }
 
 /**
- * Export to PDF using the user's local Chrome/Chromium installation
+ * Restore authored image URLs before PDF sanitization. Webview resource URLs
+ * belong to VS Code and cannot be reused by the separate Chrome print process.
+ * Keep encoded path characters, queries, fragments, and display-size attributes
+ * intact so Chrome resolves them against the document's trusted base directory.
+ */
+function preparePdfImageSources(html: string): string {
+  const $ = cheerio.load(html, undefined, false);
+  $('img.ProseMirror-separator:not([src]):not([srcset])').remove();
+  $('img[data-markdown-src]').each((_, image) => {
+    const originalSource = $(image).attr('data-markdown-src');
+    if (originalSource) $(image).attr('src', originalSource);
+  });
+  return $.html();
+}
+
+/**
+ * Export to PDF using the user's local Chrome/Chromium installation with a
+ * temporary incognito profile. The profile is removed after the print process exits.
  *
  * @returns true if export succeeded, false if user cancelled
  */
@@ -1242,14 +1261,17 @@ async function exportToPDF(
   }
 
   // Build complete HTML document
-  const completeHtml = buildExportHTML(html, theme, 'pdf');
+  const completeHtml = buildExportHTML(preparePdfImageSources(html), theme, 'pdf');
 
   // Set content with the document's directory as the base URL
   // This allows relative paths (src="./foo.png") to be resolved correctly by Chrome
   const docDir = getDocumentBasePath(document);
 
   // Inject base tag to ensure relative paths are resolved correctly
-  const htmlWithBase = completeHtml.replace('<head>', `<head><base href="file://${docDir}/">`);
+  const baseHref = pathToFileURL(docDir + path.sep)
+    .href.replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
+  const htmlWithBase = completeHtml.replace('<head>', `<head><base href="${baseHref}">`);
 
   // Write the HTML to a temp file for Chrome to print
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'md4h-export-'));
@@ -1273,6 +1295,10 @@ async function exportToPDF(
     // See SECURITY review §H3.
     const chromeArgs = [
       '--headless=chrome',
+      // QA-001: a normal Chrome profile can stay alive after printing. Incognito
+      // exits with the print session; a temporary profile avoids the user's live browser.
+      '--incognito',
+      `--user-data-dir=${path.join(tempDir, 'chrome-profile')}`,
       '--disable-gpu',
       '--no-first-run',
       '--no-default-browser-check',
@@ -1280,7 +1306,7 @@ async function exportToPDF(
       '--disable-software-rasterizer',
       '--disable-dev-shm-usage',
       '--print-to-pdf=' + outputPath,
-      `file://${tempHtmlPath}`,
+      pathToFileURL(tempHtmlPath).href,
     ];
 
     progress.report({ message: 'Rendering PDF...', increment: 30 });

@@ -10,6 +10,7 @@
  * Provides a simple input dialog for renaming images.
  * The actual rename operation is handled by the extension.
  */
+import { splitImageSource } from '../../shared/imageSource';
 
 interface VsCodeApi {
   postMessage(message: unknown): void;
@@ -23,19 +24,16 @@ type ReferencePayload = {
 };
 
 /**
- * Extract filename without extension from a path
+ * Extract a decoded filename, excluding URL suffixes before decoding delimiters.
  */
-function getFilenameWithoutExt(path: string): string {
-  const filename = path.split('/').pop() || path;
-  return filename.replace(/\.[^.]+$/, '');
-}
-
-/**
- * Get the file extension from a path
- */
-function getExtension(path: string): string {
-  const match = path.match(/\.([^.]+)$/);
-  return match ? match[1] : '';
+function getImageFilename(source: string): string {
+  const pathname = splitImageSource(source).path;
+  const filename = pathname.split(/[/\\]/).pop() || pathname;
+  try {
+    return decodeURIComponent(filename);
+  } catch {
+    return filename;
+  }
 }
 
 /**
@@ -56,8 +54,9 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
     return;
   }
 
-  const currentName = getFilenameWithoutExt(imagePath);
-  const extension = getExtension(imagePath);
+  const filename = getImageFilename(imagePath);
+  const currentName = filename.replace(/\.[^.]+$/, '');
+  const extension = filename.match(/\.([^.]+)$/)?.[1] || '';
 
   // Create overlay
   const overlay = document.createElement('div');
@@ -155,7 +154,7 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
       <label style="display: block; margin-bottom: 8px; font-size: 13px; color: var(--vscode-descriptionForeground);">
         New filename (without extension)
       </label>
-      <input type="text" class="rename-input" value="${currentName}" style="
+      <input type="text" class="rename-input" style="
         width: 100%;
         padding: 8px 12px;
         font-size: 14px;
@@ -166,9 +165,7 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
         outline: none;
         box-sizing: border-box;
       "/>
-      <div style="margin-top: 4px; font-size: 12px; color: var(--vscode-descriptionForeground);">
-        Extension: .${extension}
-      </div>
+      <div class="rename-extension" style="margin-top: 4px; font-size: 12px; color: var(--vscode-descriptionForeground);"></div>
     </div>
 
     <div id="rename-collision" style="
@@ -235,6 +232,10 @@ export function showImageRenameDialog(img: HTMLImageElement, vscodeApi: VsCodeAp
   document.body.appendChild(overlay);
 
   const input = dialog.querySelector('.rename-input') as HTMLInputElement;
+  // Filename text can contain quotes and markup characters after URL decoding.
+  input.value = currentName;
+  const extensionLabel = dialog.querySelector('.rename-extension') as HTMLElement;
+  extensionLabel.textContent = `Extension: .${extension}`;
   const cancelBtn = dialog.querySelector('.cancel-btn') as HTMLButtonElement;
   const renameBtn = dialog.querySelector('.rename-btn') as HTMLButtonElement;
   const impactRoot = dialog.querySelector('#rename-impact') as HTMLElement;

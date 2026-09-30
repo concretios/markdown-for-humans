@@ -33,7 +33,11 @@ const MAX_CAPTURE_RESOURCE_REFERENCES = 1_024;
 const RESOURCE_TIMEOUT_MS = 5_000;
 const MERMAID_WRAPPER_SELECTOR = '.mermaid-wrapper';
 const MERMAID_RENDER_STATE_ATTRIBUTE = 'data-md4h-mermaid-state';
+// ProseMirror adds an empty img beside inline atoms for caret navigation.
+// Restrict the exemption to source-less editor chrome so real failures remain visible.
+const PROSEMIRROR_SEPARATOR_SELECTOR = 'img.ProseMirror-separator:not([src]):not([srcset])';
 const CAPTURE_CHROME_SELECTOR = [
+  PROSEMIRROR_SEPARATOR_SELECTOR,
   '.feedback-annotation-layer',
   '.feedback-marker-layer',
   '.feedback-card-layer',
@@ -601,12 +605,15 @@ function consumeCaptureCloneNode(budget: CaptureCloneBudget): void {
   }
 }
 
+/** Clone one counted node and retain only document images for decode readiness. */
 function cloneCaptureNodeShallow<TNode extends Node>(
   source: TNode,
   budget: CaptureCloneBudget
 ): TNode {
   consumeCaptureCloneNode(budget);
-  if (source instanceof HTMLImageElement) budget.sourceImages.add(source);
+  if (source instanceof HTMLImageElement && !source.matches(PROSEMIRROR_SEPARATOR_SELECTOR)) {
+    budget.sourceImages.add(source);
+  }
   return source.cloneNode(false) as TNode;
 }
 

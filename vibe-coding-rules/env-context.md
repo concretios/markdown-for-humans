@@ -156,3 +156,7 @@ Shared-runner gates do not prove physical Windows i5/16 GB p95 latency, memory u
 4. Keep typing callbacks free of Markdown serialization and document-wide loops.
 5. Run focused tests, the full suite, lint and release build verification.
 6. For runtime changes, test VS Code 1.98.0 and stable. For performance claims, keep the physical Windows/manual evidence separate from CI.
+
+## SVG image boundary
+
+`CustomImage` renders SVG through the existing resource `<img>` path. `htmlImageSource.ts` preserves authored HTML image source and explicit dimensions. `svgDisplaySize.ts` changes one image occurrence through ordinary document transactions. `shared/imageSource.ts` separates local paths from URL suffixes, and `editor/imageSourceReferences.ts` edits exact rename references. SVG file imports preserve bytes; raster resize and redo reject vector targets at the host boundary. The real-browser regression is `scripts/svg-image-fixture/run.mjs`.

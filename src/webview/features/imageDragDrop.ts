@@ -26,6 +26,7 @@ import {
   getDefaultImagePath,
 } from './imageConfirmation';
 import { showHugeImageDialog, isHugeImage } from './hugeImageDialog';
+import { isSvgImageSource } from '../../shared/imageSource';
 import {
   IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
   MAX_PENDING_IMAGE_SAVES,
@@ -667,10 +668,77 @@ export function getImageFiles(dt: DataTransfer | null): File[] {
 }
 
 /**
- * Check if a file is a supported image type
+ * Recognize candidate image files synchronously for drag/paste event handling.
+ * SVG candidates with absent or generic MIME still require validateImageFile()
+ * before insertion; a filename alone never authorizes a file write.
  */
 export function isImageFile(file: File): boolean {
-  return SUPPORTED_IMAGE_TYPES.includes(file.type);
+  const mimeType = file.type.split(';', 1)[0].trim().toLowerCase();
+  // File.name is a literal filename: # and ? must not become URL suffixes.
+  if (isSvgImageSource(encodeURIComponent(file.name), mimeType)) {
+    return [
+      'image/svg+xml',
+      '',
+      'application/octet-stream',
+      'text/plain',
+      'text/xml',
+      'application/xml',
+    ].includes(mimeType);
+  }
+  return SUPPORTED_IMAGE_TYPES.includes(mimeType);
+}
+
+// Match the host's per-view image-byte ceiling before parsing XML or making a preview.
+const MAX_SVG_IMPORT_BYTES = 64 * 1024 * 1024;
+const validatedImageFiles = new WeakMap<File, Promise<boolean>>();
+
+/**
+ * Validate image candidates before saving. Raster types retain the existing MIME
+ * policy. SVG must be a bounded, well-formed XML document with an SVG root, even
+ * when its MIME is supplied. Parsing never attaches SVG markup to the live DOM.
+ * Read/parse failures return false so every caller can reject the file visibly.
+ */
+export function validateImageFile(file: File): Promise<boolean> {
+  if (!isImageFile(file)) return Promise.resolve(false);
+  if (!isSvgImageSource(encodeURIComponent(file.name), file.type)) return Promise.resolve(true);
+  if (file.size === 0 || file.size > MAX_SVG_IMPORT_BYTES) return Promise.resolve(false);
+  const cached = validatedImageFiles.get(file);
+  if (cached) return cached;
+
+  const validation = new Promise<boolean>(resolve => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve(false);
+    reader.onabort = () => resolve(false);
+    reader.onload = () => {
+      try {
+        const content = String(reader.result);
+        // Entity declarations are unnecessary for self-contained image documents
+        // and must not expand into unbounded XML while validating an import.
+        if (/<!ENTITY\s/i.test(content)) {
+          resolve(false);
+          return;
+        }
+        const document = new DOMParser().parseFromString(content, 'image/svg+xml');
+        const root = document.documentElement;
+        resolve(
+          root.localName === 'svg' &&
+            root.namespaceURI === 'http://www.w3.org/2000/svg' &&
+            document.getElementsByTagName('parsererror').length === 0
+        );
+      } catch (error) {
+        console.error('[MD4H] Failed to validate SVG:', error);
+        resolve(false);
+      }
+    };
+    try {
+      reader.readAsText(file);
+    } catch (error) {
+      console.error('[MD4H] Failed to read SVG:', error);
+      resolve(false);
+    }
+  });
+  validatedImageFiles.set(file, validation);
+  return validation;
 }
 
 /**
@@ -725,7 +793,9 @@ async function resizeImage(file: File, targetWidth: number, targetHeight: number
 }
 
 /**
- * Insert an image into the editor
+ * Insert an image into the editor.
+ * SVG imports preserve original bytes and never use raster resize options.
+ * Invalid SVGs report a visible error and release their pending reservation.
  *
  * @param editor - TipTap editor instance
  * @param file - Image file to insert
@@ -733,7 +803,7 @@ async function resizeImage(file: File, targetWidth: number, targetHeight: number
  * @param targetFolder - Target folder for saving
  * @param source - How the image was added ('dropped' or 'pasted')
  * @param pos - Optional insertion position
- * @param resizeOptions - Optional resize dimensions (from huge image dialog)
+ * @param resizeOptions - Optional raster resize dimensions (from huge image dialog)
  */
 export async function insertImage(
   editor: Editor,
@@ -753,26 +823,44 @@ export async function insertImage(
   let placeholderInserted = false;
 
   try {
-    // Resize image if requested (from huge image dialog)
+    if (!(await validateImageFile(file))) {
+      releasePendingImageSave(placeholderId);
+      vscodeApi.postMessage({
+        type: 'showError',
+        message: `Cannot insert "${file.name}". Select a supported image or a valid SVG no larger than 64 MiB.`,
+      });
+      return;
+    }
+    const isSvg = isSvgImageSource(encodeURIComponent(file.name), file.type);
+    // Vector display size belongs to the document. Canvas output would replace
+    // SVG source bytes with PNG bytes while retaining a misleading SVG filename.
     let imageFile = file;
-    if (resizeOptions) {
+    if (resizeOptions && !isSvg) {
       imageFile = await resizeImage(file, resizeOptions.width, resizeOptions.height);
     }
 
-    // Extract dimensions from the FINAL image (after resize if applicable)
-    // This ensures the filename reflects the actual saved dimensions
-    const dimensions = await getImageDimensions(imageFile);
+    // SVG has no fixed pixel resolution. Do not decode it just to infer
+    // raster dimensions or accidentally encode those dimensions in its name.
+    const dimensions = isSvg ? null : await getImageDimensions(imageFile);
     const finalDimensions: ImageDimensions = dimensions || { width: 0, height: 0 };
 
     // Convert to base64 for immediate preview
-    const base64 = await fileToBase64(imageFile);
+    const base64 = await fileToBase64(imageFile, isSvg ? 'image/svg+xml' : undefined);
     // Read the host payload before mutating TipTap. Once the placeholder is in
     // the document there must be no async gap before saveImage is posted,
     // otherwise a hidden non-retained webview can disappear with no host copy.
     const buffer = await imageFile.arrayBuffer();
+    // Non-retained webviews may disappear while validating or reading a file.
+    // A destroyed editor can no longer publish the host-owned pending marker.
+    if (editor.isDestroyed) {
+      releasePendingImageSave(placeholderId);
+      return;
+    }
 
     // Generate filename with source type and dimensions
-    const imageName = generateImageName(file.name, source, finalDimensions);
+    const originalName =
+      isSvg && !/\.svg$/i.test(file.name) ? `${file.name.replace(/\.[^.]+$/, '')}.svg` : file.name;
+    const imageName = generateImageName(originalName, source, finalDimensions);
 
     // Register the host-owned write before TipTap publishes the pending marker.
     // TipTap's update listener sends document edits synchronously from run(), so
@@ -788,7 +876,7 @@ export async function insertImage(
       placeholderId,
       name: imageName,
       data: new Uint8Array(buffer),
-      mimeType: file.type,
+      mimeType: isSvg ? 'image/svg+xml' : imageFile.type,
       targetFolder, // User-selected folder
     });
 
@@ -882,14 +970,15 @@ export function applyFailedImageCompletion(editor: Editor, placeholderId: string
 }
 
 /**
- * Convert file to base64 data URL for preview
+ * Convert original bytes to a data URL, optionally correcting the preview MIME
+ * for a validated SVG supplied with a missing or generic MIME type.
  */
-export function fileToBase64(file: File): Promise<string> {
+export function fileToBase64(file: File, mimeType?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(mimeType ? new Blob([file], { type: mimeType }) : file);
   });
 }
 

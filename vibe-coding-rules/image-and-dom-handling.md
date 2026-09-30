@@ -399,3 +399,21 @@ Use `src/__tests__/fixtures/epicReaderFriendly.ts` as canonical fixture for imag
 
 ---
 
+
+## 11. SVG rendering and display dimensions
+
+Keep SVG in an `<img>` resource context. Never inject SVG markup into the editor DOM. After decode, `CustomImage` gives unsized images a DOM-only natural width to prevent `fit-content` and `max-width: 100%` from collapsing viewBox-only SVGs. This fallback is not written to image node attributes. Authored width/height are validated and applied separately. Error and rejected-resolution states retain the authored destination and ignore late results after disposal.
+
+`htmlImageSource.ts` handles supported HTML `<img>` tokens, retains their exact original source while unchanged, and serializes deliberate dimension changes with escaped attributes. Block image tokens must remain paragraphs; inline images in lists/tables must stay inline. `MarkdownParagraph` overrides the upstream single-image unwrapping because this editor uses inline images; otherwise blank-line-separated image paragraphs merge during schema repair. Raw HTML equivalence remains strict, including Feedback mapping. Sized image round-trip tests must use production paragraph/list/table extensions.
+
+Local SVGs use `svgDisplaySize.ts`. Size changes are document transactions, not file writes. Apply, reset, undo, read-only locks, stale nodes and focus disposal require coverage. The raster resize/redo host boundaries reject SVG by path or bounded original-file signature before any backup/write. Legitimate original backup restoration is still supported.
+
+The shared paragraph renderer uses a backslash hard break after a leading sized HTML image when more Markdown follows. A two-space break at that boundary starts a CommonMark HTML block and makes the following Markdown literal. Keep authored HTML blocks unchanged, and preserve leading image indentation in the sync serializer so image-only indented blocks retain their existing parser path.
+
+Imports validate SVG XML and preserve exact bytes, including valid `.svg` files with absent/generic MIME. They bypass the huge-image raster dialog and canvas conversion while keeping pending-image capacity/ACK rules. Local paths are split from query/fragment before decoding through `shared/imageSource.ts`; resolve/reveal/metadata/rename must agree on file identity. Rename updates exact Markdown and HTML image source spans through `imageSourceReferences.ts` and the document edit queue.
+
+Generated destinations must encode each filesystem path segment exactly once with `encodeImageFilePath`, including literal `#`, `?`, and `%` in filenames or directories. Do not apply this encoder to authored URLs: their query/fragment remains a real suffix. Preview and Document Audit consume the same decoded file identity. Rename scanning includes the renderer's standalone space-containing paths and image-only indented blocks, while excluding tight-list literals, mixed prose/code, escaped examples and comments. Keep renderer/scanner parity tests when changing either grammar.
+
+Run `npm run test:svg-browser` for real Chromium geometry, Display size, themes, narrow layouts, high DPI and Feedback capture. Jest alone cannot prove that a decoded SVG occupies space. Keep private documents outside the repository and use synthetic fixtures in tests.
+
+PDF preparation restores authored image destinations before sanitization and resolves them against an encoded document base URL. Print with an incognito profile under the temporary export directory, then remove that directory after process exit. Browser regression acceptance requires the expected SVG drawing, a natural successful Chrome exit, and the completed export notification. Terminating Chrome after a PDF appears is a test failure, not successful command completion.

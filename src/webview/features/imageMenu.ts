@@ -15,6 +15,7 @@
  */
 
 import type { Editor } from '@tiptap/core';
+import { showSvgDisplaySize } from './svgDisplaySize';
 
 // Track currently open menu to close on outside click
 let currentOpenMenu: HTMLElement | null = null;
@@ -41,8 +42,9 @@ export function createImageMenuButton(): HTMLButtonElement {
 /**
  * Create the dropdown menu element
  * @param isLocal - Whether the image is local (not external URL/data URI)
+ * @param isSvg - SVG uses document display sizing instead of raster file mutation
  */
-export function createImageMenu(isLocal: boolean = true): HTMLElement {
+export function createImageMenu(isLocal: boolean = true, isSvg: boolean = false): HTMLElement {
   const menu = document.createElement('div');
   menu.className = 'image-context-menu';
   menu.setAttribute('role', 'menu');
@@ -50,9 +52,9 @@ export function createImageMenu(isLocal: boolean = true): HTMLElement {
 
   // Build menu HTML
   let menuHTML = `
-    <div class="menu-item" role="menuitem" tabindex="0" data-action="resize">
+    <div class="menu-item" role="menuitem" tabindex="0" data-action="${isSvg ? 'displaySize' : 'resize'}">
       <span class="codicon codicon-edit-sparkle menu-icon"></span>
-      <span class="menu-label">Resize</span>
+      <span class="menu-label">${isSvg ? 'Display size' : 'Resize'}</span>
     </div>
     <div class="menu-item" role="menuitem" tabindex="0" data-action="rename">
       <span class="codicon codicon-edit menu-icon"></span>
@@ -165,7 +167,8 @@ export function showImageMenu(
   button: HTMLElement,
   img: HTMLImageElement,
   editor: Editor,
-  vscodeApi: unknown
+  vscodeApi: unknown,
+  getPos?: () => number | undefined
 ): void {
   // Close any other open menu first
   if (currentOpenMenu && currentOpenMenu !== menu) {
@@ -189,7 +192,10 @@ export function showImageMenu(
     if (menuItem) {
       const action = menuItem.getAttribute('data-action');
 
-      if (action === 'resize') {
+      if (action === 'displaySize') {
+        hideImageMenu(menu);
+        if (getPos) showSvgDisplaySize(img, editor, getPos);
+      } else if (action === 'resize') {
         hideImageMenu(menu);
         // Open resize modal
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
