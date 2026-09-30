@@ -1,0 +1,10 @@
+# Settings read from the captured base revision by concretios/ai-pr-reviewer v2.
+# Credentials and per-run controls belong in the workflow, not in this file.
+comment_severity_threshold: low
+post_inline_comments: true
+rules_paths:
+  - review-rules.md
+  - CLAUDE.md
+  - AGENTS.md
+  - GEMINI.md
+  - vibe-coding-rules/

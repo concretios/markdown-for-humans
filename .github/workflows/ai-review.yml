@@ -1,59 +1,90 @@
 name: AI Code Review
 
-# SECURITY NOTE — pull_request_target trust model
-# ------------------------------------------------
-# `pull_request_target` evaluates the workflow file from the BASE branch (`main`),
-# not from the PR head. This is intentional: it grants access to repository
-# secrets (GEMINI_API_KEY) so a PR from a fork can be reviewed.
+# SECURITY NOTE — v2 reviewer trust model
+# ---------------------------------------
+# concretios/ai-pr-reviewer v2.0.0 refuses pull_request_target. That event
+# exits success with the notice "Excluded event: pull_request_target", calls
+# no model, and posts no review. The admitted events are pull_request,
+# workflow_dispatch from the default branch, and an exact maintainer comment
+# (see ai-review-request.yml).
 #
-# The risk this trust grant carries is the "pwn_request" pattern
-# (https://securitylab.github.com/research/github-actions-preventing-pwn-requests/):
-# any third-party action invoked here runs with secrets in scope. If a
-# referenced action is compromised — or its tag is moved to point at malicious
-# code — the secret leaks on every PR, including from forks.
+# A pull_request from this repository receives GEMINI_API_KEY. Fork pull
+# requests do not, and both the job condition and the action skip forks and
+# Dependabot before any model call.
 #
-# Mitigations applied:
+# Mitigations:
 #   1. Every third-party action below is pinned to a full commit SHA, not a
-#      moveable tag. A maintainer can update the SHA deliberately when bumping
-#      versions; an attacker who only controls the tag namespace cannot
-#      hijack the run. Do not use floating `@v2` here.
-#   2. The top-level `permissions:` block is set to the minimum required
-#      (read repo contents, write PR comments, read actions for result ordering).
-#      `id-token` is explicitly not granted.
-#   3. We do NOT check out or execute PR code. concretios/ai-pr-reviewer@v2
-#      captures committed source itself (Node 24 action); no `npm install` and
-#      no shell that interprets PR content.
+#      movable tag. Do not use floating `@v2` here.
+#   2. The top-level `permissions:` block is empty. The review job opts in to
+#      contents:read, pull-requests:write, and actions:read. `id-token` is
+#      not granted.
+#   3. This workflow does not check out or execute PR code. The action
+#      captures committed source itself.
+#
+# A same-repository collaborator can edit this file on their branch, and
+# pull_request runs that copy. Collaborators are inside the v2 trust
+# boundary; forks are not. Do not switch this workflow back to
+# pull_request_target — v2 will keep reporting success while reviewing nothing.
 #
 # When updating action versions, look up the new commit SHA and pin to it,
 # e.g. `gh api repos/<owner>/<repo>/git/refs/tags/<tag> --jq .object.sha`.
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number
+        required: true
+        type: string
+      review_mode:
+        description: Review budget
+        type: choice
+        options: [auto, extended]
+        default: extended
+      publish:
+        description: Publish findings
+        type: boolean
+        default: false
 
-# Default to no permissions; the single job opts in to exactly what it needs.
+# Default to no permissions; each job opts in to exactly what it needs.
 permissions: {}
-
-concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
 
 jobs:
   review:
+    if: >-
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       github.actor != 'dependabot[bot]') ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       actions: read
       contents: read
       pull-requests: write
+    concurrency:
+      group: >-
+        ai-review-${{ github.repository_id }}-${{
+          github.event.pull_request.number || inputs.pr_number
+        }}-${{
+          github.event_name == 'workflow_dispatch' && !inputs.publish &&
+          format('pilot-{0}', github.run_id) || 'publish'
+        }}
+      cancel-in-progress: false
+      queue: max
     steps:
-      # concretios/ai-pr-reviewer@v2.0.0 — pinned to immutable release SHA
-      # (do not use floating @v2 with pull_request_target / secrets).
+      # concretios/ai-pr-reviewer@v2.0.0 — pinned to the immutable release SHA.
       - uses: concretios/ai-pr-reviewer@486ca9faf54287d4ac29c5c7bff5d20b2f53d558 # v2.0.0
         id: review
         with:
           github_token: ${{ github.token }}
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          pr_number: ${{ github.event.pull_request.number || inputs.pr_number }}
+          review_mode: ${{ inputs.review_mode || 'auto' }}
+          publish: ${{ github.event_name != 'workflow_dispatch' || inputs.publish }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always() && steps.review.outputs.report_directory != ''
@@ -61,3 +92,13 @@ jobs:
           name: ai-review-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.review.outputs.report_directory }}
           retention-days: 7
+
+  skipped-event:
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.pull_request.head.repo.full_name != github.repository ||
+       github.actor == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: echo 'AI review skipped. Fork and Dependabot PRs are excluded; no model calls made.' >> "$GITHUB_STEP_SUMMARY"
