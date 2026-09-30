@@ -1,6 +1,55 @@
 import { findImageSourceReferences } from '../../editor/imageSourceReferences';
 
 describe('image source spans for rename and lookup', () => {
+  describe.each([
+    ['LF', '\n'],
+    ['CRLF', '\r\n'],
+    ['CR', '\r'],
+  ])('%s line endings', (_name, newline) => {
+    it('finds standalone space paths at their original source offsets', () => {
+      const destination = 'assets/My Diagram.svg?rev=2#detail';
+      const source = ['# 图 🖼️', '', `![Image](${destination})`, '', 'Paragraph'].join(newline);
+      const references = findImageSourceReferences(source);
+      expect(references).toHaveLength(1);
+      expect(references[0]).toMatchObject({
+        source: destination,
+        start: source.indexOf(destination),
+        end: source.indexOf(destination) + destination.length,
+        filenameStart: source.indexOf('My Diagram.svg'),
+        pathEnd: source.indexOf('?rev=2'),
+      });
+    });
+
+    it('excludes mixed indented code after prose without excluding the following image', () => {
+      const source = [
+        'Paragraph',
+        '',
+        '    ![Example](example.png)',
+        '    const value = 1;',
+        '',
+        '![Real](actual.png)',
+      ].join(newline);
+      const references = findImageSourceReferences(source);
+      expect(references.map(reference => reference.source)).toEqual(['actual.png']);
+      expect(source.slice(references[0].start, references[0].end)).toBe('actual.png');
+    });
+  });
+
+  it('maps image-only indented blocks and fenced exclusions through mixed line endings', () => {
+    const source =
+      '# 图 🖼️\r\n\r    ![First](assets/My Diagram.svg)\n    ![Second](assets/Other Diagram.svg)\r\n\r\n' +
+      '```md\r![Example](example.png)\r```\n\n<img src="assets/last.svg" width="200">';
+    const references = findImageSourceReferences(source);
+    const destinations = ['assets/My Diagram.svg', 'assets/Other Diagram.svg', 'assets/last.svg'];
+    expect(references.map(reference => reference.source)).toEqual(destinations);
+    expect(references.map(reference => source.slice(reference.start, reference.end))).toEqual(
+      destinations
+    );
+    expect(
+      references.map(reference => source.slice(reference.filenameStart, reference.pathEnd))
+    ).toEqual(['My Diagram.svg', 'Other Diagram.svg', 'last.svg']);
+  });
+
   it.each([
     ['![Diagram](assets/My Diagram.svg)', 'assets/My Diagram.svg'],
     ['  ![Diagram](  assets/图 表.svg  )  ', 'assets/图 表.svg'],

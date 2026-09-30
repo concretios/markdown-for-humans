@@ -123,3 +123,18 @@ Read `vibe-coding-rules/image-and-dom-handling.md` first.
 - Long-document check: read and exercised the 8,598-word fixture over a 10+ minute native-host session, interleaved with clipboard, Feedback, undo, and save checks. Light and dark themes, prose, lists, tables, images and code blocks were inspected with no new layout failure. This is macOS smoke evidence, not a physical Windows latency claim.
 - Per-document rename IO failures are deterministic host-adapter tests, not physical disk-failure injection. Physical Windows i5/16 GB latency/high-DPI release checks remain outside this macOS run. No browser-page tests were used, per user instruction.
 - Diff reviewed; no dependency, package-lock, or unrelated source changes. Commit and PR publication were subsequently authorized by the user.
+
+## 8. PR #105 review follow-up: CRLF reference scanning
+
+- Finding: bypassing markdown-it's core normalization made CRLF blank lines part of paragraphs. Rename could skip standalone space-containing image paths and rewrite image examples inside mixed indented code.
+- RED: eight regression cases added before the fix; the focused run failed six cases and passed 70, reproducing both CRLF defects plus CR and mixed-newline offset failures.
+- Fix: normalize CRLF/CR to LF only for block parsing; map token line numbers through the original source's LF/CRLF/CR boundaries. All destination scanning and replacement continue to use the authored source. Inline parsing stays disabled to retain the malformed-input performance improvement.
+- Coverage: scanner classification and exact spans for LF, CRLF, CR and mixed endings, Unicode before references, image-only indented blocks and fenced exclusions; provider rename preserves code examples, CRLF bytes, URL suffixes and HTML attributes.
+- Focused GREEN: both suites pass, 76 tests, including the existing four 280 KB scanner performance gates. Release build and bundle verification pass.
+- Full Jest: 165 suites and 3,102 tests passed; existing 1 skipped suite, 27 skipped tests and 120 TODOs unchanged. Log: `/tmp/md4h-crlf-tests.log`.
+- Lint and TypeScript pass. Independent read-only review found no new defects and passed 25 additional in-memory newline/source-span checks.
+- Real Extension Host: all six integration tests passed on VS Code 1.98.0 and current stable 1.140.0 with the updated release bundle.
+- Native reading/use: 8,598-word synthetic document read for 10 minutes 15 seconds in Light Modern and Dark Modern on VS Code 1.140.0. Images, prose, tables, code, selection, theme transition and sustained scrolling showed no new regression; fixture bytes remained unchanged.
+- Focused native CRLF rename smoke: real image destination updated, code example destination unchanged, all ten CRLF endings and image bytes preserved.
+- Separate pre-existing issue observed during native save: `serializeBlockMarkdown` in `src/webview/utils/markdownSerialization.ts` applies `.trim()` to non-image blocks, removing the first line's indentation from a mixed indented code block. Reproduced with unchanged HEAD serializer code in memory; both HEAD and fixed scanner replacements preserve indentation. This follow-up does not modify that serializer.
+- The user authorized committing and pushing this follow-up after a final code review.

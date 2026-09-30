@@ -262,6 +262,42 @@ describe('normalizeImagePath', () => {
       }
     );
 
+    it('renames CRLF image references without changing code examples or authored line endings', () => {
+      const provider = createProvider();
+      const internal = provider as unknown as {
+        replaceImageReferences(text: string, base: string, old: string, name: string): string;
+      };
+      const base = path.resolve('/workspace');
+      const lines = [
+        '# 图 🖼️',
+        '',
+        '![Image](assets/My Diagram.svg?rev=2#detail)',
+        '',
+        'Paragraph',
+        '',
+        '    ![Example](assets/My%20Diagram.svg)',
+        '    const value = 1;',
+        '',
+        '<img src="assets/My%20Diagram.svg?rev=2&amp;mode=1#detail" width="200">',
+        '',
+      ];
+      const expected = [...lines];
+      expected[2] = '![Image](assets/New%20Diagram.svg?rev=2#detail)';
+      expected[9] = '<img src="assets/New%20Diagram.svg?rev=2&amp;mode=1#detail" width="200">';
+      try {
+        expect(
+          internal.replaceImageReferences(
+            lines.join('\r\n'),
+            base,
+            path.join(base, 'assets/My Diagram.svg'),
+            'New Diagram.svg'
+          )
+        ).toBe(expected.join('\r\n'));
+      } finally {
+        provider.dispose();
+      }
+    });
+
     it('renames raw delimiter references after the old file has moved, preserving HTML attributes', () => {
       const provider = createProvider();
       const internal = provider as unknown as {

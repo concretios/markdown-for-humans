@@ -139,17 +139,25 @@ function indexImageDelimiters(source: string): {
   return { brackets, tagEnds };
 }
 
-/** Return exact source spans for supported images, excluding code examples. */
+/**
+ * Return exact authored-source spans for supported images, excluding code
+ * examples. Parser line maps use normalized newlines; offsets preserve LF,
+ * CRLF and CR line endings in the original text.
+ */
 export function findImageSourceReferences(source: string): ImageSourceReference[] {
   const { brackets, tagEnds } = indexImageDelimiters(source);
   const lineStarts = [0];
   for (let index = 0; index < source.length; index++) {
-    if (source[index] === '\n') lineStarts.push(index + 1);
+    if (source[index] === '\r') {
+      if (source[index + 1] === '\n') index++;
+      lineStarts.push(index + 1);
+    } else if (source[index] === '\n') lineStarts.push(index + 1);
   }
-  // Only block maps and inline source are used below. Parsing inline children
-  // repeats delimiter work and is costly on long runs of unmatched brackets.
+  // Block parsing skips core newline normalization (PR #105). Normalize only
+  // the parser input, keeping original text/line offsets for exact replacements.
+  // Parsing inline children repeats costly delimiter work on malformed input.
   const tokens: Token[] = [];
-  markdown.block.parse(source, markdown, {}, tokens);
+  markdown.block.parse(source.replace(/\r\n?/g, '\n'), markdown, {}, tokens);
   const spacePaths = new Map<number, ImageSourceSpan>();
   for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
     const token = tokens[tokenIndex];
