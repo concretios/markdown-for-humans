@@ -117,6 +117,38 @@ describe('buildFeedbackAnchorMap', () => {
     ]);
   });
 
+  it.each([
+    '<img src="diagram.svg" width="480" />',
+    "<img width='480' alt='A > B' src='diagram.svg#view' >",
+    '<IMG SRC="diagram.svg" WIDTH="480">',
+    '<img\n src="diagram.svg"\n width="480" />',
+    '<img src="first.svg" width="480" />\n<img src="second.svg" width="240" />',
+  ])('maps a standalone supported HTML image to its exact source lines: %s', image => {
+    const source = `# Diagram\n\n${image}\n\nAfter`;
+    const imageEndLine = 3 + image.split('\n').length - 1;
+    expect(
+      expectAnchorMap(source, [
+        block(0, 'heading', '# Diagram'),
+        block(1, 'paragraph', image),
+        block(2, 'paragraph', 'After'),
+      ]).blocks
+    ).toEqual([
+      { ordinal: 0, kind: 'heading', startLine: 1, endLine: 1 },
+      { ordinal: 1, kind: 'paragraph', startLine: 3, endLine: imageEndLine },
+      { ordinal: 2, kind: 'paragraph', startLine: imageEndLine + 2, endLine: imageEndLine + 2 },
+    ]);
+  });
+
+  it.each([
+    '<div><img src="diagram.svg" width="480" /></div>',
+    '<img data-src="diagram.svg" width="480" />',
+    '<img alt="src=diagram.svg" width="480" />',
+    '<img src="diagram.svg" />\nUnseparated following text',
+  ])('keeps unsupported or compound image HTML strict: %s', source => {
+    expect(buildFeedbackAnchorMap(source, [block(0, 'paragraph', source)]).ok).toBe(false);
+    expect(expectAnchorMap(source, [block(0, 'html', source)]).blocks[0].kind).toBe('html');
+  });
+
   it('maps the webview math alias to its Markdown paragraph container', () => {
     const rawMarkdown = '$$\n\\int_0^1 x^2 dx\n$$';
 

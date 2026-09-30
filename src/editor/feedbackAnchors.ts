@@ -11,7 +11,7 @@
  *
  * Key responsibilities:
  * - Parse canonical and source Markdown into comparable top-level block kinds
- * - Honor the rich parser's ordered-list boundary semantics before comparison
+ * - Honor the rich parser's ordered-list and standalone HTML image boundaries
  * - Preserve exact raw line spans across source-only formatting differences
  * - Treat leading YAML or explicitly identified JSON frontmatter as one block
  * - Fail closed when block order or structure cannot be proven equivalent
@@ -261,6 +261,27 @@ function normalizeCanonicalKind(kind: string): FeedbackAnchorKind | null {
   }
 }
 
+/**
+ * Match only image-only HTML blocks rendered by CustomImage. Attribute
+ * tokens keep src-looking text inside alt/title from authorizing unrelated HTML.
+ * Non-image HTML and wrappers retain the ordinary strict HTML block boundary.
+ */
+function isStandaloneHtmlImage(content: string): boolean {
+  let remaining = content;
+  let imageCount = 0;
+  while (remaining.trim().length > 0) {
+    const image = /^\s*<img(?=\s|\/?>)((?:[^>"']|"[^"]*"|'[^']*')*)>/i.exec(remaining);
+    if (!image) return false;
+    const attributes = image[1].matchAll(
+      /([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?/g
+    );
+    if (![...attributes].some(attribute => attribute[1].toLowerCase() === 'src')) return false;
+    imageCount++;
+    remaining = remaining.slice(image[0].length);
+  }
+  return imageCount > 0;
+}
+
 function kindForToken(token: MarkdownToken): FeedbackAnchorKind | null {
   switch (token.type) {
     case 'paragraph_open':
@@ -282,7 +303,10 @@ function kindForToken(token: MarkdownToken): FeedbackAnchorKind | null {
     case 'html_block':
       // Merged-cell tables use the editor's HTML-preserving serializer, but
       // remain the same top-level table node in the rich document.
-      return /^\s*<table(?:\s|>)/i.test(token.content) ? 'table' : 'html';
+      if (/^\s*<table(?:\s|>)/i.test(token.content)) return 'table';
+      // A sized image remains an inline image in its rich paragraph, although
+      // CommonMark classifies its standalone HTML representation as html_block.
+      return isStandaloneHtmlImage(token.content) ? 'paragraph' : 'html';
     default:
       return null;
   }

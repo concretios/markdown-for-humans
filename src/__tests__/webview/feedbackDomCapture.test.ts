@@ -124,6 +124,73 @@ describe('modern-screenshot feedback rasterizer', () => {
     }
   });
 
+  it('captures a real image beside the empty ProseMirror separator without decoding editor chrome', async () => {
+    document.body.innerHTML =
+      '<div id="root"><p><img src="vscode-webview-resource://fixture/diagram.svg"><img class="ProseMirror-separator"></p></div>';
+    const root = document.getElementById('root') as HTMLElement;
+    const block = root.firstElementChild as HTMLElement;
+    const image = block.querySelector('img') as HTMLImageElement;
+    const separator = block.querySelector('.ProseMirror-separator') as HTMLImageElement;
+    for (const element of [root, block]) {
+      Object.defineProperty(element, 'getBoundingClientRect', {
+        value: () => rect(0, 0, 300, 100),
+      });
+    }
+    Object.defineProperty(image, 'complete', { value: true });
+    Object.defineProperty(image, 'naturalWidth', { value: 300 });
+    const decode = jest.fn(async () => {
+      throw new DOMException('No source', 'EncodingError');
+    });
+    Object.defineProperty(separator, 'decode', { value: decode });
+    const screenshot = jest.fn(async (node: Node) => {
+      const stage = node as HTMLElement;
+      expect(stage.querySelector('.ProseMirror-separator')).toBeNull();
+      expect(stage.querySelectorAll('img')).toHaveLength(1);
+      return 'data:image/png;base64,AAAA';
+    });
+
+    await expect(
+      createModernScreenshotRasterizer(screenshot)({
+        root,
+        rectangle: { left: 0, top: 0, width: 300, height: 100 },
+        scale: 1,
+      })
+    ).resolves.toMatchObject({ dataUrl: 'data:image/png;base64,AAAA' });
+    expect(decode).not.toHaveBeenCalled();
+    expect(screenshot).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    '<img alt="Missing document image">',
+    '<img class="ProseMirror-separator" src="vscode-webview-resource://fixture/missing.svg">',
+    '<img class="ProseMirror-separator" srcset="vscode-webview-resource://fixture/missing.svg 1x">',
+  ])('still rejects an undecodable document image: %s', async markup => {
+    document.body.innerHTML = `<div id="root"><p>${markup}</p></div>`;
+    const root = document.getElementById('root') as HTMLElement;
+    const block = root.firstElementChild as HTMLElement;
+    const image = block.querySelector('img') as HTMLImageElement;
+    for (const element of [root, block]) {
+      Object.defineProperty(element, 'getBoundingClientRect', {
+        value: () => rect(0, 0, 300, 100),
+      });
+    }
+    const decode = jest.fn(async () => {
+      throw new DOMException('Invalid image', 'EncodingError');
+    });
+    Object.defineProperty(image, 'decode', { value: decode });
+    const screenshot = jest.fn(async () => 'data:image/png;base64,AAAA');
+
+    await expect(
+      createModernScreenshotRasterizer(screenshot)({
+        root,
+        rectangle: { left: 0, top: 0, width: 300, height: 100 },
+        scale: 1,
+      })
+    ).rejects.toMatchObject({ code: 'MD4H-FB-CAPTURE-001' });
+    expect(decode).toHaveBeenCalledTimes(1);
+    expect(screenshot).not.toHaveBeenCalled();
+  });
+
   it('falls back to a full scan when the first and last top-level children are out of order', async () => {
     // e.g. the first top-level child was moved out of normal flow by a
     // transform, so its measured top no longer precedes the last child's.

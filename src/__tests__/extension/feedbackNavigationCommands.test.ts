@@ -7,6 +7,10 @@ import { resolve } from 'path';
 import * as vscode from 'vscode';
 import { getActiveWebviewPanel } from '../../activeWebview';
 import { activate } from '../../extension';
+import { sendFeedbackCommand } from '../../feedbackCommandReadiness';
+jest.mock('../../feedbackCommandReadiness', () => ({
+  sendFeedbackCommand: jest.fn(async () => true),
+}));
 
 jest.mock('../../editor/MarkdownEditorProvider', () => ({
   MarkdownEditorProvider: {
@@ -131,10 +135,7 @@ describe('Feedback public commands', () => {
       registeredCommands.get(commandId)?.();
 
       expect(registeredCommands.has(commandId)).toBe(true);
-      expect(postMessage).toHaveBeenCalledWith({
-        type: 'feedback.command',
-        command: webviewCommand,
-      });
+      expect(sendFeedbackCommand).toHaveBeenCalledWith(getActiveWebviewPanel(), webviewCommand);
     }
   );
 });

@@ -66,6 +66,13 @@ As natural as it gets in Microsoft Word or Google Docs etc.
 
 *Rename images directly from the editor to keep your assets organized.*
 
+Referenced SVG images render without converting the vector file. For a local SVG, choose **Image options → Display size** to set its width or reset it. The change applies to that occurrence and uses normal document undo. Explicit sizes are saved as a portable HTML `<img width="…">`; unsized images keep ordinary Markdown. SVG import preserves the original bytes and skips bitmap size reduction. Rename, reveal, selection, and hover metadata work with local SVGs.
+
+Raw inline `<svg>` markup and Marp's `w:1000` alt-text directive are not interpreted. Use Display size for sizing. SVG support in Word export remains a separate limitation.
+
+PDF export preserves local SVG images and their display sizes. It uses a temporary incognito Chrome session, so remote images cannot rely on your browser's sign-in cookies.
+
+
 ---
 
 ## Built on True WYSIWYG Editing

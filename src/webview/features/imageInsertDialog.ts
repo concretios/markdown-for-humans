@@ -23,6 +23,7 @@ import {
 import { showHugeImageDialog, isHugeImage } from './hugeImageDialog';
 import {
   isImageFile,
+  validateImageFile,
   insertImage,
   extractImagePathFromDataTransfer,
   hasImageFiles,
@@ -37,7 +38,8 @@ interface VsCodeApi {
 }
 
 /**
- * Show image insert dialog
+ * Show an image picker/drop dialog, validating SVG content before selection.
+ * SVG insertion preserves original bytes and bypasses raster optimization.
  */
 export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi): Promise<void> {
   return new Promise(resolve => {
@@ -73,11 +75,14 @@ export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi
     // Create hidden file input
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = 'image/*';
+    fileInput.accept = 'image/*,.svg';
     fileInput.multiple = true;
     fileInput.style.display = 'none';
 
     let selectedFiles: File[] = [];
+    let closed = false;
+    let inserting = false;
+    let selectionRevision = 0;
     let targetFolder = getRememberedFolder() || getDefaultImagePath();
 
     dialog.innerHTML = `
@@ -236,9 +241,13 @@ export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi
         fileCount.textContent = `${files.length} file${files.length > 1 ? 's' : ''}`;
         insertCount.textContent = files.length > 1 ? `s (${files.length})` : '';
 
-        fileList.innerHTML = files
-          .map((f, i) => `${i + 1}. ${f.name} (${(f.size / 1024).toFixed(1)} KB)`)
-          .join('<br>');
+        fileList.replaceChildren(
+          ...files.map((file, index) => {
+            const row = document.createElement('div');
+            row.textContent = `${index + 1}. ${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+            return row;
+          })
+        );
       } else {
         selectedFilesDiv.style.display = 'none';
         insertBtn.style.display = 'none';
@@ -247,8 +256,13 @@ export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi
 
     // Handle file selection
     const handleFilesSelected = async (files: FileList | File[]) => {
-      const imageFiles = Array.from(files).filter(isImageFile);
+      const revision = ++selectionRevision;
+      const imageFiles: File[] = [];
+      for (const file of Array.from(files).filter(isImageFile)) {
+        if (await validateImageFile(file)) imageFiles.push(file);
+      }
 
+      if (closed || revision !== selectionRevision) return;
       if (imageFiles.length === 0) {
         // Show error for non-image files
         alert('Please select image files only.');
@@ -333,16 +347,21 @@ export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi
       window.removeEventListener('dragover', blockWindowDrop, { capture: true });
       window.removeEventListener('drop', blockWindowDrop, { capture: true });
       window.removeEventListener('dragleave', handleWindowDragLeave, { capture: true });
+      document.removeEventListener('keydown', handleEscape);
     };
 
     // Insert images
     const handleInsert = async () => {
-      if (selectedFiles.length === 0) return;
+      if (closed || inserting || selectedFiles.length === 0) return;
+      inserting = true;
+      insertBtn.disabled = true;
 
       // Get folder preference
       if (!targetFolder) {
         const options = await confirmImageDrop(selectedFiles.length, getDefaultImagePath());
         if (!options) {
+          inserting = false;
+          insertBtn.disabled = false;
           return; // User cancelled
         }
         targetFolder = options.targetFolder;
@@ -356,10 +375,12 @@ export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi
 
       // Process each file
       for (const file of selectedFiles) {
+        if (closed) return;
         // Check if huge image
         let resizeOptions: { width: number; height: number } | undefined;
         if (isHugeImage(file)) {
           const hugeImageOptions = await showHugeImageDialog(file);
+          if (closed) return;
           if (!hugeImageOptions) {
             continue; // User cancelled
           }
@@ -381,25 +402,21 @@ export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi
         await insertImage(editor, file, vscodeApi, targetFolder, 'pasted', pos, resizeOptions);
       }
 
-      // Clean up window listeners
-      cleanupWindowListeners();
-
-      // Close dialog
-      document.body.removeChild(overlay);
-      document.body.removeChild(fileInput);
-      resolve();
+      handleCancel();
     };
 
     insertBtn.addEventListener('click', handleInsert);
 
     // Cancel
     const handleCancel = () => {
+      if (closed) return;
+      closed = true;
       // Clean up window listeners
       cleanupWindowListeners();
 
       // Remove dialog elements
-      document.body.removeChild(overlay);
-      document.body.removeChild(fileInput);
+      overlay.remove();
+      fileInput.remove();
       resolve();
     };
 
@@ -495,7 +512,5 @@ export async function showImageInsertDialog(editor: Editor, vscodeApi: VsCodeApi
       }
     };
     document.addEventListener('keydown', handleEscape);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (overlay as any)._escapeHandler = handleEscape;
   });
 }

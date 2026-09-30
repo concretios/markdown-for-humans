@@ -185,7 +185,15 @@ function serializeSingleNode(
 ): SerializedBlockResult {
   try {
     return {
-      markdown: serialize({ type: 'doc', content: [node] }).trim(),
+      // Indentation selects the image-only code-block parser. Removing it after
+      // SVG sizing turns the leading <img> into an HTML block and swallows the
+      // following images (SVG R1). Keep intentional image indentation only.
+      markdown:
+        node.type === 'paragraph' &&
+        node.content?.[0]?.type === 'image' &&
+        node.content[0].attrs?.['indent-prefix']
+          ? serialize({ type: 'doc', content: [node] }).trimEnd()
+          : serialize({ type: 'doc', content: [node] }).trim(),
       serializerSucceeded: true,
     };
   } catch {

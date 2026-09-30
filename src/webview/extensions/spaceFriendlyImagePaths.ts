@@ -6,22 +6,10 @@
 
 import type { JSONContent, MarkdownRendererHelpers, RenderContext } from '@tiptap/core';
 import { Extension, type MarkdownParseHelpers, type MarkdownToken } from '@tiptap/core';
+import { renderMarkdownParagraph } from './markdownParagraph';
 
 const STANDALONE_IMAGE_LINE_WITH_SPACES_REGEX =
   /^([ \t]*)!\[([^\]]*)\]\(\s*([^)]*?\s+[^)]*?)\s*\)\s*$/;
-
-function isMeaningfulTextNode(node: JSONContent): boolean {
-  if (node.type !== 'text') return false;
-  const text = typeof node.text === 'string' ? node.text : '';
-  return text.trim().length > 0;
-}
-
-function isMeaningfulInlineNode(node: JSONContent): boolean {
-  if (!node || typeof node.type !== 'string') return false;
-  if (node.type === 'hardBreak' || node.type === 'hard_break') return false;
-  if (node.type === 'text') return isMeaningfulTextNode(node);
-  return true;
-}
 
 function stripAngleBrackets(value: string): string {
   const trimmed = value.trim();
@@ -97,23 +85,8 @@ export const SpaceFriendlyImagePaths = Extension.create({
     ]);
   },
 
-  renderMarkdown: ((
-    node: JSONContent,
-    helpers: MarkdownRendererHelpers,
-    _context: RenderContext
-  ) => {
-    const content = helpers.renderChildren(node.content || []);
-
-    const hasMeaningfulContent =
-      Array.isArray(node.content) &&
-      node.content.some((child: JSONContent) => isMeaningfulInlineNode(child));
-
-    if (!hasMeaningfulContent && content.trim() === '') {
-      return null;
-    }
-
-    return content;
-  }) as unknown as (
+  // TipTap resolves the shared paragraph token's first handler during rendering too.
+  renderMarkdown: renderMarkdownParagraph as unknown as (
     node: JSONContent,
     helpers: MarkdownRendererHelpers,
     ctx: RenderContext

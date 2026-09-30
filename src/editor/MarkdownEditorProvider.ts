@@ -16,6 +16,12 @@ import { isIP } from 'net';
 import { readFile } from 'fs/promises';
 import { outlineViewProvider, type OutlineEntry } from '../features/outlineView';
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
+import {
+  registerFeedbackCommandTarget,
+  beginFeedbackCommandTarget,
+  markFeedbackCommandTargetReady,
+  resetFeedbackCommandTarget,
+} from '../feedbackCommandReadiness';
 import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
 import {
   hasSameBlankLineLayout,
@@ -24,6 +30,13 @@ import {
 } from './markdownAstEquivalence';
 import { computeMinimalTextReplacement } from './minimalTextEdit';
 import { ImageSaveCompletionDelivery } from './imageSaveCompletionDelivery';
+import {
+  encodeImageFilePath,
+  encodeImagePathSegment,
+  hasSvgRootSignature,
+  splitImageSource,
+} from '../shared/imageSource';
+import { findImageSourceReferences } from './imageSourceReferences';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
 import {
   FeedbackSessionError,
@@ -1055,6 +1068,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       }
     }
 
+    const feedbackCommandTarget = registerFeedbackCommandTarget(panelWebview);
+
     // Set webview HTML
     panelWebview.html = this.getHtmlForWebview(panelWebview);
     void this.syncMarkdownlintMd012(this.getBlankLineMode()).catch(error => {
@@ -1171,6 +1186,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     });
 
     webviewPanel.onDidChangeViewState(() => {
+      if (!webviewPanel.visible) resetFeedbackCommandTarget(panelWebview);
       if (webviewPanel.active) {
         setActiveWebviewPanel(webviewPanel, document);
         this.inactiveAutoSaveWebviews.delete(panelWebview);
@@ -1202,6 +1218,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
     // Cleanup
     webviewPanel.onDidDispose(() => {
+      feedbackCommandTarget.dispose();
       changeDocumentSubscription.dispose();
       configChangeSubscription.dispose();
       const docUri = document.uri.toString();
@@ -1771,6 +1788,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         } else {
           this.rotateEditViewGeneration(webview);
         }
+        beginFeedbackCommandTarget(webview, this.editViewGenerations.get(webview)!);
         this.registerFeedbackWebview(document.uri.toString(), webview);
         if (!this.recoverFeedbackControllerOnReady(document, webview)) {
           // An optimistic initial post can precede the renderer's listener.
@@ -6061,6 +6079,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       });
     }
 
+    markFeedbackCommandTargetReady(webview, message.viewGeneration);
+
     const pending = this.pendingFeedbackControllerRestores.get(webview);
     if (
       !pending ||
@@ -7486,7 +7506,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   }
 
   /**
-   * Check if a file exists (used by Document Audit)
+   * Check if a file exists (used by Document Audit), decoding image destinations
+   * with the same pathname/suffix boundary as rendering.
    */
   private async handleAuditCheckFile(
     message: { type: string; [key: string]: unknown },
@@ -7509,7 +7530,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
     try {
       // Basic normalization logic similar to handleResolveImageUri
-      const normalizedPath = rawRelativePath.replace(/%20/g, ' ');
+      const normalizedPath = isImageFilePath(splitImageSource(rawRelativePath).path)
+        ? normalizeImagePath(rawRelativePath)
+        : rawRelativePath.replace(/%20/g, ' ');
       const absolutePath = path.resolve(basePath, normalizedPath);
       const fileUri = vscode.Uri.file(absolutePath);
 
@@ -7523,7 +7546,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       const suggestions: string[] = [];
       try {
         // Enhanced fuzzy matching suggestions
-        const normalizedPath = rawRelativePath.replace(/%20/g, ' ');
+        const normalizedPath = isImageFilePath(splitImageSource(rawRelativePath).path)
+          ? normalizeImagePath(rawRelativePath)
+          : rawRelativePath.replace(/%20/g, ' ');
         const basename = path.basename(normalizedPath, path.extname(normalizedPath));
         const extension = path.extname(normalizedPath).toLowerCase();
 
@@ -7598,7 +7623,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           });
 
           // 5. Apply the top 5 sorted results to the suggestions array
-          suggestions.push(...uniqueSuggestions.slice(0, 5));
+          suggestions.push(
+            ...uniqueSuggestions
+              .slice(0, 5)
+              .map(suggestion =>
+                isImageFilePath(suggestion) ? encodeImageFilePath(suggestion) : suggestion
+              )
+          );
         }
       } catch (e) {
         console.warn('[MD4H] Error finding audit file suggestions:', e);
@@ -7616,8 +7647,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   /**
    * Open a VS Code file picker dialog for the Document Audit feature.
    *
-   * Sends back an 'auditPickFileResult' message with the relative path of the
-   * file selected by the user, or null if the user cancelled.
+   * Sends the selected file path, encoding image destinations for Markdown, or
+   * null if the user cancelled. Ordinary file-link path behavior stays unchanged.
    *
    * @param message - Webview message containing requestId and fileType ('image' | 'any').
    * @param document - Active text document (used to derive the relative path base).
@@ -7685,7 +7716,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           'You selected a file outside the current workspace. An absolute path was used, which may break if you share this document.'
         );
       }
-      webview.postMessage({ type: 'auditPickFileResult', requestId, selectedPath: relativePath });
+      webview.postMessage({
+        type: 'auditPickFileResult',
+        requestId,
+        selectedPath: isImageFilePath(absoluteSelected)
+          ? encodeImageFilePath(relativePath)
+          : relativePath,
+      });
     } catch (e) {
       console.error('[MD4H] handleAuditPickFile error:', e);
       webview.postMessage({ type: 'auditPickFileResult', requestId, selectedPath: null });
@@ -7844,8 +7881,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   /**
    * Resolve a relative image path to a webview URI
    *
-   * Normalizes URL-encoded paths (e.g. `Hero%20Image.png`) before resolving
-   * so that images with spaces or special characters in filenames work correctly.
+   * Decodes only the file pathname and preserves authored query/view fragments
+   * on the display URI. Encoded filename delimiters remain part of the file.
    */
   private handleResolveImageUri(
     message: { type: string; [key: string]: unknown },
@@ -7901,7 +7938,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     webview.postMessage({
       type: 'imageUriResolved',
       requestId,
-      webviewUri: webviewUri.toString(),
+      webviewUri: webviewUri.toString() + splitImageSource(rawRelativePath).suffix,
       relativePath: rawRelativePath, // Return original path for consistency
     });
   }
@@ -7960,7 +7997,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /**
    * Handle workspace image drop (from VS Code file explorer)
-   * Computes relative path from document to the image, or copies image if outside workspace
+   * Computes an encoded destination from the literal filesystem path, copying
+   * the image first if it is outside the workspace.
    */
   private async handleWorkspaceImage(
     message: { type: string; [key: string]: unknown },
@@ -8084,7 +8122,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         // Use insertWorkspaceImage message type for consistency
         webview.postMessage({
           type: 'insertWorkspaceImage',
-          relativePath: copiedRelativePath,
+          relativePath: encodeImageFilePath(copiedRelativePath),
           altText,
           insertPosition,
         });
@@ -8110,7 +8148,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     // Send the markdown image syntax back to webview
     webview.postMessage({
       type: 'insertWorkspaceImage',
-      relativePath,
+      relativePath: encodeImageFilePath(relativePath),
       altText,
       insertPosition,
     });
@@ -8522,7 +8560,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return null;
   }
 
-  /** Persist one validated dense image buffer without owning renderer delivery. */
+  /** Persist one validated image buffer and return its encoded Markdown destination. */
   private async persistImage(
     message: { type: string; [key: string]: unknown },
     document: vscode.TextDocument,
@@ -8613,7 +8651,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       if (mimeType) {
         // Image type validation could be added here
       }
-      return { kind: 'saved', destination: relativePath };
+      return { kind: 'saved', destination: encodeImageFilePath(relativePath) };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       vscode.window.showErrorMessage(`Failed to save image: ${errorMessage}`);
@@ -8623,7 +8661,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /**
    * Handle image resize request from webview
-   * Backs up the original image, then overwrites the original file in-place.
+   * Backs up and overwrites raster images in place. Rejects SVG before any
+   * backup/write, based on the resolved target extension and original bytes.
    */
   private async handleResizeImage(
     message: { type: string; [key: string]: unknown },
@@ -8698,6 +8737,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       // Copy original to backup (workspace-scoped; never write backups next to external files)
       const originalData = await vscode.workspace.fs.readFile(imageUri);
+      this.assertRasterResizeTarget(absolutePath, originalData);
       const basePath = this.getImageBasePath(document);
       if (!basePath) {
         throw new Error('Cannot compute backup path: no base directory available');
@@ -8790,6 +8830,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           `Refusing to undo resize for image outside the document/workspace: ${imagePath}`
         );
       }
+      if (!allowedRoots.some(root => isPathContainedWithin(absoluteBackupPath, root))) {
+        throw new Error('Refusing to restore an image backup outside the document/workspace.');
+      }
 
       const imageUri = vscode.Uri.file(absoluteImagePath);
       const backupUri = vscode.Uri.file(absoluteBackupPath);
@@ -8825,7 +8868,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /**
    * Handle redo resize request from webview
-   * Reapplies resize operation
+   * Reapplies a raster resize after rechecking the target's original content.
+   * SVG restoration remains allowed through the separate undo handler.
    */
   private async handleRedoResize(
     message: { type: string; [key: string]: unknown },
@@ -8857,6 +8901,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       const imageUri = vscode.Uri.file(absolutePath);
 
+      const originalData = await vscode.workspace.fs.readFile(imageUri);
+      this.assertRasterResizeTarget(absolutePath, originalData);
+
       // Convert base64 to buffer
       const base64Data = imageData.split(',')[1];
       const buffer = Buffer.from(base64Data, 'base64');
@@ -8879,6 +8926,19 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         success: false,
         error: errorMessage,
       });
+    }
+  }
+
+  /** Reject vector files at the host boundary before destructive raster writes. */
+  private assertRasterResizeTarget(absolutePath: string, originalData: Uint8Array): void {
+    // This is a filesystem path, so a literal '#' belongs to the filename.
+    if (
+      /\.svg$/i.test(absolutePath) ||
+      hasSvgRootSignature(Buffer.from(originalData.subarray(0, 4096)).toString('utf8'))
+    ) {
+      throw new Error(
+        'SVG images must use Display size; raster resize would replace the vector file.'
+      );
     }
   }
 
@@ -8909,26 +8969,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       const fileDir = document.uri.scheme === 'file' ? path.dirname(document.uri.fsPath) : basePath;
 
-      const imageRefRegex = /!\[([^\]]*)\]\(([^)]+)\)|<img[^>]+src=["']([^"']+)["']/g;
-      const currentFileMatches: Array<{ line: number; text: string }> = [];
-      const lines = document.getText().split('\n');
-
-      lines.forEach((line, index) => {
-        imageRefRegex.lastIndex = 0;
-        let match;
-        while ((match = imageRefRegex.exec(line)) !== null) {
-          const ref = match[2] || match[3];
-          if (!ref) continue;
-
-          const normalizedRefPath = normalizeImagePath(ref);
-          const absoluteRefPath = path.isAbsolute(normalizedRefPath)
-            ? normalizedRefPath
-            : path.resolve(fileDir, normalizedRefPath);
-          if (path.normalize(absoluteRefPath) === normalizedAbsoluteTarget) {
-            currentFileMatches.push({ line: index, text: line });
-          }
-        }
-      });
+      const text = document.getText();
+      const currentFileMatches = this.getMatchingImageReferences(
+        text,
+        fileDir,
+        normalizedAbsoluteTarget
+      );
 
       const allReferences = await this.findImageReferences(imagePath, basePath);
       const otherFiles =
@@ -9000,7 +9046,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     basePath: string
   ): Promise<Array<{ file: vscode.Uri; matches: Array<{ line: number; text: string }> }>> {
     // Find all markdown files
-    const markdownFiles = await vscode.workspace.findFiles('**/*.md', null, 1000);
+    const markdownFiles = await vscode.workspace.findFiles('**/*.{md,markdown}', null, 1000);
 
     const results: Array<{ file: vscode.Uri; matches: Array<{ line: number; text: string }> }> = [];
 
@@ -9012,45 +9058,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       try {
         const doc = await vscode.workspace.openTextDocument(file);
         const text = doc.getText();
-        const lines = text.split('\n');
-
-        // Match markdown image syntax: ![alt](path) and <img src="path">
-        const imageRefRegex = /!\[([^\]]*)\]\(([^)]+)\)|<img[^>]+src=["']([^"']+)["']/g;
-        const matches: Array<{ line: number; text: string }> = [];
-
-        lines.forEach((line, index) => {
-          let match;
-          // Reset regex lastIndex for each line
-          imageRefRegex.lastIndex = 0;
-          while ((match = imageRefRegex.exec(line)) !== null) {
-            const imagePath = match[2] || match[3]; // Markdown or HTML syntax
-            if (!imagePath) continue;
-
-            // Normalize the path from the markdown file
-            const fileDir = path.dirname(file.fsPath);
-            const normalizedRefPath = normalizeImagePath(imagePath);
-            let absoluteRefPath: string;
-
-            // Handle different path formats
-            if (path.isAbsolute(normalizedRefPath)) {
-              absoluteRefPath = normalizedRefPath;
-            } else if (normalizedRefPath.startsWith('./') || normalizedRefPath.startsWith('../')) {
-              absoluteRefPath = path.resolve(fileDir, normalizedRefPath);
-            } else {
-              // Relative path without ./ prefix
-              absoluteRefPath = path.resolve(fileDir, normalizedRefPath);
-            }
-
-            // Normalize paths for comparison (handle different separators)
-            const normalizedAbsoluteOld = path.normalize(absoluteOldPath);
-            const normalizedAbsoluteRef = path.normalize(absoluteRefPath);
-
-            // Check if paths match (same file)
-            if (normalizedAbsoluteOld === normalizedAbsoluteRef) {
-              matches.push({ line: index, text: line });
-            }
-          }
-        });
+        const matches = this.getMatchingImageReferences(
+          text,
+          path.dirname(file.fsPath),
+          absoluteOldPath
+        );
 
         if (matches.length > 0) {
           results.push({ file, matches });
@@ -9064,57 +9076,106 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return results;
   }
 
+  /** Resolve only local image references, keeping URL suffixes out of file identity. */
+  private imageReferenceMatches(source: string, fileDir: string, absoluteTarget: string): boolean {
+    if (/^(?:https?:|data:|blob:|vscode-webview:|\/\/)/i.test(source)) return false;
+    const absoluteReference = path.resolve(fileDir, normalizeImagePath(source));
+    return process.platform === 'win32'
+      ? absoluteReference.toLowerCase() === path.resolve(absoluteTarget).toLowerCase()
+      : absoluteReference === path.resolve(absoluteTarget);
+  }
+
+  /** Report the containing line for each exact Markdown/HTML image occurrence. */
+  private getMatchingImageReferences(
+    text: string,
+    fileDir: string,
+    absoluteTarget: string
+  ): Array<{ line: number; text: string }> {
+    const lines = text.split('\n');
+    let line = 0;
+    let newline = text.indexOf('\n');
+    return findImageSourceReferences(text)
+      .filter(reference => this.imageReferenceMatches(reference.source, fileDir, absoluteTarget))
+      .map(reference => {
+        while (newline >= 0 && newline < reference.start) {
+          line++;
+          newline = text.indexOf('\n', newline + 1);
+        }
+        return { line, text: lines[line] };
+      });
+  }
+
+  /** Replace only matching image destinations, preserving each reference's URL suffix. */
+  private replaceImageReferences(
+    text: string,
+    fileDir: string,
+    absoluteOldPath: string,
+    newFilename: string
+  ): string {
+    let updated = text;
+    for (const reference of findImageSourceReferences(text).reverse()) {
+      if (!this.imageReferenceMatches(reference.source, fileDir, absoluteOldPath)) continue;
+      updated =
+        updated.slice(0, reference.filenameStart) +
+        encodeImagePathSegment(newFilename) +
+        updated.slice(reference.pathEnd);
+    }
+    return updated;
+  }
+
   /**
-   * Update image references in markdown files
+   * Queue a reference edit and derive it from the latest document text at execution,
+   * so a concurrent typing edit cannot be replaced by a stale rename snapshot.
    */
+  private async updateDocumentImageReferences(
+    document: vscode.TextDocument,
+    fileDir: string,
+    absoluteOldPath: string,
+    newFilename: string
+  ): Promise<boolean> {
+    const result = await this.documentEditCoordinator.enqueue(document.uri.toString(), {
+      kind: 'operation',
+      execute: async context => {
+        if (context.signal.aborted) return false;
+        const text = document.getText();
+        const updatedText = this.replaceImageReferences(
+          text,
+          fileDir,
+          absoluteOldPath,
+          newFilename
+        );
+        if (updatedText === text) return false;
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), updatedText);
+        if (!(await vscode.workspace.applyEdit(edit)))
+          throw new Error('VS Code rejected the image reference update.');
+        return true;
+      },
+    });
+    if (result.status === 'failed') throw result.error;
+    return result.status === 'completed' && result.value;
+  }
+
+  /** Update exact image destinations across the selected Markdown documents. */
   private async updateImageReferences(
     references: Array<{ file: vscode.Uri; matches: Array<{ line: number; text: string }> }>,
-    oldFilename: string,
+    absoluteOldPath: string,
     newFilename: string
   ): Promise<number> {
-    const edit = new vscode.WorkspaceEdit();
     let filesUpdated = 0;
-
-    for (const { file, matches } of references) {
-      try {
-        const doc = await vscode.workspace.openTextDocument(file);
-        const text = doc.getText();
-        const lines = text.split('\n');
-
-        // Escape filename for regex
-        const escapedOldFilename = oldFilename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-        // Match the filename when preceded by / or ( and followed by ) or " or '
-        // This ensures we only replace in path contexts, not random text
-        const imagePathRegex = new RegExp(`([(/])${escapedOldFilename}([)"'])`, 'g');
-
-        let updated = false;
-        const updatedLines = lines.map((line, index) => {
-          // Only update lines that have matches
-          if (matches.some(m => m.line === index)) {
-            const updatedLine = line.replace(imagePathRegex, `$1${newFilename}$2`);
-            if (updatedLine !== line) {
-              updated = true;
-              return updatedLine;
-            }
-          }
-          return line;
-        });
-
-        if (updated) {
-          const updatedText = updatedLines.join('\n');
-          edit.replace(file, new vscode.Range(0, 0, doc.lineCount, 0), updatedText);
-          filesUpdated++;
-        }
-      } catch (error) {
-        console.warn(`[MD4H] Failed to update file ${file.fsPath}: ${error}`);
+    for (const { file } of references) {
+      const document = await vscode.workspace.openTextDocument(file);
+      if (
+        await this.updateDocumentImageReferences(
+          document,
+          path.dirname(file.fsPath),
+          absoluteOldPath,
+          newFilename
+        )
+      ) {
+        filesUpdated++;
       }
     }
-
-    if (filesUpdated > 0) {
-      await vscode.workspace.applyEdit(edit);
-    }
-
     return filesUpdated;
   }
 
@@ -9137,6 +9198,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       const absoluteOldPath = path.resolve(basePath, normalizedOldPath);
       const oldUri = vscode.Uri.file(absoluteOldPath);
 
+      const allowedRoots = this.getAllowedFileRoots(document);
+      if (!allowedRoots.some(root => isPathContainedWithin(absoluteOldPath, root))) {
+        throw new Error('Refusing to inspect an image outside the document/workspace.');
+      }
+
       // Ensure the source exists
       await vscode.workspace.fs.stat(oldUri);
 
@@ -9146,6 +9212,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       const oldDir = path.dirname(absoluteOldPath);
       const absoluteNewPath = path.join(oldDir, newFilename);
       const newUri = vscode.Uri.file(absoluteNewPath);
+
+      if (!allowedRoots.some(root => isPathContainedWithin(absoluteNewPath, root))) {
+        throw new Error('Refusing to inspect a rename target outside the document/workspace.');
+      }
 
       let exists = false;
       try {
@@ -9165,7 +9235,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         requestId,
         exists,
         newFilename,
-        newPath: normalizedNewPath,
+        newPath: encodeImageFilePath(normalizedNewPath) + splitImageSource(oldPath).suffix,
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -9222,9 +9292,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       } catch {
         throw new Error(`Image not found: ${oldPath}`);
       }
-
-      // Get old filename (used for reference updates)
-      const oldFilename = path.basename(absoluteOldPath);
 
       // Build new filename for manual rename:
       // - Respect the user's chosen name (no auto-dimensions, no auto prefix)
@@ -9286,20 +9353,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       // Update references
       let filesUpdated = 0;
       if (updateAllReferences && references.length > 0) {
-        filesUpdated = await this.updateImageReferences(references, oldFilename, newFilename);
+        filesUpdated = await this.updateImageReferences(references, absoluteOldPath, newFilename);
       } else {
-        // Update only current document
-        const docText = document.getText();
-        const escapedOldFilename = oldFilename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const imagePathRegex = new RegExp(`([(/])${escapedOldFilename}([)"'])`, 'g');
-        const updatedText = docText.replace(imagePathRegex, `$1${newFilename}$2`);
-
-        if (updatedText !== docText) {
-          const edit = new vscode.WorkspaceEdit();
-          edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), updatedText);
-          await vscode.workspace.applyEdit(edit);
-          filesUpdated = 1;
-        }
+        const fileDir =
+          document.uri.scheme === 'file' ? path.dirname(document.uri.fsPath) : basePath;
+        filesUpdated = (await this.updateDocumentImageReferences(
+          document,
+          fileDir,
+          absoluteOldPath,
+          newFilename
+        ))
+          ? 1
+          : 0;
       }
 
       // Notify webview of success
@@ -9307,7 +9372,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         type: 'imageRenamed',
         success: true,
         oldPath,
-        newPath: normalizedNewPath,
+        newPath: encodeImageFilePath(normalizedNewPath) + splitImageSource(oldPath).suffix,
         filesUpdated,
       });
 
@@ -9883,7 +9948,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   }
 
   /**
-   * Handle image link navigation (open image in VS Code preview)
+   * Open an image destination in VS Code preview using the same URL decoding
+   * and authored suffix handling as the renderer.
    */
   private async handleOpenImage(
     message: { type: string; [key: string]: unknown },
@@ -9897,8 +9963,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
     console.warn('[MD4H] handleOpenImage called with path:', imagePath);
 
-    // Normalize path: remove ./ prefix if present for path resolution
-    const normalizedPath = imagePath.startsWith('./') ? imagePath.slice(2) : imagePath;
+    const normalizedPath = normalizeImagePath(imagePath);
 
     // Try document-relative first
     let baseDir: string | undefined;
@@ -10084,7 +10149,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   }
 
   /**
-   * Copy local image (outside workspace) to workspace
+   * Copy a local image to the workspace and return an encoded Markdown destination.
    */
   private async handleCopyLocalImageToWorkspace(
     message: { type: string; [key: string]: unknown },
@@ -10181,7 +10246,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       webview.postMessage({
         type: 'localImageCopied',
         placeholderId,
-        relativePath,
+        relativePath: encodeImageFilePath(relativePath),
         originalPath: absolutePath, // For finding the image node
       });
     } catch (error) {
@@ -11234,6 +11299,11 @@ function getNonce(): string {
   return crypto.randomBytes(16).toString('hex');
 }
 
+/** Identify image filesystem paths without interpreting literal filename delimiters. */
+function isImageFilePath(filePath: string): boolean {
+  return /\.(?:png|jpe?g|gif|svg|webp|bmp|ico|tiff?)$/i.test(filePath);
+}
+
 /**
  * Normalize an image path by URL-decoding each path segment.
  *
@@ -11246,7 +11316,7 @@ function getNonce(): string {
  * markdown imported from web tools, GitHub, or static site generators.
  *
  * @param imagePath - The raw image path from markdown src attribute
- * @returns Normalized path with URL-encoded segments decoded
+ * @returns Filesystem path with URL suffix removed before segments are decoded
  */
 export function normalizeImagePath(imagePath: string): string {
   // Don't touch remote URLs, data URIs, or already-resolved webview URIs
@@ -11258,6 +11328,10 @@ export function normalizeImagePath(imagePath: string): string {
   ) {
     return imagePath;
   }
+
+  // Strip delimiters before decoding: diagram%23view.svg names a file, while
+  // diagram.svg#view names a view within the SVG (task-svg-image-support).
+  imagePath = splitImageSource(imagePath).path;
 
   // Handle file:// URIs by stripping the scheme and decoding
   if (imagePath.startsWith('file://')) {
