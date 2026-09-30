@@ -18,6 +18,7 @@
 import Image, { type ImageOptions } from '@tiptap/extension-image';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { JSONContent, MarkdownRendererHelpers, RenderContext } from '@tiptap/core';
+import { createPendingImageDestination } from '../../shared/pendingImageProtocol';
 import {
   createImageMenuButton,
   createImageMenu,
@@ -391,7 +392,11 @@ export const CustomImage = Image.extend({
     _helpers: MarkdownRendererHelpers,
     _context: RenderContext
   ) => {
-    const src = node.attrs?.['markdown-src'] || node.attrs?.src || '';
+    const placeholderId = node.attrs?.['data-placeholder-id'];
+    const src =
+      typeof placeholderId === 'string' && placeholderId.length > 0
+        ? createPendingImageDestination(placeholderId)
+        : node.attrs?.['markdown-src'] || node.attrs?.src || '';
     const alt = node.attrs?.alt || '';
     const indentPrefix =
       typeof node.attrs?.['indent-prefix'] === 'string' ? node.attrs['indent-prefix'] : '';

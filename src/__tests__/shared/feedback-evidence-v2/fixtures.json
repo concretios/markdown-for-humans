@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "sources": {
+    "partialFormatted": "Read **the [safety guide](https://example.test/safe)** before approval.\n",
+    "adaptiveCode": "``````text\nbackticks: ````\ntildes: ~~~~~~\n``````\n",
+    "adaptiveCodeCanonical": "```text\nbackticks: ````\ntildes: ~~~~~~\n```",
+    "structural": "Intro **bold**.\n\n> Quoted [link](./quoted.md).\n",
+    "mermaid": "```mermaid\nflowchart LR\n  Draft --> Review\n```\n",
+    "normalizationRaw": "\ufeff# Ω\r\n\r\nParagraph α\r\r\nLast λ\r\n",
+    "normalizationSlice": "# Ω\n\nParagraph α\n\nLast λ",
+    "unsafeControlRaw": "Safe\u0000unsafe\n",
+    "legacy": "# Guide\n\nFirst paragraph.\n"
+  }
+}

@@ -94,7 +94,10 @@ describe('Audit Overlay UI', () => {
     expect(pill).not.toBeNull();
 
     pill.dispatchEvent(new Event('mouseover', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // The popover deliberately enters on the next animation frame. Waiting on
+    // a zero-delay timer races requestAnimationFrame in jsdom and made the full
+    // suite intermittently assert before the visible class was applied.
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
     const preview = document.querySelector('.audit-preview-popover');
     expect(preview).not.toBeNull();
@@ -633,6 +636,40 @@ describe('Toast Notifications', () => {
     expect(toast).not.toBeNull();
     expect(toast?.classList.contains('toast-info')).toBe(true);
     expect(toast?.textContent).toContain('Info message');
+  });
+
+  it('coalesces one keyed Feedback error and refreshes its dismissal lifetime', () => {
+    jest.useFakeTimers();
+
+    const firstId = showToast('Could not start Feedback.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+    jest.advanceTimersByTime(2_000);
+    const secondId = showToast('Could not start Feedback.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+
+    expect(secondId).toBe(firstId);
+    expect(document.querySelectorAll('.toast-info')).toHaveLength(1);
+
+    jest.advanceTimersByTime(2_999);
+    expect(document.getElementById(firstId)).not.toBeNull();
+    jest.advanceTimersByTime(201);
+    expect(document.getElementById(firstId)).toBeNull();
+  });
+
+  it('replaces the message in an existing keyed Feedback error toast', () => {
+    const firstId = showToast('First Feedback error.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+    const secondId = showToast('Newest Feedback error.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+
+    expect(secondId).toBe(firstId);
+    expect(document.querySelectorAll('.toast-info')).toHaveLength(1);
+    expect(document.getElementById(firstId)?.textContent).toContain('Newest Feedback error.');
+    expect(document.getElementById(firstId)?.textContent).not.toContain('First Feedback error.');
   });
 
   it('success toast auto-dismisses', done => {

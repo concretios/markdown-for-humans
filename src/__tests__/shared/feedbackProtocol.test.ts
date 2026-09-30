@@ -1,0 +1,1586 @@
+import type { FeedbackHostMessage } from '../../shared/feedbackProtocol';
+import {
+  FEEDBACK_ERROR_CODES,
+  parseFeedbackHostMessage,
+  parseFeedbackWebviewMessage,
+} from '../../shared/feedbackProtocol';
+import { FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 } from '../../shared/feedbackEvidenceV2';
+
+const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';
+const MAX_ENCODED_LENGTH = FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 - PNG_DATA_URL_PREFIX.length;
+
+describe('feedback protocol', () => {
+  it.each(['nextFeedback', 'previousFeedback'] as const)(
+    'includes the %s host navigation command',
+    command => {
+      const message = {
+        type: 'feedback.command',
+        command,
+      } satisfies FeedbackHostMessage;
+
+      expect(message).toEqual({ type: 'feedback.command', command });
+    }
+  );
+
+  it('accepts a structurally valid start request', () => {
+    const message = parseFeedbackWebviewMessage({
+      type: 'feedback.start',
+      requestId: 'request-1',
+      blocks: [
+        { ordinal: 0, kind: 'heading', markdown: '# Title', contentSize: 5 },
+        { ordinal: 1, kind: 'paragraph', markdown: 'Body', contentSize: 4 },
+      ],
+    });
+
+    expect(message).toEqual({
+      type: 'feedback.start',
+      requestId: 'request-1',
+      blocks: [
+        { ordinal: 0, kind: 'heading', markdown: '# Title', contentSize: 5 },
+        { ordinal: 1, kind: 'paragraph', markdown: 'Body', contentSize: 4 },
+      ],
+    });
+  });
+
+  it('accepts an optional canonical fingerprint only on a table block', () => {
+    const tableFingerprint = 'md4h-table/v1:0123456789abcdef';
+    const withFingerprint = {
+      type: 'feedback.start',
+      requestId: 'request-table-fingerprint',
+      blocks: [
+        {
+          ordinal: 0,
+          kind: 'table',
+          markdown: '| A |\n| - |\n| B |',
+          contentSize: 12,
+          tableFingerprint,
+        },
+      ],
+    };
+    const legacyWithoutFingerprint = {
+      type: 'feedback.start',
+      requestId: 'request-legacy-table',
+      blocks: [{ ordinal: 0, kind: 'table', markdown: '| A |', contentSize: 3 }],
+    };
+
+    expect(parseFeedbackWebviewMessage(withFingerprint)).toEqual(withFingerprint);
+    expect(parseFeedbackWebviewMessage(legacyWithoutFingerprint)).toEqual(legacyWithoutFingerprint);
+    expect(
+      parseFeedbackWebviewMessage({
+        ...withFingerprint,
+        blocks: [{ ...withFingerprint.blocks[0], kind: 'paragraph' }],
+      })
+    ).toBeNull();
+    expect(
+      parseFeedbackWebviewMessage({
+        ...withFingerprint,
+        blocks: [{ ...withFingerprint.blocks[0], tableFingerprint: 'md4h-table/v1:INVALID' }],
+      })
+    ).toBeNull();
+  });
+
+  it('accepts blockless snapshot-capable start and resume requests', () => {
+    expect(
+      parseFeedbackWebviewMessage({ type: 'feedback.start', requestId: 'snapshot-start' })
+    ).toEqual({ type: 'feedback.start', requestId: 'snapshot-start' });
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.draft.resume',
+        requestId: 'snapshot-resume',
+        round: '20260826T120000Z-ab12',
+      })
+    ).toEqual({
+      type: 'feedback.draft.resume',
+      requestId: 'snapshot-resume',
+      round: '20260826T120000Z-ab12',
+    });
+  });
+
+  it('accepts only an explicit new-round start bypass', () => {
+    const message = {
+      type: 'feedback.start.new',
+      requestId: 'request-new-1',
+      blocks: [{ ordinal: 0, kind: 'paragraph', markdown: 'Body', contentSize: 4 }],
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, skipResume: true })).toBeNull();
+  });
+
+  it('accepts only an exact controller-ready identity for one renderer generation', () => {
+    const message = {
+      type: 'feedback.controller.ready',
+      requestId: 'feedback-controller-view-current',
+      viewGeneration: 'view-current',
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, viewGeneration: '' })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, sessionId: 'stale-session' })).toBeNull();
+  });
+
+  it('accepts only an exact correlated close readiness message', () => {
+    const message = {
+      type: 'feedback.close.ready',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, outcome: 'finished' })).toBeNull();
+  });
+
+  it('accepts only an exact OS-reveal request identity', () => {
+    const message = {
+      type: 'feedback.revealInOS',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, force: true })).toBeNull();
+  });
+
+  it('accepts only an exact finish-preview request identity', () => {
+    const message = {
+      type: 'feedback.finish.preview',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, force: true })).toBeNull();
+  });
+
+  it('accepts only an exact correlated finish-preview response with a bounded prompt', () => {
+    const message = {
+      type: 'feedback.finish.previewReady',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      prompt: 'Implement the sealed feedback bundle.',
+    };
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, prompt: undefined })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, sessionId: undefined })).toBeNull();
+  });
+
+  it('requires a positive sync revision on close application', () => {
+    const message = {
+      type: 'feedback.close.applied',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      revision: 1,
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, revision: undefined })).toBeNull();
+  });
+
+  it('requires an exact positive release revision acknowledgement', () => {
+    const message = {
+      type: 'feedback.close.released',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      revision: 1,
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, released: true })).toBeNull();
+  });
+
+  it('accepts only an exact correlated close retry', () => {
+    const message = {
+      type: 'feedback.close.retry',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      revision: 1,
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, reason: 'leaked detail' })).toBeNull();
+  });
+
+  it('requires an exact correlated transition application acknowledgement', () => {
+    const message = {
+      type: 'feedback.transition.applied',
+      requestId: 'start-1',
+      lockId: 'transition-lock-1',
+      revision: 1,
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, sessionId: 'not-a-transition' })).toBeNull();
+  });
+
+  it('accepts only an exact correlated transition retry', () => {
+    const message = {
+      type: 'feedback.transition.retry',
+      requestId: 'start-1',
+      lockId: 'transition-lock-1',
+      revision: 1,
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, reason: 'leaked detail' })).toBeNull();
+  });
+
+  it('rejects the legacy one-phase close acknowledgement', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.close.ack',
+        requestId: 'finish-1',
+        sessionId: 'session-1',
+      })
+    ).toBeNull();
+  });
+
+  it('accepts only an exact correlated authoritative close sync', () => {
+    const message = {
+      type: 'feedback.close.sync',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      revision: 1,
+      content: '# Current saved source\n',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, force: true })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, content: undefined })).toBeNull();
+  });
+
+  it('accepts only a correlated final release for an applied revision', () => {
+    const message = {
+      type: 'feedback.close.release',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      revision: 2,
+    };
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, content: '# Leaked' })).toBeNull();
+  });
+
+  it('accepts only an exact correlated authoritative transition sync', () => {
+    const message = {
+      type: 'feedback.transition.sync',
+      requestId: 'start-1',
+      lockId: 'transition-lock-1',
+      revision: 1,
+      content: '# Current source\n',
+    };
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, force: true })).toBeNull();
+  });
+
+  it('accepts only an exact authoritative peer release command', () => {
+    const message = {
+      type: 'feedback.peer.release',
+      phase: 'apply',
+      releaseId: 'peer-release-1',
+      requestId: 'finish-1',
+      lockId: 'session-1',
+      viewGeneration: 'view-current',
+      revision: 2,
+      documentVersion: 9,
+      contentSha256: 'a'.repeat(64),
+      content: '# Current saved source\n',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    const commit = {
+      type: message.type,
+      phase: 'commit',
+      releaseId: message.releaseId,
+      requestId: message.requestId,
+      lockId: message.lockId,
+      viewGeneration: message.viewGeneration,
+      revision: message.revision,
+      documentVersion: message.documentVersion,
+      contentSha256: message.contentSha256,
+    };
+    expect(parseFeedbackHostMessage(commit)).toEqual(commit);
+    expect(parseFeedbackHostMessage({ ...commit, content: message.content })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, phase: undefined })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, documentVersion: -1 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, contentSha256: 'not-a-digest' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, unlocked: true })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, content: '# Form\fFeed\n' })).toEqual({
+      ...message,
+      content: '# Form\fFeed\n',
+    });
+    expect(
+      parseFeedbackHostMessage({ ...message, content: 'x'.repeat(10 * 1024 * 1024 + 1) })
+    ).not.toBeNull();
+  });
+
+  it('accepts only an exact renderer-generation peer lock acquisition', () => {
+    const message = {
+      type: 'feedback.peer.lock.acquire',
+      acquisitionId: 'peer-acquire-1',
+      requestId: 'start-1',
+      lockId: 'transition-1',
+      replacesLockId: null,
+      viewGeneration: 'view-peer-current',
+      revision: 1,
+      message: 'Feedback is active in another editor split.',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, viewGeneration: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, revision: 0 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, sessionId: 'leaked' })).toBeNull();
+  });
+
+  it('accepts only an exact renderer-generation peer lock acknowledgement', () => {
+    const message = {
+      type: 'feedback.peer.lock.acquired',
+      acquisitionId: 'peer-acquire-1',
+      requestId: 'start-1',
+      lockId: 'transition-1',
+      replacesLockId: null,
+      viewGeneration: 'view-peer-current',
+      revision: 1,
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(
+      parseFeedbackWebviewMessage({ ...message, viewGeneration: 'view-stale', extra: true })
+    ).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, lockId: '' })).toBeNull();
+  });
+
+  it('accepts only an exact correlated peer release acknowledgement', () => {
+    const message = {
+      type: 'feedback.peer.released',
+      phase: 'apply',
+      releaseId: 'peer-release-1',
+      requestId: 'finish-1',
+      lockId: 'session-1',
+      viewGeneration: 'view-current',
+      revision: 2,
+      documentVersion: 9,
+      contentSha256: 'a'.repeat(64),
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, phase: 'commit' })).toEqual({
+      ...message,
+      phase: 'commit',
+    });
+    expect(parseFeedbackWebviewMessage({ ...message, lockId: '' })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, content: '# Leaked' })).toBeNull();
+  });
+
+  it('accepts only an exact host-owned transition lock', () => {
+    const message = {
+      type: 'feedback.transition.locked',
+      requestId: 'discard-1',
+      lockId: 'transition-lock-1',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, round: 'must-not-cross' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, requestId: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, lockId: '' })).toBeNull();
+    expect(parseFeedbackWebviewMessage(message)).toBeNull();
+  });
+
+  it.each(['active-owner', 'active-peer', 'saved-draft'] as const)(
+    'accepts only an exact %s resume offer',
+    kind => {
+      const message = {
+        type: 'feedback.resume.available',
+        requestId: 'resume-offer-1',
+        kind,
+        drafts: [
+          {
+            round: '20260821T093000Z-k4p9',
+            createdAt: '2026-08-21T09:30:00.000Z',
+            itemCount: 2,
+            feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+          },
+        ],
+      };
+
+      expect(parseFeedbackHostMessage(message)).toEqual(message);
+      expect(parseFeedbackHostMessage({ ...message, requestId: '' })).toBeNull();
+      expect(parseFeedbackHostMessage({ ...message, kind: 'unknown' })).toBeNull();
+      expect(parseFeedbackHostMessage({ ...message, drafts: [] })).toBeNull();
+      expect(parseFeedbackHostMessage({ ...message, sessionId: 'must-not-cross' })).toBeNull();
+    }
+  );
+
+  it('accepts only a bounded session-transfer notice', () => {
+    const message = {
+      type: 'feedback.session.transferred',
+      oldSessionId: 'session-1',
+      lockId: 'session-2',
+      message: 'Feedback moved to another rich-view tab.',
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, oldSessionId: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, lockId: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, message: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, message: `unsafe\0message` })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, message: 'x'.repeat(100_001) })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, requestId: 'must-not-cross' })).toBeNull();
+  });
+
+  it('accepts only exact generation-bound session-transfer apply, commit, abort, and ACK shapes', () => {
+    const apply = {
+      type: 'feedback.session.transfer',
+      phase: 'apply',
+      role: 'new-owner',
+      transferId: 'transfer-1',
+      requestId: 'resume-1',
+      oldSessionId: 'session-old',
+      newSessionId: 'session-new',
+      viewGeneration: 'view-new',
+      revision: 1,
+      documentVersion: 7,
+      sourceSha256: 'a'.repeat(64),
+      peerLockMessage: 'Feedback is active in another editor split.',
+      session: {
+        sessionId: 'session-new',
+        evidenceVersion: 2,
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
+        items: [],
+      },
+    };
+    const commit = {
+      type: apply.type,
+      phase: 'commit',
+      role: apply.role,
+      transferId: apply.transferId,
+      requestId: apply.requestId,
+      oldSessionId: apply.oldSessionId,
+      newSessionId: apply.newSessionId,
+      viewGeneration: apply.viewGeneration,
+      revision: apply.revision,
+      documentVersion: apply.documentVersion,
+      sourceSha256: apply.sourceSha256,
+      peerLockMessage: apply.peerLockMessage,
+    };
+    const abort = { ...commit, phase: 'abort' };
+    const acknowledgement = {
+      type: 'feedback.session.transfer.ack',
+      phase: 'apply',
+      role: apply.role,
+      transferId: apply.transferId,
+      requestId: apply.requestId,
+      oldSessionId: apply.oldSessionId,
+      newSessionId: apply.newSessionId,
+      viewGeneration: apply.viewGeneration,
+      revision: apply.revision,
+      documentVersion: apply.documentVersion,
+      sourceSha256: apply.sourceSha256,
+      applied: true,
+    };
+
+    expect(parseFeedbackHostMessage(apply)).toEqual(apply);
+    expect(parseFeedbackHostMessage(commit)).toEqual(commit);
+    expect(parseFeedbackHostMessage(abort)).toEqual(abort);
+    expect(parseFeedbackWebviewMessage(acknowledgement)).toEqual(acknowledgement);
+    expect(parseFeedbackWebviewMessage({ ...acknowledgement, applied: false })).toEqual({
+      ...acknowledgement,
+      applied: false,
+    });
+    expect(parseFeedbackWebviewMessage({ ...acknowledgement, phase: 'abort' })).toEqual({
+      ...acknowledgement,
+      phase: 'abort',
+    });
+    expect(parseFeedbackHostMessage({ ...apply, newSessionId: apply.oldSessionId })).toBeNull();
+    expect(
+      parseFeedbackHostMessage({
+        ...apply,
+        session: { ...apply.session, sessionId: 'different-session' },
+      })
+    ).toBeNull();
+    expect(parseFeedbackHostMessage({ ...commit, session: apply.session })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...abort, session: apply.session })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...apply, unexpected: true })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...acknowledgement, unexpected: true })).toBeNull();
+  });
+
+  it('accepts strictly increasing non-contiguous ProseMirror ordinals', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.start',
+        requestId: 'request-1',
+        blocks: [
+          { ordinal: 2, kind: 'heading', markdown: '# Title', contentSize: 5 },
+          { ordinal: 5, kind: 'paragraph', markdown: 'Body', contentSize: 4 },
+        ],
+      })
+    ).toEqual({
+      type: 'feedback.start',
+      requestId: 'request-1',
+      blocks: [
+        { ordinal: 2, kind: 'heading', markdown: '# Title', contentSize: 5 },
+        { ordinal: 5, kind: 'paragraph', markdown: 'Body', contentSize: 4 },
+      ],
+    });
+  });
+
+  it.each([
+    null,
+    {},
+    { type: 'feedback.start', requestId: '', blocks: [] },
+    {
+      type: 'feedback.start',
+      requestId: 'request-1',
+      blocks: [
+        { ordinal: 1, kind: 'paragraph', markdown: 'first', contentSize: 5 },
+        { ordinal: 0, kind: 'paragraph', markdown: 'out of order', contentSize: 12 },
+      ],
+    },
+    {
+      type: 'feedback.text.add',
+      requestId: 'request-2',
+      sessionId: 'session-1',
+      startOrdinal: 2,
+      endOrdinal: 1,
+      focus: 'bad range',
+      feedback: 'Fix this',
+    },
+    {
+      type: 'feedback.screenshot.add',
+      requestId: 'request-3',
+      sessionId: 'session-1',
+      startOrdinal: 0,
+      endOrdinal: 0,
+      imageDataUrl: 'data:image/jpeg;base64,AAAA',
+      feedback: 'Wrong MIME',
+    },
+    { type: 'totally.unknown', documentText: 'must not pass through' },
+  ])('rejects malformed or unknown host-bound input %#', candidate => {
+    expect(parseFeedbackWebviewMessage(candidate)).toBeNull();
+  });
+
+  it.each([
+    {
+      type: 'feedback.start',
+      requestId: 'missing-content-size',
+      blocks: [{ ordinal: 0, kind: 'paragraph', markdown: 'Body' }],
+    },
+    {
+      type: 'feedback.start',
+      requestId: 'negative-content-size',
+      blocks: [{ ordinal: 0, kind: 'paragraph', markdown: 'Body', contentSize: -1 }],
+    },
+    {
+      type: 'feedback.start',
+      requestId: 'fractional-content-size',
+      blocks: [{ ordinal: 0, kind: 'paragraph', markdown: 'Body', contentSize: 1.5 }],
+    },
+  ])('rejects canonical blocks without a safe ProseMirror content size %#', candidate => {
+    expect(parseFeedbackWebviewMessage(candidate)).toBeNull();
+  });
+
+  it('accepts a versioned block-relative rendered range without trusting block hashes', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-exact',
+        sessionId: 'session-1',
+        startOrdinal: 2,
+        endOrdinal: 5,
+        focus: 'exact visible text',
+        feedback: 'Clarify this.',
+        renderedRange: {
+          version: 1,
+          startOrdinal: 2,
+          startOffset: 1,
+          endOrdinal: 5,
+          endOffset: 3,
+        },
+      })
+    ).toEqual({
+      type: 'feedback.text.add',
+      requestId: 'add-exact',
+      sessionId: 'session-1',
+      startOrdinal: 2,
+      endOrdinal: 5,
+      focus: 'exact visible text',
+      feedback: 'Clarify this.',
+      renderedRange: {
+        version: 1,
+        startOrdinal: 2,
+        startOffset: 1,
+        endOrdinal: 5,
+        endOffset: 3,
+      },
+    });
+  });
+
+  it('accepts a bounded table-cell target without trusting a containing-block hash', () => {
+    const message = {
+      type: 'feedback.text.add',
+      requestId: 'add-table-cells',
+      sessionId: 'session-1',
+      startOrdinal: 4,
+      endOrdinal: 4,
+      focus: 'R1C1\tR1C2\nR2C1\tR2C2',
+      feedback: 'Clarify these cells.',
+      cellTarget: {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    };
+
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+  });
+
+  it.each([
+    [
+      'a host-owned block hash',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+        tableBlockSha256: 'a'.repeat(64),
+      },
+    ],
+    [
+      'a mismatched table ordinal',
+      {
+        version: 1,
+        tableOrdinal: 3,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
+      'a collapsed rectangle',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 1, left: 0, bottom: 1, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
+      'an unbounded coordinate',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 100_000, left: 0, bottom: 100_001, right: 2 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
+      'more than 256 exact cells',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 1, right: 257 },
+        tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      },
+    ],
+    [
+      'a non-canonical fingerprint',
+      {
+        version: 1,
+        tableOrdinal: 4,
+        rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+        tableFingerprint: 'MD4H-table/v1:0123456789abcdef',
+      },
+    ],
+  ])('rejects a table-cell target with %s', (_label, cellTarget) => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-invalid-table-cells',
+        sessionId: 'session-1',
+        startOrdinal: 4,
+        endOrdinal: 4,
+        focus: 'Selected cells',
+        feedback: 'Clarify these cells.',
+        cellTarget,
+      })
+    ).toBeNull();
+  });
+
+  it('rejects a table-cell target whose ordinal exceeds the bounded block domain', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-unbounded-table-ordinal',
+        sessionId: 'session-1',
+        startOrdinal: 100_000,
+        endOrdinal: 100_000,
+        focus: 'Selected cells',
+        feedback: 'Clarify these cells.',
+        cellTarget: {
+          version: 1,
+          tableOrdinal: 100_000,
+          rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+          tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+        },
+      })
+    ).toBeNull();
+  });
+
+  it('rejects competing rendered-range and table-cell targets', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-competing-targets',
+        sessionId: 'session-1',
+        startOrdinal: 4,
+        endOrdinal: 4,
+        focus: 'Selected cells',
+        feedback: 'Clarify these cells.',
+        renderedRange: {
+          version: 1,
+          startOrdinal: 4,
+          startOffset: 0,
+          endOrdinal: 4,
+          endOffset: 1,
+        },
+        cellTarget: {
+          version: 1,
+          tableOrdinal: 4,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+          tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+        },
+      })
+    ).toBeNull();
+  });
+
+  it.each([
+    { version: 1, startOrdinal: 0, startOffset: 0, endOrdinal: 0 },
+    { version: 1, startOrdinal: 0, startOffset: -1, endOrdinal: 0, endOffset: 1 },
+    { version: 1, startOrdinal: 0, startOffset: 1, endOrdinal: 0, endOffset: 1 },
+    { version: 1, startOrdinal: 1, startOffset: 0, endOrdinal: 0, endOffset: 1 },
+    { version: 2, startOrdinal: 0, startOffset: 0, endOrdinal: 0, endOffset: 1 },
+    {
+      version: 1,
+      startOrdinal: 0,
+      startOffset: 0,
+      endOrdinal: 0,
+      endOffset: 1,
+      startBlockSha256: 'webview-must-not-supply-hashes',
+    },
+    {
+      version: 1,
+      startOrdinal: 0,
+      startOffset: 0,
+      endOrdinal: 0,
+      endOffset: 1,
+      unknown: true,
+    },
+  ])(
+    'rejects malformed, partial, collapsed, or non-canonical rendered ranges %#',
+    renderedRange => {
+      expect(
+        parseFeedbackWebviewMessage({
+          type: 'feedback.text.add',
+          requestId: 'add-invalid-range',
+          sessionId: 'session-1',
+          startOrdinal: 0,
+          endOrdinal: 0,
+          focus: 'Body',
+          feedback: 'Clarify this.',
+          renderedRange,
+        })
+      ).toBeNull();
+    }
+  );
+
+  it('continues to accept an explicit block-level text target without inline metadata', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.text.add',
+        requestId: 'add-block-target',
+        sessionId: 'session-1',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: 'Body',
+        feedback: 'Clarify this.',
+      })
+    ).toEqual({
+      type: 'feedback.text.add',
+      requestId: 'add-block-target',
+      sessionId: 'session-1',
+      startOrdinal: 0,
+      endOrdinal: 0,
+      focus: 'Body',
+      feedback: 'Clarify this.',
+    });
+  });
+
+  it('forbids rendered text metadata on screenshot messages', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.screenshot.add',
+        requestId: 'screenshot-with-text-range',
+        sessionId: 'session-1',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        imageDataUrl: 'data:image/png;base64,AAAA',
+        feedback: 'Visual note.',
+        renderedRange: {
+          version: 1,
+          startOrdinal: 0,
+          startOffset: 0,
+          endOrdinal: 0,
+          endOffset: 1,
+        },
+      })
+    ).toBeNull();
+  });
+
+  it('accepts a screenshot data URL at the derived boundary and rejects one byte over', () => {
+    const atBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH);
+    const overBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH + 1);
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.screenshot.add',
+        requestId: 'screenshot-boundary',
+        sessionId: 'session-1',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        imageDataUrl: atBoundary,
+        feedback: 'At the boundary.',
+      })
+    ).not.toBeNull();
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.screenshot.add',
+        requestId: 'screenshot-over-boundary',
+        sessionId: 'session-1',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        imageDataUrl: overBoundary,
+        feedback: 'Over the boundary.',
+      })
+    ).toBeNull();
+  });
+
+  it('accepts exact lifecycle and item mutations', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.finish',
+        requestId: 'legacy-r',
+        sessionId: 'legacy-s',
+      })
+    ).toEqual({
+      type: 'feedback.finish',
+      requestId: 'legacy-r',
+      sessionId: 'legacy-s',
+    });
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.finish',
+        requestId: 'r',
+        sessionId: 's',
+        degradedTargetIds: ['F1', 'F9'],
+      })
+    ).toEqual({
+      type: 'feedback.finish',
+      requestId: 'r',
+      sessionId: 's',
+      degradedTargetIds: ['F1', 'F9'],
+    });
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.finish',
+        requestId: 'r',
+        sessionId: 's',
+        degradedTargetIds: ['F1', 'F1'],
+      })
+    ).toBeNull();
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.item.edit',
+        requestId: 'r',
+        sessionId: 's',
+        id: 'F9',
+        feedback: 'Updated',
+      })
+    ).toEqual({
+      type: 'feedback.item.edit',
+      requestId: 'r',
+      sessionId: 's',
+      id: 'F9',
+      feedback: 'Updated',
+    });
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.capture.error',
+        requestId: 'capture-error-1',
+        sessionId: 's',
+        code: 'MD4H-FB-CAPTURE-002',
+      })
+    ).toEqual({
+      type: 'feedback.capture.error',
+      requestId: 'capture-error-1',
+      sessionId: 's',
+      code: 'MD4H-FB-CAPTURE-002',
+    });
+  });
+
+  it.each([
+    {
+      type: 'feedback.finish',
+      requestId: 'r',
+      sessionId: 's',
+      leaked: true,
+    },
+    {
+      type: 'feedback.item.edit',
+      requestId: 'r',
+      sessionId: 's',
+      id: 'F9',
+      feedback: 'Updated',
+      leaked: 'must reject',
+    },
+    {
+      type: 'feedback.start',
+      requestId: 'r',
+      blocks: [
+        {
+          ordinal: 0,
+          kind: 'paragraph',
+          markdown: 'Body',
+          contentSize: 4,
+          documentText: 'must reject',
+        },
+      ],
+    },
+    {
+      type: 'feedback.capture.error',
+      requestId: 'capture-error-1',
+      sessionId: 's',
+      code: 'MD4H-FB-CAPTURE-002',
+      imageDataUrl: 'must reject',
+    },
+  ])('rejects unknown keys anywhere in a host-bound Feedback request %#', candidate => {
+    expect(parseFeedbackWebviewMessage(candidate)).toBeNull();
+  });
+
+  it('rejects an unrecognized diagnostics error code', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.capture.error',
+        requestId: 'capture-error-1',
+        sessionId: 's',
+        code: 'NODE-ERR-LEAK',
+      })
+    ).toBeNull();
+  });
+
+  it('accepts validated opt-in draft recovery requests', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.draft.resume',
+        requestId: 'resume-1',
+        round: '20260821T093000Z-k4p9',
+        blocks: [{ ordinal: 4, kind: 'paragraph', markdown: 'Body', contentSize: 4 }],
+      })
+    ).toEqual({
+      type: 'feedback.draft.resume',
+      requestId: 'resume-1',
+      round: '20260821T093000Z-k4p9',
+      blocks: [{ ordinal: 4, kind: 'paragraph', markdown: 'Body', contentSize: 4 }],
+    });
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.draft.reveal',
+        requestId: 'reveal-1',
+        round: '20260821T093000Z-k4p9',
+      })
+    ).toEqual({
+      type: 'feedback.draft.reveal',
+      requestId: 'reveal-1',
+      round: '20260821T093000Z-k4p9',
+    });
+
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.draft.discard',
+        requestId: 'discard-1',
+        round: '20260821T093000Z-k4p9',
+      })
+    ).toEqual({
+      type: 'feedback.draft.discard',
+      requestId: 'discard-1',
+      round: '20260821T093000Z-k4p9',
+    });
+  });
+
+  it('rejects unsafe draft recovery identifiers and empty resume maps', () => {
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.draft.resume',
+        requestId: 'resume-1',
+        round: '../../outside',
+        blocks: [{ ordinal: 0, kind: 'paragraph', markdown: 'Body', contentSize: 4 }],
+      })
+    ).toBeNull();
+    expect(
+      parseFeedbackWebviewMessage({
+        type: 'feedback.draft.resume',
+        requestId: 'resume-1',
+        round: '20260821T093000Z-k4p9',
+        blocks: [],
+      })
+    ).toBeNull();
+  });
+
+  it('exports the stable public error codes', () => {
+    expect(FEEDBACK_ERROR_CODES).toEqual({
+      targetDoesNotMap: 'MD4H-FB-ANCHOR-001',
+      blockMismatch: 'MD4H-FB-ANCHOR-002',
+      resourceUnavailable: 'MD4H-FB-CAPTURE-001',
+      rasterizationFailed: 'MD4H-FB-CAPTURE-002',
+      sourceChanged: 'MD4H-FB-SNAPSHOT-001',
+    });
+  });
+
+  it('accepts and reconstructs every exact webview-bound Feedback message shape', () => {
+    const messages: FeedbackHostMessage[] = [
+      {
+        type: 'feedback.drafts.available',
+        drafts: [
+          {
+            round: '20260821T093000Z-k4p9',
+            createdAt: '2026-08-21T09:30:00.000Z',
+            itemCount: 2,
+            feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+          },
+        ],
+      },
+      {
+        type: 'feedback.resume.available',
+        requestId: 'resume-offer-1',
+        kind: 'active-owner',
+        drafts: [
+          {
+            round: '20260821T093000Z-k4p9',
+            createdAt: '2026-08-21T09:30:00.000Z',
+            itemCount: 2,
+            feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+          },
+        ],
+      },
+      {
+        type: 'feedback.session.transferred',
+        oldSessionId: 'session-previous',
+        lockId: 'session-current',
+        message: 'Feedback moved to another rich-view tab.',
+      },
+      {
+        type: 'feedback.started',
+        requestId: 'start-1',
+        sessionId: 'session-1',
+        evidenceVersion: 2,
+        source: 'docs/guide.md',
+        sourceSha256: 'a'.repeat(64),
+        round: '20260821T093000Z-k4p9',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
+        items: [
+          {
+            id: 'F1',
+            kind: 'text',
+            startOrdinal: 0,
+            endOrdinal: 0,
+            startLine: 1,
+            endLine: 2,
+            focus: 'Visible text',
+            feedback: 'Clarify this.',
+            renderedRange: {
+              version: 1,
+              startOrdinal: 0,
+              startOffset: 0,
+              endOrdinal: 0,
+              endOffset: 7,
+              startBlockSha256: 'b'.repeat(64),
+              endBlockSha256: 'b'.repeat(64),
+            },
+          },
+        ],
+      },
+      {
+        type: 'feedback.updated',
+        requestId: 'update-1',
+        sessionId: 'session-1',
+        items: [
+          {
+            id: 'F2',
+            kind: 'screenshot',
+            startOrdinal: 1,
+            endOrdinal: 2,
+            startLine: 3,
+            endLine: 8,
+            feedback: 'Improve this visual.',
+            imageUri: 'vscode-webview://feedback/F2.png?revision=1',
+          },
+        ],
+      },
+      {
+        type: 'feedback.finished',
+        requestId: 'finish-1',
+        sessionId: 'session-1',
+        feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+        itemCount: 2,
+        prompt: 'Implement the sealed feedback bundle.',
+        promptCopied: true,
+      } as unknown as FeedbackHostMessage,
+      { type: 'feedback.discarded', requestId: 'discard-1', sessionId: 'session-1' },
+      {
+        type: 'feedback.draft.discarded',
+        requestId: 'draft-discard-1',
+        round: '20260821T093000Z-k4p9',
+      },
+      {
+        type: 'feedback.diagnosticsCopied',
+        requestId: 'diagnostics-1',
+        sessionId: 'session-1',
+      },
+      {
+        type: 'feedback.invalidated',
+        sessionId: 'session-1',
+        code: FEEDBACK_ERROR_CODES.sourceChanged,
+        message: 'The source changed.',
+      },
+      {
+        type: 'feedback.error',
+        requestId: 'request-1',
+        sessionId: 'session-1',
+        code: 'MD4H-FB-STORE-001',
+        message: 'Could not write the draft.',
+        recoverable: true,
+      },
+      {
+        type: 'feedback.peer.locked',
+        lockId: 'peer-lock-1',
+        message: 'Feedback is active in another editor split.',
+      },
+      { type: 'feedback.peer.unlocked', lockId: 'peer-lock-1' },
+      { type: 'feedback.command', command: 'nextFeedback' },
+      { type: 'feedback.command', command: 'chooseScope' },
+    ];
+
+    for (const message of messages) {
+      expect(parseFeedbackHostMessage(message)).toEqual(message);
+    }
+  });
+
+  it('requires an exact positive item count and safe prompt on a finished response', () => {
+    const message = {
+      type: 'feedback.finished',
+      requestId: 'finish-1',
+      sessionId: 'session-1',
+      feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+      itemCount: 2,
+      prompt: 'Implement the sealed feedback bundle.',
+      promptCopied: true,
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+    expect(parseFeedbackHostMessage({ ...message, itemCount: undefined })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, itemCount: 0 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, itemCount: -1 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, itemCount: 1.5 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, itemCount: 100_001 })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, prompt: undefined })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, prompt: '' })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, prompt: `unsafe\0prompt` })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, prompt: 'x'.repeat(1_000_001) })).toBeNull();
+    expect(parseFeedbackHostMessage({ ...message, leaked: true })).toBeNull();
+  });
+
+  it('accepts a host-enriched table-cell item summary', () => {
+    const message = {
+      type: 'feedback.updated',
+      requestId: 'update-table-cells',
+      sessionId: 'session-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 4,
+          endOrdinal: 4,
+          startLine: 10,
+          endLine: 15,
+          focus: 'R1C1\tR1C2\nR2C1\tR2C2',
+          feedback: 'Clarify these cells.',
+          cellTarget: {
+            version: 1,
+            tableOrdinal: 4,
+            rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+            tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+            tableBlockSha256: 'a'.repeat(64),
+          },
+        },
+      ],
+    };
+
+    expect(parseFeedbackHostMessage(message)).toEqual(message);
+  });
+
+  it.each([
+    ['missing block hash', undefined],
+    ['invalid block hash', 'not-a-sha256'],
+  ])('rejects a table-cell item summary with %s', (_label, tableBlockSha256) => {
+    const cellTarget = {
+      version: 1,
+      tableOrdinal: 4,
+      rectangle: { top: 0, left: 0, bottom: 2, right: 2 },
+      tableFingerprint: 'md4h-table/v1:0123456789abcdef',
+      ...(tableBlockSha256 === undefined ? {} : { tableBlockSha256 }),
+    };
+    expect(
+      parseFeedbackHostMessage({
+        type: 'feedback.updated',
+        requestId: 'update-invalid-table-cells',
+        sessionId: 'session-1',
+        items: [
+          {
+            id: 'F1',
+            kind: 'text',
+            startOrdinal: 4,
+            endOrdinal: 4,
+            startLine: 10,
+            endLine: 15,
+            focus: 'Selected cells',
+            feedback: 'Clarify these cells.',
+            cellTarget,
+          },
+        ],
+      })
+    ).toBeNull();
+  });
+
+  it.each([
+    { type: 'feedback.updated', requestId: 'update-1', items: [] },
+    {
+      type: 'feedback.finished',
+      requestId: 'finish-1',
+      feedbackFile: '.md4h/feedback/docs/guide/feedback.md',
+      itemCount: 2,
+      prompt: 'Implement the sealed feedback bundle.',
+      promptCopied: true,
+    },
+    { type: 'feedback.discarded', requestId: 'discard-1' },
+    { type: 'feedback.diagnosticsCopied', requestId: 'diagnostics-1' },
+    {
+      type: 'feedback.invalidated',
+      code: FEEDBACK_ERROR_CODES.sourceChanged,
+      message: 'The source changed.',
+    },
+  ])('rejects an active-session host response without its runtime token %#', candidate => {
+    expect(parseFeedbackHostMessage(candidate)).toBeNull();
+  });
+
+  it.each([
+    [
+      'text without Focus',
+      {
+        id: 'F1',
+        kind: 'text',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 1,
+        feedback: 'Clarify this.',
+      },
+    ],
+    [
+      'text without feedback',
+      {
+        id: 'F1',
+        kind: 'text',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 1,
+        focus: 'Visible text',
+      },
+    ],
+    [
+      'screenshot without feedback',
+      {
+        id: 'F1',
+        kind: 'screenshot',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 1,
+        imageUri: 'vscode-webview://feedback/F1.png',
+      },
+    ],
+    [
+      'screenshot without an image URI',
+      {
+        id: 'F1',
+        kind: 'screenshot',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 1,
+        feedback: 'Improve this visual.',
+      },
+    ],
+  ])('rejects a %s summary instead of accepting a partial discriminated item', (_label, item) => {
+    expect(
+      parseFeedbackHostMessage({
+        type: 'feedback.updated',
+        requestId: 'update-partial-item',
+        sessionId: 'session-1',
+        items: [item],
+      })
+    ).toBeNull();
+  });
+
+  it.each([
+    [
+      'text item with imageUri',
+      {
+        id: 'F1',
+        kind: 'text',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 1,
+        focus: 'Visible text',
+        feedback: 'Clarify this.',
+        imageUri: 'vscode-webview://feedback/F1.png',
+      },
+    ],
+    [
+      'screenshot item with Focus',
+      {
+        id: 'F1',
+        kind: 'screenshot',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 1,
+        feedback: 'Improve this visual.',
+        imageUri: 'vscode-webview://feedback/F1.png',
+        focus: 'must reject',
+      },
+    ],
+    [
+      'screenshot item with rendered-range metadata',
+      {
+        id: 'F1',
+        kind: 'screenshot',
+        startOrdinal: 0,
+        endOrdinal: 0,
+        startLine: 1,
+        endLine: 1,
+        feedback: 'Improve this visual.',
+        imageUri: 'vscode-webview://feedback/F1.png',
+        renderedRange: {
+          version: 1,
+          startOrdinal: 0,
+          startOffset: 0,
+          endOrdinal: 0,
+          endOffset: 1,
+          startBlockSha256: 'b'.repeat(64),
+          endBlockSha256: 'b'.repeat(64),
+        },
+      },
+    ],
+  ])('rejects a %s because its fields belong to the other item kind', (_label, item) => {
+    expect(
+      parseFeedbackHostMessage({
+        type: 'feedback.updated',
+        requestId: 'update-cross-kind-field',
+        sessionId: 'session-1',
+        items: [item],
+      })
+    ).toBeNull();
+  });
+
+  it('rejects duplicate item IDs in one host update', () => {
+    const item = {
+      id: 'F1',
+      kind: 'text',
+      startOrdinal: 0,
+      endOrdinal: 0,
+      startLine: 1,
+      endLine: 1,
+      focus: 'Visible text',
+      feedback: 'Clarify this.',
+    };
+
+    expect(
+      parseFeedbackHostMessage({
+        type: 'feedback.updated',
+        requestId: 'update-duplicate-items',
+        sessionId: 'session-1',
+        items: [item, { ...item }],
+      })
+    ).toBeNull();
+  });
+
+  it.each([
+    ['start', { startOrdinal: 1, endOrdinal: 2 }],
+    ['end', { startOrdinal: 0, endOrdinal: 3 }],
+  ])('rejects a rendered range whose %s ordinal disagrees with its item', (_endpoint, range) => {
+    expect(
+      parseFeedbackHostMessage({
+        type: 'feedback.updated',
+        requestId: 'update-mismatched-rendered-range',
+        sessionId: 'session-1',
+        items: [
+          {
+            id: 'F1',
+            kind: 'text',
+            startOrdinal: 0,
+            endOrdinal: 2,
+            startLine: 1,
+            endLine: 4,
+            focus: 'Visible text',
+            feedback: 'Clarify this.',
+            renderedRange: {
+              version: 1,
+              ...range,
+              startOffset: 0,
+              endOffset: 1,
+              startBlockSha256: 'b'.repeat(64),
+              endBlockSha256: 'c'.repeat(64),
+            },
+          },
+        ],
+      })
+    ).toBeNull();
+  });
+
+  it.each([
+    null,
+    {},
+    { type: 'feedback.updated', requestId: 'update-1', items: [], leaked: true },
+    {
+      type: 'feedback.drafts.available',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 0,
+          feedbackFile: '.md4h/feedback/feedback.md',
+          sourceText: 'must reject',
+        },
+      ],
+    },
+    {
+      type: 'feedback.resume.available',
+      requestId: 'resume-offer-1',
+      kind: 'active-owner',
+      drafts: [
+        {
+          round: '20260821T093000Z-k4p9',
+          createdAt: '2026-08-21T09:30:00.000Z',
+          itemCount: 1,
+          feedbackFile: '.md4h/feedback/feedback.md',
+          feedback: 'must reject',
+        },
+      ],
+    },
+    {
+      type: 'feedback.started',
+      requestId: 'start-1',
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'not-a-sha256',
+      round: '20260821T093000Z-k4p9',
+      feedbackFile: '.md4h/feedback/feedback.md',
+      anchors: [],
+      items: [],
+    },
+    {
+      type: 'feedback.started',
+      requestId: 'start-1',
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'a'.repeat(64),
+      round: '20260821T093000Z-k4p9',
+      feedbackFile: '.md4h/feedback/feedback.md',
+      anchors: [{ ordinal: 0, startLine: 2, endLine: 1 }],
+      items: [],
+    },
+    {
+      type: 'feedback.updated',
+      requestId: 'update-1',
+      items: [
+        {
+          id: 'F1',
+          kind: 'text',
+          startOrdinal: 0,
+          endOrdinal: 0,
+          startLine: 1,
+          endLine: 1,
+          focus: 'Visible text',
+          feedback: 'Clarify this.',
+          renderedRange: {
+            version: 1,
+            startOrdinal: 0,
+            startOffset: 0,
+            endOrdinal: 0,
+            endOffset: 7,
+            startBlockSha256: 'b'.repeat(64),
+            endBlockSha256: 'b'.repeat(64),
+            documentText: 'must reject',
+          },
+        },
+      ],
+    },
+    {
+      type: 'feedback.updated',
+      requestId: 'update-1',
+      items: [
+        {
+          id: 'F2',
+          kind: 'screenshot',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          startLine: 3,
+          endLine: 4,
+          feedback: 'Visual note.',
+          imageUri: 42,
+        },
+      ],
+    },
+    {
+      type: 'feedback.error',
+      message: 'Bad request.',
+      recoverable: false,
+      imageDataUrl: 'must reject',
+    },
+    {
+      type: 'feedback.peer.locked',
+      lockId: '',
+      message: 'Feedback is active elsewhere.',
+    },
+    {
+      type: 'feedback.peer.locked',
+      lockId: 'peer-lock-1',
+      message: 'Feedback is active elsewhere.',
+      sourceText: 'must reject',
+    },
+    { type: 'feedback.peer.unlocked', lockId: 'peer-lock-1', leaked: true },
+    { type: 'feedback.command', command: 'not-a-command' },
+  ])('rejects malformed or unknown webview-bound Feedback data %#', candidate => {
+    expect(parseFeedbackHostMessage(candidate)).toBeNull();
+  });
+});

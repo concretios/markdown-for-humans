@@ -14,7 +14,8 @@ import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { ListKit } from '@tiptap/extension-list';
-import Link from '@tiptap/extension-link';
+import { MarkdownCode, MarkdownLink } from './extensions/markdownCompatibilityMarks';
+import { PreservedMarkdownLiteral } from './extensions/preservedMarkdownLiteral';
 import { CustomImage } from './extensions/customImage';
 import { lowlight } from 'lowlight';
 import { Mermaid } from './extensions/mermaid';
@@ -30,28 +31,70 @@ import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
+import { MarkdownListItem } from './extensions/markdownListItem';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
 import { DraggableBlocks } from './extensions/draggableBlocks';
 import { DocumentAuditExtension } from './features/auditDocument';
-import { createFormattingToolbar, createTableMenu, updateToolbarStates } from './BubbleMenuView';
+import {
+  createFormattingToolbar,
+  createTableMenu,
+  getFeedbackToolbarMenuHost,
+  updateToolbarStates,
+} from './BubbleMenuView';
 import { getEditorMarkdownForSync } from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
 import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
 import {
   setupImageDragDrop,
   hasPendingImageSaves,
+  waitForPendingImageSaves,
   getPendingImageCount,
 } from './features/imageDragDrop';
-import { toggleTocOverlay } from './features/tocOverlay';
+import { hideTocOverlay, isTocVisible, toggleTocOverlay } from './features/tocOverlay';
 import { showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
-import { copyAiContextReference, type SelectionBlockRange } from './utils/aiContextReference';
 import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
+import {
+  createFeedbackNodeViewInteractionGuards,
+  createFeedbackReviewController,
+  enumerateCanonicalFeedbackBlocks,
+  type FeedbackReviewController,
+} from './features/feedbackReview';
+import {
+  createFeedbackPeerLockController,
+  type FeedbackPeerLockController,
+} from './features/feedbackPeerLock';
+import { parseFeedbackHostMessage, type FeedbackHostMessage } from '../shared/feedbackProtocol';
+import {
+  captureSelectedFeedbackBlocks,
+  startFeedbackAreaCapture,
+} from './features/feedbackCaptureWorkflow';
+import { createModernScreenshotRasterizer } from './features/feedbackDomCapture';
+import { DocumentSyncController } from './documentSyncController';
+import { MAX_RICH_VIEW_POSITION, RichViewStateController } from './utils/richViewState';
+import {
+  DOCUMENT_SYNC_PROTOCOL_VERSION,
+  parseDocumentEditAck,
+  parseDocumentFlushBarrier,
+} from '../shared/documentSyncProtocol';
+import {
+  FEEDBACK_DELIVERY_PROTOCOL_VERSION,
+  parseFeedbackDeliveryStatusQuery,
+  parseFeedbackStartedDelivery,
+  type FeedbackDeliveryApplicationStatus,
+  type FeedbackDeliveryStatusQuery,
+  type FeedbackStartedDelivery,
+} from '../shared/feedbackDeliveryProtocol';
+import { FEEDBACK_SNAPSHOT_PROTOCOL_VERSION } from '../shared/feedbackSnapshotProtocol';
+import { handleFeedbackSnapshotMessage } from './features/feedbackSnapshotClient';
+import { createFeedbackPeerReleaseClient } from './features/feedbackPeerReleaseClient';
+import { createFeedbackPeerLockClient } from './features/feedbackPeerLockClient';
+import { createFeedbackSessionTransferClient } from './features/feedbackSessionTransferClient';
 
 // Helper function for slug generation (same as in linkDialog)
 function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
@@ -122,6 +165,10 @@ type VsCodeApi = {
   setState: (state: unknown) => void;
 };
 
+type GenerationBoundVsCodeApi = VsCodeApi & {
+  readonly viewGeneration: string;
+};
+
 declare const acquireVsCodeApi: () => VsCodeApi;
 
 // Message type for communication between extension and webview
@@ -134,7 +181,7 @@ interface WebviewMessage {
 // Extended window interface for MD4H globals
 declare global {
   interface Window {
-    vscode?: VsCodeApi;
+    vscode?: GenerationBoundVsCodeApi;
     resolveImagePath?: (relativePath: string) => Promise<string>;
     getImageReferences?: (imagePath: string) => Promise<unknown>;
     checkImageRename?: (oldPath: string, newName: string) => Promise<unknown>;
@@ -153,14 +200,17 @@ declare global {
 
 const vscode = acquireVsCodeApi();
 
-// Make vscode API available globally for toolbar buttons
-window.vscode = vscode;
-
 let editor: Editor | null = null;
+let feedbackReviewController: FeedbackReviewController | null = null;
+let feedbackPeerLockController: FeedbackPeerLockController | null = null;
+let pendingFeedbackPeerLock: { lockId: string; message: string } | null = null;
+let feedbackControllerReadyRequestId: string | null = null;
+const feedbackRasterizer = createModernScreenshotRasterizer();
+let closeFeedbackMoreMenu: ((restoreFocus: boolean) => void) | null = null;
 let isUpdating = false; // Prevent feedback loops
 let formattingToolbar: HTMLElement;
 let tableMenu: HTMLElement;
-let updateTimeout: number | null = null;
+let documentSyncController: DocumentSyncController | null = null;
 let lastUserEditTime = 0; // Track when user last edited
 let pendingInitialContent: string | null = null; // Content from host before editor is ready
 let hasSentReadySignal = false;
@@ -168,6 +218,7 @@ let isDomReady = document.readyState !== 'loading';
 let outlineUpdateTimeout: number | null = null;
 let allowNextHostSyncDespiteRecentEdit = false;
 let allowNextHostSyncDespiteEchoHash = false;
+let hostReconciliationPending = false;
 // Math (KaTeX) feature flag. Captured from the first 'update'/'settingsUpdate'
 // message so the editor knows whether to register math extensions on init.
 // Toggling at runtime requires a reload — we surface a one-time notice.
@@ -178,11 +229,204 @@ let mathFeatureRegistered = false;
 let lastSentContentHash: string | null = null;
 let lastSentTimestamp = 0;
 
+function createViewGeneration(): string {
+  const randomId = globalThis.crypto?.randomUUID?.();
+  if (randomId) return `view-${randomId}`;
+  return `view-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+const viewGeneration = createViewGeneration();
+// Toolbar image insertion uses the same generation-bound protocol as paste and
+// drag/drop. Exposing the raw API here would omit this identity and make the
+// host reject every picker save as stale or malformed.
+window.vscode = {
+  postMessage: message => vscode.postMessage(message),
+  getState: () => vscode.getState(),
+  setState: state => vscode.setState(state),
+  viewGeneration,
+};
+let localDocumentRevision = 0;
+let acceptedDocumentVersion = 0;
+let nextDocumentEditSequence = 1;
+let feedbackRecoveryPrecedesInitialization = false;
+const retiredFeedbackPeerLockIds = new Set<string>();
+const MAX_RETIRED_FEEDBACK_PEER_LOCKS = 128;
+const retireFeedbackPeerLock = (lockId: string): void => {
+  retiredFeedbackPeerLockIds.delete(lockId);
+  retiredFeedbackPeerLockIds.add(lockId);
+  while (retiredFeedbackPeerLockIds.size > MAX_RETIRED_FEEDBACK_PEER_LOCKS) {
+    const oldest = retiredFeedbackPeerLockIds.values().next().value as string | undefined;
+    if (oldest === undefined) break;
+    retiredFeedbackPeerLockIds.delete(oldest);
+  }
+};
+const feedbackPeerReleaseClient = createFeedbackPeerReleaseClient({
+  viewGeneration,
+  getPeerLockId: () => feedbackPeerLockController?.getLockId() ?? null,
+  hasReviewReleaseLock: lockId => feedbackReviewController?.hasPeerReleaseLock(lockId) === true,
+  applyPeerContent: (content, documentVersion) =>
+    applyFeedbackPeerAuthoritativeContent(content, documentVersion),
+  applyReviewRelease: (lockId, content, documentVersion) =>
+    feedbackReviewController?.applyPeerRelease(lockId, () =>
+      applyFeedbackPeerAuthoritativeContent(content, documentVersion)
+    ) === true,
+  completeReviewRelease: lockId => {
+    const completed =
+      feedbackReviewController?.completeClose(lockId) === true ||
+      feedbackReviewController?.completeTransition(lockId) === true ||
+      feedbackReviewController?.completeSessionRelease(lockId) === true;
+    if (completed) retireFeedbackPeerLock(lockId);
+    return completed;
+  },
+  unlockPeer: lockId => {
+    retireFeedbackPeerLock(lockId);
+    if (pendingFeedbackPeerLock?.lockId === lockId) pendingFeedbackPeerLock = null;
+    feedbackPeerLockController?.unlock(lockId);
+  },
+  postMessage: message => vscode.postMessage(message),
+});
+const feedbackPeerLockClient = createFeedbackPeerLockClient({
+  viewGeneration,
+  hasReviewSession: () => Boolean(feedbackReviewController?.getSession()),
+  isRetiredLock: lockId => retiredFeedbackPeerLockIds.has(lockId),
+  getLockId: () => feedbackPeerLockController?.getLockId() ?? null,
+  lock: (lockId, message) => {
+    pendingFeedbackPeerLock = { lockId, message };
+    feedbackPeerLockController?.lock(lockId, message);
+  },
+  postMessage: message => vscode.postMessage(message),
+});
+const feedbackSessionTransferClient = createFeedbackSessionTransferClient({
+  viewGeneration,
+  getSessionId: () => feedbackReviewController?.getSession()?.sessionId ?? null,
+  getPeerLockId: () => feedbackPeerLockController?.getLockId() ?? null,
+  prepareIncoming: message => feedbackReviewController?.prepareSessionTransfer(message) === true,
+  prepareOutgoing: message => feedbackReviewController?.prepareSessionTransfer(message) === true,
+  prepareSameOwner: message => feedbackReviewController?.prepareSessionTransfer(message) === true,
+  commitIncoming: message => feedbackReviewController?.commitSessionTransfer(message) === true,
+  commitOutgoing: message => {
+    const committed = feedbackReviewController?.commitSessionTransfer(message) === true;
+    if (committed) retireFeedbackPeerLock(message.oldSessionId);
+    return committed;
+  },
+  commitSameOwner: message => feedbackReviewController?.commitSessionTransfer(message) === true,
+  abortIncoming: message => feedbackReviewController?.abortSessionTransfer(message) === true,
+  abortOutgoing: message => feedbackReviewController?.abortSessionTransfer(message) === true,
+  abortSameOwner: message => feedbackReviewController?.abortSessionTransfer(message) === true,
+  lockPeer: (lockId, message) => {
+    pendingFeedbackPeerLock = { lockId, message };
+    feedbackPeerLockController?.lock(lockId, message);
+  },
+  unlockPeer: lockId => {
+    retireFeedbackPeerLock(lockId);
+    if (pendingFeedbackPeerLock?.lockId === lockId) pendingFeedbackPeerLock = null;
+    feedbackPeerLockController?.unlock(lockId);
+  },
+  postMessage: message => vscode.postMessage(message),
+});
+
+/** Announce Feedback readiness only after both lifecycle guards exist. */
+function signalFeedbackControllerReady(): void {
+  if (
+    feedbackControllerReadyRequestId !== null ||
+    !feedbackReviewController ||
+    !feedbackPeerLockController
+  ) {
+    return;
+  }
+  feedbackControllerReadyRequestId = `feedback-controller-${viewGeneration}`;
+  vscode.postMessage({
+    type: 'feedback.controller.ready',
+    requestId: feedbackControllerReadyRequestId,
+    viewGeneration,
+  });
+}
+
 // Performance and Sync constants (m3)
 const DEBOUNCE_SYNC_MS = 500;
 const SYNC_ECHO_TIMEOUT_MS = 2000;
 const RECENT_EDIT_THRESHOLD_MS = 2000;
 const OUTLINE_UPDATE_DEBOUNCE_MS = 250;
+const INITIAL_CONTENT_RECOVERY_MS = 100;
+
+function requestWebviewFrame(callback: () => void): number {
+  if (typeof window.requestAnimationFrame === 'function') {
+    return window.requestAnimationFrame(callback);
+  }
+  return window.setTimeout(callback, 16);
+}
+
+function cancelWebviewFrame(frameId: number): void {
+  if (typeof window.cancelAnimationFrame === 'function') {
+    window.cancelAnimationFrame(frameId);
+    return;
+  }
+  window.clearTimeout(frameId);
+}
+
+function getDocumentScrollSurface(): Element {
+  return document.scrollingElement ?? document.documentElement;
+}
+
+const richViewStateController = new RichViewStateController({
+  initialState: vscode.getState(),
+  readCurrentState: () => {
+    if (!editor) return null;
+    const { from, to } = editor.state.selection;
+    return {
+      documentVersion: acceptedDocumentVersion,
+      selection: { from, to },
+      scrollTop: getDocumentScrollSurface().scrollTop,
+    };
+  },
+  writeState: state => vscode.setState(state),
+  requestFrame: requestWebviewFrame,
+  cancelFrame: cancelWebviewFrame,
+  onError: error => console.warn('[MD4H] Could not persist or restore rich-view state:', error),
+});
+
+function restoreRichViewState(editorInstance: Editor): void {
+  if (feedbackRecoveryPrecedesInitialization) return;
+  richViewStateController.restore({
+    documentVersion: acceptedDocumentVersion,
+    maximumPosition: Math.min(editorInstance.state.doc.content.size, MAX_RICH_VIEW_POSITION),
+    applySelection: selection => editorInstance.commands.setTextSelection(selection),
+    applyScroll: scrollTop => {
+      getDocumentScrollSurface().scrollTop = scrollTop;
+    },
+  });
+}
+
+function flushRichViewBeforeTeardown(): void {
+  try {
+    // The source TextDocument remains authoritative. Push the last debounced
+    // edit across the message boundary before VS Code discards this DOM.
+    if (documentSyncController?.hasPendingSync()) {
+      const result = documentSyncController.flushForTeardown();
+      if (result.status === 'blocked') {
+        console.error('[MD4H] Flush blocked before webview teardown: newest edit may be lost');
+      }
+    }
+  } catch (error) {
+    console.error('[MD4H] Could not flush pending Markdown before webview teardown:', error);
+  }
+  richViewStateController.flushPersist();
+}
+
+window.addEventListener(
+  'scroll',
+  () => {
+    richViewStateController.cancelPendingRestore();
+    richViewStateController.schedulePersist();
+  },
+  { passive: true }
+);
+window.addEventListener('pagehide', () => {
+  flushRichViewBeforeTeardown();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) flushRichViewBeforeTeardown();
+});
 
 /**
  * Simple hash function (djb2 algorithm) for content deduplication
@@ -196,8 +440,26 @@ function hashString(str: string): string {
 }
 const signalReady = () => {
   if (hasSentReadySignal) return;
-  vscode.postMessage({ type: 'ready' });
+  vscode.postMessage({
+    type: 'ready',
+    protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+    feedbackDeliveryProtocolVersion: FEEDBACK_DELIVERY_PROTOCOL_VERSION,
+    feedbackSnapshotProtocolVersion: FEEDBACK_SNAPSHOT_PROTOCOL_VERSION,
+    viewGeneration,
+  });
   hasSentReadySignal = true;
+  window.setTimeout(() => {
+    if (!editor && pendingInitialContent === null) {
+      // A recreated hidden webview reuses its panel object. If the host's
+      // per-panel delivery cache suppresses the ordinary ready update, request
+      // an explicit authoritative replay instead of initializing empty TipTap.
+      vscode.postMessage({
+        type: 'document.sync.request',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        viewGeneration,
+      });
+    }
+  }, INITIAL_CONTENT_RECOVERY_MS);
 };
 
 /**
@@ -207,6 +469,24 @@ const trackSentContent = (content: string) => {
   lastSentContentHash = hashString(content);
   lastSentTimestamp = Date.now();
 };
+
+/** Request one forced host replay after renderer-side work is fully settled. */
+function requestHostReconciliation(forceNow = false): void {
+  hostReconciliationPending = true;
+  if (!forceNow && documentSyncController?.hasPendingSync()) return;
+
+  vscode.postMessage({
+    type: 'document.sync.request',
+    protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+    viewGeneration,
+  });
+}
+
+/** Complete a deferred replay once no unsent or unacknowledged edit remains. */
+function resumeHostReconciliation(): void {
+  if (!hostReconciliationPending || documentSyncController?.hasPendingSync()) return;
+  requestHostReconciliation(true);
+}
 
 const pushOutlineUpdate = () => {
   if (!editor) return;
@@ -232,42 +512,30 @@ function isPlainFindShortcut(
   const hasPrimaryModifier = Boolean(event.metaKey) !== Boolean(event.ctrlKey);
   return hasPrimaryModifier && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'f';
 }
-// Pending AI context reference requests, keyed by requestId. The host saves the
-// document and replies with `aiContextRefResponse`; we look up the resolver here.
-const aiContextRefCallbacks = new Map<
-  string,
-  (response: { ref?: string; relPath?: string; error?: string }) => void
->();
-
-// Webview-only "remember choice for this session" preference for the
-// copy-AI-context save dialog. Cleared whenever the webview is reloaded.
-let aiContextSessionSkipSave = false;
-// Mirrors the user setting `markdownForHumans.copyAiContextRef.skipSaveWarning`,
-// kept in sync via `update` and `settingsUpdate` messages from the host.
-let aiContextSkipSaveWarningSetting = false;
 let blankLineMode: BlankLineMode = 'strip';
 // Mirrors `markdownForHumans.formattingShortcuts.enabled`. When false, the
 // editor stops intercepting Cmd/Ctrl+B/I/U so those chords reach VS Code's own
 // keybindings instead of toggling bold/italic/underline in-editor.
 let formattingShortcutsEnabled = true;
 
-// Pending document-dirty queries, keyed by requestId. The host replies with
-// `documentDirtyResponse`; we look up the resolver here.
-const documentDirtyCallbacks = new Map<string, (isDirty: boolean) => void>();
+/** True when this rich view is frozen locally or by a sibling split owner. */
+function isFeedbackEditingLocked(): boolean {
+  return Boolean(
+    feedbackReviewController?.isEditingLocked?.() ||
+    feedbackReviewController?.getSession() ||
+    feedbackPeerLockController?.isLocked()
+  );
+}
 
-function queryDocumentDirty(): Promise<boolean> {
-  return new Promise(resolve => {
-    const requestId = `is-dirty-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-    documentDirtyCallbacks.set(requestId, resolve);
-    vscode.postMessage({ type: 'queryDocumentDirty', requestId });
-    // Defensive timeout so a missing host reply can't wedge the toolbar.
-    setTimeout(() => {
-      if (documentDirtyCallbacks.delete(requestId)) {
-        // Treat unknown state as "needs confirmation" — safer than silently saving.
-        resolve(true);
-      }
-    }, 2000);
-  });
+function announcePeerFeedbackLock(): void {
+  if (typeof window.dispatchEvent !== 'function' || typeof CustomEvent !== 'function') return;
+  window.dispatchEvent(
+    new CustomEvent('feedbackLocalError', {
+      detail: {
+        message: 'Feedback is active in another editor split. Finish it there before editing here.',
+      },
+    })
+  );
 }
 
 /**
@@ -275,7 +543,7 @@ function queryDocumentDirty(): Promise<boolean> {
  * math editor modal. Shared by the keyboard shortcut and the toolbar button.
  */
 async function insertAndEditMath(editorInstance: Editor, mode: 'inline' | 'block'): Promise<void> {
-  if (!enableMath) return;
+  if (!enableMath || isFeedbackEditingLocked()) return;
 
   const typeName = mode === 'block' ? 'mathBlock' : 'inlineMath';
   const nodeType = editorInstance.schema.nodes[typeName];
@@ -318,64 +586,11 @@ async function insertAndEditMath(editorInstance: Editor, mode: 'inline' | 'block
   );
 }
 
-async function runCopyAiContextRef(): Promise<void> {
-  if (!editor) return;
-
-  // Snapshot focus synchronously, before any await. ProseMirror keeps a stale
-  // selection in place after the editor blurs, so if the user clicked outside
-  // the editor (another panel, the toolbar) we'd otherwise copy `#N` pointing
-  // at whatever line was last touched. The toolbar's AI-Ref button uses
-  // `mousedown` preventDefault so clicking it doesn't blur the editor — meaning
-  // `isFocused` here accurately answers "is the user currently engaged with
-  // the document?". When false, we copy `@file` without a line range.
-  const selectionIsActive = editor.isFocused;
-
-  const { showToast } = await import('./features/auditOverlay');
-
-  // The reference encodes line numbers from the on-disk file, so a dirty buffer
-  // forces a save before the copy. Ask the user before saving on their behalf —
-  // unless they've already opted out for this session or via the setting.
-  const isDirty = await queryDocumentDirty();
-  const needsConfirmation =
-    isDirty && !aiContextSessionSkipSave && !aiContextSkipSaveWarningSetting;
-
-  if (needsConfirmation) {
-    const { showAiContextSaveWarning } = await import('./features/aiContextSaveWarning');
-    const choice = await showAiContextSaveWarning();
-    if (!choice.confirmed) {
-      showToast('AI reference copy cancelled — file not saved', 'info');
-      return;
-    }
-    if (choice.rememberForSession) {
-      aiContextSessionSkipSave = true;
-    }
-  }
-
-  const result = await copyAiContextReference(
-    editor,
-    blankLineMode,
-    (range: SelectionBlockRange | null) => {
-      return new Promise(resolve => {
-        const requestId = `ai-ref-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-        aiContextRefCallbacks.set(requestId, resolve);
-        // A null range means we couldn't map the cursor to any block; the host
-        // replies with the bare workspace-relative path and we paste `@path`
-        // (no `#N`).
-        vscode.postMessage({
-          type: 'getAiContextRef',
-          requestId,
-          startLine: range?.startLine,
-          endLine: range?.endLine,
-        });
-      });
-    },
-    { selectionIsActive }
-  );
-  if (result.success) {
-    showToast(`Copied AI reference: ${result.ref}`, 'success');
-  } else {
-    showToast(result.error || 'Could not copy AI reference', 'info');
-  }
+/** Open link editing only while the rich document is writable. */
+function openLinkDialogWhenEditable(editorInstance: Editor): boolean {
+  if (isFeedbackEditingLocked()) return false;
+  showLinkDialog(editorInstance);
+  return true;
 }
 
 // Global function for resolving image paths (used by CustomImage extension)
@@ -462,71 +677,103 @@ window.setupImageResize = function (
  * Immediately send update (used for save shortcuts)
  */
 function immediateUpdate() {
-  if (!editor) return;
+  if (!editor || isFeedbackEditingLocked()) return;
 
   try {
-    // Clear any pending debounced update
-    if (updateTimeout) {
-      clearTimeout(updateTimeout);
-      updateTimeout = null;
-    }
-
-    const markdown = getEditorMarkdownForSync(editor, blankLineMode);
-    trackSentContent(markdown);
-    // Save-time policy enforcement (e.g. strip blank lines) should be reflected
-    // immediately in the editor UI even if the user just typed.
-    allowNextHostSyncDespiteRecentEdit = true;
-    allowNextHostSyncDespiteEchoHash = true;
+    const result = getDocumentSyncController().sendNow('save-policy-enforce');
+    if (result.status === 'disposed') return;
 
     console.log('[MD4H] Immediate save triggered');
 
-    // Send edit first
+    // A prior edit may still be awaiting its application-level ACK. The host
+    // drains that edit, sends an authoritative flush barrier, drains any newer
+    // revision emitted by that barrier, and only then invokes VS Code save.
     vscode.postMessage({
-      type: 'edit',
-      content: markdown,
-      editReason: 'save-policy-enforce',
+      type: 'save',
     });
-
-    // Then tell VS Code to save the file
-    setTimeout(() => {
-      vscode.postMessage({
-        type: 'save',
-      });
-    }, 50); // Small delay to ensure edit is processed first
   } catch (error) {
     console.error('[MD4H] Error in immediate save:', error);
   }
 }
 
 /**
- * Debounced update with error handling
- * Prevents sync while images are being saved to avoid race conditions
+ * Return the editor's deferred sync boundary, creating it on first use.
+ * Serialization stays behind this controller so TipTap updates only mark the
+ * current generation dirty instead of walking the document on every keystroke.
  */
-function debouncedUpdate(markdown: string) {
-  if (updateTimeout) window.clearTimeout(updateTimeout);
-  updateTimeout = window.setTimeout(() => {
-    try {
-      // Check if any images are currently being saved
-      if (hasPendingImageSaves()) {
-        const count = getPendingImageCount();
-        console.log(`[MD4H] Delaying document sync - ${count} image(s) still being saved`);
-        // Reschedule the update to check again
-        debouncedUpdate(markdown);
-        return;
-      }
+function getDocumentSyncController(): DocumentSyncController {
+  if (documentSyncController) return documentSyncController;
 
-      // Track content hash to detect and ignore echo updates
+  documentSyncController = new DocumentSyncController({
+    delayMs: DEBOUNCE_SYNC_MS,
+    serialize: () => {
+      if (!editor) throw new Error('Cannot serialize before the editor is ready.');
+      return getEditorMarkdownForSync(editor, blankLineMode);
+    },
+    send: (markdown, reason) => {
       trackSentContent(markdown);
-
+      if (reason === 'save-policy-enforce') {
+        // Save-time policy enforcement (e.g. strip blank lines) should be
+        // reflected immediately in the editor UI even after recent typing.
+        allowNextHostSyncDespiteRecentEdit = true;
+        allowNextHostSyncDespiteEchoHash = true;
+      }
+      const editId = `${viewGeneration}:${localDocumentRevision}:${nextDocumentEditSequence}`;
+      nextDocumentEditSequence += 1;
       vscode.postMessage({
         type: 'edit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        editId,
+        viewGeneration,
+        localRevision: localDocumentRevision,
+        baseDocumentVersion: acceptedDocumentVersion,
         content: markdown,
-        editReason: 'typing',
+        editReason: reason,
       });
-    } catch (error) {
+      return { editId, localRevision: localDocumentRevision };
+    },
+    sendTeardown: (markdown, predecessor) => {
+      trackSentContent(markdown);
+      const editId = `${viewGeneration}:${localDocumentRevision}:${nextDocumentEditSequence}`;
+      nextDocumentEditSequence += 1;
+      vscode.postMessage({
+        type: 'document.teardown.edit',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        editId,
+        viewGeneration,
+        localRevision: localDocumentRevision,
+        baseDocumentVersion: acceptedDocumentVersion,
+        predecessorEditId: predecessor.editId,
+        predecessorLocalRevision: predecessor.localRevision,
+        content: markdown,
+      });
+      return { editId, localRevision: localDocumentRevision };
+    },
+    shouldDefer: hasPendingImageSaves,
+    onDeferred: () => {
+      const count = getPendingImageCount();
+      console.log(`[MD4H] Delaying document sync - ${count} image(s) still being saved`);
+    },
+    onError: error => {
       console.error('[MD4H] Error sending update:', error);
-    }
-  }, DEBOUNCE_SYNC_MS);
+    },
+    schedule: (callback, delayMs) => {
+      const timeout = window.setTimeout(callback, delayMs);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        window.clearTimeout(timeout);
+      };
+    },
+  });
+  return documentSyncController;
+}
+
+/** Mark the current editor generation dirty and restart its debounce. */
+function debouncedUpdate(): void {
+  localDocumentRevision += 1;
+  getDocumentSyncController().markDirty();
 }
 
 // TODO: Re-implement code block language badges feature
@@ -596,6 +843,7 @@ function initializeEditor(initialContent: string) {
             levels: [1, 2, 3, 4, 5, 6],
           },
           paragraph: false, // Disable default paragraph, using MarkdownParagraph instead
+          code: false, // Use MarkdownCode so inline code stays inside other Markdown marks
           codeBlock: false, // Disable default CodeBlock, using CodeBlockLowlight instead
           // ListKit is registered separately to support task lists; disable StarterKit's list
           // extensions to avoid duplicate names (which can break markdown parsing, e.g. `1)` lists).
@@ -611,6 +859,8 @@ function initializeEditor(initialContent: string) {
           },
         }),
         MarkdownParagraph, // Custom paragraph with empty-paragraph filtering in renderMarkdown
+        MarkdownCode,
+        PreservedMarkdownLiteral,
         CodeBlockWithCopy.configure({
           lowlight,
           HTMLAttributes: {
@@ -637,15 +887,17 @@ function initializeEditor(initialContent: string) {
         TableHeader,
         TableCell,
         ListKit.configure({
+          listItem: false,
           orderedList: false,
           taskItem: {
             nested: true,
           },
         }),
+        MarkdownListItem,
         OrderedListMarkdownFix,
         TabIndentation, // Enable Tab/Shift+Tab for list indentation
         ImageEnterSpacing, // Handle Enter key around images and gap cursor
-        Link.configure({
+        MarkdownLink.configure({
           openOnClick: false,
           HTMLAttributes: {
             class: 'markdown-link',
@@ -710,15 +962,14 @@ function initializeEditor(initialContent: string) {
           return false; // Allow default for non-image drops
         },
       },
-      onUpdate: ({ editor }) => {
+      onUpdate: () => {
         if (isUpdating) return;
 
         try {
           // Track when user last edited
           lastUserEditTime = Date.now();
 
-          const markdown = getEditorMarkdownForSync(editor, blankLineMode);
-          debouncedUpdate(markdown);
+          debouncedUpdate();
           scheduleOutlineUpdate();
         } catch (error) {
           console.error('[MD4H] Error in onUpdate:', error);
@@ -728,6 +979,7 @@ function initializeEditor(initialContent: string) {
         try {
           const { from } = editor.state.selection;
           vscode.postMessage({ type: 'selectionChange', pos: from });
+          richViewStateController.schedulePersist();
         } catch (error) {
           console.warn('[MD4H] Selection update failed:', error);
         }
@@ -769,15 +1021,36 @@ function initializeEditor(initialContent: string) {
       isUpdating = false;
     }
 
+    // VS Code owns the Markdown and Feedback lifecycle. Restore only bounded
+    // presentation coordinates after that exact document version initializes.
+    restoreRichViewState(editorInstance);
+
     // Create and insert formatting toolbar at top
     formattingToolbar = createFormattingToolbar(editorInstance);
     const editorContainer = document.querySelector('#editor') as HTMLElement;
     if (editorContainer && editorContainer.parentElement) {
       editorContainer.parentElement.insertBefore(formattingToolbar, editorContainer);
     }
+    const editorDom = editorInstance.view.dom;
+    const feedbackNodeViewGuards = createFeedbackNodeViewInteractionGuards(editorDom);
+    feedbackReviewController = createFeedbackReviewController({
+      editor: editorInstance,
+      host: vscode,
+      onReadOnlyChange: feedbackNodeViewGuards.setActive,
+    });
+    feedbackPeerLockController = createFeedbackPeerLockController({
+      editor: editorInstance,
+      toolbar: formattingToolbar,
+    });
+    if (pendingFeedbackPeerLock) {
+      feedbackPeerLockController.lock(
+        pendingFeedbackPeerLock.lockId,
+        pendingFeedbackPeerLock.message
+      );
+    }
+    signalFeedbackControllerReady();
 
     // Track editor focus state for toolbar and keep toolbar enabled while interacting with it
-    const editorDom = editorInstance.view.dom;
     editorDom.addEventListener('focus', () => {
       window.dispatchEvent(new CustomEvent('editorFocusChange', { detail: { focused: true } }));
     });
@@ -803,7 +1076,7 @@ function initializeEditor(initialContent: string) {
     tableMenu = createTableMenu(editorInstance);
 
     // Setup image drag & drop handling
-    setupImageDragDrop(editorInstance, vscode);
+    setupImageDragDrop(editorInstance, vscode, viewGeneration);
 
     // Initial outline push
     pushOutlineUpdate();
@@ -822,6 +1095,7 @@ function initializeEditor(initialContent: string) {
     const contextMenuHandler = (e: MouseEvent) => {
       // Don't override the native textarea context menu inside the math modal.
       if (isEventInsideModalOverlay(e)) return;
+      if (isFeedbackEditingLocked()) return;
       try {
         const target = e.target as HTMLElement;
         const tableCell = target.closest('td, th');
@@ -854,6 +1128,16 @@ function initializeEditor(initialContent: string) {
       // undo/redo, copy/paste, save, search, etc. for its own input.
       if (isEventInsideModalOverlay(e)) return;
 
+      // The crop overlay owns its keyboard interaction. Prevent document and
+      // VS Code chords, including Find, until capture completes or is canceled.
+      if (document.body.classList.contains('feedback-capture-active')) {
+        if (e.key !== 'Escape' && e.key !== 'Tab') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+        return;
+      }
+
       const isMod = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows/Linux
 
       // Save shortcut - immediate save
@@ -861,6 +1145,9 @@ function initializeEditor(initialContent: string) {
       if (isMod && e.key === 's') {
         e.preventDefault();
         e.stopPropagation();
+        if (isFeedbackEditingLocked()) {
+          return;
+        }
         immediateUpdate();
 
         document.body.classList.add('saving-feedback');
@@ -881,6 +1168,10 @@ function initializeEditor(initialContent: string) {
 
       // Handle Ctrl+K chord for link insertion
       if (isMod && e.key === 'k') {
+        if (isFeedbackEditingLocked()) {
+          ctrlKPressed = false;
+          return;
+        }
         // Start chord detection - set flag and timer
         ctrlKPressed = true;
         if (ctrlKTimer) {
@@ -898,7 +1189,7 @@ function initializeEditor(initialContent: string) {
         e.preventDefault();
         e.stopPropagation();
         if (editor) {
-          showLinkDialog(editor);
+          openLinkDialogWhenEditable(editor);
         }
         // Reset chord state
         ctrlKPressed = false;
@@ -936,18 +1227,6 @@ function initializeEditor(initialContent: string) {
         if (editor) {
           void insertAndEditMath(editor, 'block');
         }
-        return;
-      }
-
-      // Cmd/Ctrl+Alt+C — Copy current selection as @file#lines AI context reference.
-      // VS Code keybindings declared in package.json don't fire while focus is
-      // inside a webview iframe, so we have to detect the chord here ourselves.
-      // Match e.code instead of e.key because Ctrl+Alt on Windows is the AltGr
-      // modifier on some layouts and can rewrite e.key to a non-letter glyph.
-      if (isMod && e.altKey && (e.code === 'KeyC' || e.key.toLowerCase() === 'c')) {
-        e.preventDefault();
-        e.stopPropagation();
-        void runCopyAiContextRef();
         return;
       }
     };
@@ -1068,15 +1347,6 @@ function initializeEditor(initialContent: string) {
     editorInstance.on('update', updateLinkHandlers);
     updateLinkHandlers(); // Initial call
 
-    // Clean up listeners when editor is destroyed to prevent memory leaks
-    editorInstance.on('destroy', () => {
-      document.removeEventListener('contextmenu', contextMenuHandler);
-      document.removeEventListener('click', documentClickHandler);
-      document.removeEventListener('keydown', keydownHandler);
-      editorInstance.view.dom.removeEventListener('click', handleLinkClick);
-      console.log('[MD4H] Editor destroyed, global listeners cleaned up');
-    });
-
     console.log('[MD4H] Editor initialization complete');
   } catch (error) {
     console.error('[MD4H] Fatal error initializing editor:', error);
@@ -1096,19 +1366,82 @@ function initializeEditor(initialContent: string) {
 /**
  * Handle messages from extension
  */
-window.addEventListener('message', (event: MessageEvent) => {
+window.addEventListener('message', async (event: MessageEvent) => {
+  const incomingType =
+    typeof event.data === 'object' && event.data !== null
+      ? (event.data as { type?: unknown }).type
+      : undefined;
+  if (typeof incomingType === 'string' && incomingType.startsWith('feedback.')) {
+    // A host recovery message has higher authority than the delayed scroll
+    // correction used while recreating an ordinary hidden editor.
+    richViewStateController.cancelPendingRestore();
+    if (!editor) feedbackRecoveryPrecedesInitialization = true;
+  }
+
+  const snapshotDisposition = handleFeedbackSnapshotMessage(event.data, {
+    viewGeneration,
+    getLocalRevision: () => localDocumentRevision,
+    isDirty: () => documentSyncController?.hasPendingSync() === true,
+    serialize: () => {
+      if (!editor)
+        throw new Error('Cannot inspect Feedback snapshot before editor initialization.');
+      return getEditorMarkdownForSync(editor, blankLineMode);
+    },
+    applyAuthoritativeContent: (content, documentVersion) => {
+      if (!editor || !updateEditorContentFromHost(content, true)) return false;
+      documentSyncController?.acceptAuthoritativeState();
+      hostReconciliationPending = false;
+      acceptedDocumentVersion = documentVersion;
+      return true;
+    },
+    enumerateCanonicalBlocks: () => {
+      if (!editor)
+        throw new Error('Cannot enumerate Feedback blocks before editor initialization.');
+      return enumerateCanonicalFeedbackBlocks(editor);
+    },
+    postMessage: message => vscode.postMessage(message),
+  });
+  if (snapshotDisposition !== 'ignored') {
+    if (snapshotDisposition === 'rejected') {
+      console.warn('[MD4H] Rejected or failed Feedback snapshot renderer stage');
+    }
+    return;
+  }
+
+  const feedbackStatusQuery = parseFeedbackDeliveryStatusQuery(event.data);
+  if (feedbackStatusQuery) {
+    try {
+      const appliedSession = feedbackReviewController?.getSession();
+      const status: FeedbackDeliveryApplicationStatus = !appliedSession
+        ? { kind: 'inactive' }
+        : appliedSession.sessionId === feedbackStatusQuery.sessionEpoch
+          ? { kind: 'applied', value: { messageType: 'feedback.started' } }
+          : { kind: 'mismatch' };
+      postFeedbackDeliveryStatus(feedbackStatusQuery, status);
+    } catch (error) {
+      console.error('[MD4H] Error reading Feedback renderer status:', error);
+    }
+    return;
+  }
+
+  const feedbackDelivery = parseFeedbackStartedDelivery(event.data);
   try {
-    const message = event.data as WebviewMessage;
+    const message = (feedbackDelivery?.payload ?? event.data) as WebviewMessage;
+    let validatedFeedbackMessage: FeedbackHostMessage | null = null;
+    if (typeof message?.type === 'string' && message.type.startsWith('feedback.')) {
+      validatedFeedbackMessage = parseFeedbackHostMessage(message);
+      if (validatedFeedbackMessage === null) {
+        console.warn('[MD4H] Rejected malformed Feedback host message');
+        return;
+      }
+    }
 
     switch (message.type) {
-      case 'update':
+      case 'update': {
         // Store skipResizeWarning setting if present
         if (typeof message.skipResizeWarning === 'boolean') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (window as any).skipResizeWarning = message.skipResizeWarning;
-        }
-        if (typeof message.skipAiContextSaveWarning === 'boolean') {
-          aiContextSkipSaveWarningSetting = message.skipAiContextSaveWarning;
         }
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
@@ -1131,6 +1464,15 @@ window.addEventListener('message', (event: MessageEvent) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (window as any).enableMath = message.enableMath;
         }
+        if (
+          !editor &&
+          Number.isSafeInteger(message.documentVersion) &&
+          message.documentVersion >= 0
+        ) {
+          // Establish the host identity before TipTap initialization so any
+          // selection event raised by setContent cannot persist version 0.
+          acceptedDocumentVersion = message.documentVersion;
+        }
         // Initialize editor with first payload to seed undo history correctly
         if (!editor) {
           if (isDomReady) {
@@ -1140,16 +1482,52 @@ window.addEventListener('message', (event: MessageEvent) => {
           }
           return;
         }
-        updateEditorContent(message.content);
+        const hostUpdateApplied = updateEditorContentFromHost(
+          message.content,
+          message.force === true
+        );
+        if (hostUpdateApplied) {
+          if (message.force === true) {
+            documentSyncController?.acceptAuthoritativeState();
+            hostReconciliationPending = false;
+          }
+          if (Number.isSafeInteger(message.documentVersion) && message.documentVersion >= 0) {
+            acceptedDocumentVersion = message.documentVersion;
+          }
+        }
         break;
+      }
+      case 'document.edit.ack': {
+        const acknowledgement = parseDocumentEditAck(message);
+        if (!acknowledgement || acknowledgement.viewGeneration !== viewGeneration) {
+          break;
+        }
+        const syncController = documentSyncController;
+        if (
+          !syncController ||
+          !syncController.acknowledge(acknowledgement.editId, acknowledgement.localRevision)
+        ) {
+          break;
+        }
+        if (acknowledgement.accepted) {
+          acceptedDocumentVersion = Math.max(
+            acceptedDocumentVersion,
+            acknowledgement.documentVersion
+          );
+          syncController.resume();
+          resumeHostReconciliation();
+        } else {
+          // The host rejected this base-version lineage. Do not emit a newer
+          // dirty revision until an authoritative replay resets its base.
+          requestHostReconciliation(true);
+        }
+        break;
+      }
       case 'settingsUpdate':
         // Update skipResizeWarning setting
         if (typeof message.skipResizeWarning === 'boolean') {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (window as any).skipResizeWarning = message.skipResizeWarning;
-        }
-        if (typeof message.skipAiContextSaveWarning === 'boolean') {
-          aiContextSkipSaveWarningSetting = message.skipAiContextSaveWarning;
         }
         if (message.blankLineMode === 'preserve' || message.blankLineMode === 'strip') {
           blankLineMode = message.blankLineMode;
@@ -1570,54 +1948,222 @@ window.addEventListener('message', (event: MessageEvent) => {
         }
         break;
       }
-      case 'aiContextRefResponse': {
-        const requestId = message.requestId as string;
-        const callback = aiContextRefCallbacks.get(requestId);
-        if (callback) {
-          callback({
-            ref: message.ref as string | undefined,
-            relPath: message.relPath as string | undefined,
-            error: message.error as string | undefined,
-          });
-          aiContextRefCallbacks.delete(requestId);
-        }
-        break;
-      }
-      case 'documentDirtyResponse': {
-        const requestId = message.requestId as string;
-        const callback = documentDirtyCallbacks.get(requestId);
-        if (callback) {
-          callback(message.isDirty === true);
-          documentDirtyCallbacks.delete(requestId);
-        }
-        break;
-      }
       case 'flushPendingEdit': {
         // Host needs the latest content NOW (autosave on focus/window change).
         // If a debounced edit is queued, fire it synchronously so the `edit`
         // message arrives at the host before the ack we send immediately
         // after — guaranteeing the host can rely on the buffer being current.
         const requestId = message.requestId as string;
+        let ok = true;
         try {
-          if (editor && updateTimeout !== null) {
-            window.clearTimeout(updateTimeout);
-            updateTimeout = null;
-            const markdown = getEditorMarkdownForSync(editor, blankLineMode);
-            trackSentContent(markdown);
-            vscode.postMessage({
-              type: 'edit',
-              content: markdown,
-              editReason: 'typing',
-            });
+          const barrier = parseDocumentFlushBarrier(message);
+          const hasBarrierMetadata =
+            message.protocolVersion !== undefined ||
+            message.viewGeneration !== undefined ||
+            message.documentVersion !== undefined;
+          if (hasPendingImageSaves()) {
+            // Save and Feedback are explicit user actions. Keep their bounded
+            // host barrier open while an already-posted image write reaches a
+            // terminal result instead of making the user retry the action.
+            await waitForPendingImageSaves();
+          }
+          if (hasPendingImageSaves()) {
+            ok = false;
+          } else if (hostReconciliationPending) {
+            // A rejected edit may have newer local typing derived from a stale
+            // base. Only an applied authoritative replay can establish a safe
+            // base for that content; a flush barrier cannot do so by itself.
+            ok = false;
+          } else if (hasBarrierMetadata && !barrier) {
+            ok = false;
+          } else if (barrier) {
+            if (
+              barrier.viewGeneration !== viewGeneration ||
+              barrier.documentVersion < acceptedDocumentVersion
+            ) {
+              ok = false;
+            } else {
+              documentSyncController?.acceptHostBarrier();
+              acceptedDocumentVersion = barrier.documentVersion;
+            }
+          }
+          if (ok && editor && documentSyncController?.hasPendingSync()) {
+            const result = documentSyncController.flush();
+            if (result.status === 'blocked' || result.status === 'disposed') ok = false;
           }
         } catch (error) {
+          ok = false;
           console.error('[MD4H] flushPendingEdit failed:', error);
         }
-        vscode.postMessage({ type: 'flushPendingEditAck', requestId });
+        vscode.postMessage({
+          type: 'flushPendingEditAck',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          requestId,
+          viewGeneration,
+          documentVersion: acceptedDocumentVersion,
+          ok,
+        });
         break;
       }
-      case 'triggerCopyAiContextRef': {
-        void runCopyAiContextRef();
+      case 'feedback.drafts.available':
+      case 'feedback.resume.available':
+      case 'feedback.draft.discarded':
+      case 'feedback.transition.locked':
+      case 'feedback.updated':
+      case 'feedback.finished':
+      case 'feedback.finish.previewReady':
+      case 'feedback.discarded':
+      case 'feedback.close.release':
+      case 'feedback.diagnosticsCopied':
+      case 'feedback.invalidated':
+      case 'feedback.error': {
+        if (validatedFeedbackMessage) {
+          feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
+        }
+        break;
+      }
+      case 'feedback.started': {
+        if (validatedFeedbackMessage?.type !== 'feedback.started') break;
+        const isCurrentControllerRestore =
+          feedbackDelivery !== null &&
+          feedbackControllerReadyRequestId === validatedFeedbackMessage.requestId;
+        if (!isCurrentControllerRestore) {
+          feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
+          break;
+        }
+
+        const currentSession = feedbackReviewController?.getSession();
+        if (currentSession?.sessionId === validatedFeedbackMessage.sessionId) break;
+        if (
+          !feedbackReviewController ||
+          pendingFeedbackPeerLock?.lockId !== validatedFeedbackMessage.sessionId
+        ) {
+          break;
+        }
+        const restored = feedbackReviewController.restoreActiveSession({
+          sessionId: validatedFeedbackMessage.sessionId,
+          source: validatedFeedbackMessage.source,
+          sourceSha256: validatedFeedbackMessage.sourceSha256,
+          round: validatedFeedbackMessage.round,
+          feedbackFile: validatedFeedbackMessage.feedbackFile,
+          anchors: validatedFeedbackMessage.anchors,
+          items: validatedFeedbackMessage.items,
+        });
+        if (!restored) break;
+
+        // The application ACK covers both activation and removal of the
+        // temporary peer lock, so a dropped follow-up message cannot strand or
+        // prematurely expose the recreated renderer.
+        pendingFeedbackPeerLock = null;
+        feedbackPeerLockController?.unlock(validatedFeedbackMessage.sessionId);
+        break;
+      }
+      case 'feedback.session.transfer': {
+        if (validatedFeedbackMessage?.type === 'feedback.session.transfer') {
+          feedbackSessionTransferClient.handle(validatedFeedbackMessage);
+        }
+        break;
+      }
+      case 'feedback.session.transferred': {
+        if (validatedFeedbackMessage?.type !== 'feedback.session.transferred') break;
+        const currentSession = feedbackReviewController?.getSession();
+        if (!currentSession || currentSession.sessionId !== validatedFeedbackMessage.oldSessionId) {
+          break;
+        }
+        feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
+        pendingFeedbackPeerLock = {
+          lockId: validatedFeedbackMessage.lockId,
+          message: validatedFeedbackMessage.message,
+        };
+        feedbackPeerLockController?.lock(
+          validatedFeedbackMessage.lockId,
+          validatedFeedbackMessage.message
+        );
+        break;
+      }
+      case 'feedback.close.sync': {
+        if (validatedFeedbackMessage?.type === 'feedback.close.sync') {
+          feedbackReviewController?.applyCloseSync(validatedFeedbackMessage, content =>
+            updateEditorContentFromHost(content, true)
+          );
+        }
+        break;
+      }
+      case 'feedback.transition.sync': {
+        if (validatedFeedbackMessage?.type === 'feedback.transition.sync') {
+          feedbackReviewController?.applyTransitionSync(validatedFeedbackMessage, content =>
+            updateEditorContentFromHost(content, true)
+          );
+        }
+        break;
+      }
+      case 'feedback.peer.release': {
+        if (validatedFeedbackMessage?.type === 'feedback.peer.release') {
+          feedbackPeerReleaseClient.handle(validatedFeedbackMessage);
+        }
+        break;
+      }
+      case 'feedback.peer.lock.acquire': {
+        if (validatedFeedbackMessage?.type === 'feedback.peer.lock.acquire') {
+          feedbackPeerLockClient.handle(validatedFeedbackMessage);
+        }
+        break;
+      }
+      case 'feedback.peer.locked': {
+        if (
+          validatedFeedbackMessage?.type !== 'feedback.peer.locked' ||
+          feedbackReviewController?.getSession()
+        ) {
+          break;
+        }
+        pendingFeedbackPeerLock = {
+          lockId: validatedFeedbackMessage.lockId,
+          message: validatedFeedbackMessage.message,
+        };
+        feedbackPeerLockController?.lock(
+          validatedFeedbackMessage.lockId,
+          validatedFeedbackMessage.message
+        );
+        break;
+      }
+      case 'feedback.peer.unlocked': {
+        if (validatedFeedbackMessage?.type !== 'feedback.peer.unlocked') break;
+        if (pendingFeedbackPeerLock?.lockId === validatedFeedbackMessage.lockId) {
+          pendingFeedbackPeerLock = null;
+        }
+        feedbackReviewController?.completeClose?.(validatedFeedbackMessage.lockId);
+        feedbackReviewController?.completeTransition?.(validatedFeedbackMessage.lockId);
+        feedbackPeerLockController?.unlock(validatedFeedbackMessage.lockId);
+        break;
+      }
+      case 'feedback.command': {
+        if (!validatedFeedbackMessage || validatedFeedbackMessage.type !== 'feedback.command') {
+          break;
+        }
+        if (feedbackPeerLockController?.isLocked()) {
+          announcePeerFeedbackLock();
+          break;
+        }
+        if (validatedFeedbackMessage.command === 'start') closeIncompatibleFeedbackSurfaces();
+        if (validatedFeedbackMessage.command === 'captureArea') {
+          if (editor && feedbackReviewController) {
+            startFeedbackAreaCapture({
+              editor,
+              review: feedbackReviewController,
+              rasterize: feedbackRasterizer,
+            });
+          }
+        } else if (validatedFeedbackMessage.command === 'captureSelectedBlocks') {
+          if (editor && feedbackReviewController) {
+            captureSelectedFeedbackBlocks({
+              editor,
+              review: feedbackReviewController,
+              rasterize: feedbackRasterizer,
+            });
+          }
+        } else {
+          feedbackReviewController?.handleHostMessage(validatedFeedbackMessage);
+        }
         break;
       }
       case 'navigateToHeading': {
@@ -1637,18 +2183,66 @@ window.addEventListener('message', (event: MessageEvent) => {
       default:
         console.warn('[MD4H] Unknown message type:', message.type);
     }
+
+    if (feedbackDelivery) {
+      const appliedSession = feedbackReviewController?.getSession();
+      postFeedbackDeliveryAcknowledgement(
+        feedbackDelivery,
+        appliedSession?.sessionId === feedbackDelivery.sessionEpoch
+          ? { kind: 'applied', value: { messageType: 'feedback.started' } }
+          : { kind: 'rejected', code: 'renderer-not-ready' }
+      );
+    }
   } catch (error) {
     console.error('[MD4H] Error handling message:', error);
+    if (feedbackDelivery) {
+      postFeedbackDeliveryAcknowledgement(feedbackDelivery, {
+        kind: 'rejected',
+        code: 'renderer-apply-failed',
+      });
+    }
   }
 });
+
+function postFeedbackDeliveryAcknowledgement(
+  delivery: FeedbackStartedDelivery,
+  outcome:
+    | { readonly kind: 'applied'; readonly value: { readonly messageType: 'feedback.started' } }
+    | { readonly kind: 'rejected'; readonly code: string }
+): void {
+  vscode.postMessage({
+    type: 'feedback.delivery.ack',
+    protocolVersion: FEEDBACK_DELIVERY_PROTOCOL_VERSION,
+    messageId: delivery.messageId,
+    operationEpoch: delivery.operationEpoch,
+    sessionEpoch: delivery.sessionEpoch,
+    stageRevision: delivery.stageRevision,
+    outcome,
+  });
+}
+
+function postFeedbackDeliveryStatus(
+  query: FeedbackDeliveryStatusQuery,
+  status: FeedbackDeliveryApplicationStatus
+): void {
+  vscode.postMessage({
+    type: 'feedback.delivery.status.response',
+    protocolVersion: FEEDBACK_DELIVERY_PROTOCOL_VERSION,
+    messageId: query.messageId,
+    operationEpoch: query.operationEpoch,
+    sessionEpoch: query.sessionEpoch,
+    stageRevision: query.stageRevision,
+    status,
+  });
+}
 
 /**
  * Update editor content from document with cursor preservation
  */
-function updateEditorContent(markdown: string) {
+function updateEditorContent(markdown: string): boolean {
   if (!editor) {
     console.error('[MD4H] Editor not initialized');
-    return;
+    return false;
   }
 
   try {
@@ -1659,7 +2253,7 @@ function updateEditorContent(markdown: string) {
       const timeSinceLastSend = Date.now() - lastSentTimestamp;
       if (timeSinceLastSend < SYNC_ECHO_TIMEOUT_MS) {
         console.log('[MD4H] Ignoring update (matches content we just sent)');
-        return;
+        return false;
       }
     }
     allowNextHostSyncDespiteEchoHash = false;
@@ -1668,7 +2262,8 @@ function updateEditorContent(markdown: string) {
     const timeSinceLastEdit = Date.now() - lastUserEditTime;
     if (timeSinceLastEdit < RECENT_EDIT_THRESHOLD_MS && !allowNextHostSyncDespiteRecentEdit) {
       console.log(`[MD4H] Skipping update - user recently edited (${timeSinceLastEdit}ms ago)`);
-      return;
+      requestHostReconciliation();
+      return false;
     }
     allowNextHostSyncDespiteRecentEdit = false;
 
@@ -1683,7 +2278,7 @@ function updateEditorContent(markdown: string) {
     const currentMarkdown = getEditorMarkdownForSync(editor, blankLineMode);
     if (currentMarkdown === markdown) {
       console.log('[MD4H] Update skipped (content unchanged)');
-      return;
+      return true;
     }
 
     // Save cursor position
@@ -1691,7 +2286,12 @@ function updateEditorContent(markdown: string) {
     console.log(`[MD4H] Saving cursor position: ${from}-${to}`);
 
     // Set content
-    editor.commands.setContent(markdown, { contentType: 'markdown' });
+    const setContentResult = editor.commands.setContent(markdown, { contentType: 'markdown' });
+    if (setContentResult === false) {
+      console.error('[MD4H] Editor rejected host content replacement');
+      requestHostReconciliation();
+      return false;
+    }
 
     // Restore cursor position
     try {
@@ -1712,12 +2312,41 @@ function updateEditorContent(markdown: string) {
     if (duration > 1000) {
       console.warn(`[MD4H] Slow update: ${duration.toFixed(2)}ms for ${docSize} chars`);
     }
+    return true;
   } catch (error) {
     console.error('[MD4H] Error updating content:', error);
     console.error('[MD4H] Document size:', markdown.length, 'chars');
+    requestHostReconciliation();
+    return false;
   } finally {
     isUpdating = false;
   }
+}
+
+/** Apply host-authoritative content, optionally bypassing ordinary echo guards. */
+function updateEditorContentFromHost(markdown: string, force = false): boolean {
+  const peerController = feedbackPeerLockController;
+  const peerLocked = peerController?.isLocked() === true;
+  if (force || peerLocked) {
+    // A sibling may flush the exact content that this split most recently
+    // attempted to send, or a just-closed owner may still show its frozen
+    // snapshot. The explicit host payload is authoritative in both cases.
+    allowNextHostSyncDespiteEchoHash = true;
+    allowNextHostSyncDespiteRecentEdit = true;
+  }
+  if (peerLocked && peerController) {
+    return peerController.runHostUpdate(() => updateEditorContent(markdown));
+  }
+  return updateEditorContent(markdown);
+}
+
+/** Apply a peer barrier snapshot and advance the renderer's document lineage. */
+function applyFeedbackPeerAuthoritativeContent(markdown: string, documentVersion: number): boolean {
+  if (!updateEditorContentFromHost(markdown, true)) return false;
+  documentSyncController?.acceptAuthoritativeState();
+  hostReconciliationPending = false;
+  acceptedDocumentVersion = documentVersion;
+  return true;
 }
 
 /**
@@ -1799,10 +2428,198 @@ window.addEventListener('toggleTocOutline', () => {
   }
 });
 
+function closeIncompatibleFeedbackSurfaces(): void {
+  if (editor && isTocVisible()) {
+    hideTocOverlay(editor, false);
+  }
+  const auditClose = document.querySelector<HTMLButtonElement>(
+    '.audit-overlay.visible .audit-overlay-close'
+  );
+  auditClose?.click();
+  if (editor && !editor.isDestroyed) {
+    void import('./features/auditDocument')
+      .then(({ auditPluginKey }) => {
+        if (editor && !editor.isDestroyed) {
+          editor.view.dispatch(editor.state.tr.setMeta(auditPluginKey, []));
+        }
+      })
+      .catch(error => console.error('[MD4H] Failed to clear audit decorations:', error));
+  }
+  document
+    .querySelectorAll<HTMLButtonElement>(
+      '.math-editor-overlay #cancel-btn, .mermaid-editor-overlay #cancel-btn'
+    )
+    .forEach(button => button.click());
+  document.querySelectorAll<HTMLElement>('.image-context-menu').forEach(menu => {
+    menu.style.display = 'none';
+  });
+  document.querySelectorAll<HTMLElement>('.image-menu-button').forEach(button => {
+    button.setAttribute('aria-expanded', 'false');
+  });
+  document
+    .querySelectorAll<HTMLElement>('.mermaid-wrapper.highlighted, .md4h-math-block.highlighted')
+    .forEach(node => node.classList.remove('highlighted'));
+  document
+    .querySelectorAll<HTMLElement>(
+      '.image-caret-before, .image-caret-after, .image-caret-selected, .image-pending-delete'
+    )
+    .forEach(node => {
+      node.classList.remove(
+        'image-caret-before',
+        'image-caret-after',
+        'image-caret-selected',
+        'image-pending-delete'
+      );
+    });
+  document
+    .querySelectorAll<HTMLElement>('.mermaid-tooltip, .md4h-math-block-tooltip')
+    .forEach(tooltip => {
+      tooltip.style.display = 'none';
+    });
+  document.querySelectorAll<HTMLElement>('.toolbar-dropdown-menu').forEach(menu => {
+    menu.style.display = 'none';
+  });
+  closeFeedbackMoreMenu?.(false);
+}
+
+function showFeedbackMoreMenu(): void {
+  closeFeedbackMoreMenu?.(false);
+  if (!feedbackReviewController?.getSession()) return;
+
+  const trigger = document.querySelector<HTMLButtonElement>('[data-feedback-more]');
+
+  const menu = document.createElement('div');
+  menu.className = 'feedback-more-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'More feedback actions');
+  trigger?.setAttribute('aria-expanded', 'true');
+  const actions: Array<{ label: string; action: () => void }> = [
+    {
+      label: 'Reveal feedback file',
+      action: () => feedbackReviewController?.reveal(),
+    },
+    {
+      label: 'Copy diagnostics',
+      action: () => feedbackReviewController?.copyDiagnostics(),
+    },
+  ];
+  for (const action of actions) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'feedback-more-item';
+    button.setAttribute('role', 'menuitem');
+    button.textContent = action.label;
+    button.addEventListener('click', () => {
+      closeFeedbackMoreMenu?.(true);
+      action.action();
+    });
+    menu.append(button);
+  }
+  const menuHost = getFeedbackToolbarMenuHost(trigger, formattingToolbar);
+  menuHost.append(menu);
+  menu.querySelector<HTMLButtonElement>('button')?.focus();
+
+  const closeFromPointer = (event: Event): void => {
+    if (
+      event.target instanceof Node &&
+      (menu.contains(event.target) || trigger?.contains(event.target))
+    ) {
+      return;
+    }
+    closeFeedbackMoreMenu?.(false);
+  };
+  const close = (restoreFocus: boolean): void => {
+    menu.remove();
+    trigger?.setAttribute('aria-expanded', 'false');
+    document.removeEventListener('pointerdown', closeFromPointer, true);
+    closeFeedbackMoreMenu = null;
+    if (restoreFocus && trigger?.isConnected) trigger.focus();
+  };
+  closeFeedbackMoreMenu = close;
+  menu.addEventListener('keydown', event => {
+    const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+      return;
+    }
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % items.length;
+    else if (event.key === 'ArrowUp') nextIndex = (currentIndex - 1 + items.length) % items.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = items.length - 1;
+    else if (event.key === 'Tab') close(false);
+    if (nextIndex !== null) {
+      event.preventDefault();
+      items[nextIndex]?.focus();
+    }
+  });
+  window.setTimeout(() => document.addEventListener('pointerdown', closeFromPointer, true), 0);
+}
+
+window.addEventListener('feedbackStartRequested', () => {
+  if (feedbackPeerLockController?.isLocked()) {
+    announcePeerFeedbackLock();
+    return;
+  }
+  closeIncompatibleFeedbackSurfaces();
+  feedbackReviewController?.start();
+});
+
+window.addEventListener('feedbackResumeRequested', closeIncompatibleFeedbackSurfaces);
+
+window.addEventListener('feedbackFinishRequested', () => {
+  feedbackReviewController?.finish();
+});
+
+window.addEventListener('feedbackCommentsToggleRequested', () => {
+  feedbackReviewController?.toggleComments();
+});
+
+window.addEventListener('feedbackDiscardRequested', () => {
+  feedbackReviewController?.discard();
+});
+
+window.addEventListener('feedbackCaptureRequested', () => {
+  if (!editor || !feedbackReviewController) return;
+  startFeedbackAreaCapture({
+    editor,
+    review: feedbackReviewController,
+    rasterize: feedbackRasterizer,
+  });
+});
+
+window.addEventListener('feedbackReplaceScreenshotRequested', event => {
+  if (!editor || !feedbackReviewController) return;
+  const detail = (event as CustomEvent<{ id?: string; feedback?: string }>).detail;
+  if (!detail?.id) return;
+  startFeedbackAreaCapture({
+    editor,
+    review: feedbackReviewController,
+    rasterize: feedbackRasterizer,
+    replaceId: detail.id,
+    initialFeedback: detail.feedback,
+  });
+});
+
+window.addEventListener('feedbackLocalError', event => {
+  const detail = (event as CustomEvent<{ message?: string }>).detail;
+  if (!detail?.message) return;
+  void import('./features/auditOverlay').then(({ showToast }) => {
+    showToast(detail.message ?? 'Feedback action failed.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+  });
+});
+
+window.addEventListener('feedbackMoreRequested', showFeedbackMoreMenu);
+
 // Handle custom event for document audit from toolbar button
 window.addEventListener('auditDocument', async () => {
-  if (!editor) return;
+  if (!editor || isFeedbackEditingLocked()) return;
   console.log('[MD4H] Running document audit...');
+  let loadingToast: { id: string; dismiss: (toastId: string) => void } | undefined;
   try {
     const { runAudit, auditPluginKey } = await import('./features/auditDocument');
     const { showAuditOverlay, showToast, dismissToast } = await import('./features/auditOverlay');
@@ -1812,21 +2629,29 @@ window.addEventListener('auditDocument', async () => {
 
     // Show loading toast
     const loadingToastId = showToast('Auditing document...', 'loading');
+    loadingToast = { id: loadingToastId, dismiss: dismissToast };
 
-    const issues = await runAudit(editor);
+    const auditEditor = editor;
+    const issues = await runAudit(auditEditor);
     console.log('[MD4H] Audit complete, issues found:', issues.length);
 
-    // Dismiss loading toast
-    dismissToast(loadingToastId);
+    // Feedback may have frozen the document while the async audit was still
+    // running. Do not let a stale result reopen chrome or decorations inside
+    // the focused review surface.
+    if (editor !== auditEditor || auditEditor.isDestroyed || isFeedbackEditingLocked()) return;
 
-    showAuditOverlay(editor, issues);
+    showAuditOverlay(auditEditor, issues);
 
     // Apply decorations
     if (issues.length > 0) {
-      editor.view.dispatch(editor.state.tr.setMeta(auditPluginKey, issues));
+      auditEditor.view.dispatch(auditEditor.state.tr.setMeta(auditPluginKey, issues));
     }
   } catch (error) {
     console.error('[MD4H] Audit failed:', error);
+  } finally {
+    if (loadingToast) {
+      loadingToast.dismiss(loadingToast.id);
+    }
   }
 });
 
@@ -1834,11 +2659,6 @@ window.addEventListener('auditDocument', async () => {
 window.addEventListener('copyAsMarkdown', () => {
   if (!editor) return;
   copySelectionAsMarkdown(editor);
-});
-
-// Handle copy AI context reference from toolbar button
-window.addEventListener('copyAiContextRef', () => {
-  void runCopyAiContextRef();
 });
 
 // Handle insert-math from toolbar buttons
@@ -1860,6 +2680,7 @@ window.addEventListener('insertMath', (event: Event) => {
 
 // Handle open source view from toolbar button
 window.addEventListener('openSourceView', () => {
+  if (isFeedbackEditingLocked()) return;
   console.log('[MD4H] Opening source view...');
   vscode.postMessage({ type: 'openSourceView' });
 });
@@ -1986,7 +2807,7 @@ window.addEventListener('exportDocument', async (event: Event) => {
  * events so Ctrl+Z / Ctrl+V / etc. stay scoped to the modal.
  */
 function isEventInsideModalOverlay(event: Event): boolean {
-  const selector = '.math-editor-overlay';
+  const selector = '.math-editor-overlay, [data-md4h-modal], .feedback-annotation-dialog';
   const target = event.target;
   if (target instanceof Element && target.closest(selector)) return true;
   const active = document.activeElement;
@@ -2024,6 +2845,11 @@ document.addEventListener(
     // rerouting them here inserted clipboard HTML/markdown into the document
     // instead of the focused field.
     if (!isPasteTargetedAtEditor(event.target)) return;
+    if (isFeedbackEditingLocked()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
 
     const clipboardData = event.clipboardData;
     if (!clipboardData) return;
@@ -2078,8 +2904,20 @@ export const __testing = {
   setMockEditor(mockEditor: any) {
     editor = mockEditor;
   },
-  updateEditorContentForTests(markdown: string) {
-    return updateEditorContent(markdown);
+  setFeedbackReviewControllerForTests(controller: FeedbackReviewController | null) {
+    feedbackReviewController = controller;
+  },
+  setFeedbackPeerLockControllerForTests(controller: FeedbackPeerLockController | null) {
+    feedbackPeerLockController = controller;
+  },
+  setFeedbackControllerReadyRequestForTests(requestId: string | null) {
+    feedbackControllerReadyRequestId = requestId;
+  },
+  signalFeedbackControllerReadyForTests() {
+    signalFeedbackControllerReady();
+  },
+  updateEditorContentForTests(markdown: string, force = false) {
+    return updateEditorContentFromHost(markdown, force);
   },
   trackSentContentForTests(content: string) {
     trackSentContent(content);
@@ -2090,6 +2928,7 @@ export const __testing = {
   resetSyncState() {
     lastSentContentHash = null;
     lastSentTimestamp = 0;
+    hostReconciliationPending = false;
   },
   isCodeContextForPasteForTests(event: ClipboardEvent) {
     if (!editor) return false;
@@ -2098,6 +2937,27 @@ export const __testing = {
   insertRawCodeTextForTests(text: string) {
     if (!editor) return;
     insertRawCodeText(editor, text);
+  },
+  queueDebouncedUpdateForTests(_markdown?: string) {
+    debouncedUpdate();
+  },
+  immediateUpdateForTests() {
+    immediateUpdate();
+  },
+  flushRichViewBeforeTeardownForTests() {
+    flushRichViewBeforeTeardown();
+  },
+  getDocumentSyncIdentityForTests() {
+    return { viewGeneration, localRevision: localDocumentRevision, acceptedDocumentVersion };
+  },
+  markRecentUserEditForTests() {
+    lastUserEditTime = Date.now();
+  },
+  openLinkDialogForTests(editorInstance: Editor) {
+    return openLinkDialogWhenEditable(editorInstance);
+  },
+  insertAndEditMathForTests(editorInstance: Editor, mode: 'inline' | 'block') {
+    return insertAndEditMath(editorInstance, mode);
   },
   isPlainFindShortcutForTests(event: {
     key: string;
