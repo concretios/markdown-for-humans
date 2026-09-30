@@ -403,14 +403,29 @@ describe('BubbleMenuView', () => {
       );
     });
 
-    it('disables finish while a comment composer or edit draft is open', () => {
+    it('dispatches Finish with an unfinished comment so the controller can reveal draft guidance', () => {
+      const toolbar = createFormattingToolbar(createMockEditor());
+      const finishRequested = jest.fn();
+      window.addEventListener('feedbackFinishRequested', finishRequested);
+      try {
+        setFeedbackToolbarState({ active: true, commentsState: 'expanded', commentsLocked: true });
+        const finish = toolbar.querySelector<HTMLButtonElement>('[data-feedback-finish]');
+        expect(finish?.disabled).toBe(false);
+        finish?.click();
+        expect(finishRequested).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('feedbackFinishRequested', finishRequested);
+      }
+    });
+
+    it('keeps finish reachable before and after a comment draft so guidance is available', () => {
       const editor = createMockEditor();
       const toolbar = createFormattingToolbar(editor);
       setFeedbackToolbarState({ active: true, commentsLocked: true });
 
       let finish = toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement;
-      expect(finish.disabled).toBe(true);
-      expect(finish.getAttribute('aria-disabled')).toBe('true');
+      expect(finish.disabled).toBe(false);
+      expect(finish.getAttribute('aria-disabled')).toBe('false');
 
       setFeedbackToolbarState({ active: true, commentsLocked: false });
       finish = toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement;

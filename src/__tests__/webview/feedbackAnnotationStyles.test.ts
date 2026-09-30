@@ -5,6 +5,24 @@ const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'u
 const cssRules = css.match(/[^{}]+\{[^{}]*\}/g) ?? [];
 const feedbackCss = css.slice(css.indexOf('Snapshot Feedback review'));
 
+describe('Feedback blocked-action guidance styling', () => {
+  it('shows theme-aware guidance and static attention without hiding its message', () => {
+    const notice = ruleFor('.feedback-draft-notice');
+    const attention = ruleFor('.feedback-draft-attention');
+    expect(notice).toContain('--vscode-editorWidget-background');
+    expect(notice).toContain('--vscode-editorWidget-foreground');
+    expect(notice).not.toMatch(/clip|display:\s*none|visibility:\s*hidden/);
+    expect(attention).toContain('--vscode-focusBorder');
+    expect(attention).not.toMatch(/animation:/);
+  });
+
+  it('lets peer navigation wrap in narrow splits and retain keyboard-visible focus', () => {
+    expect(ruleFor('.feedback-peer-lock-banner')).toMatch(/flex-wrap:\s*wrap/);
+    expect(ruleFor('.feedback-peer-lock-action')).toMatch(/white-space:\s*normal/);
+    expect(ruleFor('.feedback-peer-lock-action:focus-visible')).toContain('--vscode-focusBorder');
+  });
+});
+
 const ruleFor = (selector: string): string =>
   cssRules.find(rule => {
     const selectorList = rule
@@ -16,6 +34,12 @@ const ruleFor = (selector: string): string =>
   }) ?? '';
 
 describe('Feedback annotation styles', () => {
+  it('lets a height-constrained composer scroll to its actions without scrolling the document', () => {
+    const composer = ruleFor('.feedback-card-layer .feedback-composer');
+    expect(composer).toMatch(/overflow-y:\s*auto/);
+    expect(composer).toMatch(/overscroll-behavior:\s*contain/);
+  });
+
   it('uses a document-positioned overlay without creating a second scroll surface', () => {
     const layer = css.match(/\.feedback-annotation-layer\s*\{[^}]*\}/)?.[0] ?? '';
     const cardLayer = css.match(/\.feedback-card-layer\s*\{[^}]*\}/)?.[0] ?? '';

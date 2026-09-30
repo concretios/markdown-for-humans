@@ -25,8 +25,10 @@ function createFixture() {
     unregisterPlugin: jest.fn(),
     isDestroyed: false,
   } as unknown as Editor;
-  const controller = createFeedbackPeerLockController({ editor, toolbar });
-  return { controller, editor, editorDom, toolbar, registeredPlugins };
+  const onGoToActiveFeedback = jest.fn();
+  const options = { editor, toolbar, onGoToActiveFeedback };
+  const controller = createFeedbackPeerLockController(options);
+  return { controller, editor, editorDom, toolbar, registeredPlugins, onGoToActiveFeedback };
 }
 
 describe('Feedback peer split lock', () => {
@@ -63,6 +65,102 @@ describe('Feedback peer split lock', () => {
 
     expect(plugin.spec.filterTransaction?.({ docChanged: true })).toBe(false);
     expect(plugin.spec.filterTransaction?.({ docChanged: false })).toBe(true);
+  });
+
+  it('offers a keyboard-accessible action outside the inert toolbar without unlocking edits', () => {
+    const { controller, toolbar, onGoToActiveFeedback } = createFixture();
+    controller.lock('session-1', 'Feedback is active in another editor split.');
+
+    const button = document.querySelector<HTMLButtonElement>('[data-feedback-peer-lock] button');
+    expect(button?.textContent).toBe('Go to active feedback');
+    expect(button?.type).toBe('button');
+    expect(button?.disabled).toBe(false);
+    expect(button?.closest('[inert]')).toBeNull();
+    button?.focus();
+    expect(document.activeElement).toBe(button);
+    button?.click();
+
+    expect(onGoToActiveFeedback).toHaveBeenCalledWith('session-1');
+    expect(toolbar.hasAttribute('inert')).toBe(true);
+    expect(controller.isLocked()).toBe(true);
+  });
+
+  it('keeps action focus and uses the current token when a peer lock is replaced', () => {
+    const { controller, onGoToActiveFeedback } = createFixture();
+    controller.lock('session-1', 'Initial session.');
+    const button = document.querySelector<HTMLButtonElement>('[data-feedback-peer-lock] button');
+    button?.focus();
+
+    controller.lock('session-2', 'Replacement session.');
+    expect(document.activeElement).toBe(button);
+    expect(document.querySelectorAll('[data-feedback-peer-lock] button')).toHaveLength(1);
+    button?.click();
+    expect(onGoToActiveFeedback).toHaveBeenCalledWith('session-2');
+
+    controller.unlock('session-2');
+    button?.click();
+    expect(onGoToActiveFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    'preserves native Tab traversal with shift=%s instead of running editing keymaps',
+    shiftKey => {
+      const { controller, editorDom } = createFixture();
+      const editingKeymap = jest.fn((event: KeyboardEvent) => event.preventDefault());
+      editorDom.addEventListener('keydown', editingKeymap);
+      controller.lock('session-1', 'Feedback is active elsewhere.');
+
+      const event = new KeyboardEvent('keydown', {
+        key: 'Tab',
+        shiftKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      editorDom.dispatchEvent(event);
+
+      expect(editingKeymap).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(false);
+      expect(controller.isLocked()).toBe(true);
+    }
+  );
+
+  it.each([
+    { key: 'Tab', ctrlKey: true },
+    { key: 'Tab', metaKey: true },
+    { key: 'Tab', altKey: true },
+    { key: 'c', metaKey: true },
+    { key: 'ArrowLeft' },
+  ])('leaves other keyboard shortcuts untouched: %j', key => {
+    const { controller, editorDom } = createFixture();
+    const keymap = jest.fn();
+    editorDom.addEventListener('keydown', keymap);
+    controller.lock('session-1', 'Feedback is active elsewhere.');
+    const event = new KeyboardEvent('keydown', { ...key, bubbles: true, cancelable: true });
+
+    editorDom.dispatchEvent(event);
+
+    expect(keymap).toHaveBeenCalledWith(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it.each(['unlock', 'destroy'] as const)('restores ordinary Tab keymaps after %s', close => {
+    const { controller, editorDom } = createFixture();
+    const editingKeymap = jest.fn((event: KeyboardEvent) => event.preventDefault());
+    editorDom.addEventListener('keydown', editingKeymap);
+    controller.lock('session-1', 'Feedback is active elsewhere.');
+    if (close === 'unlock') controller.unlock('session-1');
+    else controller.destroy();
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    editorDom.dispatchEvent(event);
+
+    expect(editingKeymap).toHaveBeenCalledWith(event);
+    expect(event.defaultPrevented).toBe(true);
   });
 
   it('temporarily admits authoritative host content without unlocking the peer UI', () => {

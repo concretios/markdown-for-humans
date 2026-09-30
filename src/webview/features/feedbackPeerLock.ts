@@ -4,7 +4,8 @@
  * Licensed under the MIT License. See LICENSE file in the project root for details.
  *
  * @fileoverview Explicit read-only state for a rich-view split whose sibling
- * owns a frozen Feedback session. This has no runtime cost outside that state.
+ * owns a frozen Feedback session, with a route back to that owner. This has no
+ * runtime cost outside that state.
  */
 
 import type { Editor } from '@tiptap/core';
@@ -33,16 +34,20 @@ export function createFeedbackPeerReadOnlyPlugin(): Plugin {
 /**
  * Lock a non-owning split without creating Feedback chrome in that split.
  * A correlated lock ID prevents a delayed unlock from clearing a newer lock.
+ * Navigation stays outside the inert toolbar and never clears read-only state.
+ * Plain Tab and Shift+Tab use native focus traversal while the split is locked.
  */
 export function createFeedbackPeerLockController(options: {
   editor: Editor;
   toolbar: HTMLElement;
+  onGoToActiveFeedback: (lockId: string) => void;
 }): FeedbackPeerLockController {
   const { editor, toolbar } = options;
   const editorDom = editor.view.dom as HTMLElement;
   const nodeViewGuards = createFeedbackNodeViewInteractionGuards(editorDom);
   let lockId: string | null = null;
   let banner: HTMLElement | null = null;
+  let bannerMessage: HTMLElement | null = null;
   let pluginRegistered = false;
   let originalAriaReadonly: string | null = null;
   let originalTabIndex: string | null = null;
@@ -51,6 +56,13 @@ export function createFeedbackPeerLockController(options: {
 
   const guardMutation = (event: Event): void => {
     event.preventDefault();
+    event.stopImmediatePropagation();
+  };
+
+  const allowFocusTraversal = (event: KeyboardEvent): void => {
+    if (event.key !== 'Tab' || event.altKey || event.ctrlKey || event.metaKey) return;
+    // Editing keymaps consume Tab even when the read-only plugin rejects their
+    // transaction. Skip those keymaps while preserving native browser traversal.
     event.stopImmediatePropagation();
   };
 
@@ -78,11 +90,21 @@ export function createFeedbackPeerLockController(options: {
       banner.setAttribute('data-feedback-peer-lock', '');
       banner.setAttribute('role', 'status');
       banner.setAttribute('aria-live', 'polite');
+      bannerMessage = document.createElement('span');
+      bannerMessage.className = 'feedback-peer-lock-message';
+      const navigateButton = document.createElement('button');
+      navigateButton.type = 'button';
+      navigateButton.className = 'feedback-peer-lock-action feedback-secondary-button';
+      navigateButton.textContent = 'Go to active feedback';
+      navigateButton.addEventListener('click', () => {
+        if (lockId !== null) options.onGoToActiveFeedback(lockId);
+      });
+      banner.append(bannerMessage, navigateButton);
       const shell = editorDom.closest<HTMLElement>('#editor')?.parentElement;
       if (toolbar.parentElement) toolbar.insertAdjacentElement('afterend', banner);
       else shell?.prepend(banner);
     }
-    banner.textContent = message;
+    if (bannerMessage) bannerMessage.textContent = message;
   };
 
   const activate = (nextLockId: string, message: string): void => {
@@ -95,6 +117,7 @@ export function createFeedbackPeerLockController(options: {
       editorDom.addEventListener('cut', guardMutation, true);
       editorDom.addEventListener('paste', guardMutation, true);
       editorDom.addEventListener('drop', guardMutation, true);
+      editorDom.addEventListener('keydown', allowFocusTraversal, true);
       nodeViewGuards.setActive(true);
       registerPlugin();
       editorDom.setAttribute('aria-readonly', 'true');
@@ -115,6 +138,7 @@ export function createFeedbackPeerLockController(options: {
     editorDom.removeEventListener('cut', guardMutation, true);
     editorDom.removeEventListener('paste', guardMutation, true);
     editorDom.removeEventListener('drop', guardMutation, true);
+    editorDom.removeEventListener('keydown', allowFocusTraversal, true);
     nodeViewGuards.setActive(false);
     unregisterPlugin();
     if (reviewOwnsReadOnlyState) {
@@ -139,6 +163,7 @@ export function createFeedbackPeerLockController(options: {
     toolbarHadInert = false;
     banner?.remove();
     banner = null;
+    bannerMessage = null;
     document.body.classList.remove('feedback-peer-locked');
   };
 
