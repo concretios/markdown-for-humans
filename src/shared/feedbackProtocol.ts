@@ -177,6 +177,12 @@ interface FeedbackSessionRequestBase extends FeedbackRequestBase {
 
 export type FeedbackWebviewMessage =
   | (FeedbackRequestBase & {
+      /** Navigate to the current owner without transferring or unlocking the session. */
+      type: 'feedback.peer.reveal';
+      lockId: string;
+      viewGeneration: string;
+    })
+  | (FeedbackRequestBase & {
       /** Proves the Feedback controller exists for this exact renderer lifetime. */
       type: 'feedback.controller.ready';
       viewGeneration: string;
@@ -811,6 +817,19 @@ function isPngDataUrl(value: unknown): value is string {
 export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMessage | null {
   if (!isRecord(value) || typeof value.type !== 'string' || !isRequestId(value.requestId)) {
     return null;
+  }
+
+  if (value.type === 'feedback.peer.reveal') {
+    return hasExactKeys(value, ['type', 'requestId', 'lockId', 'viewGeneration']) &&
+      isSessionId(value.lockId) &&
+      isSessionId(value.viewGeneration)
+      ? {
+          type: value.type,
+          requestId: value.requestId,
+          lockId: value.lockId,
+          viewGeneration: value.viewGeneration,
+        }
+      : null;
   }
 
   if (value.type === 'feedback.controller.ready') {

@@ -343,6 +343,260 @@ describe('Feedback review controller', () => {
     ]);
   });
 
+  describe('visible guidance for an unfinished feedback action', () => {
+    const target = {
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus: 'Alpha beta',
+      startLine: 3,
+      endLine: 3,
+    };
+    const savedItem: FeedbackItemSummary = {
+      id: 'F1',
+      kind: 'text',
+      startOrdinal: 0,
+      endOrdinal: 0,
+      startLine: 1,
+      endLine: 1,
+      focus: 'Title',
+      feedback: 'Saved feedback',
+    };
+    const activate = (): ReturnType<typeof createFeedbackReviewController> => {
+      const controller = createFeedbackReviewController({ editor: createEditorFixture(), host });
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'b'.repeat(64),
+        round: 'round-1',
+        anchors: [{ ordinal: 1, startLine: 3, endLine: 3 }],
+        items: [savedItem],
+      });
+      return controller;
+    };
+
+    it.each(['new-comment', 'finish', 'discard', 'hide-comments', 'navigate', 'saved-marker'])(
+      'preserves and visibly identifies the current comment after %s',
+      action => {
+        const controller = activate();
+        controller.openTextComposer(target);
+        const composer = document.querySelector<HTMLElement>('.feedback-composer')!;
+        const field = composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+        field.value = 'Keep my unfinished comment.';
+        field.setSelectionRange(4, 11);
+        const otherControl = document.createElement('button');
+        document.body.append(otherControl);
+        otherControl.focus();
+        const redirect = (): void => {
+          if (action === 'new-comment') controller.openTextComposer({ ...target, focus: 'Title' });
+          if (action === 'finish') controller.finish();
+          if (action === 'discard') controller.discard();
+          if (action === 'hide-comments') controller.toggleComments(false);
+          if (action === 'navigate') controller.navigateFeedback('next');
+          if (action === 'saved-marker') {
+            document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+          }
+        };
+
+        redirect();
+        redirect();
+
+        expect(document.querySelector('.feedback-composer')).toBe(composer);
+        expect(field.value).toBe('Keep my unfinished comment.');
+        expect([field.selectionStart, field.selectionEnd]).toEqual([4, 11]);
+        expect(document.activeElement).toBe(field);
+        expect(composer.querySelector('[data-feedback-draft-notice]')?.textContent).toBe(
+          'Add or cancel your current comment first.'
+        );
+        expect(composer.querySelector('[data-feedback-draft-notice]')?.getAttribute('role')).toBe(
+          'status'
+        );
+        expect(document.querySelectorAll('[data-feedback-draft-notice]')).toHaveLength(1);
+        expect(composer.classList).toContain('feedback-draft-attention');
+        expect(host.postMessage).not.toHaveBeenCalled();
+        controller.deactivate();
+        expect(document.querySelector('[data-feedback-draft-notice]')).toBeNull();
+      }
+    );
+
+    it('keeps the saved-comment edit protected and visible after the host refreshes its form', () => {
+      const controller = activate();
+      document.querySelector<HTMLButtonElement>('[data-feedback-marker]')?.click();
+      document.querySelector<HTMLButtonElement>('[data-feedback-edit-action="F1"]')?.click();
+      const originalField = document.querySelector<HTMLTextAreaElement>(
+        '[data-feedback-edit-input]'
+      )!;
+      originalField.value = 'Keep this unsaved edit.';
+      originalField.dispatchEvent(new Event('input', { bubbles: true }));
+      controller.handleHostMessage({
+        type: 'feedback.updated',
+        requestId: 'external-refresh',
+        sessionId: 'session-1',
+        items: [savedItem],
+      });
+      const currentField = document.querySelector<HTMLTextAreaElement>(
+        '[data-feedback-edit-input]'
+      )!;
+      const reveal = jest.fn();
+      currentField.closest<HTMLElement>('[data-feedback-edit-form]')!.scrollIntoView = reveal;
+
+      controller.openTextComposer(target);
+
+      expect(document.querySelector('.feedback-composer')).toBeNull();
+      expect(controller.draftSurfaceGate.activeKind()).toBe('feedback-edit');
+      expect(currentField.value).toBe('Keep this unsaved edit.');
+      expect(document.activeElement).toBe(currentField);
+      expect(document.querySelector('[data-feedback-draft-notice]')?.textContent).toBe(
+        'Save or cancel your current edit first.'
+      );
+      expect(reveal).toHaveBeenCalledWith({ behavior: 'auto', block: 'nearest' });
+    });
+
+    it('keeps the visible reminder inside a discard dialog and preserves its focus trap', () => {
+      const controller = activate();
+      controller.openTextComposer(target);
+      const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+      field.value = 'Keep this unfinished comment.';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      document
+        .querySelector<HTMLButtonElement>('.feedback-composer-actions .feedback-secondary-button')
+        ?.click();
+      const dialog = document.querySelector<HTMLElement>('[data-feedback-discard-dialog]')!;
+
+      controller.finish();
+
+      expect(document.activeElement).toBe(dialog.querySelector('[data-feedback-discard-keep]'));
+      expect(dialog.querySelector('[data-feedback-draft-notice]')?.textContent).toBe(
+        'Keep editing or discard your current comment first.'
+      );
+      expect(document.querySelector('.feedback-composer')?.contains(document.activeElement)).toBe(
+        false
+      );
+      expect(field.value).toBe('Keep this unfinished comment.');
+    });
+
+    it('returns to the draft before rejecting a selection inside Feedback chrome', () => {
+      const controller = activate();
+      controller.openTextComposer(target);
+      const field = document.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+      field.value = 'Keep this draft';
+      const heading = document.querySelector<HTMLElement>('.feedback-composer-title')!;
+      const range = document.createRange();
+      range.selectNodeContents(heading);
+      const selection = window.getSelection()!;
+      selection.removeAllRanges();
+      selection.addRange(range);
+
+      try {
+        controller.commentOnSelection();
+
+        expect(document.activeElement).toBe(field);
+        expect(document.querySelector('[data-feedback-draft-notice]')?.textContent).toBe(
+          'Add or cancel your current comment first.'
+        );
+        expect(field.value).toBe('Keep this draft');
+      } finally {
+        selection.removeAllRanges();
+      }
+    });
+
+    it.each(['finish', 'discard', 'toggle-comments', 'choose-scope'])(
+      'explains %s while a block capture prepares without its own dialog',
+      action => {
+        const controller = activate();
+        const lease = controller.draftSurfaceGate.claim({
+          kind: 'capture-rasterizing',
+          focus: jest.fn(),
+        });
+        controller.setAnnotationsSuspended(true);
+        const requestFrame = jest.spyOn(window, 'requestAnimationFrame');
+        requestFrame.mockClear();
+        const scrollBefore = document.querySelector('#editor')!.scrollTop;
+        if (action === 'finish') controller.finish();
+        if (action === 'discard') controller.discard();
+        if (action === 'toggle-comments') controller.toggleComments(false);
+        if (action === 'choose-scope') controller.chooseScope();
+
+        expect(document.querySelector('[data-feedback-draft-notice]')?.textContent).toBe(
+          'Wait for the current capture to finish preparing.'
+        );
+        expect(document.querySelector('[data-feedback-draft-notice]')?.parentElement).toBe(
+          document.body
+        );
+        expect(document.querySelector('#editor')!.scrollTop).toBe(scrollBefore);
+        expect(requestFrame).not.toHaveBeenCalled();
+        expect(host.postMessage).not.toHaveBeenCalled();
+        lease?.release();
+        expect(document.querySelector('[data-feedback-draft-notice]')).toBeNull();
+        requestFrame.mockRestore();
+      }
+    );
+  });
+
+  it.each([
+    'math-editor',
+    'mermaid-editor',
+    'image-insert-dialog',
+    'rename-dialog',
+    'huge-image',
+    'link-dialog',
+  ])('preserves the active %s modal and explains why Feedback cannot start', name => {
+    const controller = createFeedbackReviewController({ editor: createEditorFixture(), host });
+    const overlay = document.createElement('div');
+    overlay.className = name === 'link-dialog' ? 'link-dialog-popover' : `${name}-overlay`;
+    if (name === 'link-dialog') {
+      overlay.setAttribute('role', 'dialog');
+      overlay.setAttribute('aria-modal', 'true');
+    }
+    const dialog = document.createElement('div');
+    dialog.className =
+      name === 'link-dialog'
+        ? 'export-settings-overlay-panel'
+        : name.endsWith('dialog')
+          ? name
+          : `${name}-dialog`;
+    const field = document.createElement('textarea');
+    field.value = 'Keep my unsaved modal changes';
+    const cancel = document.createElement('button');
+    const cancelClick = jest.fn();
+    cancel.addEventListener('click', cancelClick);
+    dialog.append(field, cancel);
+    overlay.append(dialog);
+    document.body.append(overlay);
+    field.focus();
+
+    controller.start();
+
+    expect(host.postMessage).not.toHaveBeenCalled();
+    expect(controller.getSession()).toBeNull();
+    expect(document.activeElement).toBe(field);
+    expect(field.value).toBe('Keep my unsaved modal changes');
+    expect(cancelClick).not.toHaveBeenCalled();
+    expect(dialog.querySelector('[data-feedback-draft-notice]')?.textContent).toBe(
+      'Complete or close this dialog before starting Feedback.'
+    );
+    expect(document.body.classList).not.toContain('feedback-review-starting');
+    overlay.remove();
+    controller.start();
+    expect(host.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'feedback.start' })
+    );
+  });
+
+  it('does not block Feedback on a hidden modal', () => {
+    const controller = createFeedbackReviewController({ editor: createEditorFixture(), host });
+    const overlay = document.createElement('div');
+    overlay.className = 'mermaid-editor-overlay';
+    overlay.style.display = 'none';
+    document.body.append(overlay);
+
+    controller.start();
+
+    expect(host.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'feedback.start' })
+    );
+    expect(document.querySelector('[data-feedback-draft-notice]')).toBeNull();
+  });
+
   it('uses the TipTap v3 Markdown manager exposed by the live editor', () => {
     const editor = createEditorFixture() as unknown as {
       markdown?: { serialize: jest.Mock<string, [unknown]> };
@@ -1516,6 +1770,77 @@ describe('Feedback review controller', () => {
       });
     }
   });
+
+  it.each([0, -1_000])(
+    'keeps a tall composer scrollable inside a short split while the document top is %s',
+    async containerTop => {
+      const originalInnerHeight = window.innerHeight;
+      const editor = createEditorFixture();
+      const rect = (top: number, height: number): DOMRect =>
+        ({
+          top,
+          bottom: top + height,
+          left: 0,
+          right: 800,
+          width: 800,
+          height,
+          x: 0,
+          y: top,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      document.querySelector<HTMLElement>('.formatting-toolbar')!.getBoundingClientRect = () =>
+        rect(0, 64);
+      document.querySelector<HTMLElement>('#editor')!.getBoundingClientRect = () =>
+        rect(containerTop, 3_000);
+      const controller = createFeedbackReviewController({ editor, host });
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'b'.repeat(64),
+        round: 'round-1',
+        items: [],
+      });
+      try {
+        controller.openTextComposer({
+          startOrdinal: 1,
+          endOrdinal: 1,
+          focus: 'Alpha beta',
+          startLine: 3,
+          endLine: 3,
+        });
+        const composer = document.querySelector<HTMLElement>('.feedback-composer')!;
+        const input = composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')!;
+        input.value = 'Preserve this draft while resizing the split.';
+        input.setSelectionRange(9, 19);
+        // Model the browser's border-box measurement for a naturally tall form.
+        composer.getBoundingClientRect = () =>
+          rect(
+            Number.parseFloat(composer.style.top) || 0,
+            Math.min(520, Number.parseFloat(composer.style.maxHeight) || Infinity)
+          );
+        for (const viewportHeight of [350, 220, 680]) {
+          Object.defineProperty(window, 'innerHeight', {
+            configurable: true,
+            value: viewportHeight,
+          });
+          window.dispatchEvent(new Event('resize'));
+          await waitForFeedbackFrame();
+          const bounds = composer.getBoundingClientRect();
+          expect(Number.parseFloat(composer.style.maxHeight)).toBe(viewportHeight - 64 - 24);
+          expect(bounds.top).toBeGreaterThanOrEqual(64 + 12);
+          expect(bounds.bottom).toBeLessThanOrEqual(viewportHeight - 12);
+          expect(input.value).toBe('Preserve this draft while resizing the split.');
+          expect([input.selectionStart, input.selectionEnd]).toEqual([9, 19]);
+        }
+      } finally {
+        controller.deactivate();
+        Object.defineProperty(window, 'innerHeight', {
+          configurable: true,
+          value: originalInnerHeight,
+        });
+      }
+    }
+  );
 
   it('keeps a compact composer reachable near the bottom of the visible viewport', async () => {
     const originalInnerHeight = window.innerHeight;
@@ -5898,7 +6223,7 @@ describe('Feedback review controller', () => {
     expect(target.scrollIntoView).not.toHaveBeenCalled();
     expect(document.body.getAttribute('data-feedback-comments-state')).toBe(commentsState);
     expect(document.activeElement).toBe(resume);
-    expect(document.querySelector('.feedback-live-region')?.textContent).toContain(
+    expect(document.querySelector('[data-feedback-draft-notice]')?.textContent).toContain(
       'Resume feedback or finish the current completion step'
     );
   });
@@ -5930,8 +6255,8 @@ describe('Feedback review controller', () => {
 
     expect(target.scrollIntoView).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(modalAction);
-    expect(document.querySelector('.feedback-live-region')?.textContent).toContain(
-      'Complete or close the active dialog before navigating comments'
+    expect(document.querySelector('[data-feedback-draft-notice]')?.textContent).toContain(
+      'Complete or close this dialog before navigating comments'
     );
   });
 
@@ -9020,6 +9345,68 @@ describe('Feedback review controller', () => {
       requestId: expect.any(String),
     });
   });
+
+  it.each([
+    ['Resume', '[data-feedback-draft-resume]', 'feedback.draft.resume'],
+    ['Start new', '[data-feedback-start-new]', 'feedback.start.new'],
+  ])(
+    'guards saved-draft %s before modal changes and cleans search on entry',
+    (_label, selector, messageType) => {
+      const editor = createEditorFixture();
+      const controller = createFeedbackReviewController({ editor, host });
+      controller.handleHostMessage({
+        type: 'feedback.drafts.available',
+        drafts: [
+          {
+            round: '20260821T093000Z-k4p9',
+            createdAt: '2026-08-21T09:30:00.000Z',
+            itemCount: 2,
+            feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+          },
+        ],
+      });
+      const modal = document.createElement('section');
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-modal', 'true');
+      const field = document.createElement('textarea');
+      field.value = 'Keep my unsaved changes';
+      modal.append(field);
+      document.body.append(modal);
+      field.focus();
+      const cleanup = jest.fn(() => {
+        expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
+        expect(host.postMessage).not.toHaveBeenCalled();
+      });
+      window.addEventListener('feedbackResumeRequested', cleanup);
+
+      try {
+        const button = document.querySelector<HTMLButtonElement>(selector)!;
+        button.click();
+
+        expect(host.postMessage).not.toHaveBeenCalled();
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(editor.view.dom.getAttribute('aria-readonly')).toBeNull();
+        expect(button.disabled).toBe(false);
+        expect(field.value).toBe('Keep my unsaved changes');
+        expect(document.activeElement).toBe(field);
+        expect(modal.querySelector('[data-feedback-draft-notice]')?.textContent).toBe(
+          'Complete or close this dialog before starting Feedback.'
+        );
+
+        modal.remove();
+        button.click();
+
+        expect(cleanup).toHaveBeenCalledTimes(1);
+        expect(host.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: messageType })
+        );
+        expect(document.querySelector('[data-feedback-draft-notice]')).toBeNull();
+        expect(button.disabled).toBe(true);
+      } finally {
+        window.removeEventListener('feedbackResumeRequested', cleanup);
+      }
+    }
+  );
 
   it('turns a correlated active-session conflict into a focused Resume choice', () => {
     const editor = createEditorFixture();

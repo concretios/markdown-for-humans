@@ -97,8 +97,15 @@ jest.mock('./../../webview/features/imageDragDrop', () => ({
   waitForPendingImageSaves: jest.fn(async () => undefined),
   getPendingImageCount: jest.fn(() => 0),
 }));
-jest.mock('./../../webview/features/tocOverlay', () => ({ toggleTocOverlay: jest.fn() }));
-jest.mock('./../../webview/features/searchOverlay', () => ({ showSearchOverlay: jest.fn() }));
+jest.mock('./../../webview/features/tocOverlay', () => ({
+  toggleTocOverlay: jest.fn(),
+  isTocVisible: jest.fn(() => false),
+}));
+jest.mock('./../../webview/features/searchOverlay', () => ({
+  showSearchOverlay: jest.fn(),
+  hideSearchOverlay: jest.fn(),
+  isSearchVisible: jest.fn(() => true),
+}));
 jest.mock('./../../webview/utils/exportContent', () => ({
   collectExportContent: jest.fn(),
   getDocumentTitle: jest.fn(),
@@ -211,6 +218,34 @@ describe('webview undo/redo guards', () => {
   afterEach(() => {
     jest.useRealTimers();
   });
+
+  it.each(['feedbackStartRequested', 'feedbackResumeRequested', 'command'])(
+    'closes search without focus restoration when entering Feedback via %s',
+    async entry => {
+      const search = await import('../../webview/features/searchOverlay');
+      const mockEditor = { isDestroyed: true };
+      testing.setMockEditor(mockEditor);
+      testing.setFeedbackReviewControllerForTests({
+        start: jest.fn(),
+        handleHostMessage: jest.fn(),
+      });
+      Object.assign(document, {
+        querySelector: jest.fn(() => null),
+        querySelectorAll: jest.fn(() => []),
+      });
+      if (entry === 'command') {
+        handleWindowMessage?.({
+          data: { type: 'feedback.command', command: 'start' },
+        } as MessageEvent);
+      } else {
+        const registrations = (window.addEventListener as jest.Mock).mock.calls;
+        const listener = registrations.find(([name]) => name === entry)?.[1];
+        expect(listener).toBeDefined();
+        listener({});
+      }
+      expect(search.hideSearchOverlay).toHaveBeenCalledWith(mockEditor, false);
+    }
+  );
 
   it('exposes the renderer generation to toolbar image operations', () => {
     const toolbarApi = (global as unknown as { window: { vscode?: { viewGeneration?: string } } })

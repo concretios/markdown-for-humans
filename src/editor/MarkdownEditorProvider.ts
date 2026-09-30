@@ -4663,6 +4663,59 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     await new Promise<void>(resolve => session.mutationIdleWaiters.add(resolve));
   }
 
+  /**
+   * Focus the live owner of the peer's current lock without changing ownership.
+   * The host derives both the document and target panel from its registrations;
+   * stale renderers and lifecycle transitions cannot choose another destination.
+   */
+  private revealFeedbackOwner(
+    message: Extract<FeedbackWebviewMessage, { type: 'feedback.peer.reveal' }>,
+    document: vscode.TextDocument,
+    webview: vscode.Webview
+  ): void {
+    const documentKey = document.uri.toString();
+    const unavailableMessage =
+      'Active Feedback is no longer available in that split. Try again, or reopen this document and resume its saved Feedback draft.';
+    try {
+      const session = this.feedbackSessions.get(documentKey);
+      const peers = this.feedbackWebviews.get(documentKey);
+      const appliedLock = this.appliedFeedbackPeerLocks.get(webview);
+      if (
+        !peers?.has(webview) ||
+        this.editViewGenerations.get(webview) !== message.viewGeneration ||
+        appliedLock?.viewGeneration !== message.viewGeneration ||
+        appliedLock.lockId !== message.lockId ||
+        !session ||
+        session.sessionId !== message.lockId ||
+        session.ownerWebview === webview ||
+        !peers.has(session.ownerWebview)
+      ) {
+        void vscode.window.showWarningMessage(unavailableMessage);
+        return;
+      }
+      if (
+        session.phase !== 'active' ||
+        this.feedbackTransitions.has(documentKey) ||
+        this.pendingFeedbackSessionTransfers.has(documentKey)
+      ) {
+        void vscode.window.showWarningMessage('Feedback is changing state. Try again in a moment.');
+        return;
+      }
+      const panels = this.openPanels.get(documentKey);
+      const entries = panels ? [...panels.entries()] : [];
+      const senderIsOpen = entries.some(([, entry]) => entry.webview === webview);
+      const owner = entries.find(([, entry]) => entry.webview === session.ownerWebview);
+      if (!senderIsOpen || !owner) {
+        void vscode.window.showWarningMessage(unavailableMessage);
+        return;
+      }
+      owner[0].reveal(owner[0].viewColumn, false);
+    } catch (error) {
+      console.error('[MD4H] Could not reveal the active Feedback split:', error);
+      void vscode.window.showWarningMessage(unavailableMessage);
+    }
+  }
+
   private async handleFeedbackWebviewMessage(
     message: FeedbackWebviewMessage,
     document: vscode.TextDocument,
@@ -4679,6 +4732,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         }
       | undefined;
     try {
+      if (message.type === 'feedback.peer.reveal') {
+        this.revealFeedbackOwner(message, document, webview);
+        return;
+      }
+
       if (message.type === 'feedback.controller.ready') {
         this.handleFeedbackControllerReady(message, document, webview);
         return;

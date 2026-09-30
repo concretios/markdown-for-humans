@@ -51,7 +51,7 @@ import {
   getPendingImageCount,
 } from './features/imageDragDrop';
 import { hideTocOverlay, isTocVisible, toggleTocOverlay } from './features/tocOverlay';
-import { showSearchOverlay } from './features/searchOverlay';
+import { hideSearchOverlay, isSearchVisible, showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
@@ -69,7 +69,11 @@ import {
   createFeedbackPeerLockController,
   type FeedbackPeerLockController,
 } from './features/feedbackPeerLock';
-import { parseFeedbackHostMessage, type FeedbackHostMessage } from '../shared/feedbackProtocol';
+import {
+  parseFeedbackHostMessage,
+  type FeedbackHostMessage,
+  type FeedbackWebviewMessage,
+} from '../shared/feedbackProtocol';
 import {
   captureSelectedFeedbackBlocks,
   startFeedbackAreaCapture,
@@ -1041,6 +1045,14 @@ function initializeEditor(initialContent: string) {
     feedbackPeerLockController = createFeedbackPeerLockController({
       editor: editorInstance,
       toolbar: formattingToolbar,
+      onGoToActiveFeedback: lockId => {
+        vscode.postMessage({
+          type: 'feedback.peer.reveal',
+          requestId: `feedback-peer-reveal-${Date.now()}`,
+          lockId,
+          viewGeneration,
+        } satisfies FeedbackWebviewMessage);
+      },
     });
     if (pendingFeedbackPeerLock) {
       feedbackPeerLockController.lock(
@@ -2428,7 +2440,11 @@ window.addEventListener('toggleTocOutline', () => {
   }
 });
 
+/** Close transient editing surfaces without moving Feedback's invoking focus or scroll. */
 function closeIncompatibleFeedbackSurfaces(): void {
+  if (editor && isSearchVisible()) {
+    hideSearchOverlay(editor, false);
+  }
   if (editor && isTocVisible()) {
     hideTocOverlay(editor, false);
   }
@@ -2445,11 +2461,8 @@ function closeIncompatibleFeedbackSurfaces(): void {
       })
       .catch(error => console.error('[MD4H] Failed to clear audit decorations:', error));
   }
-  document
-    .querySelectorAll<HTMLButtonElement>(
-      '.math-editor-overlay #cancel-btn, .mermaid-editor-overlay #cancel-btn'
-    )
-    .forEach(button => button.click());
+  // Genuine dialogs keep their unfinished input; the review controller redirects
+  // Start to that dialog instead of implicitly activating its Cancel action.
   document.querySelectorAll<HTMLElement>('.image-context-menu').forEach(menu => {
     menu.style.display = 'none';
   });
