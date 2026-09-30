@@ -1086,8 +1086,9 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
         eventName: 'feedbackFinishRequested',
         icon: { name: 'check', fallback: '✓' },
         dataName: 'finish',
-        disabled:
-          invalidated || closing || captureState !== 'idle' || Boolean(state.commentsLocked),
+        // An unfinished comment is redirectable: the controller reveals it and
+        // explains how to finish it. Native disabling would swallow that click.
+        disabled: invalidated || closing || captureState !== 'idle',
       }),
       createFeedbackAction({
         label: captureArmed

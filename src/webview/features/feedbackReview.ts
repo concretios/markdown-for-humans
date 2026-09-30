@@ -346,10 +346,12 @@ export interface FeedbackDraftSurfaceGate {
 
 /**
  * Creates one session-scoped owner for all incomplete Feedback surfaces. A
- * blocked action focuses the current owner instead of replacing its draft.
+ * blocked action focuses the current owner and requests visible guidance instead
+ * of replacing its draft. Passive lifecycle checks must use `hasActive()`.
  */
 export function createFeedbackDraftSurfaceGate(
-  onOwnerChange: (active: boolean) => void = () => undefined
+  onOwnerChange: (active: boolean) => void = () => undefined,
+  onBlockedAction: (surface: FeedbackDraftSurface) => void = () => undefined
 ): FeedbackDraftSurfaceGate {
   let active: { token: symbol; surface: FeedbackDraftSurface } | null = null;
 
@@ -364,6 +366,7 @@ export function createFeedbackDraftSurfaceGate(
     const owner = current();
     if (!owner) return false;
     owner.surface.focus();
+    onBlockedAction(owner.surface);
     return true;
   };
 
@@ -970,8 +973,24 @@ export function createFeedbackReviewController(options: {
   const editorContainer = editorDom.closest<HTMLElement>('#editor') ?? editorDom.parentElement;
   const formattingToolbar = document.querySelector<HTMLElement>('.formatting-toolbar');
   let updateBlockActionForDraftSurface = (_active: boolean): void => undefined;
-  const draftSurfaceGate = createFeedbackDraftSurfaceGate(active =>
-    updateBlockActionForDraftSurface(active)
+  let showDraftSurfaceAttention = (_surface: FeedbackDraftSurface): void => undefined;
+  let draftNotice: HTMLElement | null = null;
+  let draftAttentionTarget: HTMLElement | null = null;
+  let draftAttentionTimer: number | null = null;
+  const clearDraftSurfaceAttention = (): void => {
+    if (draftAttentionTimer !== null) window.clearTimeout(draftAttentionTimer);
+    draftAttentionTimer = null;
+    draftAttentionTarget?.classList.remove('feedback-draft-attention');
+    draftAttentionTarget = null;
+    draftNotice?.remove();
+    draftNotice = null;
+  };
+  const draftSurfaceGate = createFeedbackDraftSurfaceGate(
+    active => {
+      if (!active) clearDraftSurfaceAttention();
+      updateBlockActionForDraftSurface(active);
+    },
+    surface => showDraftSurfaceAttention(surface)
   );
   let session: FeedbackSessionView | null = null;
   let invalidated = false;
@@ -1270,6 +1289,66 @@ export function createFeedbackReviewController(options: {
     }, 0);
   };
 
+  /** Show one local reminder without replacing input or dismissing its owner. */
+  const showSurfaceAttention = (element: HTMLElement | undefined, instruction: string): void => {
+    clearDraftSurfaceAttention();
+    const noticeSurface =
+      element?.querySelector<HTMLElement>(
+        '.feedback-annotation-panel, .feedback-capture-instruction, .math-editor-dialog, .mermaid-editor-dialog, .image-insert-dialog, .rename-dialog, .huge-image-dialog, .export-settings-overlay-panel'
+      ) ?? element;
+    draftNotice = createElement('p', 'feedback-draft-notice', instruction);
+    draftNotice.setAttribute('data-feedback-draft-notice', '');
+    draftNotice.setAttribute('role', 'status');
+    if (!noticeSurface) {
+      // Block captures have no dialog while rasterizing. Keep guidance outside
+      // the captured editor DOM without reflowing or scrolling its frozen crop.
+      draftNotice.classList.add('feedback-draft-notice-floating');
+      document.body.append(draftNotice);
+      return;
+    }
+    const heading = noticeSurface.querySelector<HTMLElement>(
+      ':scope > .feedback-composer-heading, :scope > h2, :scope > h3'
+    );
+    if (heading) heading.after(draftNotice);
+    else noticeSurface.prepend(draftNotice);
+    draftAttentionTarget = noticeSurface;
+    noticeSurface.classList.add('feedback-draft-attention');
+    // A static highlight is deliberate: no motion, including under reduced motion.
+    draftAttentionTimer = window.setTimeout(() => {
+      draftAttentionTarget?.classList.remove('feedback-draft-attention');
+      draftAttentionTimer = null;
+    }, 1800);
+    scheduleAnnotationLayout();
+  };
+
+  /** Reveal the owning draft only after an explicit competing user action. */
+  showDraftSurfaceAttention = (surface): void => {
+    const element = surface.element;
+    const instruction = element?.matches('[data-feedback-discard-dialog]')
+      ? 'Keep editing or discard your current comment first.'
+      : surface.kind === 'text-composer'
+        ? element?.querySelector<HTMLTextAreaElement>('[data-feedback-input]')?.readOnly
+          ? 'Wait for your current comment to finish saving.'
+          : 'Add or cancel your current comment first.'
+        : surface.kind === 'feedback-edit'
+          ? editDraft?.pendingRequestId
+            ? 'Wait for your current edit to finish saving.'
+            : 'Save or cancel your current edit first.'
+          : surface.kind === 'finish-checkpoint'
+            ? pendingFinishRequestId
+              ? 'Wait for Feedback to finish saving.'
+              : 'Resume feedback or finish the current completion step first.'
+            : surface.kind === 'text-block-selector'
+              ? 'Choose blocks or cancel the current selection first.'
+              : surface.kind === 'capture-rasterizing'
+                ? 'Wait for the current capture to finish preparing.'
+                : 'Complete or cancel your current capture first.';
+    showSurfaceAttention(element, instruction);
+    if (surface.kind === 'feedback-edit') {
+      element?.scrollIntoView?.({ behavior: 'auto', block: 'nearest' });
+    }
+  };
+
   const removeSyncRetryAlert = (): boolean => {
     const containedFocus = Boolean(
       syncRetryAlert &&
@@ -1495,6 +1574,8 @@ export function createFeedbackReviewController(options: {
     resume.setAttribute('data-feedback-draft-resume', '');
     resume.addEventListener('click', () => {
       if (session || startRequestId) return;
+      if (focusModalSurfaceBefore('starting Feedback')) return;
+      clearDraftSurfaceAttention();
       rememberTransitionFocus();
       setDraftBannerBusy(true);
       window.dispatchEvent(new CustomEvent('feedbackResumeRequested'));
@@ -1513,8 +1594,11 @@ export function createFeedbackReviewController(options: {
     startNew.setAttribute('data-feedback-start-new', '');
     startNew.addEventListener('click', () => {
       if (session || startRequestId || draftBannerMode !== 'saved') return;
+      if (focusModalSurfaceBefore('starting Feedback')) return;
+      clearDraftSurfaceAttention();
       rememberTransitionFocus();
       setDraftBannerBusy(true);
+      window.dispatchEvent(new CustomEvent('feedbackResumeRequested'));
       startRequestId = nextRequestId();
       setReadOnly(true);
       document.body.classList.add('feedback-review-starting');
@@ -2519,8 +2603,7 @@ export function createFeedbackReviewController(options: {
 
   const collapseRail = (restoreToolbarFocus = false): void => {
     if (editDraft) {
-      focusFeedbackEdit(editDraft.id);
-      announce('Save or cancel the feedback edit before collapsing comments.');
+      draftSurfaceGate.focusActive();
       return;
     }
     clearActiveComment();
@@ -2585,8 +2668,7 @@ export function createFeedbackReviewController(options: {
   function closeFeedbackEdit(restoreFocus = true): void {
     if (!editDraft) return;
     if (editDraft.pendingRequestId !== null) {
-      focusFeedbackEdit(editDraft.id);
-      announce('Wait for the feedback edit to finish saving.');
+      draftSurfaceGate.focusActive();
       return;
     }
     const id = editDraft.id;
@@ -2607,18 +2689,12 @@ export function createFeedbackReviewController(options: {
     if (!hasWritableSession() || !session) return;
     hideBlockAction();
     if (editDraft) {
-      focusFeedbackEdit(editDraft.id);
-      if (editDraft.id !== item.id) {
-        announce(`Save or cancel the edit for ${editDraft.id} before editing ${item.id}.`);
-      }
+      draftSurfaceGate.focusActive();
       return;
     }
     const focus = (): void => focusFeedbackEdit(item.id);
     const surface = draftSurfaceGate.claim({ kind: 'feedback-edit', focus });
-    if (!surface) {
-      announce('Finish or cancel the current feedback action before editing a comment.');
-      return;
-    }
+    if (!surface) return;
     editDraft = {
       id: item.id,
       sessionId: session.sessionId,
@@ -2627,8 +2703,6 @@ export function createFeedbackReviewController(options: {
       surface,
     };
     renderCards();
-    const form = panel?.querySelector<HTMLElement>(`[data-feedback-edit-form="${item.id}"]`);
-    surface.update({ kind: 'feedback-edit', ...(form ? { element: form } : {}), focus });
     scheduleAnnotationLayout();
     focus();
     announce(`Editing feedback ${item.id}.`);
@@ -2638,14 +2712,8 @@ export function createFeedbackReviewController(options: {
     preferredId: string,
     authoritativeCluster?: readonly string[]
   ): void => {
-    if (!session || composer || !session.items.some(item => item.id === preferredId)) return;
-    if (editDraft) {
-      focusFeedbackEdit(editDraft.id);
-      if (editDraft.id !== preferredId) {
-        announce(`Save or cancel the edit for ${editDraft.id} before opening ${preferredId}.`);
-      }
-      return;
-    }
+    if (!session || !session.items.some(item => item.id === preferredId)) return;
+    if (draftSurfaceGate.focusActive()) return;
     activeItemIds = authoritativeCluster
       ? [...authoritativeCluster].sort(compareFeedbackIds)
       : clusterIdsForItem(preferredId);
@@ -2951,6 +3019,13 @@ export function createFeedbackReviewController(options: {
         if (capturePreview) card.append(capturePreview);
         card.append(form);
         panel.append(card);
+        // Host refreshes rebuild cards. The lease must follow the live form or
+        // its detached predecessor would silently release the unsaved edit.
+        draft.surface.update({
+          kind: 'feedback-edit',
+          element: form,
+          focus: () => focusFeedbackEdit(draft.id),
+        });
         resizeFeedbackInput(field);
         continue;
       }
@@ -3504,6 +3579,9 @@ export function createFeedbackReviewController(options: {
       const composerLeft = Math.max(12, containerWidth - composerWidth - 44);
       composer.style.left = `${composerLeft + containerBounds.left}px`;
       composer.style.right = 'auto';
+      // Short editor splits need an internal scroll surface. Constrain the form
+      // before measuring it so its position includes the reachable action area.
+      composer.style.maxHeight = `${Math.max(1, viewportBottom - minimumVisibleSurfaceTop - 12)}px`;
       const nextComposerWidth = `${composerWidth}px`;
       if (composer.style.width !== nextComposerWidth) {
         composer.style.width = nextComposerWidth;
@@ -3733,12 +3811,7 @@ export function createFeedbackReviewController(options: {
         markers[nextIndex]?.focus({ preventScroll: true });
       });
       marker.addEventListener('click', () => {
-        if (composer) return;
-        if (editDraft) {
-          focusFeedbackEdit(editDraft.id);
-          announce('Save or cancel the current feedback edit before changing comments.');
-          return;
-        }
+        if (draftSurfaceGate.focusActive()) return;
         removePendingButton();
         if (commentsState === 'expanded' && activeItemId && ids.includes(activeItemId)) {
           collapseRail();
@@ -4012,7 +4085,7 @@ export function createFeedbackReviewController(options: {
   };
 
   const handleSavedAnnotationClick = (event: MouseEvent): void => {
-    if (!session || composer || commentsState === 'hidden') return;
+    if (!session || commentsState === 'hidden') return;
     const target =
       event.target instanceof HTMLElement
         ? event.target.closest<HTMLElement>('.md4h-feedback-annotation')
@@ -4030,34 +4103,19 @@ export function createFeedbackReviewController(options: {
     activateFeedbackItem(preferredId, marker.dataset.feedbackIds?.split(',').filter(Boolean));
   };
 
-  const focusDraftSurfaceBefore = (action: string): boolean => {
-    const kind = draftSurfaceGate.activeKind();
-    if (!kind || !draftSurfaceGate.focusActive()) return false;
-    const instruction =
-      kind === 'finish-checkpoint'
-        ? 'Resume feedback or finish the current completion step'
-        : kind === 'text-composer'
-          ? 'Add or cancel the current feedback'
-          : kind === 'feedback-edit'
-            ? 'Save or cancel the current feedback edit'
-            : kind === 'text-block-selector'
-              ? 'Choose a text block range or cancel'
-              : 'Complete or cancel the current capture';
-    announce(`${instruction} before ${action}.`);
-    return true;
-  };
-
   const focusModalSurfaceBefore = (action: string): boolean => {
     const activeModal = Array.from(
       document.querySelectorAll<HTMLElement>(
-        '[data-md4h-modal], [role="dialog"][aria-modal="true"], .math-editor-overlay'
+        '[data-md4h-modal], [role="dialog"][aria-modal="true"], .math-editor-overlay, .mermaid-editor-overlay, .image-insert-dialog-overlay, .rename-dialog-overlay, .huge-image-overlay'
       )
     )
       .filter(
         candidate =>
           candidate.isConnected &&
           !candidate.hidden &&
-          candidate.getAttribute('aria-hidden') !== 'true'
+          !candidate.closest('[aria-hidden="true"], [hidden]') &&
+          window.getComputedStyle(candidate).display !== 'none' &&
+          window.getComputedStyle(candidate).visibility !== 'hidden'
       )
       .at(-1);
     if (!activeModal) return false;
@@ -4071,7 +4129,7 @@ export function createFeedbackReviewController(options: {
       const focusedControl = focusable.some(candidate => focusElementWithoutScroll(candidate));
       if (!focusedControl) focusElementWithoutScroll(activeModal);
     }
-    announce(`Complete or close the active dialog before ${action}.`);
+    showSurfaceAttention(activeModal, `Complete or close this dialog before ${action}.`);
     return true;
   };
 
@@ -4087,6 +4145,8 @@ export function createFeedbackReviewController(options: {
         return;
       }
       if (session || startRequestId) return;
+      if (focusModalSurfaceBefore('starting Feedback')) return;
+      clearDraftSurfaceAttention();
       rememberTransitionFocus();
       setDraftBannerBusy(true);
       startRequestId = nextRequestId();
@@ -4217,7 +4277,7 @@ export function createFeedbackReviewController(options: {
         if (session?.sessionId !== message.oldSessionId) return false;
         // Refuse to stage ownership loss while a comment/edit draft is open —
         // local cancel/finish paths already gate on the same draft surface.
-        if (draftSurfaceGate.focusActive()) return false;
+        if (draftSurfaceGate.hasActive()) return false;
       } else {
         if (session?.sessionId === message.oldSessionId) {
           controller.activate(message.session);
@@ -4301,7 +4361,7 @@ export function createFeedbackReviewController(options: {
       }
       if (message.role === 'old-owner') {
         if (session?.sessionId !== message.oldSessionId) return false;
-        if (draftSurfaceGate.focusActive()) return false;
+        if (draftSurfaceGate.hasActive()) return false;
         controller.deactivate();
         return session === null;
       }
@@ -4313,6 +4373,7 @@ export function createFeedbackReviewController(options: {
     },
 
     deactivate() {
+      clearDraftSurfaceAttention();
       pendingSessionTransfer = null;
       if (!activationRollbackInProgress && activationTransaction) {
         const transaction = activationTransaction;
@@ -4545,10 +4606,7 @@ export function createFeedbackReviewController(options: {
       const invokingElement =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
       hideBlockAction();
-      if (draftSurfaceGate.focusActive()) {
-        announce('Finish or cancel the current feedback action before opening another.');
-        return;
-      }
+      if (draftSurfaceGate.focusActive()) return;
       if (composer) {
         setCommentsState('expanded');
         composer.querySelector<HTMLTextAreaElement>('[data-feedback-input]')?.focus({
@@ -4933,8 +4991,9 @@ export function createFeedbackReviewController(options: {
     },
 
     chooseScope() {
-      if (!hasWritableSession() || !session || !structureIndex) return false;
-      if (focusDraftSurfaceBefore('choosing a scope')) return false;
+      if (!hasWritableSession() || !session) return false;
+      if (draftSurfaceGate.focusActive()) return false;
+      if (!structureIndex) return false;
       const position = editor.state.selection.from;
       const scope = structureIndex.atPosition(position);
       const selected = editor.state.selection.empty
@@ -4958,6 +5017,7 @@ export function createFeedbackReviewController(options: {
 
     commentOnSelection() {
       if (!hasWritableSession() || !session) return false;
+      if (draftSurfaceGate.focusActive()) return true;
       if (nativeTextSelectionIsOutsideEditor(editorDom)) {
         announce('Select text in the Markdown document to add feedback.');
         return false;
@@ -4970,7 +5030,7 @@ export function createFeedbackReviewController(options: {
 
     toggleComments(force) {
       if (!session || !rail) return;
-      if (focusDraftSurfaceBefore('changing comment visibility')) return;
+      if (draftSurfaceGate.focusActive()) return;
       const wantsVisible = force ?? commentsState === 'hidden';
       if (composer && !wantsVisible) {
         setCommentsState('expanded');
@@ -5005,7 +5065,7 @@ export function createFeedbackReviewController(options: {
 
     navigateFeedback(direction) {
       if (!session || session.items.length === 0) return;
-      if (focusDraftSurfaceBefore('navigating comments')) return;
+      if (draftSurfaceGate.focusActive()) return;
       if (focusModalSurfaceBefore('navigating comments')) return;
       const ordered = [...session.items].sort(
         (left, right) =>
@@ -5043,10 +5103,7 @@ export function createFeedbackReviewController(options: {
         return;
       }
       if (!hasWritableSession() || !session) return;
-      if (draftSurfaceGate.focusActive()) {
-        announce('Add or cancel the current feedback before finishing.');
-        return;
-      }
+      if (draftSurfaceGate.focusActive()) return;
       if (blockSelector) {
         blockSelector.querySelector<HTMLElement>('select, button')?.focus({
           preventScroll: true,
@@ -5076,10 +5133,7 @@ export function createFeedbackReviewController(options: {
 
     discard() {
       if (!session || pendingFinishRequestId !== null || pendingClose !== null) return;
-      if (draftSurfaceGate.focusActive()) {
-        announce('Add or cancel the current feedback before discarding this draft.');
-        return;
-      }
+      if (draftSurfaceGate.focusActive()) return;
       post({
         type: 'feedback.discard',
         requestId: nextRequestId(),

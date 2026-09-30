@@ -2360,10 +2360,11 @@
   .search-overlay.visible {
     opacity: 1;
     visibility: visible;
-    pointer-events: auto;
   }
   
   .search-overlay-panel {
+    /* Only Find itself intercepts clicks; its transparent wrapper spans the toolbar. */
+    pointer-events: auto;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -3888,6 +3889,11 @@ body.vscode-high-contrast-light.feedback-completion-open {
 }
 
 .feedback-peer-lock-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   position: fixed;
   top: 48px;
   left: 50%;
@@ -3908,6 +3914,55 @@ body.vscode-high-contrast-light.feedback-completion-open {
   backdrop-filter: blur(12px) saturate(115%);
   font: 12px/1.4 var(--vscode-font-family);
   text-align: center;
+}
+
+.feedback-peer-lock-message {
+  flex: 1 1 220px;
+}
+
+.feedback-peer-lock-action {
+  flex: 0 1 auto;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.feedback-peer-lock-action:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+/* Find uses the toolbar row while a recovery banner occupies the row below it. */
+body:has(.feedback-draft-banner) .search-overlay,
+.feedback-peer-locked .search-overlay {
+  padding-top: 4px;
+}
+
+.feedback-draft-notice {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-focusBorder);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+  font: 12px/1.5 var(--vscode-font-family);
+}
+
+/* Static attention is also suitable when reduced motion is requested. */
+.feedback-draft-attention {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.feedback-draft-notice-floating {
+  position: fixed;
+  top: 54px;
+  left: 50%;
+  z-index: 5201;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  box-sizing: border-box;
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .feedback-peer-locked .formatting-toolbar {
@@ -4793,6 +4848,9 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
   box-sizing: border-box;
   width: min(320px, calc(100vw - 96px));
   margin: 0;
+  /* Layout sets the height available below the toolbar, including in short splits. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
   pointer-events: auto;
   box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-widget-shadow) 45%, transparent);
 }

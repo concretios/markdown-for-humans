@@ -10,6 +10,20 @@ const PNG_DATA_URL_PREFIX = 'data:image/png;base64,';
 const MAX_ENCODED_LENGTH = FEEDBACK_MAX_SCREENSHOT_DATA_URL_LENGTH_V2 - PNG_DATA_URL_PREFIX.length;
 
 describe('feedback protocol', () => {
+  it('accepts an exact peer navigation request bound to its lock and renderer generation', () => {
+    const message = {
+      type: 'feedback.peer.reveal',
+      requestId: 'peer-reveal-1',
+      lockId: 'session-1',
+      viewGeneration: 'view-1',
+    };
+    expect(parseFeedbackWebviewMessage(message)).toEqual(message);
+    expect(parseFeedbackWebviewMessage({ ...message, lockId: '' })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, viewGeneration: '' })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, viewGeneration: undefined })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...message, documentUri: 'file:///other.md' })).toBeNull();
+  });
+
   it.each(['nextFeedback', 'previousFeedback'] as const)(
     'includes the %s host navigation command',
     command => {
