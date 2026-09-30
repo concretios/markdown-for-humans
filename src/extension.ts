@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 import { MarkdownEditorProvider } from './editor/MarkdownEditorProvider';
 import { WordCountFeature } from './features/wordCount';
 import { getActiveWebviewPanel } from './activeWebview';
+import { sendFeedbackCommand } from './feedbackCommandReadiness';
 import { outlineViewProvider } from './features/outlineView';
 import type { FeedbackHostMessage } from './shared/feedbackProtocol';
 
@@ -173,10 +174,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
       vscode.commands.registerCommand(commandId, () => {
         const panel = getActiveWebviewPanel();
-        if (panel) {
-          const message: FeedbackHostMessage = { type: 'feedback.command', command };
-          void panel.webview.postMessage(message);
-        }
+        return panel ? sendFeedbackCommand(panel, command) : false;
       })
     );
   }

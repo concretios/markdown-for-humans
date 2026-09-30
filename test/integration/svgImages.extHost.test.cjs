@@ -52,10 +52,13 @@ async function openImageEditor(uri, viewColumn = vscode.ViewColumn.One) {
 }
 
 async function verifyLiveFeedback(sourceUri, feedbackRoot, source, errors) {
-  // The public VS Code API exposes tabs, not webview readiness. Feedback's
-  // snapshot barrier performs the authoritative renderer/host handshake.
-  await new Promise(resolve => setTimeout(resolve, 2500));
-  await vscode.commands.executeCommand('markdownForHumans.feedback.start');
+  // Public commands now await the generation-validated controller readiness
+  // signal. Exercise immediate startup, without a machine-dependent sleep.
+  assert.equal(
+    await vscode.commands.executeCommand('markdownForHumans.feedback.start'),
+    true,
+    'Feedback command must reach the ready, active SVG editor'
+  );
   const feedbackFile = await waitFor(() => {
     assert.equal(errors.length, 0, errors.join(' | '));
     if (!fs.existsSync(feedbackRoot)) return undefined;

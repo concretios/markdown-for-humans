@@ -417,3 +417,11 @@ Generated destinations must encode each filesystem path segment exactly once wit
 Run `npm run test:svg-browser` for real Chromium geometry, Display size, themes, narrow layouts, high DPI and Feedback capture. Jest alone cannot prove that a decoded SVG occupies space. Keep private documents outside the repository and use synthetic fixtures in tests.
 
 PDF preparation restores authored image destinations before sanitization and resolves them against an encoded document base URL. Print with an incognito profile under the temporary export directory, then remove that directory after process exit. Browser regression acceptance requires the expected SVG drawing, a natural successful Chrome exit, and the completed export notification. Terminating Chrome after a PDF appears is a test failure, not successful command completion.
+
+### Image paste event ordering
+
+The image paste listener runs in capture phase so supported image payloads are
+claimed before ProseMirror schedules its native paste fallback and delayed focus.
+Ordinary text/HTML payloads pass through to the existing paste pipeline. Dispose
+the capture listener with its editor. The SVG import regressions cover both image
+claiming and ordinary text paste.

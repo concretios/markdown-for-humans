@@ -70,6 +70,11 @@ normal content deduplication is not safe at this boundary.
 
 ## Feedback Snapshot and Delivery
 
+Public Feedback commands wait for the generation-validated controller-ready
+signal before posting to the original active panel. The bounded startup wait is
+cancelled on hide, reload or disposal; queue acceptance is not session activation.
+
+
 - A new Start and a durable-draft Resume inspect every split first. Divergent dirty split digests fail before any flush chooses a winner.
 - The host flushes all splits, drains the document queue, saves, reads exact bytes, and binds the `TextDocument` version plus text SHA-256 to the saved-byte SHA-256.
 - The saved source is applied back to every split. Only the owner enumerates canonical blocks after that authoritative apply.

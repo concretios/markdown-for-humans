@@ -16,6 +16,12 @@ import { isIP } from 'net';
 import { readFile } from 'fs/promises';
 import { outlineViewProvider, type OutlineEntry } from '../features/outlineView';
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
+import {
+  registerFeedbackCommandTarget,
+  beginFeedbackCommandTarget,
+  markFeedbackCommandTargetReady,
+  resetFeedbackCommandTarget,
+} from '../feedbackCommandReadiness';
 import { buildResizeBackupLocation, resolveBackupPathWithCollisionDetection } from './imageBackups';
 import {
   hasSameBlankLineLayout,
@@ -1062,6 +1068,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       }
     }
 
+    const feedbackCommandTarget = registerFeedbackCommandTarget(panelWebview);
+
     // Set webview HTML
     panelWebview.html = this.getHtmlForWebview(panelWebview);
     void this.syncMarkdownlintMd012(this.getBlankLineMode()).catch(error => {
@@ -1178,6 +1186,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     });
 
     webviewPanel.onDidChangeViewState(() => {
+      if (!webviewPanel.visible) resetFeedbackCommandTarget(panelWebview);
       if (webviewPanel.active) {
         setActiveWebviewPanel(webviewPanel, document);
         this.inactiveAutoSaveWebviews.delete(panelWebview);
@@ -1209,6 +1218,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
     // Cleanup
     webviewPanel.onDidDispose(() => {
+      feedbackCommandTarget.dispose();
       changeDocumentSubscription.dispose();
       configChangeSubscription.dispose();
       const docUri = document.uri.toString();
@@ -1778,6 +1788,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         } else {
           this.rotateEditViewGeneration(webview);
         }
+        beginFeedbackCommandTarget(webview, this.editViewGenerations.get(webview)!);
         this.registerFeedbackWebview(document.uri.toString(), webview);
         if (!this.recoverFeedbackControllerOnReady(document, webview)) {
           // An optimistic initial post can precede the renderer's listener.
@@ -6067,6 +6078,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         requestId: message.requestId,
       });
     }
+
+    markFeedbackCommandTargetReady(webview, message.viewGeneration);
 
     const pending = this.pendingFeedbackControllerRestores.get(webview);
     if (

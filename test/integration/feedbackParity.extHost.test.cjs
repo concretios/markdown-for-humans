@@ -74,10 +74,11 @@ suite('Feedback snapshot parity (Ext Host)', () => {
           : undefined;
       }, 'custom editor tab');
 
-      // Allow the rich editor webview to finish initializing and mark snapshot capability.
-      await new Promise(resolve => setTimeout(resolve, 2500));
-
-      await vscode.commands.executeCommand('markdownForHumans.feedback.start');
+      assert.equal(
+        await vscode.commands.executeCommand('markdownForHumans.feedback.start'),
+        true,
+        'Feedback command must reach the ready editor without a startup sleep'
+      );
 
       const draftDir = await waitFor(() => {
         if (!fs.existsSync(feedbackRoot)) return undefined;

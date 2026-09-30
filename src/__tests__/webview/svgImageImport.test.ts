@@ -243,6 +243,36 @@ describe('SVG imports preserve vector files', () => {
     }
   );
 
+  it('claims image paste before ProseMirror schedules its fallback focus callback', async () => {
+    setupImageDragDrop(editor, { postMessage }, 'svg-import-view');
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: transfer([svgFile()]) });
+    const timers = jest.spyOn(window, 'setTimeout');
+    editor.view.dom.dispatchEvent(event);
+    // ProseMirror's capturePaste fallback schedules focus at 50ms. It must never
+    // run for an image paste handled by us, even when this editor closes early.
+    expect(timers.mock.calls.filter(([, delay]) => delay === 50)).toHaveLength(0);
+    for (let i = 0; i < 20 && !postMessage.mock.calls.some(([m]) => m.type === 'saveImage'); i++)
+      await nextTask();
+    expect(postMessage.mock.calls.filter(([m]) => m.type === 'saveImage')).toHaveLength(1);
+    // Let any broken fallback finish while the editor is alive in the RED run.
+    await new Promise(resolve => setTimeout(resolve, 60));
+  });
+
+  it('leaves ordinary text paste to ProseMirror', () => {
+    setupImageDragDrop(editor, { postMessage }, 'svg-import-view');
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        ...transfer([]),
+        getData: (type: string) => (type === 'text/plain' ? 'Plain text' : ''),
+      },
+    });
+    editor.view.dom.dispatchEvent(event);
+    expect(editor.getText()).toContain('Plain text');
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
   it('validates and inserts a generic-MIME SVG selected by the file picker', async () => {
     const dialog = showImageInsertDialog(editor, {
       postMessage,

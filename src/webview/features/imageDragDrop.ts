@@ -180,9 +180,12 @@ export function setupImageDragDrop(
   );
 
   // Paste handling
-  editorElement.addEventListener('paste', e =>
-    handlePaste(e as ClipboardEvent, editor, generationBoundApi)
-  );
+  // Claim supported image payloads before ProseMirror's bubble listener starts
+  // its native paste fallback (and delayed focus). Ordinary text still passes through.
+  const handleImagePaste = (event: Event) => {
+    void handlePaste(event as ClipboardEvent, editor, generationBoundApi);
+  };
+  editorElement.addEventListener('paste', handleImagePaste, true);
 
   const completionClient = createPendingImageCompletionClient({
     viewGeneration,
@@ -231,6 +234,7 @@ export function setupImageDragDrop(
 
   // Clean up window listeners when editor is destroyed to prevent memory leaks
   editor.on('destroy', () => {
+    editorElement.removeEventListener('paste', handleImagePaste, true);
     window.removeEventListener('dragover', blockWindowDrop);
     window.removeEventListener('drop', blockWindowDrop);
     window.removeEventListener('dragleave', handleWindowDragLeave as EventListener);
