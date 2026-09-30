@@ -1088,7 +1088,7 @@ function initializeEditor(initialContent: string) {
     tableMenu = createTableMenu(editorInstance);
 
     // Setup image drag & drop handling
-    setupImageDragDrop(editorInstance, vscode, viewGeneration);
+    setupImageDragDrop(editorInstance, vscode, viewGeneration, isFeedbackEditingLocked);
 
     // Initial outline push
     pushOutlineUpdate();

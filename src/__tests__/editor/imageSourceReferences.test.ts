@@ -98,3 +98,17 @@ describe('image source spans for rename and lookup', () => {
     ]);
   });
 });
+
+// Long malformed input must not repeat a suffix scan for every opener.
+it.each(['a<b\n', '![open\n', 'a<b', '![open'])(
+  'scans 280 KB of unclosed %j references within 100ms',
+  fragment => {
+    const source =
+      fragment.repeat(Math.ceil(280_000 / fragment.length)) + '\n\n![real](actual.png)';
+    const start = performance.now();
+    expect(findImageSourceReferences(source).map(reference => reference.source)).toEqual([
+      'actual.png',
+    ]);
+    expect(performance.now() - start).toBeLessThan(100);
+  }
+);

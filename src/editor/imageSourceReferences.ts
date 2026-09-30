@@ -4,6 +4,7 @@
  * Markdown code and comments. It never rewrites dimensions, titles or prose.
  */
 import MarkdownIt from 'markdown-it';
+import type Token from 'markdown-it/lib/token.mjs';
 
 const markdown = new MarkdownIt({ html: true });
 
@@ -69,6 +70,8 @@ export interface ImageSourceReference {
   end: number;
   /** Exact filename range, excluding the directory and URL suffix. */
   filenameStart: number;
+  /** Filename start when raw URL delimiters belong to a legacy filename. */
+  literalFilenameStart: number;
   pathEnd: number;
   /** Source after Markdown escapes/HTML entities, before URL decoding. */
   source: string;
@@ -101,13 +104,52 @@ function decodeImageSource(raw: string): { source: string; offsets: number[] } {
   return { source: decoded, offsets };
 }
 
+/**
+ * Index balanced brackets and HTML tag endings in linear passes. Malformed
+ * openers must not rescan the remaining document on each failed match (I4).
+ */
+function indexImageDelimiters(source: string): {
+  brackets: Map<number, number>;
+  tagEnds: Int32Array;
+} {
+  const brackets = new Map<number, number>();
+  const stack: number[] = [];
+  for (let index = 0; index < source.length; index++) {
+    if (source[index] === '\\') index++;
+    else if (source[index] === '[') stack.push(index);
+    else if (source[index] === ']') {
+      const open = stack.pop();
+      if (open !== undefined) brackets.set(open, index);
+    }
+  }
+  const tagEnds = new Int32Array(source.length + 1);
+  let singleQuote = -1;
+  let doubleQuote = -1;
+  for (let index = source.length - 1; index >= 0; index--) {
+    const character = source[index];
+    if (character === '>') tagEnds[index] = index + 1;
+    else if (character === '"') {
+      tagEnds[index] = doubleQuote < 0 ? 0 : tagEnds[doubleQuote + 1];
+      doubleQuote = index;
+    } else if (character === "'") {
+      tagEnds[index] = singleQuote < 0 ? 0 : tagEnds[singleQuote + 1];
+      singleQuote = index;
+    } else if (character !== '<') tagEnds[index] = tagEnds[index + 1];
+  }
+  return { brackets, tagEnds };
+}
+
 /** Return exact source spans for supported images, excluding code examples. */
 export function findImageSourceReferences(source: string): ImageSourceReference[] {
+  const { brackets, tagEnds } = indexImageDelimiters(source);
   const lineStarts = [0];
   for (let index = 0; index < source.length; index++) {
     if (source[index] === '\n') lineStarts.push(index + 1);
   }
-  const tokens = markdown.parse(source, {});
+  // Only block maps and inline source are used below. Parsing inline children
+  // repeats delimiter work and is costly on long runs of unmatched brackets.
+  const tokens: Token[] = [];
+  markdown.block.parse(source, markdown, {}, tokens);
   const spacePaths = new Map<number, ImageSourceSpan>();
   for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
     const token = tokens[tokenIndex];
@@ -156,6 +198,11 @@ export function findImageSourceReferences(source: string): ImageSourceReference[
       end,
       source: decoded.source,
       filenameStart: start + decoded.offsets[separator + 1],
+      literalFilenameStart:
+        start +
+        decoded.offsets[
+          Math.max(decoded.source.lastIndexOf('/'), decoded.source.lastIndexOf('\\')) + 1
+        ],
       pathEnd: start + decoded.offsets[pathEnd],
     });
   };
@@ -191,7 +238,11 @@ export function findImageSourceReferences(source: string): ImageSourceReference[
       continue;
     }
     if (source[index] === '<') {
-      const tag = /^<([a-z][a-z0-9:-]*)\b(?:[^>"']|"[^"]*"|'[^']*')*>/i.exec(source.slice(index));
+      const tagEnd = tagEnds[index + 1];
+      const tag =
+        tagEnd > 0
+          ? /^<([a-z][a-z0-9:-]*)\b(?:[^<>"']|"[^"]*"|'[^']*')*>/i.exec(source.slice(index, tagEnd))
+          : null;
       if (tag) {
         const name = tag[1].toLowerCase();
         if (name === 'img') {
@@ -228,13 +279,9 @@ export function findImageSourceReferences(source: string): ImageSourceReference[
       index = spacePath.syntaxEnd;
       continue;
     }
-    let cursor = index + 2;
-    let depth = 1;
-    for (; cursor < source.length && depth > 0; cursor++) {
-      if (source[cursor] === '\\') cursor++;
-      else if (source[cursor] === '[') depth++;
-      else if (source[cursor] === ']') depth--;
-    }
+    const labelEnd = brackets.get(index + 1);
+    let cursor = labelEnd === undefined ? source.length : labelEnd + 1;
+    let depth = 0;
     if (source[cursor] !== '(') {
       index++;
       continue;

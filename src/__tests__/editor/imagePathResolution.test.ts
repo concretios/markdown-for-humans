@@ -6,6 +6,9 @@
  * resolve correctly in the WYSIWYG editor.
  */
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { MarkdownEditorProvider, normalizeImagePath } from '../../editor/MarkdownEditorProvider';
 import * as vscode from 'vscode';
 import { Uri } from 'vscode';
@@ -220,6 +223,62 @@ describe('normalizeImagePath', () => {
       new MarkdownEditorProvider({
         extensionUri: Uri.file('/test/extension'),
       } as unknown as vscode.ExtensionContext);
+
+    it.each(['C#-logo.png', 'draft?review.png'])(
+      'resolves an existing raw delimiter filename %s',
+      filename => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'md4h-raw-path-'));
+        fs.writeFileSync(path.join(root, filename), 'image');
+        const provider = createProvider();
+        const document = {
+          ...createMockTextDocument(''),
+          uri: Uri.file(path.join(root, 'doc.md')),
+        };
+        const webview = createMockWebview();
+        try {
+          (
+            provider as unknown as {
+              handleResolveImageUri(
+                message: unknown,
+                doc: vscode.TextDocument,
+                view: vscode.Webview
+              ): void;
+            }
+          ).handleResolveImageUri(
+            { relativePath: filename, requestId: 'raw' },
+            document,
+            webview as unknown as vscode.Webview
+          );
+          expect(webview.asWebviewUri).toHaveBeenCalledWith(
+            expect.objectContaining({ fsPath: path.join(root, filename) })
+          );
+          expect(webview.postMessage).toHaveBeenCalledWith(
+            expect.objectContaining({ webviewUri: `webview:${path.join(root, filename)}` })
+          );
+        } finally {
+          provider.dispose();
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      }
+    );
+
+    it('renames raw delimiter references after the old file has moved, preserving HTML attributes', () => {
+      const provider = createProvider();
+      const internal = provider as unknown as {
+        replaceImageReferences(text: string, base: string, old: string, name: string): string;
+      };
+      const base = path.resolve('/workspace');
+      const source = '![C](assets#one/C#-logo.png)\n<img src="assets#one/C#-logo.png" width="200">';
+      expect(
+        internal.replaceImageReferences(
+          source,
+          base,
+          path.join(base, 'assets#one/C#-logo.png'),
+          'new?logo.png'
+        )
+      ).toBe('![C](assets#one/new%3Flogo.png)\n<img src="assets#one/new%3Flogo.png" width="200">');
+      provider.dispose();
+    });
 
     it('resolves and decodes workspace-relative image paths', () => {
       const provider = createProvider();
