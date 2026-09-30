@@ -138,3 +138,11 @@ Read `vibe-coding-rules/image-and-dom-handling.md` first.
 - Focused native CRLF rename smoke: real image destination updated, code example destination unchanged, all ten CRLF endings and image bytes preserved.
 - Separate pre-existing issue observed during native save: `serializeBlockMarkdown` in `src/webview/utils/markdownSerialization.ts` applies `.trim()` to non-image blocks, removing the first line's indentation from a mixed indented code block. Reproduced with unchanged HEAD serializer code in memory; both HEAD and fixed scanner replacements preserve indentation. This follow-up does not modify that serializer.
 - The user authorized committing and pushing this follow-up after a final code review.
+
+## 9. CI follow-up: deterministic scanner regression gates
+
+- CI failure at `739149e`: Node 24 passed functional assertions but failed all four 100 ms scanner limits (114 to 289 ms); Node 22 was cancelled by matrix fail-fast. Coverage and parallel worker timing cannot certify the local hardware latency budget.
+- Keep the existing 280 KB production-output cases. Replace their elapsed-time assertions with a separate deterministic gate at 280 KB and 560 KB, charging scanner loop iterations and sliced characters against a linear 20-units-per-character allowance. Instrument only an in-memory test copy; production scanner code and API are unchanged.
+- Assert the instrumented scanner matches the ordinary production import and retains the trailing valid image. A separate inline-parser spy has a positive control and rejects accidentally reintroducing full inline parsing.
+- Independent verification: all eight production fixtures use approximately four to five work units per character. The exact pre-PR scanner, with only full parsing replaced by block parsing, exceeds the budget on all eight fixtures. A full-inline-parser mutation triggers the separate parser spy. Two positive controls also verify nested suffix loops and repeated slices are each rejected.
+- Validation: final parallel coverage passed 166 suites and 3,109 tests; existing one skipped suite, 27 skipped tests and 120 TODOs are unchanged. Log: `/tmp/md4h-ci-scanner-coverage-final.log`. The seven-test performance suite, lint, TypeScript and independent review pass. Remote CI must pass before merge.
