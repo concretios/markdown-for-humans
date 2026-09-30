@@ -536,7 +536,11 @@ export function showSearchOverlay(editor: Editor): void {
 }
 
 /**
- * Hide the search overlay
+ * Hide Find and clear its highlights. Pass false when another UI owns focus:
+ * Feedback entry must retain its invoking control and current reading position.
+ *
+ * @param editor - Editor whose search decorations should be cleared.
+ * @param restorePosition - Restore editor focus and, when appropriate, selection.
  */
 export function hideSearchOverlay(editor: Editor, restorePosition = true): void {
   if (!searchOverlayElement) return;
@@ -584,7 +588,7 @@ export function hideSearchOverlay(editor: Editor, restorePosition = true): void 
     }
   }
 
-  focusEditor(editor, shouldPreventFocusScroll);
+  if (restorePosition) focusEditor(editor, shouldPreventFocusScroll);
   savedSelection = null;
   savedScrollPosition = null;
 }

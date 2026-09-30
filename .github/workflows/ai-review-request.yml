@@ -1,0 +1,48 @@
+name: AI Review Request
+
+# issue_comment workflows run from the default branch, so this file is not
+# taken from a pull request. The action still admits only an exact
+# "@dr-concretio review" or "@dr-concretio extend" comment, from a current
+# maintainer, on an open pull request in this repository.
+#
+# Actions are pinned to full commit SHAs. Do not use a floating @v2 tag.
+# Permissions are empty unless the job condition matches a review command.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  review:
+    if: >-
+      github.event.issue.pull_request &&
+      (github.event.comment.body == '@dr-concretio review' ||
+       github.event.comment.body == '@dr-concretio extend')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: ai-review-${{ github.repository_id }}-${{ github.event.issue.number }}-publish
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: concretios/ai-pr-reviewer@486ca9faf54287d4ac29c5c7bff5d20b2f53d558 # v2.0.0
+        id: review
+        with:
+          github_token: ${{ github.token }}
+          gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          pr_number: ${{ github.event.issue.number }}
+          bot_name: dr-concretio
+          publish: 'true'
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.review.outputs.report_directory != ''
+        with:
+          name: ai-review-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.review.outputs.report_directory }}
+          retention-days: 7

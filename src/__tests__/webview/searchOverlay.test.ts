@@ -53,6 +53,8 @@ jest.mock('@tiptap/pm/state', () => {
 });
 
 import type { Editor } from '@tiptap/core';
+import { readFileSync } from 'fs';
+import * as path from 'path';
 import {
   findMatches,
   showSearchOverlay,
@@ -177,6 +179,21 @@ function setWindowScrollPosition(x: number, y: number) {
 }
 
 describe('Search Overlay', () => {
+  it('allows clicks through the transparent wrapper while keeping the visible panel interactive', () => {
+    const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
+    const visibleRule = css.match(/\.search-overlay\.visible\s*\{([^}]+)\}/)?.[1];
+    const panelRule = css.match(/\.search-overlay-panel\s*\{([^}]+)\}/)?.[1];
+    expect(visibleRule).not.toMatch(/pointer-events:\s*auto/);
+    expect(panelRule).toMatch(/pointer-events:\s*auto/);
+  });
+
+  it('keeps Find above saved-draft actions instead of covering Resume and Start new', () => {
+    const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
+    expect(css).toMatch(
+      /body:has\(\.feedback-draft-banner\)\s+\.search-overlay[^{}]*\{[^}]*padding-top:\s*4px/
+    );
+  });
+
   describe('findMatches', () => {
     it('should return empty array for empty query', () => {
       const editor = createMockEditor('Hello world');
@@ -494,6 +511,25 @@ describe('Search Overlay UI behaviors', () => {
 
     expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
     expect(editor.commands.focus).toHaveBeenCalledWith(undefined, { scrollIntoView: false });
+  });
+
+  it('closes for Feedback without restoring an old cursor or stealing toolbar focus', () => {
+    editor.state.selection = { from: 4, to: 4 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    showSearchOverlay(editor as unknown as Editor);
+    const button = document.createElement('button');
+    document.body.append(button);
+    button.focus();
+    editor.commands.setTextSelection.mockClear();
+    editor.commands.focus.mockClear();
+
+    hideSearchOverlay(editor as unknown as Editor, false);
+
+    expect(isSearchVisible()).toBe(false);
+    expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+    expect(editor.commands.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button);
+    expect(document.querySelector('.search-overlay.visible')).toBeNull();
   });
 });
 

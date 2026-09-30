@@ -31,9 +31,16 @@ type ToastLifecycle = {
   showFrame?: ToastFrameHandle;
   autoDismiss?: ToastTimerHandle;
   removal?: ToastTimerHandle;
+  dedupeKey?: string;
 };
 
 const toastLifecycles = new Map<string, ToastLifecycle>();
+const keyedToastIds = new Map<string, string>();
+
+export interface ToastOptions {
+  /** Reuse one non-loading toast for repeated messages from the same UI channel. */
+  dedupeKey?: string;
+}
 
 function getToastLifecycle(toastId: string): ToastLifecycle {
   let lifecycle = toastLifecycles.get(toastId);
@@ -66,6 +73,9 @@ function clearToastLifecycle(toastId: string): void {
   }
   clearToastTimer(lifecycle.autoDismiss);
   clearToastTimer(lifecycle.removal);
+  if (lifecycle.dedupeKey && keyedToastIds.get(lifecycle.dedupeKey) === toastId) {
+    keyedToastIds.delete(lifecycle.dedupeKey);
+  }
   toastLifecycles.delete(toastId);
 }
 
@@ -117,15 +127,71 @@ function scheduleToastRemoval(toastId: string, toast: HTMLElement): void {
   );
 }
 
+function scheduleToastAutoDismiss(toastId: string, toast: HTMLElement): void {
+  scheduleToastTimer(
+    toastId,
+    'autoDismiss',
+    () => {
+      toast.classList.remove('visible');
+      scheduleToastRemoval(toastId, toast);
+    },
+    TOAST_AUTO_DISMISS_MS
+  );
+}
+
+function refreshKeyedToast(
+  message: string,
+  type: 'success' | 'info',
+  dedupeKey: string
+): string | null {
+  const toastId = keyedToastIds.get(dedupeKey);
+  if (!toastId) return null;
+
+  const toast = document.getElementById(toastId);
+  if (!toast) {
+    clearToastLifecycle(toastId);
+    keyedToastIds.delete(dedupeKey);
+    return null;
+  }
+
+  const lifecycle = getToastLifecycle(toastId);
+  clearToastTimer(lifecycle.removal);
+  delete lifecycle.removal;
+  toast.classList.remove('toast-success', 'toast-info');
+  toast.classList.add(`toast-${type}`, 'visible');
+  const icon = toast.querySelector<HTMLElement>('.toast-icon');
+  if (icon) {
+    icon.className = `toast-icon codicon ${
+      type === 'success' ? 'codicon-verified' : 'codicon-info'
+    }`;
+  }
+  const messageElement = toast.querySelector<HTMLElement>('.toast-message');
+  if (messageElement && messageElement.textContent !== message) {
+    messageElement.textContent = message;
+  }
+  scheduleToastAutoDismiss(toastId, toast);
+  return toastId;
+}
+
 /**
  * Display a toast notification.
  * Auto-dismisses after TOAST_AUTO_DISMISS_MS unless type is 'loading'.
  *
  * @param message - The message to display
  * @param type - Toast type: 'success' | 'info' | 'loading' (affects styling and auto-dismiss)
+ * @param options - Optional channel key for coalescing repeated non-loading messages
  * @returns id for dismissing the toast manually (only used for 'loading' type)
  */
-export function showToast(message: string, type: 'success' | 'info' | 'loading' = 'info'): string {
+export function showToast(
+  message: string,
+  type: 'success' | 'info' | 'loading' = 'info',
+  options: ToastOptions = {}
+): string {
+  if (type !== 'loading' && options.dedupeKey) {
+    const refreshedToastId = refreshKeyedToast(message, type, options.dedupeKey);
+    if (refreshedToastId) return refreshedToastId;
+  }
+
   let toastContainer = document.getElementById('toast-container');
   if (!toastContainer) {
     toastContainer = document.createElement('div');
@@ -155,6 +221,12 @@ export function showToast(message: string, type: 'success' | 'info' | 'loading' 
 
   toastContainer.appendChild(toast);
 
+  if (type !== 'loading' && options.dedupeKey) {
+    const lifecycle = getToastLifecycle(toastId);
+    lifecycle.dedupeKey = options.dedupeKey;
+    keyedToastIds.set(options.dedupeKey, toastId);
+  }
+
   // Trigger animation
   scheduleToastFrame(toastId, () => {
     toast.classList.add('visible');
@@ -162,15 +234,7 @@ export function showToast(message: string, type: 'success' | 'info' | 'loading' 
 
   // Auto-dismiss only for non-loading toasts
   if (type !== 'loading') {
-    scheduleToastTimer(
-      toastId,
-      'autoDismiss',
-      () => {
-        toast.classList.remove('visible');
-        scheduleToastRemoval(toastId, toast);
-      },
-      TOAST_AUTO_DISMISS_MS
-    );
+    scheduleToastAutoDismiss(toastId, toast);
   }
 
   return toastId;
@@ -207,6 +271,7 @@ export function clearToasts(): void {
   document.querySelectorAll('.toast').forEach(toast => {
     toast.remove();
   });
+  keyedToastIds.clear();
   document.getElementById('toast-container')?.remove();
 }
 

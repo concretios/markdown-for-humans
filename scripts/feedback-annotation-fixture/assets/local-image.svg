@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300" role="img" aria-label="Feedback fixture landscape">
+  <rect width="640" height="300" fill="#2f81f7"/>
+  <circle cx="520" cy="72" r="34" fill="#ffd33d"/>
+  <path d="M0 245 160 100 285 225 390 135 640 285v15H0z" fill="#2da44e"/>
+  <path d="M0 270 130 175 250 270 365 205 520 270 640 220v80H0z" fill="#0969da" opacity=".72"/>
+  <rect x="18" y="18" width="172" height="38" rx="8" fill="#ffffff" opacity=".92"/>
+  <text x="34" y="44" font-family="system-ui, sans-serif" font-size="19" fill="#24292f">Local fixture image</text>
+</svg>

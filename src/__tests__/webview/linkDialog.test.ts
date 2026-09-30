@@ -5,7 +5,7 @@
 import { getMarkRange, Editor } from '@tiptap/core';
 import { hideLinkDialog, showLinkDialog } from '../../webview/features/linkDialog';
 
-jest.mock('prosemirror-state', () => ({
+jest.mock('@tiptap/pm/state', () => ({
   TextSelection: {
     create: jest.fn(() => ({})),
   },

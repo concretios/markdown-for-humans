@@ -29,7 +29,7 @@ import type {
  * style so edits stay minimal.
  */
 
-const FENCE_RE = /^([ ]{0,3})(```|~~~)/;
+const FENCE_RE = /^([ ]{0,3})(`{3,}|~{3,})/;
 
 function isIndentedStyle(prefix: string): boolean {
   if (!prefix) return false;
@@ -40,6 +40,22 @@ function isIndentedStyle(prefix: string): boolean {
 function extractFencePrefix(raw: string): string {
   const match = raw.match(FENCE_RE);
   return match ? match[1] : '';
+}
+
+function extractFenceMarker(raw: string): string | null {
+  return raw.match(FENCE_RE)?.[2] ?? null;
+}
+
+/** Return an authored fence widened only when its body could close it early. */
+function safeFenceMarker(authoredMarker: unknown, body: string): string {
+  const marker =
+    typeof authoredMarker === 'string' && /^(?:`{3,}|~{3,})$/.test(authoredMarker)
+      ? authoredMarker
+      : '```';
+  const character = marker[0];
+  const runs = body.match(character === '`' ? /`+/g : /~+/g) ?? [];
+  const longestBodyRun = runs.reduce((longest, run) => Math.max(longest, run.length), 0);
+  return character.repeat(Math.max(3, marker.length, longestBodyRun + 1));
 }
 
 function extractIndentPrefix(raw: string): string {
@@ -79,6 +95,9 @@ export function parsePreservedCodeBlock(
   if (indentPrefix) {
     attrs['indent-prefix'] = indentPrefix;
   }
+  if (!isIndented) {
+    attrs['fence-marker'] = extractFenceMarker(raw);
+  }
 
   return helpers.createNode('codeBlock', attrs, text ? [helpers.createTextNode(text)] : []);
 }
@@ -103,9 +122,11 @@ export function renderPreservedCodeBlock(node: JSONContent, h: MarkdownRendererH
       .join('\n');
   }
 
-  // Fenced code block style: optional 0-3 space prefix on fences and body.
-  const openFence = `${indentPrefix}\`\`\`${language}`;
-  const closeFence = `${indentPrefix}\`\`\``;
+  // Fenced code block style: preserve the authored marker and widen it when
+  // nested fence text would otherwise close the serialized block early.
+  const fenceMarker = safeFenceMarker(node.attrs?.['fence-marker'], body);
+  const openFence = `${indentPrefix}${fenceMarker}${language}`;
+  const closeFence = `${indentPrefix}${fenceMarker}`;
 
   if (!body) {
     return `${openFence}\n\n${closeFence}`;

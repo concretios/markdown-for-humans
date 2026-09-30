@@ -44,7 +44,9 @@ function stripAngleBrackets(value: string): string {
 export const SpaceFriendlyImagePaths = Extension.create({
   name: 'spaceFriendlyImagePaths',
 
-  priority: 180,
+  // TipTap 3.30's Paragraph has priority 1000. This fallback must run first
+  // for the shared `paragraph` token or the generic handler consumes it.
+  priority: 1100,
 
   markdownTokenName: 'paragraph',
 

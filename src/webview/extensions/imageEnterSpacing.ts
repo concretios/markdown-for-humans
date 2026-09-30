@@ -8,7 +8,7 @@ import { Extension } from '@tiptap/core';
 import { GapCursor } from '@tiptap/pm/gapcursor';
 import { NodeSelection, Plugin, PluginKey, TextSelection, EditorState } from '@tiptap/pm/state';
 import { Fragment, Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Decoration, DecorationSet } from 'prosemirror-view';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 const IMAGE_ENTER_SPACING_PLUGIN = new PluginKey('imageEnterSpacing');
 
