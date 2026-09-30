@@ -214,4 +214,19 @@ See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md
 
 ---
 
-**Last Updated:** 2025-12-13
+## Cursor Cloud specific instructions
+
+The default Cloud Agent image already has Node.js 22, npm 10, Git, Xvfb, and Google Chrome (`/usr/bin/google-chrome`). Refresh dependencies with `npm ci` from the lockfile. There is no database, queue, or dev server to start.
+
+- Lint: `npm run lint`
+- Unit tests: `npm test`
+- Typecheck: `npx tsc --noEmit`
+- Debug build: `npm run build:debug`
+- Extension host smoke tests: `xvfb-run -a npm run test:integration`
+- Performance budget gate: `node --test scripts/feedback-performance-fixture/verification.test.mjs && node scripts/feedback-performance-fixture/run.mjs`
+
+`npm run test:integration` builds the release bundle, then opens the custom editor inside a real VS Code Extension Development Host. The first run downloads VS Code into gitignored `.vscode-test/`. PDF export can use the image Chrome binary without setting `markdownForHumans.chromePath`.
+
+---
+
+**Last Updated:** 2026-09-30
