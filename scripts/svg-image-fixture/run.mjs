@@ -77,6 +77,8 @@ const server = createServer(async (request, response) => {
     else if (pathname === '/renderer.js') content = await readFile(join(temporary, 'renderer.js'));
     else if (privateDirectory && pathname === '/private-deck.md')
       content = await readFile(join(privateDirectory, 'deck-1-overview.md'));
+    else if (privateDirectory && pathname === '/private-deck-2.md')
+      content = await readFile(join(privateDirectory, 'deck-2-deep-dive.md'));
     else if (
       privateDirectory &&
       pathname.startsWith('/images/') &&
@@ -263,12 +265,37 @@ try {
       }
     }
   }
+  let deck2 = { present: false, passed: true, checks: {} };
+  if (privateDirectory) {
+    await send('Emulation.setDeviceMetricsOverride', {
+      width: 1200,
+      height: 1400,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    deck2 = await evaluate('window.measureDeck2Sizing()');
+    await send('Emulation.setDeviceMetricsOverride', {
+      width: 420,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    const narrowDeck2 = await evaluate('window.measureDeck2Sizing()');
+    deck2 = {
+      present: deck2.present,
+      passed: deck2.passed && narrowDeck2.passed,
+      checks: { wide: deck2.checks, narrow: narrowDeck2.checks },
+      wide: deck2.images,
+      narrow: narrowDeck2.images,
+    };
+  }
   const privateFilesUnchanged =
     JSON.stringify(privateHashesBefore) === JSON.stringify(await hashPrivateFiles());
   const result = {
     passed:
       matrix.every(result => result.passed) &&
       privateResults.every(result => result.passed) &&
+      deck2.passed &&
       capture.passed &&
       sizeFlow.passed &&
       privateFilesUnchanged &&
@@ -279,6 +306,7 @@ try {
     capture,
     productionPdf,
     privateResults,
+    deck2,
     ...(privateDirectory ? { privateFilesUnchanged } : {}),
     outputDirectory: temporary,
   };

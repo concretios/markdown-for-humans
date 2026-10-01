@@ -40,6 +40,11 @@ declare global {
     runSvgFixture?: (theme: string, privateDeck?: boolean) => Promise<FixtureResult>;
     captureSvgFixture?: () => Promise<{ dataUrl: string; marker: number[] }>;
     runSvgSizeFlow?: () => Promise<{ passed: boolean; checks: Record<string, boolean> }>;
+    measureDeck2Sizing?: () => Promise<{
+      present: boolean;
+      passed: boolean;
+      checks: Record<string, boolean>;
+    }>;
     collectSvgPdfFixture?: () => Promise<string>;
     resolveImagePath?: (source: string) => Promise<string>;
   }
@@ -166,9 +171,13 @@ window.runSvgFixture = async (theme, privateDeck = false) => {
   if (privateDeck) {
     checks.privateImagesVisible =
       images.length >= 3 && images.every(image => image.width > 0 && image.height > 0);
+    const privateColumn = editor.view.dom.clientWidth;
     checks.privateSvgAspect = images
       .filter(image => image.alt === 'w:1000')
       .every(image => Math.abs(image.width / image.height - 1280 / 560) < 0.025);
+    checks.privateSvgFillsColumn = images
+      .filter(image => image.alt === 'w:1000')
+      .every(image => image.width > 0 && Math.abs(image.width - privateColumn) <= 2);
   } else {
     for (const alt of [
       'viewbox',
@@ -189,11 +198,30 @@ window.runSvgFixture = async (theme, privateDeck = false) => {
         actual && Math.abs(actual.width / actual.height - 1280 / 560) < 0.025
       );
     }
+    const column = editor.view.dom.clientWidth;
     const sized = imageByAlt('sized');
+    const viewbox = imageByAlt('viewbox');
+    const percent = imageByAlt('percent');
+    const explicit = imageByAlt('explicit');
     checks.sizedWidth = Boolean(
-      sized &&
-      Math.abs(sized.getBoundingClientRect().width - Math.min(320, editor.view.dom.clientWidth)) <=
-        1
+      sized && Math.abs(sized.getBoundingClientRect().width - Math.min(320, column)) <= 1
+    );
+    checks.viewboxFillsColumn = Boolean(
+      viewbox &&
+      viewbox.closest('.image-fluid-svg') &&
+      !viewbox.hasAttribute('width') &&
+      Math.abs(viewbox.getBoundingClientRect().width - column) <= 2
+    );
+    checks.percentFillsColumn = Boolean(
+      percent &&
+      percent.closest('.image-fluid-svg') &&
+      Math.abs(percent.getBoundingClientRect().width - column) <= 2
+    );
+    checks.explicitIntrinsic = Boolean(
+      explicit &&
+      !explicit.closest('.image-fluid-svg') &&
+      explicit.getAttribute('width') === '640' &&
+      Math.abs(explicit.getBoundingClientRect().width - Math.min(640, column)) <= 2
     );
     checks.iconNotExpanded = (imageByAlt('icon')?.getBoundingClientRect().width ?? 0) <= 32;
     checks.rasterNotExpanded = (imageByAlt('raster')?.getBoundingClientRect().width ?? 0) <= 32;
@@ -263,6 +291,59 @@ window.runSvgFixture = async (theme, privateDeck = false) => {
   };
   window.fixtureResult = result;
   return result;
+};
+
+window.measureDeck2Sizing = async () => {
+  const response = await fetch('/private-deck-2.md');
+  if (!response.ok) return { present: false, passed: true, checks: {} };
+  editor.commands.setContent(await response.text(), { contentType: 'markdown' });
+  await settleImages();
+  const column = editor.view.dom.clientWidth;
+  const images = Array.from(
+    editor.view.dom.querySelectorAll<HTMLImageElement>('img.markdown-image')
+  );
+  const fluid = images.filter(image => image.closest('.image-fluid-svg'));
+  const authored = images.filter(image => image.getAttribute('width') === '666');
+  const markdown = getEditorMarkdownForSync(editor, 'strip');
+  const aspectMatches = (image: HTMLImageElement) => {
+    const box = image.getBoundingClientRect();
+    return (
+      image.naturalWidth > 0 &&
+      image.naturalHeight > 0 &&
+      box.height > 0 &&
+      Math.abs(box.width / box.height - image.naturalWidth / image.naturalHeight) < 0.03
+    );
+  };
+  const checks: Record<string, boolean> = {
+    deck2ImageCount: images.length >= 5,
+    deck2FluidCount: fluid.length >= 4,
+    deck2FluidFillsColumn: fluid.every(
+      image => Math.abs(image.getBoundingClientRect().width - column) <= 2
+    ),
+    deck2FluidAspect: fluid.every(aspectMatches),
+    deck2AuthoredNotFluid: authored.length === 1 && !authored[0].closest('.image-fluid-svg'),
+    deck2AuthoredWidth:
+      authored.length === 1 &&
+      Math.abs(authored[0].getBoundingClientRect().width - Math.min(666, column)) <= 2,
+    deck2AuthoredAspect: authored.length === 1 && aspectMatches(authored[0]),
+    deck2UnsizedStayMarkdown: markdown.includes('![w:960](images/deck-2-driver-ports.svg)'),
+    deck2AuthoredStays: markdown.includes('width="666"'),
+  };
+  return {
+    present: true,
+    passed: Object.values(checks).every(Boolean),
+    checks,
+    column,
+    images: images.map(image => ({
+      alt: image.alt,
+      width: Math.round(image.getBoundingClientRect().width),
+      height: Math.round(image.getBoundingClientRect().height),
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+      fluid: Boolean(image.closest('.image-fluid-svg')),
+      attrWidth: image.getAttribute('width'),
+    })),
+  };
 };
 
 window.captureSvgFixture = async () => {

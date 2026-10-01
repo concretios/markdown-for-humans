@@ -2389,6 +2389,20 @@
     margin-top: 0.25em;
   }
 
+  /* ViewBox-only and percentage SVGs have no concrete intrinsic width. The
+     built-in Markdown preview lays them out at the reading column. Copying
+     naturalWidth instead locks them at Chrome's 300×150 default object size.
+     Concrete SVG widths stay on the shrink-to-fit wrapper above. */
+  .image-wrapper.image-fluid-svg {
+    display: block;
+    width: 100%;
+  }
+
+  .image-wrapper.image-fluid-svg .markdown-image {
+    width: 100%;
+    height: auto;
+  }
+
   .image-load-failed .markdown-image {
     display: none;
   }
