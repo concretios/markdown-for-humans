@@ -212,26 +212,11 @@ function isolateAreaCaptureSurface(surface: HTMLElement): () => void {
  * Keeps Command Palette and toolbar invocations inside one capture lifecycle.
  * Visible surfaces are focused, while an in-flight rasterization is left alone
  * so annotation suspension remains balanced around exactly one pixel request.
+ * The review gate shows the only guidance on the owning surface; a second toast
+ * here would repeat it in different words.
  */
 function focusActiveCaptureWorkflow(review: FeedbackReviewController): boolean {
-  const gate = draftSurfaceGateFor(review);
-  const kind = gate.activeKind();
-  if (!kind) return false;
-  gate.focusActive();
-  const message =
-    kind === 'text-composer'
-      ? 'Finish or cancel this comment before capturing.'
-      : kind === 'text-block-selector'
-        ? 'Choose blocks or cancel this feedback action before capturing.'
-        : kind === 'finish-checkpoint'
-          ? 'Resume feedback or finish the current completion step before capturing.'
-          : kind === 'area-capture'
-            ? 'An area capture is already active. Drag to select an area or cancel it.'
-            : kind === 'capture-rasterizing'
-              ? 'A Feedback capture is already being prepared.'
-              : 'Finish or cancel the current capture before starting another.';
-  showCaptureError(message);
-  return true;
+  return draftSurfaceGateFor(review).focusActive();
 }
 
 function claimCaptureWorkflow(

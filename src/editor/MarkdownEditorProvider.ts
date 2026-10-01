@@ -4821,6 +4821,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       const session = this.feedbackSessions.get(documentKey);
       const peers = this.feedbackWebviews.get(documentKey);
       const appliedLock = this.appliedFeedbackPeerLocks.get(webview);
+      // Start and Resume lock peers with a random transition id, and a reloaded
+      // owner locks itself with its own session id. Neither matches a revealable
+      // peer lock, so report the transition before the session id comparison.
+      if (
+        peers?.has(webview) &&
+        this.editViewGenerations.get(webview) === message.viewGeneration &&
+        (this.feedbackTransitions.get(documentKey)?.lockId === message.lockId ||
+          (session?.sessionId === message.lockId && session.ownerWebview === webview))
+      ) {
+        void vscode.window.showWarningMessage('Feedback is changing state. Try again in a moment.');
+        return;
+      }
       if (
         !peers?.has(webview) ||
         this.editViewGenerations.get(webview) !== message.viewGeneration ||

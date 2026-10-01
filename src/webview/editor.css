@@ -3886,11 +3886,18 @@ body.vscode-high-contrast-light.feedback-completion-open {
   outline-offset: 2px;
 }
 
-/* Find uses the toolbar row while a recovery banner occupies the row below it. */
-body:has(.feedback-draft-banner) .search-overlay,
-body:has(.out-of-sync-banner) .search-overlay,
+/* A peer lock disables the toolbar, so Find can use the toolbar row while the
+   lock banner occupies the row below it. */
 .feedback-peer-locked .search-overlay {
   padding-top: 4px;
+}
+
+/* The saved-draft and out-of-sync banners leave the toolbar live. Find keeps
+   its row below the toolbar, and each banner moves below Find's 46 px panel
+   while Find is open. */
+body:has(.search-overlay.visible) .feedback-draft-banner,
+body:has(.search-overlay.visible) .out-of-sync-banner {
+  top: 104px;
 }
 
 .feedback-draft-notice {

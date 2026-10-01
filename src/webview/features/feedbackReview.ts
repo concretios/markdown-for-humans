@@ -983,7 +983,10 @@ export function createFeedbackReviewController(options: {
   let draftNotice: HTMLElement | null = null;
   let draftAttentionTarget: HTMLElement | null = null;
   let draftAttentionTimer: number | null = null;
+  let draftNoticeHostObserver: MutationObserver | null = null;
   const clearDraftSurfaceAttention = (): void => {
+    draftNoticeHostObserver?.disconnect();
+    draftNoticeHostObserver = null;
     if (draftAttentionTimer !== null) window.clearTimeout(draftAttentionTimer);
     draftAttentionTimer = null;
     draftAttentionTarget?.classList.remove('feedback-draft-attention');
@@ -1300,7 +1303,7 @@ export function createFeedbackReviewController(options: {
     clearDraftSurfaceAttention();
     const noticeSurface =
       element?.querySelector<HTMLElement>(
-        '.feedback-annotation-panel, .feedback-capture-instruction, .math-editor-dialog, .mermaid-editor-dialog, .image-insert-dialog, .rename-dialog, .huge-image-dialog, .export-settings-overlay-panel'
+        '.feedback-annotation-panel, .feedback-capture-instruction, .math-editor-dialog, .mermaid-editor-dialog, .image-insert-dialog, .rename-dialog, .huge-image-dialog, .export-settings-overlay-panel, .toc-overlay-panel'
       ) ?? element;
     draftNotice = createElement('p', 'feedback-draft-notice', instruction);
     draftNotice.setAttribute('data-feedback-draft-notice', '');
@@ -1490,13 +1493,9 @@ export function createFeedbackReviewController(options: {
   const restoreTransitionFocus = (): void => {
     const preferred = transitionReturnFocus;
     transitionReturnFocus = null;
-    if (
-      preferred?.isConnected &&
-      (!(preferred instanceof HTMLButtonElement) || !preferred.disabled)
-    ) {
-      preferred.focus({ preventScroll: true });
-      return;
-    }
+    // The remembered control can be hidden by the time Start ends. Chromium
+    // ignores focus() on hidden elements, so fall back unless focus landed.
+    if (focusElementWithoutScroll(preferred)) return;
     const draftAction = draftBanner?.querySelector<HTMLElement>(
       'button:not(:disabled), select:not(:disabled)'
     );
@@ -4127,20 +4126,27 @@ export function createFeedbackReviewController(options: {
     activateFeedbackItem(preferredId, marker.dataset.feedbackIds?.split(',').filter(Boolean));
   };
 
+  /**
+   * The TOC and Table dialogs stay mounted and fade out through a CSS visibility
+   * transition, so their computed style still reads visible right after they
+   * close. Their `visible` class is the synchronous open state.
+   */
+  const isOpenModal = (candidate: HTMLElement): boolean =>
+    candidate.isConnected &&
+    !candidate.hidden &&
+    !candidate.closest('[aria-hidden="true"], [hidden]') &&
+    (candidate.matches('.toc-overlay, .export-settings-overlay')
+      ? candidate.classList.contains('visible')
+      : window.getComputedStyle(candidate).display !== 'none' &&
+        window.getComputedStyle(candidate).visibility !== 'hidden');
+
   const focusModalSurfaceBefore = (action: string): boolean => {
     const activeModal = Array.from(
       document.querySelectorAll<HTMLElement>(
         '[data-md4h-modal], [role="dialog"][aria-modal="true"], .math-editor-overlay, .mermaid-editor-overlay, .image-insert-dialog-overlay, .rename-dialog-overlay, .huge-image-overlay'
       )
     )
-      .filter(
-        candidate =>
-          candidate.isConnected &&
-          !candidate.hidden &&
-          !candidate.closest('[aria-hidden="true"], [hidden]') &&
-          window.getComputedStyle(candidate).display !== 'none' &&
-          window.getComputedStyle(candidate).visibility !== 'hidden'
-      )
+      .filter(isOpenModal)
       .at(-1);
     if (!activeModal) return false;
 
@@ -4154,6 +4160,15 @@ export function createFeedbackReviewController(options: {
       if (!focusedControl) focusElementWithoutScroll(activeModal);
     }
     showSurfaceAttention(activeModal, `Complete or close this dialog before ${action}.`);
+    // Link and Table dialogs are hidden and reused, not removed. Clear the notice
+    // when this dialog closes so its next, unrelated open does not repeat it.
+    draftNoticeHostObserver = new MutationObserver(() => {
+      if (!isOpenModal(activeModal)) clearDraftSurfaceAttention();
+    });
+    draftNoticeHostObserver.observe(activeModal, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+    });
     return true;
   };
 
@@ -4167,6 +4182,20 @@ export function createFeedbackReviewController(options: {
             completionDialog
         );
         return;
+      }
+      // editor.ts closes Find, the TOC and the audit overlay before Start. Their
+      // controls keep focus while the overlay fades, then Chromium drops it to
+      // BODY, so a Start that fails fast, succeeds or is a no-op during a session
+      // would leave no focused control. Use the editor.
+      // EditorView.focus() writes the editor selection to the DOM. A bare focus()
+      // lets Chromium move the caret to the document start, and ProseMirror then
+      // scrolls to the old caret or, without a focus event, keeps the moved one.
+      if (
+        document.activeElement?.closest(
+          '.search-overlay:not(.visible), .toc-overlay:not(.visible), .audit-overlay:not(.visible)'
+        )
+      ) {
+        editor.view.focus();
       }
       if (session || startRequestId) return;
       if (focusModalSurfaceBefore('starting Feedback')) return;

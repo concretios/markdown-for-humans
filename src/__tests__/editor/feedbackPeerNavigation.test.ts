@@ -130,8 +130,9 @@ describe('Feedback peer owner navigation', () => {
             : {}
       );
       expect(fixture.reveal).not.toHaveBeenCalled();
+      // Both warnings contain "Try again"; only this one says "no longer available".
       expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
-        expect.stringMatching(/try again|reopen/i)
+        expect.stringMatching(/no longer available/i)
       );
       expect(fixture.peer.postMessage).not.toHaveBeenCalled();
     } finally {
@@ -150,14 +151,116 @@ describe('Feedback peer owner navigation', () => {
         else fixture.session.phase = phase;
         fixture.navigate();
         expect(fixture.reveal).not.toHaveBeenCalled();
+        // Both warnings contain "Try again"; only the transition one says "changing state".
         expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
-          expect.stringMatching(/try again/i)
+          expect.stringMatching(/changing state/i)
         );
       } finally {
         fixture.dispose();
       }
     }
   );
+
+  it('reports a Start or Resume transition whose lock is not a session id as changing state', () => {
+    const fixture = createFixture();
+    try {
+      const transitionLockId = '9f1c2b7a4d6e8f00112233445566778899';
+      fixture.state.feedbackSessions.delete(fixture.documentKey);
+      fixture.state.feedbackTransitions.set(fixture.documentKey, {
+        lockId: transitionLockId,
+        ownerWebview: fixture.owner,
+      });
+      fixture.state.appliedFeedbackPeerLocks.set(fixture.peer, {
+        lockId: transitionLockId,
+        viewGeneration: 'peer-generation',
+      });
+
+      fixture.navigate({ lockId: transitionLockId });
+
+      expect(fixture.reveal).not.toHaveBeenCalled();
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledTimes(1);
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringMatching(/changing state/i)
+      );
+      expect(fixture.peer.postMessage).not.toHaveBeenCalled();
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it.each(['stale-generation', 'unregistered-sender', 'stale-owner'])(
+    'tells a %s renderer that its transition lock is no longer available',
+    failure => {
+      const fixture = createFixture();
+      try {
+        const transitionLockId = '9f1c2b7a4d6e8f00112233445566778899';
+        fixture.state.feedbackTransitions.set(fixture.documentKey, {
+          lockId: transitionLockId,
+          ownerWebview: fixture.owner,
+        });
+        fixture.state.appliedFeedbackPeerLocks.set(fixture.peer, {
+          lockId: transitionLockId,
+          viewGeneration: 'peer-generation',
+        });
+        if (failure === 'unregistered-sender')
+          fixture.state.feedbackWebviews.get(fixture.documentKey)?.delete(fixture.peer);
+        fixture.state.editViewGenerations.set(fixture.owner, 'owner-generation');
+
+        if (failure === 'stale-owner') {
+          // A reloaded owner's old renderer asking about its own session.
+          fixture.state.handleWebviewMessage(
+            {
+              type: 'feedback.peer.reveal',
+              requestId: 'reveal-stale-owner',
+              lockId: 'session-1',
+              viewGeneration: 'old-owner-generation',
+            },
+            { uri: { toString: () => fixture.documentKey } } as vscode.TextDocument,
+            fixture.owner
+          );
+        } else {
+          fixture.navigate({
+            lockId: transitionLockId,
+            ...(failure === 'stale-generation' ? { viewGeneration: 'old-generation' } : {}),
+          });
+        }
+
+        expect(fixture.reveal).not.toHaveBeenCalled();
+        expect(vscode.window.showWarningMessage).toHaveBeenCalledTimes(1);
+        expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+          expect.stringMatching(/no longer available/i)
+        );
+      } finally {
+        fixture.dispose();
+      }
+    }
+  );
+
+  it('reports the owner restoring its own session as changing state', () => {
+    const fixture = createFixture();
+    try {
+      fixture.state.editViewGenerations.set(fixture.owner, 'owner-generation');
+
+      fixture.state.handleWebviewMessage(
+        {
+          type: 'feedback.peer.reveal',
+          requestId: 'reveal-self',
+          lockId: 'session-1',
+          viewGeneration: 'owner-generation',
+        },
+        { uri: { toString: () => fixture.documentKey } } as vscode.TextDocument,
+        fixture.owner
+      );
+
+      expect(fixture.reveal).not.toHaveBeenCalled();
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledTimes(1);
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringMatching(/changing state/i)
+      );
+    } finally {
+      fixture.dispose();
+    }
+  });
 
   it('reports a recoverable error if the owner panel is disposed during reveal', () => {
     const fixture = createFixture();

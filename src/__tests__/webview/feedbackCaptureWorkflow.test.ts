@@ -1412,7 +1412,8 @@ describe('keyboard Feedback block selector', () => {
     });
 
     it('announces preparation on the crop overlay and removes it after success', async () => {
-      const gate = createFeedbackDraftSurfaceGate();
+      const onBlockedAction = jest.fn();
+      const gate = createFeedbackDraftSurfaceGate(undefined, onBlockedAction);
       const harness = createAreaHarness({ draftSurfaceGate: gate });
       let resolveRasterize!: (capture: { dataUrl: string; width: number; height: number }) => void;
       harness.rasterize.mockImplementation(
@@ -1442,10 +1443,12 @@ describe('keyboard Feedback block selector', () => {
       window.addEventListener('feedbackLocalError', onLocalError);
       try {
         startFeedbackAreaCapture(harness);
-        expect(onLocalError).toHaveBeenCalledTimes(1);
-        expect((onLocalError.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
-          message: 'A Feedback capture is already being prepared.',
-        });
+        // The gate's guidance on the owning surface is the only message.
+        expect(onBlockedAction).toHaveBeenCalledTimes(1);
+        expect(onBlockedAction.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({ kind: 'capture-rasterizing' })
+        );
+        expect(onLocalError).not.toHaveBeenCalled();
       } finally {
         window.removeEventListener('feedbackLocalError', onLocalError);
       }
@@ -1760,7 +1763,8 @@ describe('keyboard Feedback block selector', () => {
     });
 
     it('focuses and preserves a text draft while explaining why capture is blocked', () => {
-      const gate = createFeedbackDraftSurfaceGate();
+      const onBlockedAction = jest.fn();
+      const gate = createFeedbackDraftSurfaceGate(undefined, onBlockedAction);
       const draft = document.createElement('textarea');
       draft.value = 'Keep this unfinished feedback.';
       document.body.append(draft);
@@ -1778,10 +1782,12 @@ describe('keyboard Feedback block selector', () => {
         expect(document.activeElement).toBe(draft);
         expect(draft.value).toBe('Keep this unfinished feedback.');
         expect(harness.setCaptureState).not.toHaveBeenCalled();
-        expect(onLocalError).toHaveBeenCalledTimes(1);
-        expect((onLocalError.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
-          message: 'Finish or cancel this comment before capturing.',
-        });
+        // The gate's guidance on the owning surface is the only message.
+        expect(onBlockedAction).toHaveBeenCalledTimes(1);
+        expect(onBlockedAction.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({ kind: 'text-composer', element: draft })
+        );
+        expect(onLocalError).not.toHaveBeenCalled();
       } finally {
         window.removeEventListener('feedbackLocalError', onLocalError);
         lease?.release();
@@ -1789,7 +1795,8 @@ describe('keyboard Feedback block selector', () => {
     });
 
     it('focuses the completion checkpoint and explains how to leave it before capturing', () => {
-      const gate = createFeedbackDraftSurfaceGate();
+      const onBlockedAction = jest.fn();
+      const gate = createFeedbackDraftSurfaceGate(undefined, onBlockedAction);
       const checkpoint = document.createElement('section');
       checkpoint.setAttribute('role', 'dialog');
       checkpoint.tabIndex = -1;
@@ -1811,10 +1818,11 @@ describe('keyboard Feedback block selector', () => {
         expect(focusCheckpoint).toHaveBeenCalledTimes(1);
         expect(document.activeElement).toBe(checkpoint);
         expect(harness.setCaptureState).not.toHaveBeenCalled();
-        expect(onLocalError).toHaveBeenCalledTimes(1);
-        expect((onLocalError.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
-          message: 'Resume feedback or finish the current completion step before capturing.',
-        });
+        expect(onBlockedAction).toHaveBeenCalledTimes(1);
+        expect(onBlockedAction.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({ kind: 'finish-checkpoint', element: checkpoint })
+        );
+        expect(onLocalError).not.toHaveBeenCalled();
       } finally {
         window.removeEventListener('feedbackLocalError', onLocalError);
         lease?.release();

@@ -2570,7 +2570,10 @@ window.addEventListener('toggleTocOutline', () => {
   }
 });
 
-/** Close transient editing surfaces without moving Feedback's invoking focus or scroll. */
+/**
+ * Close transient editing surfaces without moving Feedback's invoking focus or scroll.
+ * A focused More menu hands focus back to its More button, as Escape does.
+ */
 function closeIncompatibleFeedbackSurfaces(): void {
   if (editor && isSearchVisible()) {
     hideSearchOverlay(editor, false);
@@ -2622,7 +2625,9 @@ function closeIncompatibleFeedbackSurfaces(): void {
   document.querySelectorAll<HTMLElement>('.toolbar-dropdown-menu').forEach(menu => {
     menu.style.display = 'none';
   });
-  closeFeedbackMoreMenu?.(false);
+  // The More menu exists only during a session, where Start is a no-op.
+  // Removing its focused menuitem would otherwise leave focus on BODY.
+  closeFeedbackMoreMenu?.(Boolean(document.activeElement?.closest('.feedback-more-menu')));
 }
 
 function showFeedbackMoreMenu(): void {
@@ -2671,14 +2676,29 @@ function showFeedbackMoreMenu(): void {
     }
     closeFeedbackMoreMenu?.(false);
   };
+  // A Feedback toolbar re-render replaces the menu host without calling close.
+  // It also removes the focused menuitem, so give focus to the new More button
+  // unless the re-render already moved it elsewhere.
+  const rerenderObserver = new MutationObserver(() => {
+    if (menu.isConnected) return;
+    const focusLost = !document.activeElement || document.activeElement === document.body;
+    close(false);
+    if (focusLost) document.querySelector<HTMLButtonElement>('[data-feedback-more]')?.focus();
+  });
   const close = (restoreFocus: boolean): void => {
+    rerenderObserver.disconnect();
     menu.remove();
     trigger?.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', closeFromPointer, true);
     closeFeedbackMoreMenu = null;
-    if (restoreFocus && trigger?.isConnected) trigger.focus();
+    // Returning focus to the sticky toolbar must not move the reading position.
+    if (restoreFocus && trigger?.isConnected) trigger.focus({ preventScroll: true });
   };
   closeFeedbackMoreMenu = close;
+  rerenderObserver.observe(menuHost.closest('.formatting-toolbar') ?? menuHost, {
+    childList: true,
+    subtree: true,
+  });
   menu.addEventListener('keydown', event => {
     const items = Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
     const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -2698,7 +2718,12 @@ function showFeedbackMoreMenu(): void {
       items[nextIndex]?.focus();
     }
   });
-  window.setTimeout(() => document.addEventListener('pointerdown', closeFromPointer, true), 0);
+  window.setTimeout(() => {
+    // The menu can close before this deferred registration runs.
+    if (closeFeedbackMoreMenu === close) {
+      document.addEventListener('pointerdown', closeFromPointer, true);
+    }
+  }, 0);
 }
 
 window.addEventListener('feedbackStartRequested', () => {
