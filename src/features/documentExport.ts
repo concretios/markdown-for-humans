@@ -8,8 +8,10 @@
  * @file documentExport.ts - PDF and Word document export
  * @description Handles exporting markdown documents to PDF (via local Chrome) and Word (via docx).
  * Applies export theme settings, embeds Mermaid diagrams as high-quality images,
- * restores authored image destinations for PDF in an isolated Chrome session,
- * and reads dimensions from a small, bounded set of explicitly supported formats.
+ * exports only local images the host contains (as canonical relative URLs), no
+ * other local resource loads and no `http:` loads (the preview CSP refuses them),
+ * prints PDF in an isolated Chrome session, and reads
+ * dimensions from a small, bounded set of explicitly supported formats.
  */
 
 import * as vscode from 'vscode';
@@ -19,6 +21,7 @@ import * as os from 'os';
 import { spawn } from 'child_process';
 import { pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
+import { encodeImagePathSegment } from '../shared/imageSource';
 
 type SafeDimensionImageFormat = 'png' | 'jpeg' | 'gif' | 'webp' | 'bmp' | 'ico' | 'svg';
 
@@ -854,6 +857,141 @@ async function showExportWarning(format: string): Promise<boolean> {
 }
 
 /**
+ * Host decision for an authored local image destination: the contained file and
+ * its URL suffix, or undefined when the preview refuses the path.
+ */
+export type ExportImageResolver = (
+  source: string
+) => { absolutePath: string; suffix: string } | undefined;
+
+/**
+ * Destinations the preview loads directly, without host path resolution. Not
+ * `http:`: the preview CSP (`img-src` webview resources, `https:`, `data:`,
+ * `blob:`) refuses it, so export drops it too (decision #5).
+ */
+const DIRECT_IMAGE_SOURCE = /^(?:data:|blob:|https:\/\/|vscode-webview:\/\/)/;
+
+/** An `http:` image the preview passes to the CSP, which refuses it; any letter case. */
+const HTTP_IMAGE_SOURCE = /^http:/i;
+
+/** Attributes that fetch a URL on elements other than `img`: SVG `image`/`use`/`feImage`, table `background`. */
+const RESOURCE_URL_ATTRIBUTES = new Set(['href', 'xlink:href', 'background']);
+
+/**
+ * Attributes Chrome parses as CSS: `style`, the SVG presentation attributes that
+ * take `url()`, and SMIL animation values, which can set those properties.
+ */
+const CSS_ATTRIBUTES = new Set([
+  'style',
+  'fill',
+  'stroke',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+  'clip-path',
+  'mask',
+  'filter',
+  'cursor',
+  'to',
+  'from',
+  'by',
+  'values',
+]);
+
+/**
+ * True for a reference export must drop: neither a fragment nor a direct source.
+ * That is a file Chrome would resolve, or an `http:` URL the preview CSP refuses.
+ */
+function isLocalReference(target: string): boolean {
+  const normalized = target.trim().toLowerCase();
+  return !normalized.startsWith('#') && !DIRECT_IMAGE_SOURCE.test(normalized);
+}
+
+/**
+ * True when CSS text could fetch a local file or an `http:` URL: such a `url()`,
+ * or any `image-set()` or `@import`, since both also take bare strings. Escapes
+ * are decoded first because `\75 rl(` is also `url(`.
+ */
+function cssLoadsLocalResource(css: string): boolean {
+  const decoded = css
+    .replace(/\\(?:([0-9a-f]{1,6})\s?|([\s\S]))/gi, (_, hex: string | undefined, char: string) =>
+      hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : char
+    )
+    .toLowerCase();
+  if (/image-set\(|@import/.test(decoded)) return true;
+  return [...decoded.matchAll(/url\(\s*['"]?([^'")]*)/g)].some(([, target]) =>
+    isLocalReference(target)
+  );
+}
+
+/**
+ * Drop local resource loads outside `img`: CSS in `style` elements and in CSS
+ * attributes (`style`, SVG `fill`, ...), and URL attributes such as SVG `image`
+ * `href`. The preview resolves these against the webview origin, so it never
+ * shows a local file through them; raw Mermaid SVG, kept when PNG conversion
+ * fails, can still carry them into export (02-F3). `http:` loads go too, since
+ * the preview CSP refuses them (decision #5). Links are navigation, not loads.
+ * Other attributes (`src`, `alt`, `title`, link `href`) are not CSS, so a
+ * `url(` in their text loads nothing and stays (02-R1).
+ */
+function dropLocalResourceLoads($: cheerio.CheerioAPI): void {
+  $('style').each((_, style) => {
+    if (cssLoadsLocalResource($(style).text())) $(style).remove();
+  });
+  $('*').each((_, element) => {
+    const { name, attribs } = element as { name: string; attribs: Record<string, string> };
+    for (const [attribute, value] of Object.entries(attribs)) {
+      const lower = attribute.toLowerCase();
+      const fetchesUrl =
+        RESOURCE_URL_ATTRIBUTES.has(lower) &&
+        !((name === 'a' || name === 'area') && lower.endsWith('href'));
+      const isCss = CSS_ATTRIBUTES.has(lower);
+      if ((fetchesUrl && isLocalReference(value)) || (isCss && cssLoadsLocalResource(value))) {
+        $(element).removeAttr(attribute);
+      }
+    }
+  });
+}
+
+/**
+ * Give every exported image the source the preview would load, before either
+ * exporter sees it. Local destinations become a canonical, segment-encoded URL
+ * relative to `baseDir` for a file the host contained; refused ones lose `src`,
+ * and so do `http:` sources, which the preview CSP refuses (decision #5).
+ * SECURITY (#101): Chrome must never resolve the authored string itself. Its
+ * URL parser treats `\`, tabs and `//host` differently from Node's path logic.
+ * Local and `http:` loads outside `img` (CSS, SVG `href`, `background`) are dropped.
+ */
+function restrictExportImageSources(
+  html: string,
+  resolveLocalImage: ExportImageResolver,
+  baseDir: string
+): string {
+  const $ = cheerio.load(html, undefined, false);
+  $('img').each((_, image) => {
+    const source = $(image).attr('data-markdown-src') || $(image).attr('src') || '';
+    $(image).removeAttr('data-markdown-src').removeAttr('srcset');
+    if (DIRECT_IMAGE_SOURCE.test(source)) {
+      $(image).attr('src', source);
+      return;
+    }
+    const resolved =
+      source && !HTTP_IMAGE_SOURCE.test(source) ? resolveLocalImage(source) : undefined;
+    const relativePath = resolved && path.relative(baseDir, resolved.absolutePath);
+    // A different Windows drive or UNC share has no relative form; fail closed.
+    if (!resolved || !relativePath || path.isAbsolute(relativePath)) {
+      $(image).removeAttr('src');
+      return;
+    }
+    // Split on the platform separator only: a POSIX filename may contain `\`.
+    const url = relativePath.split(path.sep).map(encodeImagePathSegment).join('/');
+    $(image).attr('src', url + resolved.suffix);
+  });
+  dropLocalResourceLoads($);
+  return $.html();
+}
+
+/**
  * Export document to PDF or Word format
  *
  * @param format - Export format ('pdf' or 'docx')
@@ -861,13 +999,15 @@ async function showExportWarning(format: string): Promise<boolean> {
  * @param mermaidImages - Mermaid diagrams as PNG data URLs
  * @param title - Document title
  * @param document - Source VS Code document
+ * @param resolveLocalImage - Host containment decision for local image destinations
  */
 export async function exportDocument(
   format: string,
   html: string,
   mermaidImages: MermaidImage[],
   title: string,
-  document: vscode.TextDocument
+  document: vscode.TextDocument,
+  resolveLocalImage: ExportImageResolver
 ): Promise<void> {
   // Show warning dialog and wait for user confirmation
   const userConfirmed = await showExportWarning(format);
@@ -877,6 +1017,7 @@ export async function exportDocument(
 
   // Convert all images (local and remote) to data URLs for embedding
   // html = await convertImagesToDataUrls(html, document);
+  html = restrictExportImageSources(html, resolveLocalImage, getDocumentBasePath(document));
 
   // Export theme is always light
   const exportTheme = 'light';
@@ -1223,18 +1364,13 @@ async function promptForChromePathInlineResolver(
 }
 
 /**
- * Restore authored image URLs before PDF sanitization. Webview resource URLs
- * belong to VS Code and cannot be reused by the separate Chrome print process.
- * Keep encoded path characters, queries, fragments, and display-size attributes
- * intact so Chrome resolves them against the document's trusted base directory.
+ * Drop source-less editor separators before printing. Image sources were already
+ * restricted by `restrictExportImageSources`, so Chrome resolves only vetted
+ * relative URLs against the document's trusted base directory.
  */
 function preparePdfImageSources(html: string): string {
   const $ = cheerio.load(html, undefined, false);
   $('img.ProseMirror-separator:not([src]):not([srcset])').remove();
-  $('img[data-markdown-src]').each((_, image) => {
-    const originalSource = $(image).attr('data-markdown-src');
-    if (originalSource) $(image).attr('src', originalSource);
-  });
   return $.html();
 }
 

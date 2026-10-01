@@ -14,7 +14,7 @@ import * as https from 'https';
 import * as dns from 'dns';
 import { isIP } from 'net';
 import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { outlineViewProvider, type OutlineEntry } from '../features/outlineView';
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import {
@@ -7505,7 +7505,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     // Import dynamically to avoid loading heavy dependencies on startup
     const { exportDocument } = await import('../features/documentExport');
 
-    await exportDocument(format, html, mermaidImages, title, document);
+    // SECURITY: export embeds only images the preview would show (#101).
+    const basePath = this.getImageBasePath(document);
+    const allowedRoots = this.getAllowedFileRoots(document);
+    await exportDocument(format, html, mermaidImages, title, document, source =>
+      basePath ? resolveContainedImageSource(source, basePath, allowedRoots) : undefined
+    );
   }
 
   /**
@@ -7918,10 +7923,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       });
       return;
     }
-    const relativePath = normalizeImagePath(rawRelativePath, basePath);
-    const absolutePath = path.resolve(basePath, relativePath);
-    const allowedRoots = this.getAllowedFileRoots(document);
-    if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, path.resolve(root)))) {
+    const resolved = resolveContainedImageSource(
+      rawRelativePath,
+      basePath,
+      this.getAllowedFileRoots(document)
+    );
+    if (!resolved) {
       webview.postMessage({
         type: 'imageUriResolved',
         requestId,
@@ -7931,7 +7938,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       });
       return;
     }
-    const fileUri = vscode.Uri.file(absolutePath);
+    const fileUri = vscode.Uri.file(resolved.absolutePath);
 
     // Convert to webview URI
     const webviewUri = webview.asWebviewUri(fileUri);
@@ -7939,7 +7946,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     webview.postMessage({
       type: 'imageUriResolved',
       requestId,
-      webviewUri: webviewUri.toString() + splitLocalImageSource(rawRelativePath, basePath).suffix,
+      webviewUri: webviewUri.toString() + resolved.suffix,
       relativePath: rawRelativePath, // Return original path for consistency
     });
   }
@@ -11444,6 +11451,54 @@ export function normalizeImagePath(imagePath: string, basePath?: string): string
       }
     })
     .join('/');
+}
+
+/**
+ * Resolve an authored local image destination the way the preview does, and
+ * accept it only inside the allowed roots. PDF and Word export share this
+ * decision so they never embed a file the editor refused to show.
+ *
+ * An existing file must also be contained once symlinks are resolved: a cloned
+ * repo can commit a link that points outside every root, and both the webview
+ * loader and Chrome follow it.
+ *
+ * @param source - Authored destination (relative, absolute, encoded, with optional query/fragment)
+ * @param basePath - Directory relative destinations resolve against
+ * @param allowedRoots - Absolute roots the file must be contained in
+ * @returns The file (lexical path) and its URL suffix, or undefined when the path,
+ *   or the real path of an existing file, escapes every root
+ */
+export function resolveContainedImageSource(
+  source: string,
+  basePath: string,
+  allowedRoots: readonly string[]
+): { absolutePath: string; suffix: string } | undefined {
+  const absolutePath = path.resolve(basePath, normalizeImagePath(source, basePath));
+  const roots = allowedRoots.map(root => path.resolve(root));
+  // Lexical check first, so realpath never touches a refused path (a UNC host, say).
+  // normalizeImagePath above still stats the literal name of a `?`/`#`-suffixed source.
+  if (!roots.some(root => isPathContainedWithin(absolutePath, root))) {
+    return undefined;
+  }
+  // SECURITY: compare real paths so a committed symlink cannot leave the roots.
+  // A missing file loads nothing, so it keeps the lexical decision.
+  const realTarget = realPathOrUndefined(absolutePath);
+  if (
+    realTarget &&
+    !roots.some(root => isPathContainedWithin(realTarget, realPathOrUndefined(root) ?? root))
+  ) {
+    return undefined;
+  }
+  return { absolutePath, suffix: splitLocalImageSource(source, basePath).suffix };
+}
+
+/** The symlink-free path of an existing file or directory, or undefined when it cannot be resolved. */
+function realPathOrUndefined(candidate: string): string | undefined {
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

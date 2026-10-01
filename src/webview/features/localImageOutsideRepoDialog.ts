@@ -78,9 +78,7 @@ export async function showLocalImageOutsideRepoDialog(
 
       <div style="margin-bottom: 12px; padding: 8px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border); border-radius: 3px;">
         <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;">Image Path:</div>
-        <div style="font-size: 12px; color: var(--vscode-foreground); word-break: break-all; font-family: var(--vscode-editor-font-family, monospace);">
-          ${imagePath}
-        </div>
+        <div id="local-image-path" style="font-size: 12px; color: var(--vscode-foreground); word-break: break-all; font-family: var(--vscode-editor-font-family, monospace);"></div>
       </div>
 
       <div style="margin-bottom: 20px;">
@@ -105,7 +103,6 @@ export async function showLocalImageOutsideRepoDialog(
               <input
                 type="text"
                 id="copy-image-folder-input"
-                value="${targetFolder}"
                 style="
                   width: 100%;
                   padding: 6px 8px;
@@ -166,6 +163,9 @@ export async function showLocalImageOutsideRepoDialog(
     const copyToRepoRadio = dialog.querySelector('input[value="copy-to-repo"]') as HTMLInputElement;
     const copyFolderContainer = dialog.querySelector('#copy-folder-input-container') as HTMLElement;
     const copyFolderInput = dialog.querySelector('#copy-image-folder-input') as HTMLInputElement;
+    // Host path and folder are file-system/settings text, never markup.
+    (dialog.querySelector('#local-image-path') as HTMLElement).textContent = imagePath;
+    copyFolderInput.value = targetFolder;
     const rememberCheckbox = dialog.querySelector('#remember-local-choice') as HTMLInputElement;
     const cancelBtn = dialog.querySelector('#cancel-local-image') as HTMLButtonElement;
     const confirmBtn = dialog.querySelector('#confirm-local-image') as HTMLButtonElement;

@@ -8,10 +8,18 @@
  * These tests pin the containment guard on all four read handlers.
  */
 
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { MarkdownEditorProvider } from '../../editor/MarkdownEditorProvider';
+import { exportDocument } from '../../features/documentExport';
+
+jest.mock('../../features/documentExport', () => ({ exportDocument: jest.fn() }));
 
 type Internals = {
+  handleExportDocument: (
+    message: Record<string, unknown>,
+    document: vscode.TextDocument
+  ) => Promise<void>;
   handleRevealImageInOS: (
     message: Record<string, unknown>,
     document: vscode.TextDocument
@@ -144,5 +152,26 @@ describe('image read handlers enforce path containment', () => {
 
     const reply = webview.postMessage.mock.calls.at(-1)?.[0];
     expect(reply).toMatchObject({ type: 'imageMetadata', requestId: 'r2', metadata: null });
+  });
+
+  it('handleExportDocument gives export the same containment resolver as the preview', async () => {
+    const provider = createProvider() as unknown as Internals;
+    const document = createDocument();
+
+    await provider.handleExportDocument(
+      { type: 'exportDocument', format: 'pdf', html: '<p></p>', title: 'Guide' },
+      document
+    );
+
+    const resolveImage = (exportDocument as jest.Mock).mock.calls.at(-1)?.[5];
+    expect(typeof resolveImage).toBe('function');
+    expect(resolveImage(LEGIT)).toEqual({
+      absolutePath: path.resolve('/tmp/mdws/docs', LEGIT),
+      suffix: '',
+    });
+    expect(resolveImage(TRAVERSAL)).toBeUndefined();
+    expect(resolveImage('/etc/passwd.png')).toBeUndefined();
+    expect(resolveImage('//host/share/x.png')).toBeUndefined();
+    expect(resolveImage('%2E%2E/%2E%2E/secret.png')).toBeUndefined();
   });
 });

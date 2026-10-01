@@ -57,4 +57,22 @@ describe('localImageOutsideRepoDialog', () => {
     });
     expect(setRememberedFolder).toHaveBeenCalledWith('assets/img');
   });
+
+  it('shows host path and folder text literally, without markup or attribute injection', async () => {
+    (getRememberedFolder as jest.Mock).mockReturnValue(null);
+    const imagePath = '/outside/<img src=https:evil.example>.png';
+    const folder = 'images" data-injected="1';
+
+    const resultPromise = showLocalImageOutsideRepoDialog(imagePath, folder);
+
+    const dialog = document.querySelector('.local-image-outside-repo-dialog') as HTMLElement;
+    expect(dialog.querySelector('img')).toBeNull();
+    expect(dialog.querySelector('[data-injected]')).toBeNull();
+    expect(dialog.textContent).toContain(imagePath);
+    const folderInput = document.querySelector('#copy-image-folder-input') as HTMLInputElement;
+    expect(folderInput.value).toBe(folder);
+
+    (document.querySelector('#cancel-local-image') as HTMLButtonElement).click();
+    await expect(resultPromise).resolves.toBeNull();
+  });
 });
