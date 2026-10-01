@@ -49,10 +49,7 @@ function createTableEditor(): Editor {
   });
 }
 
-function findFirstCellTextPos(
-  editor: Editor,
-  cellType: 'tableCell' | 'tableHeader'
-): number {
+function findFirstCellTextPos(editor: Editor, cellType: 'tableCell' | 'tableHeader'): number {
   let textPos: number | null = null;
   editor.state.doc.descendants((node, pos) => {
     if (node.type.name === cellType && textPos === null) {
@@ -68,11 +65,7 @@ function findFirstCellTextPos(
   return textPos;
 }
 
-function cellAt(
-  doc: JSONContent,
-  rowIndex: number,
-  columnIndex: number
-): JSONContent {
+function cellAt(doc: JSONContent, rowIndex: number, columnIndex: number): JSONContent {
   const table = doc.content?.[0];
   const row = table?.content?.[rowIndex];
   const cell = row?.content?.[columnIndex];
