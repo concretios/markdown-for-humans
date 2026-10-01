@@ -22,24 +22,31 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function collectText(node: JSONContent): string {
+/**
+ * Flatten a cell to HTML text, emitting real `<br>` for hardBreaks.
+ *
+ * WHY: A literal `\n` inside `<td>` is collapsible whitespace in HTML/CSS, so
+ * Enter→hardBreak would silently lose the visible line break on save/reload.
+ * Escaping must apply only to text nodes — never to the `<br>` we insert.
+ */
+function renderCellInnerHtml(node: JSONContent): string {
   if (!node || typeof node !== 'object') {
     return '';
   }
 
   if (node.type === 'text') {
-    return typeof node.text === 'string' ? node.text : '';
+    return escapeHtml(typeof node.text === 'string' ? node.text : '');
   }
 
   if (node.type === 'hardBreak' || node.type === 'hard_break') {
-    return '\n';
+    return '<br>';
   }
 
   if (!Array.isArray(node.content)) {
     return '';
   }
 
-  return node.content.map(collectText).join('');
+  return node.content.map(renderCellInnerHtml).join('');
 }
 
 /** Keep literal cell pipes from becoming GFM column delimiters on the next parse. */
@@ -83,10 +90,10 @@ function renderTableCellSpanAttributes(cell: JSONContent): string {
 }
 
 function renderTableCell(cell: JSONContent, tagName: 'th' | 'td'): string {
-  const rawText = collectText(cell).trim();
-  const escapedText = escapeHtml(rawText);
+  // Trim only leading/trailing spaces and tabs so edge hardBreaks (`<br>`) stay.
+  const innerHtml = renderCellInnerHtml(cell).replace(/^[ \t]+|[ \t]+$/g, '');
   const spanAttributes = renderTableCellSpanAttributes(cell);
-  return `<${tagName}${spanAttributes}>${escapedText}</${tagName}>`;
+  return `<${tagName}${spanAttributes}>${innerHtml}</${tagName}>`;
 }
 
 export const HtmlPreservingTable = Table.extend({

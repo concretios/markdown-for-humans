@@ -21,10 +21,9 @@ _None currently. All critical issues have been resolved._
 ### Enter Key in Table Cells
 **Type:** Bug
 **Description:** Pressing Enter in table cells creates new paragraphs within the cell, which breaks markdown table formatting when serialized. Markdown tables require single-line cells or `<br>` tags for line breaks, not multiple paragraphs.
-**Status:** Under consideration
-**Current Behavior:** TipTap's TableKit extension allows Enter key to create paragraphs in table cells by default.
-**Workaround:** Use source view to edit table cells, or use Shift+Enter for line breaks within cells (if supported). Avoid pressing Enter in table cells to prevent formatting issues.
-**Future Consideration:** Enter key in table cells should be disabled or converted to `<br>` tags to preserve markdown table structure.
+**Status:** Fixed
+**Fix:** `TableCellEnterHardBreak` maps Enter inside `tableCell` / `tableHeader` to `setHardBreak` so GFM serializes `<br>`. HTML-origin tables serialize hardBreaks as `<br>` inside `<td>`/`<th>` (not a literal newline, which HTML collapses). Shift+Enter continues to insert a hard break. Tab / Shift-Tab row navigation is unchanged.
+**Tests:** `src/__tests__/webview/tableCellEnterHardBreak.test.ts`
 
 ### Workspace File Drag-Drop in Cursor IDE
 **Type:** Bug
