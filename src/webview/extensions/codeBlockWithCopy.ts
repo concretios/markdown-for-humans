@@ -4,15 +4,33 @@
  * Licensed under the MIT License. See LICENSE file in the project root for details.
  */
 
-import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import CodeBlock, { type CodeBlockOptions } from '@tiptap/extension-code-block';
+import { mergeAttributes } from '@tiptap/core';
 import { parsePreservedCodeBlock, renderPreservedCodeBlock } from './preservedCodeBlock';
 import { createCodeBlockCopyNodeView } from './codeBlockCopyNodeView';
+import { createCodeHighlightingPlugin } from '../highlighting/plugin';
+import { createHighlightService } from '../highlighting/client';
+
+interface HighlightedCodeBlockOptions extends CodeBlockOptions {
+  workerUri: string;
+}
 
 /**
  * Syntax-highlighted code block with preserved Markdown indentation and a
  * ProseMirror-safe copy control.
  */
-export const CodeBlockWithCopy = CodeBlockLowlight.extend({
+export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
+  addOptions() {
+    return { ...this.parent?.(), workerUri: '' } as HighlightedCodeBlockOptions;
+  },
+
+  addProseMirrorPlugins() {
+    return [
+      ...(this.parent?.() ?? []),
+      createCodeHighlightingPlugin(() => createHighlightService(this.options.workerUri)),
+    ];
+  },
+
   addAttributes() {
     return {
       ...this.parent?.(),
@@ -44,7 +62,7 @@ export const CodeBlockWithCopy = CodeBlockLowlight.extend({
     return ({ node, HTMLAttributes, extension }) =>
       createCodeBlockCopyNodeView(
         node,
-        HTMLAttributes,
+        mergeAttributes(extension.options.HTMLAttributes, HTMLAttributes),
         extension.options.languageClassPrefix as string
       );
   },

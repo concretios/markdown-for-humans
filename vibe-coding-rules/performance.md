@@ -28,6 +28,53 @@ The immediate TipTap update path must remain independent of document size.
 
 Do not compute Markdown, an outline, annotation geometry or other document-wide state directly in a keystroke callback.
 
+## Code Block Highlighting
+
+Use the single plugin in `src/webview/highlighting/plugin.ts`. Ordinary document
+changes inspect changed ranges and map existing decorations; attribute-only steps
+also invalidate the affected block. Selection and unrelated metadata transactions
+do not schedule lexical work. Unknown step types may conservatively rebuild the
+occurrence index, so measure that fallback separately from ordinary typing.
+
+The plugin defers source extraction and submits one active lexical job to the
+view-owned service in `client.ts`. The service lazily loads the packaged Blob
+worker, shares cached relative spans for identical grammar/source pairs, and does
+not accumulate another pending-source queue. Plain and unsupported fences never
+load the grammar bundle or run automatic language detection.
+
+`HIGHLIGHT_LIMITS` in `types.ts` is the source of truth for provisional resource
+limits. It caps source size, result ranges, serialized result bytes, cache entries,
+cache bytes and cached ranges. Worker attempts time out and allow at most one
+automatic retry per grammar/source per view session. Over-limit and failed work
+keeps editable plain code. Dispose the worker, Blob URL, timers, cache and pending
+publication work with the view; do not retain them in `vscode.setState()`.
+
+Worker timing is only part of highlighting cost. Validate result checking,
+decoration construction/mapping, DOM updates and paint separately on the main
+thread. Token-cache bounds do not bound total decoration or DOM memory. A supported
+10,000-line single block must receive complete tokens and remain responsive; do
+not silently truncate its result to meet a frame target. Long-result publication,
+saturated queues, replacement/undo, stale-result rejection and disposal require
+their own tests and real-host measurements.
+
+Long blocks keep foreground work proportional to the edit and the viewport.
+`DecorationSet.remove()` is quadratic for many inline decorations in one
+textblock, so large removals rebuild the set. Edits remove only colors touching
+the changed text. Viewport probes skip overlays such as the sticky toolbar, and a
+projection is republished only after the visible range leaves it. Code blocks
+opt out of scroll anchoring because a moved projection reuses the long text node.
+Large-result validation yields through `MessageChannel` tasks; chained
+`setTimeout(0)` hops were clamped and, in an unfocused window, throttled to about
+one per second (32 s for a 10,000-line block).
+`codeHighlightingLargeBlockCost.test.ts` guards the 40,000-token budget.
+
+Focused regression suites are `codeHighlightingPlugin.test.ts`,
+`highlighting/client.test.ts`, `highlighting/tokenize.test.ts`,
+`codeFenceMenu.test.ts` and `codeHighlightAppearance.test.ts` under
+`src/__tests__/webview/`. Keep measured dispatch time, lexical worker time and
+input-to-paint time distinct. The product budgets above remain release targets,
+not guarantees established by worker adoption or passing unit tests.
+
 ## Extension-Host Edit Cost
 
 - Every mutation uses the per-document `DocumentEditCoordinator`.
@@ -104,17 +151,15 @@ ordinary production import under coverage.
 
 ## Bundle Budget
 
-Release artifacts are produced by `npm run build:release`. The latest generated release profile at the time of this update is approximately:
+Release artifacts are produced by `npm run build:release`. Measure
+`dist/extension.js`, `dist/webview.js`, `dist/highlighting-worker.js` and
+`dist/webview.css` from the release output whenever dependencies or bundling change.
+`scripts/verify-build.js` checks artifact presence, package boundaries, source-map
+policy and broad size ceilings, and reports combined editor-plus-worker JavaScript.
 
-| Artifact            | Approximate size |
-| ------------------- | ---------------: |
-| `dist/extension.js` |          2.1 MiB |
-| `dist/webview.js`   |          4.6 MiB |
-| `dist/webview.css`  |         0.16 MiB |
-
-These numbers replace the obsolete 6.8 KB and 9.3 MB estimates. They are not a permanent truth, so refresh them from a release build when dependencies or bundling change. `scripts/verify-build.js` separately enforces artifact presence, package boundaries, source-map policy and broad size ceilings.
-
-Keep the webview JavaScript near or below 5 MB. Before adding a heavy dependency:
+Keep total webview JavaScript, including the worker, near or below 5 MB. Moving
+grammars to a worker changes startup and execution ownership, not their packaged
+bytes. Before adding a heavy dependency:
 
 1. inspect whether the existing stack already provides the capability
 2. compare release bundle output, not installed package size

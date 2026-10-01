@@ -17,7 +17,6 @@ import { ListKit } from '@tiptap/extension-list';
 import { MarkdownCode, MarkdownLink } from './extensions/markdownCompatibilityMarks';
 import { PreservedMarkdownLiteral } from './extensions/preservedMarkdownLiteral';
 import { CustomImage } from './extensions/customImage';
-import { lowlight } from 'lowlight';
 import { Mermaid } from './extensions/mermaid';
 import { InlineMath } from './extensions/inlineMath';
 import { MathBlock } from './extensions/mathBlock';
@@ -132,35 +131,6 @@ import {
 } from './features/imageMetadata';
 // Import rename dialog to register global function
 import './features/imageRenameDialog';
-
-// Import common languages for syntax highlighting
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import python from 'highlight.js/lib/languages/python';
-import bash from 'highlight.js/lib/languages/bash';
-import json from 'highlight.js/lib/languages/json';
-import markdown from 'highlight.js/lib/languages/markdown';
-import css from 'highlight.js/lib/languages/css';
-import xml from 'highlight.js/lib/languages/xml';
-import sql from 'highlight.js/lib/languages/sql';
-import java from 'highlight.js/lib/languages/java';
-import go from 'highlight.js/lib/languages/go';
-import rust from 'highlight.js/lib/languages/rust';
-
-// Register languages with lowlight
-lowlight.registerLanguage('javascript', javascript);
-lowlight.registerLanguage('typescript', typescript);
-lowlight.registerLanguage('python', python);
-lowlight.registerLanguage('bash', bash);
-lowlight.registerLanguage('json', json);
-lowlight.registerLanguage('markdown', markdown);
-lowlight.registerLanguage('css', css);
-lowlight.registerLanguage('html', xml);
-lowlight.registerLanguage('xml', xml);
-lowlight.registerLanguage('sql', sql);
-lowlight.registerLanguage('java', java);
-lowlight.registerLanguage('go', go);
-lowlight.registerLanguage('rust', rust);
 
 // VS Code API type definitions
 type VsCodeApi = {
@@ -834,9 +804,9 @@ function initializeEditor(initialContent: string) {
         // Math must be before generic block/inline parsers so $$ and $...$
         // are tokenised before paragraph fallback.
         ...mathExtensions,
-        // Mermaid must be before CodeBlockLowlight to intercept mermaid code blocks
+        // Mermaid must be before CodeBlockWithCopy to intercept mermaid code blocks
         Mermaid,
-        // Must be before CodeBlockLowlight to intercept indented "code" tokens containing images
+        // Must be before CodeBlockWithCopy to intercept indented "code" tokens containing images
         IndentedImageCodeBlock,
         // Fallback: treat standalone image lines with spaces in the path as images.
         SpaceFriendlyImagePaths,
@@ -848,7 +818,7 @@ function initializeEditor(initialContent: string) {
           },
           paragraph: false, // Disable default paragraph, using MarkdownParagraph instead
           code: false, // Use MarkdownCode so inline code stays inside other Markdown marks
-          codeBlock: false, // Disable default CodeBlock, using CodeBlockLowlight instead
+          codeBlock: false, // Disable default CodeBlock, using CodeBlockWithCopy instead
           // ListKit is registered separately to support task lists; disable StarterKit's list
           // extensions to avoid duplicate names (which can break markdown parsing, e.g. `1)` lists).
           bulletList: false,
@@ -866,7 +836,7 @@ function initializeEditor(initialContent: string) {
         MarkdownCode,
         PreservedMarkdownLiteral,
         CodeBlockWithCopy.configure({
-          lowlight,
+          workerUri: document.body.dataset.highlightingWorkerUri ?? '',
           HTMLAttributes: {
             class: 'code-block-highlighted',
           },

@@ -287,6 +287,14 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       expect(resource(firstHtml, 'link')).toBe(resource(sameHostHtml, 'link'));
       expect(resource(firstHtml, 'script')).not.toBe(resource(rebuiltHostHtml, 'script'));
       expect(resource(firstHtml, 'link')).not.toBe(resource(rebuiltHostHtml, 'link'));
+      const workerResource = (html: string) =>
+        html.match(/<body[^>]+data-highlighting-worker-uri="([^"]+)"/)?.[1];
+      expect(workerResource(firstHtml)).toMatch(/highlighting-worker\.js\?/);
+      expect(workerResource(firstHtml)).toBe(workerResource(sameHostHtml));
+      expect(workerResource(firstHtml)).not.toBe(workerResource(rebuiltHostHtml));
+      expect(firstHtml).toContain('worker-src blob:;');
+      expect(firstHtml).toContain(`connect-src ${webview.cspSource};`);
+      expect(firstHtml).not.toMatch(/script-src[^;]*(?:unsafe-eval|unsafe-inline|blob:)/);
     } finally {
       uriApi.joinPath = originalJoinPath;
     }

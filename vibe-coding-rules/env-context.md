@@ -69,6 +69,24 @@ The `ready` handshake always forces one authoritative document update. The
 optimistic startup post can occur before the webview listener is installed, so
 normal content deduplication is not safe at this boundary.
 
+## Code Block Highlighting
+
+`CodeBlockWithCopy` extends the plain TipTap code-block extension and installs one
+`codeSyntaxHighlighting` plugin. Do not add CodeBlockLowlight or a second highlighting
+plugin alongside it. Highlighting is presentation state, never a document mutation.
+
+- The plugin maps an occurrence index and existing decorations through transactions. Ordinary edits inspect changed ranges, including attribute-only changes; an unknown step can require a conservative full index scan.
+- Lexical work runs in the lazily loaded, packaged `highlighting-worker.js`. Each webview owns its worker, bounded token cache, timers and disposal. None belongs in persisted webview state.
+- `languageRegistry.ts` defines the supported grammar and alias inventory without importing grammar code into the editor bundle. Worker registration preserves the existing Lowlight common grammars and the editor's explicit highlight.js overrides; inventory tests guard compatibility.
+- Grammar lookup uses only the normalized first fence token. Empty, explicit plain-text and unsupported tokens stay plain without automatic language detection or a warning. The document keeps its authored info string; menu changes replace the language token while retaining each block's metadata suffix.
+- Worker results contain validated, block-relative UTF-16 spans. Publication rechecks the occurrence, revision, grammar and source before creating decorations. Color-only transactions do not enter undo history or document sync.
+- Source/token limits and worker failures keep the code editable and show a short explanation outside the code content. The copy control reads the current document node's raw text.
+- Surface, font and token colors use VS Code variables and contributed `markdownForHumans.code*` colors. Theme changes do not require new lexical work.
+
+These boundaries do not establish an input-to-paint performance result. Large-result
+publication, document replacement, memory disposal and real-host theme checks remain
+release gates in the active syntax-highlighting plan.
+
 ## Feedback Snapshot and Delivery
 
 Public Feedback commands wait for the generation-validated controller-ready
@@ -141,6 +159,10 @@ Shared-runner gates do not prove physical Windows i5/16 GB p95 latency, memory u
 | Sync protocol               | `src/shared/documentSyncProtocol.ts`                                                             |
 | Renderer sync controller    | `src/webview/documentSyncController.ts`                                                          |
 | TipTap composition          | `src/webview/editor.ts`                                                                          |
+| Code block node view        | `src/webview/extensions/codeBlockWithCopy.ts`, `src/webview/extensions/codeBlockCopyNodeView.ts` |
+| Highlight occurrence index  | `src/webview/highlighting/plugin.ts`                                                              |
+| Highlight worker and limits | `src/webview/highlighting/client.ts`, `src/webview/highlighting/worker.ts`, `src/webview/highlighting/types.ts` |
+| Fence info and grammars     | `src/webview/highlighting/fenceInfo.ts`, `src/webview/highlighting/languageRegistry.ts`, `src/webview/highlighting/tokenize.ts` |
 | List Markdown compatibility | `src/webview/extensions/markdownListItem.ts`, `src/webview/extensions/orderedListMarkdownFix.ts` |
 | Sync serialization          | `src/webview/utils/markdownSerialization.ts`                                                     |
 | Hidden-view state           | `src/webview/utils/richViewState.ts`                                                             |

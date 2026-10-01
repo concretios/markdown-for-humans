@@ -10,7 +10,7 @@ This document lists the third-party open source software components used in Mark
 - **Repository:** https://github.com/ueberdosis/tiptap
 - **License URL:** https://github.com/ueberdosis/tiptap/blob/main/LICENSE
 
-### @tiptap/extension-code-block-lowlight
+### @tiptap/extension-code-block
 - **License:** MIT
 - **Copyright:** © 2024 Tiptap Inc.
 - **Repository:** https://github.com/ueberdosis/tiptap
