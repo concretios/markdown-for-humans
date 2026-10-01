@@ -8,6 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+---
+
+## [0.4.0] - 2026-10-01
+
+### What's New
+
+#### LLM Feedback review sessions
+Review a document in a read-only Feedback mode, comment on text, whole blocks, table cells or captured screen areas, and hand the finished bundle to an AI agent. Drafts are saved under `.md4h/feedback` and can be resumed later.
+
+#### SVG images
+SVG images render in the editor and stay sharp when resized. Display size is written to the Markdown without changing the SVG file.
+
+#### Syntax highlighting for code blocks
+Code blocks are highlighted incrementally in a background worker, with theme-aware colors for light, dark and high-contrast themes. Plain, unknown and unlabeled fences stay literal text.
+
 ### Added
 
 - Added Feedback-mode whole-block gutter targeting with an animated hover preview for paragraphs, headings, lists, blockquotes, and whole tables while preserving exact text and rectangular table-cell selection precedence.
@@ -33,6 +48,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Aligned host and durable-store exact-cell accounting so restored degraded locators cannot pass host validation and then fail persistence.
 - Stopped TipTap 3.30.5 Markdown serialization from growing backslashes in underscored URLs/emails, escaping ordinary prose (`snake_case`, footnotes, `[WIP]`), converting authored `&lt;tag&gt;` entity text into deletable HTML, or dropping `[x]`/`[ ]` markers from numbered lists.
 - Projected all-empty Feedback table-cell selections as `[Empty cells]` so the host protocol accepts the item instead of bricking the draft session.
+- Saving no longer rewrites a mid-line `>` as `&gt;` (for example `Click **File** > **Save**`). A `>` at the start of a line still stays literal text instead of becoming a blockquote.
+- Typing is no longer lost when format on save, trim trailing whitespace or another tool changes the file while you type. Your typing wins, and the replaced version can be opened from the notice.
+- Ctrl+S now tells you, with Retry, when the editor could not hand its newest changes to VS Code, instead of silently doing nothing.
+- Repeated sync failures between the editor and VS Code now stop after a few retries and show a persistent out-of-sync banner with Reload, instead of looping.
+- Fixed image paste, undo after an image save, legacy file names containing `#` or `?`, slow reference scans on malformed Markdown, and rename reporting.
+- Feedback: Discard works on Remote-SSH, WSL and dev containers and asks before a permanent delete when Trash is unavailable; Start works on CRLF files and with format on save; slow screenshot saves no longer create duplicates; locks left by a closed window clear after 5 minutes; failures are shown on screen.
+- Feedback capture recovers when the window resizes mid-capture, never saves a blank screenshot, stays responsive over large tables, and counts text limits in characters.
+- Feedback entry works while the outline, Find or a dialog is open; guidance notices clear when their dialog closes; focus lands on a visible element; Find no longer covers toolbar buttons.
 
 ### Changed
 
@@ -51,11 +74,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Refreshed vulnerable compatible transitive dependencies. Production audits report zero known vulnerabilities; the remaining `js-yaml` advisory is development-only (eslint/mocha/vsce/jest) and does not ship in the VSIX.
 - Updated TipTap to `3.30.5`, which includes the upstream `mergeAttributes` prototype-pollution and Markdown attribute-parsing denial-of-service fixes that the npm audit feed did not surface.
 - Restricted webview local-file access to the exact extension/workspace or document roots, rejected out-of-root image requests, and honored cancelled editor resolution.
+- PDF and Word export embed only images the editor itself can show. Images outside the document and workspace roots (absolute paths, `..` traversal, encoded paths, UNC paths, symlinks) and `http:` images are left out.
+- Error messages, workspace settings and file names are shown in the editor UI as text, never interpreted as HTML.
 
 ### Testing
 
 - Added deterministic 3,000-word and 10,000-line performance fixtures, renderer fault injection, Windows and Ubuntu Extension Host CI, and minimum/current VS Code coverage.
 - Added TipTap 3.30.5 Markdown escape/entity round-trip regressions for underscored URLs, HTML-entity prose, footnotes, and numbered-list checkboxes.
+
+### Known Issues
+
+- Word export leaves out embedded images. PDF export is not affected.
+- Text after a line break inside a task item can be lost when the file is reopened (reproduced with a backslash line break, `- [ ] task\`). Avoid line breaks inside task items until this is fixed.
+- Resizing a hand-written HTML `<img>` tag rewrites it without its other attributes (`align`, `class`, `style`).
+- Escaped Markdown characters such as `\*` are saved without their backslash and can turn into formatting.
+- Loose lists can be saved as tight lists, and `1)` list markers as `1.`.
 
 ---
 
