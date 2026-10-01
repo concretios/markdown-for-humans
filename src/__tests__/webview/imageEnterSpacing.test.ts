@@ -198,8 +198,7 @@ describe('ImageEnterSpacing extension', () => {
       const plugin = createPlugin({ commands: {} });
       const event = createEvent();
       const handled =
-        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ??
-        false;
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
 
       expect(handled).toBe(true);
       expect(event.preventDefault).toHaveBeenCalled();
@@ -231,8 +230,7 @@ describe('ImageEnterSpacing extension', () => {
       const plugin = createPlugin({ commands: {} });
       const event = createEvent();
       const handled =
-        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ??
-        false;
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
 
       expect(handled).toBe(true);
       expect(event.preventDefault).toHaveBeenCalled();
@@ -263,8 +261,7 @@ describe('ImageEnterSpacing extension', () => {
       const plugin = createPlugin({ commands: {} });
       const event = createEvent();
       const handled =
-        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ??
-        false;
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
 
       expect(handled).toBe(true);
       const insertBeforeContainingBlock = doc.child(0).nodeSize;
@@ -300,8 +297,7 @@ describe('ImageEnterSpacing extension', () => {
       const plugin = createPlugin({ commands: {} });
       const event = createEvent();
       const handled =
-        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ??
-        false;
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
 
       expect(handled).toBe(true);
       const insertAfterContainingBlock = doc.child(0).nodeSize;
@@ -364,13 +360,11 @@ describe('ImageEnterSpacing extension', () => {
       // Prefer an explicit gap-before-image selection (the decoration path); if
       // ArrowLeft fell back to text selection, synthesize the gap the plan asserts.
       const $before = doc.resolve(imagePos);
-      if (
-        !(
-          selectionAfterArrow &&
-          (selectionAfterArrow as { type?: string }).type === 'gapcursor' &&
-          (selectionAfterArrow as GapCursor).$from?.nodeAfter?.type.name === 'image'
-        )
-      ) {
+      if (!(
+        selectionAfterArrow &&
+        (selectionAfterArrow as { type?: string }).type === 'gapcursor' &&
+        (selectionAfterArrow as GapCursor).$from?.nodeAfter?.type.name === 'image'
+      )) {
         selectionAfterArrow = createGapSelection(doc, imagePos);
       }
       expect($before.nodeAfter?.type.name).toBe('image');
@@ -443,13 +437,11 @@ describe('ImageEnterSpacing extension', () => {
       expect(arrowHandled).toBe(true);
 
       const $after = doc.resolve(posAfterImage);
-      if (
-        !(
-          selectionAfterArrow &&
-          (selectionAfterArrow as { type?: string }).type === 'gapcursor' &&
-          (selectionAfterArrow as GapCursor).$from?.nodeBefore?.type.name === 'image'
-        )
-      ) {
+      if (!(
+        selectionAfterArrow &&
+        (selectionAfterArrow as { type?: string }).type === 'gapcursor' &&
+        (selectionAfterArrow as GapCursor).$from?.nodeBefore?.type.name === 'image'
+      )) {
         selectionAfterArrow = createGapSelection(doc, posAfterImage);
       }
       expect($after.nodeBefore?.type.name).toBe('image');
