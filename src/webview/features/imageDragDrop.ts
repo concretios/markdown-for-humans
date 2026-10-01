@@ -84,10 +84,30 @@ export function hasPendingImageSaves(): boolean {
   return pendingImageSaves.size > 0;
 }
 
-/** Wait until every picker, paste, or drop image has reached a terminal host result. */
-export function waitForPendingImageSaves(): Promise<void> {
-  if (!hasPendingImageSaves()) return Promise.resolve();
-  return new Promise(resolve => pendingImageSaveWaiters.add(resolve));
+/**
+ * Wait until every picker, paste, or drop image has reached a terminal host result.
+ *
+ * @param timeoutMs - Optional deadline. A host flush barrier gives up after its
+ *   own timeout, so the renderer must not resume that barrier much later.
+ * @returns true when no image save is pending, false when the deadline passed first
+ */
+export function waitForPendingImageSaves(timeoutMs?: number): Promise<boolean> {
+  if (!hasPendingImageSaves()) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      resolve(true);
+    };
+    pendingImageSaveWaiters.add(settle);
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        // Drop the waiter so a late completion cannot revive this barrier.
+        pendingImageSaveWaiters.delete(settle);
+        resolve(false);
+      }, timeoutMs);
+    }
+  });
 }
 
 type EditorForInsertPosition = {

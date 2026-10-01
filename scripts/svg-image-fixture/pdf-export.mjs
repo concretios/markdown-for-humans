@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { build } from 'esbuild';
 
@@ -116,9 +116,24 @@ export async function runPdfExportFixture({ repository, temporary, chrome, html,
   let exported;
   try {
     const { exportDocument } = createRequire(import.meta.url)(bundle);
-    exported = exportDocument('pdf', html, [], 'SVG export regression', {
-      uri: { scheme: 'file', fsPath: join(sourceDirectory, 'source.md') },
-    });
+    exported = exportDocument(
+      'pdf',
+      html,
+      [],
+      'SVG export regression',
+      { uri: { scheme: 'file', fsPath: join(sourceDirectory, 'source.md') } },
+      // Host containment contract: decode the pathname, keep the suffix, stay in the document directory.
+      source => {
+        const [pathname] = source.split(/[?#]/, 1);
+        const absolutePath = resolve(
+          sourceDirectory,
+          ...pathname.split('/').map(decodeURIComponent)
+        );
+        return absolutePath.startsWith(sourceDirectory + sep)
+          ? { absolutePath, suffix: source.slice(pathname.length) }
+          : undefined;
+      }
+    );
     await Promise.race([
       exported,
       new Promise((_, reject) => {

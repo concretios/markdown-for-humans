@@ -198,7 +198,7 @@ describe('Feedback review-only lifecycle with a real editor', () => {
     for (const event of ['focusin', 'pointerover', 'pointerdown', 'pointerleave']) {
       expect(domAdd.mock.calls.filter(([type]) => type === event)).toHaveLength(0);
     }
-    for (const event of ['pointerup', 'pointercancel']) {
+    for (const event of ['pointerup', 'pointercancel', 'contextmenu', 'visibilitychange']) {
       expect(documentAdd.mock.calls.filter(([type]) => type === event)).toHaveLength(0);
     }
     for (const event of ['beforeinput', 'cut', 'paste', 'drop']) {
@@ -228,6 +228,12 @@ describe('Feedback review-only lifecycle with a real editor', () => {
     const pointerCancelRegistration = documentAdd.mock.calls.find(
       ([event, , capture]) => event === 'pointercancel' && capture === true
     );
+    const contextMenuRegistration = documentAdd.mock.calls.find(
+      ([event, , capture]) => event === 'contextmenu' && capture === true
+    );
+    const visibilityRegistration = documentAdd.mock.calls.find(
+      ([event]) => event === 'visibilitychange'
+    );
     expect(editorOn.mock.calls.filter(([event]) => event === 'selectionUpdate')).toHaveLength(1);
     expect(documentAdd.mock.calls.filter(([event]) => event === 'selectionchange')).toHaveLength(1);
     expect(windowAdd.mock.calls.filter(([event]) => event === 'resize')).toHaveLength(1);
@@ -237,11 +243,12 @@ describe('Feedback review-only lifecycle with a real editor', () => {
       domAdd.mock.calls.filter(([event, , capture]) => event === 'pointerdown' && capture === true)
     ).toHaveLength(1);
     expect(domAdd.mock.calls.filter(([event]) => event === 'pointerleave')).toHaveLength(1);
-    for (const event of ['pointerup', 'pointercancel']) {
+    for (const event of ['pointerup', 'pointercancel', 'contextmenu']) {
       expect(
         documentAdd.mock.calls.filter(([type, , capture]) => type === event && capture === true)
       ).toHaveLength(1);
     }
+    expect(documentAdd.mock.calls.filter(([type]) => type === 'visibilitychange')).toHaveLength(1);
     for (const event of ['beforeinput', 'cut', 'paste', 'drop']) {
       expect(
         domAdd.mock.calls.filter(([type, , capture]) => type === event && capture === true)
@@ -259,6 +266,8 @@ describe('Feedback review-only lifecycle with a real editor', () => {
     expect(domRemove).toHaveBeenCalledWith(...(pointerLeaveRegistration ?? []));
     expect(documentRemove).toHaveBeenCalledWith(...(pointerUpRegistration ?? []));
     expect(documentRemove).toHaveBeenCalledWith(...(pointerCancelRegistration ?? []));
+    expect(documentRemove).toHaveBeenCalledWith(...(contextMenuRegistration ?? []));
+    expect(documentRemove).toHaveBeenCalledWith(...(visibilityRegistration ?? []));
     for (const event of ['beforeinput', 'cut', 'paste', 'drop']) {
       const registration = domAdd.mock.calls.find(
         ([type, , capture]) => type === event && capture === true

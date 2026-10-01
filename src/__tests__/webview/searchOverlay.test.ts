@@ -187,11 +187,21 @@ describe('Search Overlay', () => {
     expect(panelRule).toMatch(/pointer-events:\s*auto/);
   });
 
-  it('keeps Find above saved-draft actions instead of covering Resume and Start new', () => {
+  it('keeps Find below the live toolbar and moves a saved-draft banner below Find', () => {
     const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
-    expect(css).toMatch(
-      /body:has\(\.feedback-draft-banner\)\s+\.search-overlay[^{}]*\{[^}]*padding-top:\s*4px/
+    // Moving Find into the toolbar row covered live toolbar buttons in narrow splits.
+    expect(css).not.toMatch(/body:has\(\.feedback-draft-banner\)\s+\.search-overlay/);
+    const findTop = Number(
+      css.match(/\n\s*\.search-overlay\s*\{[^}]*padding-top:\s*(\d+)px/)?.[1] ?? Number.NaN
     );
+    const bannerTop = Number(
+      css.match(
+        /body:has\(\.search-overlay\.visible\)\s+\.feedback-draft-banner\s*\{[^}]*top:\s*(\d+)px/
+      )?.[1] ?? Number.NaN
+    );
+    // The Find panel is 46 CSS px tall: 28 px controls, 8 px padding and a 1 px
+    // border on each side. The rendered geometry is a manual VS Code check.
+    expect(bannerTop).toBeGreaterThanOrEqual(findTop + 46);
   });
 
   describe('findMatches', () => {

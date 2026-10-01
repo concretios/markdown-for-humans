@@ -46,8 +46,9 @@ interface TopLevelBlockPosition {
 const topLevelBlockCache = new WeakMap<ProseMirrorNode, readonly TopLevelBlockPosition[]>();
 
 // Keep hover and whole-block target creation responsive well below the shared
-// protocol boundary. The sentinel is included in this 64 KiB limit so a huge
-// block cannot create a multi-megabyte intermediate Focus value.
+// protocol boundary. The sentinel is included in this 64 Ki-character (code
+// point) limit so a huge block cannot create a multi-megabyte intermediate
+// Focus value.
 const FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH = 64 * 1024;
 const FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL = '\n[Focus truncated]';
 
@@ -162,20 +163,84 @@ function normalizedVisibleText(value: string): string {
   return value.replace(/\r\n/g, '\n');
 }
 
+/** Counts Unicode code points, so a surrogate pair is one character. */
+export function codePointLength(value: string): number {
+  return value.length - (value.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g)?.length ?? 0);
+}
+
+/** Returns at most `maximum` leading code points without splitting a surrogate pair. */
+export function codePointPrefix(value: string, maximum: number): string {
+  if (value.length <= maximum) return value;
+  let characters = 0;
+  let codeUnits = 0;
+  for (const character of value) {
+    if (characters >= maximum) break;
+    characters += 1;
+    codeUnits += character.length;
+  }
+  return value.slice(0, codeUnits);
+}
+
+/**
+ * Reads `node.textBetween(0, node.content.size, '\n', '\n')` up to a character
+ * limit. ProseMirror positions also count node boundaries, so a fixed position
+ * window truncates structure-heavy blocks such as lists or table cells early.
+ * A node no larger than the limit is read whole and then cut to the limit. Its
+ * text is at most twice its size, because a block leaf such as a horizontal
+ * rule takes one position but yields a separator and a newline. A larger node
+ * gets one `nodesBetween` walk that applies textBetween's block and leaf
+ * separators, counts code points as it appends, and stops entering nodes at
+ * the first character past the limit, so no node is read twice.
+ *
+ * @returns At most `maximumCharacters` code points, and whether text was omitted
+ */
+export function boundedNodeText(
+  node: ProseMirrorNode,
+  maximumCharacters: number
+): { readonly text: string; readonly truncated: boolean } {
+  if (node.content.size <= maximumCharacters) {
+    const whole = node.textBetween(0, node.content.size, '\n', '\n');
+    const text = codePointPrefix(whole, maximumCharacters);
+    return { text, truncated: text.length < whole.length };
+  }
+  let text = '';
+  let remaining = maximumCharacters;
+  let truncated = false;
+  let firstBlock = true;
+  const append = (value: string): void => {
+    const kept = codePointPrefix(value, remaining);
+    text += kept;
+    remaining -= codePointLength(kept);
+    if (kept.length < value.length) truncated = true;
+  };
+  node.nodesBetween(0, node.content.size, child => {
+    if (truncated) return false;
+    const leafText = child.isText ? (child.text ?? '') : child.isLeaf ? '\n' : '';
+    if (child.isBlock && ((child.isLeaf && leafText) || child.isTextblock)) {
+      if (firstBlock) firstBlock = false;
+      else append('\n');
+    }
+    if (leafText && !truncated) append(leafText);
+    return !truncated;
+  });
+  return { text, truncated };
+}
+
 function focusWithTruncationSentinel(value: string, maximumLength: number): string {
   const prefixLength = Math.max(
     0,
     maximumLength - FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL.length
   );
-  return `${value.slice(0, prefixLength)}${FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL}`;
+  return `${codePointPrefix(value, prefixLength)}${FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL}`;
 }
 
+/** Bounds Focus by characters (code points); the sentinel counts toward the limit. */
 function boundedWholeBlockFocus(
   value: string,
   maximumLength = FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH,
   forceTruncation = false
 ): BoundedWholeBlockFocus {
-  if (!forceTruncation && value.length <= maximumLength) {
+  if (!forceTruncation && codePointLength(value) <= maximumLength) {
     return { focus: value, truncated: false };
   }
   return {
@@ -485,14 +550,13 @@ function focusForTopLevelBlock(
     // Bound the ProseMirror walk itself. Calling textBetween across the full
     // node would first materialize an invalid multi-megabyte string and only
     // then give the caller a chance to reject it.
-    const traversalEnd = Math.min(node.content.size, maximumLength);
-    const semanticText = node.textBetween(0, traversalEnd, '\n', '\n');
+    const semanticText = boundedNodeText(node, maximumLength);
     const bounded = boundedWholeBlockFocus(
-      semanticText,
+      semanticText.text,
       maximumLength,
-      traversalEnd < node.content.size
+      semanticText.truncated
     );
-    if (semanticText.trim().length > 0 || bounded.truncated) return bounded;
+    if (semanticText.text.trim().length > 0 || bounded.truncated) return bounded;
   }
 
   const semanticLabel = semanticLabelForNode(node);
@@ -511,7 +575,8 @@ function focusForTopLevelBlock(
  * Return Focus for one already-indexed top-level block without traversing the
  * document. The caller supplies the canonical mapped DOM element so direct
  * ProseMirror widgets cannot shift opaque-node rendering to a neighbour.
- * Focus is capped at 64 KiB with an explicit truncation sentinel.
+ * Focus is capped at 64 Ki characters (code points) with an explicit
+ * truncation sentinel.
  */
 export function feedbackFocusForMappedBlock(
   editor: Editor,
@@ -530,7 +595,7 @@ export function feedbackFocusForMappedBlock(
  * leaking transient NodeView controls such as copy buttons or status labels.
  * ProseMirror content is authoritative for editable nodes so code indentation
  * and hard breaks are preserved. Opaque nodes use semantic attributes before a
- * chrome-stripped rendered fallback. Aggregate Focus is capped at 64 KiB with
+ * chrome-stripped rendered fallback. Aggregate Focus is capped at 64 Ki characters with
  * an explicit truncation sentinel.
  */
 export function feedbackFocusForBlockRange(
@@ -546,6 +611,7 @@ export function feedbackFocusForBlockRange(
     (_, index) => startOrdinal + index
   );
   let focus = '';
+  let focusCharacters = 0;
   let hasIncludedBlock = false;
   for (const ordinal of ordinals) {
     const blockPosition = blocks[ordinal];
@@ -562,7 +628,8 @@ export function feedbackFocusForBlockRange(
     }
 
     const separatorLength = hasIncludedBlock ? 1 : 0;
-    const remainingLength = FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH - focus.length - separatorLength;
+    const remainingLength =
+      FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH - focusCharacters - separatorLength;
     if (remainingLength <= FEEDBACK_WHOLE_BLOCK_FOCUS_TRUNCATION_SENTINEL.length) {
       return focusWithTruncationSentinel(focus, FEEDBACK_WHOLE_BLOCK_FOCUS_MAX_LENGTH);
     }
@@ -571,6 +638,7 @@ export function feedbackFocusForBlockRange(
     if (blockFocus.focus.length === 0) continue;
     if (hasIncludedBlock) focus += '\n';
     focus += blockFocus.focus;
+    focusCharacters += separatorLength + codePointLength(blockFocus.focus);
     hasIncludedBlock = true;
     if (blockFocus.truncated) return focus;
   }

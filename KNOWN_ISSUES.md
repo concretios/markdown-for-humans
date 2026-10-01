@@ -28,10 +28,9 @@ _None currently. All critical issues have been resolved._
 ### Enter Key in Table Cells
 **Type:** Bug
 **Description:** Pressing Enter in table cells creates new paragraphs within the cell, which breaks markdown table formatting when serialized. Markdown tables require single-line cells or `<br>` tags for line breaks, not multiple paragraphs.
-**Status:** Under consideration
-**Current Behavior:** TipTap's TableKit extension allows Enter key to create paragraphs in table cells by default.
-**Workaround:** Use source view to edit table cells, or use Shift+Enter for line breaks within cells (if supported). Avoid pressing Enter in table cells to prevent formatting issues.
-**Future Consideration:** Enter key in table cells should be disabled or converted to `<br>` tags to preserve markdown table structure.
+**Status:** Fixed
+**Fix:** `TableCellEnterHardBreak` maps Enter inside `tableCell` / `tableHeader` to `setHardBreak` so GFM serializes `<br>`. HTML-origin tables serialize hardBreaks as `<br>` inside `<td>`/`<th>` (not a literal newline, which HTML collapses). Shift+Enter continues to insert a hard break. Tab / Shift-Tab row navigation is unchanged.
+**Tests:** `src/__tests__/webview/tableCellEnterHardBreak.test.ts`
 
 ### Workspace File Drag-Drop in Cursor IDE
 **Type:** Bug
@@ -74,11 +73,12 @@ _None currently. All critical issues have been resolved._
 **Type:** Design Limitation
 **Description:** PDF and Word exports have limited support for images and Mermaid diagrams.
 **Current Behavior:**
-- **PDF Export:** Images with relative paths may not resolve correctly. Remote images (HTTP/HTTPS URLs) are not embedded. Image conversion to data URLs is currently disabled.
-- **Word Export:** Remote images (HTTP/HTTPS URLs) are explicitly skipped and not embedded. Images using `vscode-webview://` URLs may fail to resolve. Only data URLs and local file paths are reliably supported.
+- **Both formats (since 0.4.0):** Export embeds only images the editor itself can show. Local images outside the document's folder and the workspace (absolute paths elsewhere on disk, `..` paths that leave the workspace, symlinks that point outside it) and `http:` images are left out of the exported file.
+- **PDF Export:** HTTPS images are fetched while exporting. Image conversion to data URLs is currently disabled.
+- **Word Export:** Remote images (HTTP/HTTPS URLs) are explicitly skipped and not embedded. Embedded images are currently missing from Word documents; see the 0.4.0 known issues in the CHANGELOG.
 - **Mermaid Diagrams:** While converted to PNG in the webview, they may not render correctly in exported documents if the conversion process fails.
 **Workaround:**
-- For PDF: Use absolute paths or ensure images are in the same directory as the document. Download remote images locally before exporting.
+- For PDF: Keep images inside the workspace or next to the document and reference them with relative paths. Download remote images into the workspace before exporting.
 - For Word: Download remote images locally before exporting. Ensure images use relative paths from the document location.
 - For Mermaid: Verify diagrams render correctly in the editor before exporting. If issues occur, try recreating the diagram.
 **Future Consideration:** Image conversion to data URLs will be re-enabled, and remote image fetching will be added for both export formats.

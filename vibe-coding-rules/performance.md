@@ -92,6 +92,8 @@ This is intentionally a single-replacement strategy. Add a general diff algorith
 - Batch resize, zoom, font and asynchronous-content layout into one scheduled pass.
 - Limit capture to mapped visible blocks and propagate `AbortSignal` through every asynchronous wait.
 - Cap capture staging at 4,096 DOM nodes and 1,024 resource references.
+- Map a crop to blocks with first-hit early exit and a shared 4,096-node hit-test budget; past it, a block whose box intersects counts as hit.
+- Defer selection Focus sampling while a pointer drag is in progress; release, cancel, context menu, blur or a visibility change takes one full sample.
 - Cap raster output at 12 megapixels and 10 MiB.
 
 ## Hidden Webviews and Memory

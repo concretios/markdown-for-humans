@@ -214,10 +214,14 @@ export function showToast(
   };
   const icon = iconMap[type];
 
-  toast.innerHTML = `
-    <span class="toast-icon codicon ${icon}" aria-hidden="true"></span>
-    <span class="toast-message">${message}</span>
-  `;
+  // SECURITY (#93): messages can carry host error text; never parse them as HTML.
+  const iconElement = document.createElement('span');
+  iconElement.className = `toast-icon codicon ${icon}`;
+  iconElement.setAttribute('aria-hidden', 'true');
+  const messageElement = document.createElement('span');
+  messageElement.className = 'toast-message';
+  messageElement.textContent = message;
+  toast.append(iconElement, messageElement);
 
   toastContainer.appendChild(toast);
 

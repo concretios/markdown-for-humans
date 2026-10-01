@@ -14,7 +14,7 @@ import * as https from 'https';
 import * as dns from 'dns';
 import { isIP } from 'net';
 import { readFile } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import { outlineViewProvider, type OutlineEntry } from '../features/outlineView';
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import {
@@ -40,6 +40,7 @@ import {
 import { findImageSourceReferences } from './imageSourceReferences';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
 import {
+  FeedbackReportLockBusyError,
   FeedbackSessionError,
   FeedbackSessionStore,
   type FeedbackItem,
@@ -339,6 +340,11 @@ interface ActiveFeedbackSession {
   targets: Map<string, { startOrdinal: number; endOrdinal: number }>;
   previewNonce: string;
   previewRevisions: Map<string, number>;
+  /**
+   * Screenshot Add idempotency keys mapped to the one item each keeps, the
+   * newest attempt applied to it, and a hash of that attempt's content.
+   */
+  screenshotAddKeys?: Map<string, { itemId: string; attempt: number; contentSha256: string }>;
   /** Exact draft ranges that were structurally valid but no longer resolve. */
   degradedRenderedRangeIds: Set<string>;
   /** Draft table-cell targets whose containing table identity no longer validates. */
@@ -373,6 +379,8 @@ interface FeedbackTransition {
   /** Only this webview may complete or release the transition. */
   ownerWebview: vscode.Webview;
   acceptingFlushEdit: boolean;
+  /** Save participants may edit the buffer while the snapshot save runs. */
+  acceptingSaveEdits?: boolean;
   invalidated: boolean;
   /** An accepted pre-lock edit must be reflected back before this lock retires. */
   recoveryRequired: boolean;
@@ -405,6 +413,22 @@ const FEEDBACK_DURABLE_MUTATION_MESSAGES = new Set<FeedbackWebviewMessage['type'
   'feedback.item.edit',
   'feedback.item.delete',
   'feedback.item.restore',
+]);
+
+/**
+ * In-session actions whose webview UI has no visible error surface; their
+ * errors otherwise reach only the screen-reader live region. Screenshot,
+ * Finish and preview failures are shown in their own dialogs.
+ */
+const FEEDBACK_NOTIFIED_ERROR_MESSAGES = new Set<FeedbackWebviewMessage['type']>([
+  'feedback.text.add',
+  'feedback.item.edit',
+  'feedback.item.delete',
+  'feedback.item.restore',
+  'feedback.discard',
+  'feedback.reveal',
+  'feedback.revealInOS',
+  'feedback.copyDiagnostics',
 ]);
 
 type FeedbackHostErrorCode = NonNullable<
@@ -627,9 +651,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   // assets, while a rebuilt or reloaded host cannot reuse an older bundle.
   private readonly webviewAssetRevision = crypto.randomBytes(8).toString('hex');
 
-  // Track pending edits to avoid feedback loops
-  // Key: document URI, Value: timestamp of last edit from webview
-  private pendingEdits = new Map<string, number>();
   // Remember the latest content received from a rich view and which split sent
   // it. Echo suppression is source-specific so sibling splits still update.
   private lastWebviewContent = new Map<string, string>();
@@ -641,6 +662,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   // Keep in-flight payloads separate and promote only the latest successful
   // delivery into the deduplication cache.
   private pendingHostContentByWebview = new WeakMap<vscode.Webview, { readonly content: string }>();
+  // While a split's Ctrl+S edit is applied with content changed by the
+  // save-time policy, that policy result. Only the update carrying exactly it
+  // is tagged `savePolicyEcho`, the one host update allowed to replace the
+  // renderer's recent typing; a save participant or external write is not.
+  private readonly savePolicyEchoByWebview = new WeakMap<vscode.Webview, string>();
   // Every mutation of one TextDocument passes through this coordinator. VS Code
   // applies WorkspaceEdits asynchronously, so fire-and-forget webview messages
   // must be serialized explicitly to prevent an older completion from landing
@@ -1238,7 +1264,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       this.lastHostContentByWebview.delete(panelWebview);
       this.pendingHostContentByWebview.delete(panelWebview);
       if (!hasRemainingWebviews) {
-        this.pendingEdits.delete(docUri);
         this.lastWebviewContent.delete(docUri);
         this.lastWebviewContentSource.delete(docUri);
         this.preservePendingAutoSaveOnFinalPanelDispose(document);
@@ -1259,8 +1284,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /**
    * Send document content to webview
-   * Skips recent echoes by default. A forced update is reserved for restoring
-   * authoritative source after a frozen Feedback owner has closed locally.
+   * Content this split already has (its own echo, a repeated delivery, or blank
+   * lines hidden by strip mode) is sent as a version-only update, so every
+   * version change still reaches the renderer's edit base. A forced update is
+   * reserved for authoritative replays and Feedback restoration. The update
+   * carrying the save-time policy result of this split's own Ctrl+S edit is
+   * tagged `savePolicyEcho`.
    */
   private updateWebview(
     document: vscode.TextDocument,
@@ -1272,7 +1301,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     if (!force && this.feedbackSessions.get(docUri)?.ownerWebview === webview) {
       return;
     }
-    const lastEditTime = this.pendingEdits.get(docUri);
     const mode = this.getBlankLineMode();
     const rawContent = document.getText();
     const currentContent = applyBlankLinePolicy(rawContent, mode);
@@ -1281,7 +1309,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     // payload is still in flight. Otherwise A -> B -> A can suppress the final
     // corrective A while B is still able to arrive and leave the renderer stale.
     const pendingHostContent = this.pendingHostContentByWebview.get(webview);
-    if (!force && pendingHostContent?.content === currentContent) return;
+    if (!force && pendingHostContent?.content === currentContent) {
+      this.postDocumentVersion(document, webview);
+      return;
+    }
     const lastHostContent = this.lastHostContentByWebview.get(webview);
     if (
       !force &&
@@ -1289,28 +1320,27 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       lastHostContent !== undefined &&
       lastHostContent === currentContent
     ) {
+      this.postDocumentVersion(document, webview);
       return;
     }
 
-    // Suppress an immediate echo only for the split that originated it.
+    // Suppress an immediate echo only for the split that originated it, and only
+    // while nothing was posted to that split after its edit was accepted
+    // (`applyEditNow` clears both delivery caches for its source). Once the
+    // split was sent other content, its old edit no longer proves what it shows:
+    // A -> B -> A must resend A, or a version-only update would let the split's
+    // next edit overwrite A with B. Line endings are ignored: VS Code stores the
+    // renderer's LF text with a CRLF document's EOL, and preserve mode keeps it.
     const lastSentContent = this.lastWebviewContent.get(docUri);
     if (
       !force &&
+      pendingHostContent === undefined &&
+      lastHostContent === undefined &&
       this.lastWebviewContentSource.get(docUri) === webview &&
       lastSentContent !== undefined &&
-      lastSentContent === currentContent
+      lastSentContent.replace(/\r\n/g, '\n') === currentContent.replace(/\r\n/g, '\n')
     ) {
-      return;
-    }
-
-    // Skip update if this change came from webview within last 100ms
-    // This prevents feedback loops while allowing external Git changes to sync
-    if (
-      !force &&
-      this.lastWebviewContentSource.get(docUri) === webview &&
-      lastEditTime &&
-      Date.now() - lastEditTime < 100
-    ) {
+      this.postDocumentVersion(document, webview);
       return;
     }
 
@@ -1341,6 +1371,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     );
     const blankLineMode = this.getBlankLineMode();
     const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
+    const savePolicyEcho = !force && this.savePolicyEchoByWebview.get(webview) === currentContent;
 
     const payload = {
       type: 'update',
@@ -1348,6 +1379,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       documentVersion: this.getDocumentVersion(document),
       content: transformedContent,
       ...(force ? { force: true } : {}),
+      ...(savePolicyEcho ? { savePolicyEcho: true } : {}),
       skipResizeWarning: skipWarning,
       imagePath: imagePath,
       imagePathBase: imagePathBase,
@@ -1384,6 +1416,27 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         this.pendingHostContentByWebview.delete(webview);
       }
       console.error('[MD4H] Failed posting document update:', error);
+    }
+  }
+
+  /**
+   * Advance one split's edit base without resending content it already shows.
+   * A save participant or a strip-mode blank-line change bumps the version; if
+   * the renderer never learns it, its next edit is rejected as stale (Y1).
+   */
+  private postDocumentVersion(document: vscode.TextDocument, webview: vscode.Webview): void {
+    try {
+      void Promise.resolve(
+        webview.postMessage({
+          type: 'document.version',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          documentVersion: this.getDocumentVersion(document),
+        })
+      ).catch(error => {
+        console.error('[MD4H] Failed posting document version:', error);
+      });
+    } catch (error) {
+      console.error('[MD4H] Failed posting document version:', error);
     }
   }
 
@@ -1689,9 +1742,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           // owns the document. If any later transition step fails, keep the
           // lock until this accepted content is reflected back exactly.
           feedbackTransition.recoveryRequired = true;
+          // Compare EOL-normalized text: VS Code converts the inserted LF
+          // content to the document's EOL, so a CRLF file never matches raw.
           feedbackTransition.expectedFlushContentSha256 = crypto
             .createHash('sha256')
-            .update(this.normalizeWebviewEditContent(message.content), 'utf8')
+            .update(
+              this.normalizeWebviewEditContent(message.content).replace(/\r\n/g, '\n'),
+              'utf8'
+            )
             .digest('hex');
           if (feedbackTransition.ownerWebview !== webview) {
             // Preserve the peer's edit, then cancel this start. The owner's
@@ -1754,6 +1812,36 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           message.viewGeneration === this.editViewGenerations.get(webview)
         ) {
           this.updateWebview(document, webview, { force: true });
+        }
+        break;
+      }
+      case 'document.sync.conflict': {
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          message.viewGeneration === this.editViewGenerations.get(webview)
+        ) {
+          // Capture now: the renderer's resend that replaces this text is the
+          // next message in order from the same view.
+          void this.showDocumentSyncConflict(document.getText());
+        }
+        break;
+      }
+      case 'document.sync.failed': {
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          message.viewGeneration === this.editViewGenerations.get(webview)
+        ) {
+          void this.showDocumentSyncFailure(webview);
+        }
+        break;
+      }
+      case 'document.sync.reload': {
+        // The Reload editor action of the renderer's out-of-sync banner.
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          message.viewGeneration === this.editViewGenerations.get(webview)
+        ) {
+          this.reloadOutOfSyncRenderer(webview);
         }
         break;
       }
@@ -3866,10 +3954,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       );
     }
 
-    const capturedDocumentVersion = this.getDocumentVersion(document);
-    const capturedSourceText = document.getText();
-
     if (document.isDirty) {
+      // Save participants (format or trim on save) can edit the buffer inside
+      // save(). Accept those edits and capture the snapshot after save below.
+      const transition = this.feedbackTransitions.get(document.uri.toString());
+      if (transition) transition.acceptingSaveEdits = true;
       let saved = false;
       try {
         saved = await document.save();
@@ -3878,6 +3967,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           'MD4H-FB-STORE-002',
           `Could not save the Markdown snapshot: ${error instanceof Error ? error.message : String(error)}`
         );
+      } finally {
+        if (transition) transition.acceptingSaveEdits = false;
       }
       if (!saved || document.isDirty) {
         throw new FeedbackSessionError(
@@ -3886,6 +3977,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         );
       }
     }
+
+    const capturedDocumentVersion = this.getDocumentVersion(document);
+    const capturedSourceText = document.getText();
 
     const sourceBytes = await readFile(document.uri.fsPath);
     const prepared = this.feedbackSnapshotService.prepareSource({
@@ -4224,6 +4318,39 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         sourceSliceSha256: source.sourceSliceSha256,
       },
     };
+  }
+
+  /**
+   * Replace one screenshot item's PNG, comment and target in place, and bump
+   * its preview revision so webviews reload the image.
+   */
+  private async replaceFeedbackScreenshot(
+    session: ActiveFeedbackSession,
+    document: vscode.TextDocument,
+    id: string,
+    input: { startOrdinal: number; endOrdinal: number; feedback: string; imageDataUrl: string }
+  ): Promise<void> {
+    const target = this.mapFeedbackTarget(session, input.startOrdinal, input.endOrdinal);
+    const migrationItems = await this.feedbackMigrationItemsV2(session);
+    await session.store.replaceScreenshotFeedbackV2(
+      id,
+      {
+        startLine: target.startLine,
+        endLine: target.endLine,
+        feedback: input.feedback,
+        pngData: input.imageDataUrl,
+        ...this.resolveFeedbackVisualTargetV2(session, target),
+      },
+      {
+        beforeCommit: this.feedbackCommitGuard(session, document),
+        ...(migrationItems === undefined ? {} : { migrationItems }),
+      }
+    );
+    session.targets.set(id, {
+      startOrdinal: target.startOrdinal,
+      endOrdinal: target.endOrdinal,
+    });
+    session.previewRevisions.set(id, (session.previewRevisions.get(id) ?? 1) + 1);
   }
 
   /** Return a fully v2 item set or fail on mixed in-memory schema state. */
@@ -4694,6 +4821,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       const session = this.feedbackSessions.get(documentKey);
       const peers = this.feedbackWebviews.get(documentKey);
       const appliedLock = this.appliedFeedbackPeerLocks.get(webview);
+      // Start and Resume lock peers with a random transition id, and a reloaded
+      // owner locks itself with its own session id. Neither matches a revealable
+      // peer lock, so report the transition before the session id comparison.
+      if (
+        peers?.has(webview) &&
+        this.editViewGenerations.get(webview) === message.viewGeneration &&
+        (this.feedbackTransitions.get(documentKey)?.lockId === message.lockId ||
+          (session?.sessionId === message.lockId && session.ownerWebview === webview))
+      ) {
+        void vscode.window.showWarningMessage('Feedback is changing state. Try again in a moment.');
+        return;
+      }
       if (
         !peers?.has(webview) ||
         this.editViewGenerations.get(webview) !== message.viewGeneration ||
@@ -5193,26 +5332,74 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         }
 
         case 'feedback.screenshot.add': {
-          const target = this.mapFeedbackTarget(session, message.startOrdinal, message.endOrdinal);
-          const migrationItems = await this.feedbackMigrationItemsV2(session);
-          const item = await session.store.addScreenshotFeedbackV2(
-            {
-              startLine: target.startLine,
-              endLine: target.endLine,
-              feedback: message.feedback,
-              pngData: message.imageDataUrl,
-              ...this.resolveFeedbackVisualTargetV2(session, target),
-            },
-            {
-              beforeCommit: this.feedbackCommitGuard(session, document),
-              ...(migrationItems === undefined ? {} : { migrationItems }),
+          // The webview times out a slow Add after 15 s, but the request may
+          // still commit while the user retries or Retakes under the same key.
+          // Keep one item per key holding the newest attempt, in either order.
+          const key = message.idempotencyKey;
+          const attempt = message.attempt ?? 1;
+          const contentSha256 =
+            key === undefined
+              ? ''
+              : crypto
+                  .createHash('sha256')
+                  .update(
+                    JSON.stringify([
+                      message.startOrdinal,
+                      message.endOrdinal,
+                      message.feedback,
+                      message.imageDataUrl,
+                    ]),
+                    'utf8'
+                  )
+                  .digest('hex');
+          const prior = key === undefined ? undefined : session.screenshotAddKeys?.get(key);
+          const priorIsLive =
+            prior !== undefined &&
+            session.store.items.some(existing => existing.id === prior.itemId);
+          if (
+            prior !== undefined &&
+            (attempt <= prior.attempt || (priorIsLive && contentSha256 === prior.contentSha256))
+          ) {
+            // An older attempt, or the committed content again: no write.
+            prior.attempt = Math.max(prior.attempt, attempt);
+          } else if (prior !== undefined && priorIsLive) {
+            // A newer attempt with edited text, annotation or crop: last write wins.
+            await this.replaceFeedbackScreenshot(session, document, prior.itemId, message);
+            prior.attempt = attempt;
+            prior.contentSha256 = contentSha256;
+          } else {
+            const target = this.mapFeedbackTarget(
+              session,
+              message.startOrdinal,
+              message.endOrdinal
+            );
+            const migrationItems = await this.feedbackMigrationItemsV2(session);
+            const item = await session.store.addScreenshotFeedbackV2(
+              {
+                startLine: target.startLine,
+                endLine: target.endLine,
+                feedback: message.feedback,
+                pngData: message.imageDataUrl,
+                ...this.resolveFeedbackVisualTargetV2(session, target),
+              },
+              {
+                beforeCommit: this.feedbackCommitGuard(session, document),
+                ...(migrationItems === undefined ? {} : { migrationItems }),
+              }
+            );
+            session.targets.set(item.id, {
+              startOrdinal: target.startOrdinal,
+              endOrdinal: target.endOrdinal,
+            });
+            session.previewRevisions.set(item.id, 1);
+            if (key !== undefined) {
+              (session.screenshotAddKeys ??= new Map()).set(key, {
+                itemId: item.id,
+                attempt,
+                contentSha256,
+              });
             }
-          );
-          session.targets.set(item.id, {
-            startOrdinal: target.startOrdinal,
-            endOrdinal: target.endOrdinal,
-          });
-          session.previewRevisions.set(item.id, 1);
+          }
           this.postFeedbackMessage(webview, {
             type: 'feedback.updated',
             requestId: message.requestId,
@@ -5223,30 +5410,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         }
 
         case 'feedback.screenshot.replace': {
-          const target = this.mapFeedbackTarget(session, message.startOrdinal, message.endOrdinal);
-          const migrationItems = await this.feedbackMigrationItemsV2(session);
-          await session.store.replaceScreenshotFeedbackV2(
-            message.id,
-            {
-              startLine: target.startLine,
-              endLine: target.endLine,
-              feedback: message.feedback,
-              pngData: message.imageDataUrl,
-              ...this.resolveFeedbackVisualTargetV2(session, target),
-            },
-            {
-              beforeCommit: this.feedbackCommitGuard(session, document),
-              ...(migrationItems === undefined ? {} : { migrationItems }),
-            }
-          );
-          session.targets.set(message.id, {
-            startOrdinal: target.startOrdinal,
-            endOrdinal: target.endOrdinal,
-          });
-          session.previewRevisions.set(
-            message.id,
-            (session.previewRevisions.get(message.id) ?? 1) + 1
-          );
+          await this.replaceFeedbackScreenshot(session, document, message.id, message);
           this.postFeedbackMessage(webview, {
             type: 'feedback.updated',
             requestId: message.requestId,
@@ -5518,10 +5682,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
               );
             }
             await session.store.validateContainedPaths();
-            await vscode.workspace.fs.delete(vscode.Uri.file(session.store.getDiscardPath()), {
-              recursive: true,
-              useTrash: true,
-            });
+            const deleted = await this.deleteFeedbackBundle(
+              session.store.getDiscardPath(),
+              async () => {
+                if (this.feedbackSessions.get(document.uri.toString()) !== session) {
+                  throw new FeedbackSessionError(
+                    'MD4H-FB-STORE-001',
+                    'This feedback session is no longer active.'
+                  );
+                }
+                await session.store.validateContainedPaths();
+              }
+            );
+            if (!deleted) {
+              session.phase = 'active';
+              return;
+            }
             session.store.finalizeDiscard();
             session.pendingClose = {
               requestId: message.requestId,
@@ -5586,12 +5762,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           message: 'The Markdown source changed outside the frozen feedback snapshot.',
         });
       }
+      const errorMessage = error instanceof Error ? error.message : 'The feedback request failed.';
+      if (
+        error instanceof FeedbackReportLockBusyError ||
+        FEEDBACK_NOTIFIED_ERROR_MESSAGES.has(message.type)
+      ) {
+        // The webview toast auto-dismisses and in-session errors only reach the
+        // live region, so a blocked write or Resume, and an in-session action
+        // without its own error surface, also get a notification.
+        void vscode.window.showErrorMessage(errorMessage);
+      }
       this.postFeedbackMessage(webview, {
         type: 'feedback.error',
         requestId: message.requestId,
         ...(requestSession ? { sessionId: requestSession.sessionId } : {}),
         ...(code ? { code } : {}),
-        message: error instanceof Error ? error.message : 'The feedback request failed.',
+        message: errorMessage,
         recoverable: true,
       });
     } finally {
@@ -6894,8 +7080,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /**
    * Consumes document changes that occur while Feedback owns the document.
-   * Flush-generated edits remain allowed until the snapshot is locked. Any
-   * later change cancels an in-progress transition or invalidates the session.
+   * Flush-generated edits (compared EOL-normalized) remain allowed until the
+   * snapshot is locked, and any change made while the snapshot save runs (save
+   * participants) is accepted and marks the transition for recovery. Any other
+   * change cancels an in-progress transition or invalidates the session.
    */
   private handleFeedbackDocumentChange(
     documentKey: string,
@@ -6912,11 +7100,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     if (transition === undefined) {
       return false;
     }
+    if (transition.acceptingSaveEdits) {
+      // The snapshot binds to the text observed after save resolves, but the
+      // renderers still need that text if the transition fails afterward.
+      transition.recoveryRequired = true;
+      return true;
+    }
     if (transition.acceptingFlushEdit) {
       const currentSha256 =
         currentText === undefined
           ? undefined
-          : crypto.createHash('sha256').update(currentText, 'utf8').digest('hex');
+          : crypto
+              .createHash('sha256')
+              .update(currentText.replace(/\r\n/g, '\n'), 'utf8')
+              .digest('hex');
       if (
         transition.expectedFlushContentSha256 !== undefined &&
         transition.expectedFlushContentSha256 === currentSha256
@@ -7473,10 +7670,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       }
       await store.validateContainedPaths();
       this.assertFeedbackTransition(documentKey, transitionToken);
-      await vscode.workspace.fs.delete(vscode.Uri.file(store.getDiscardPath()), {
-        recursive: true,
-        useTrash: true,
+      const deleted = await this.deleteFeedbackBundle(store.getDiscardPath(), async () => {
+        await store.validateContainedPaths();
+        this.assertFeedbackTransition(documentKey, transitionToken);
       });
+      if (!deleted) return;
       store.finalizeDiscard();
       this.postFeedbackMessage(webview, {
         type: 'feedback.draft.discarded',
@@ -7486,6 +7684,44 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     } finally {
       await this.endFeedbackTransition(documentKey, transitionToken, document);
     }
+  }
+
+  /**
+   * Move a Feedback bundle to Trash, or delete it permanently after a second
+   * modal confirmation when Trash fails. VS Code's FileService rejects
+   * `useTrash` for providers without the Trash capability, which includes the
+   * server-side disk provider on Remote-SSH, WSL and dev containers. The error
+   * text is localized, so any Trash failure gets the same fallback the
+   * Explorer offers.
+   *
+   * @param bundlePath - Contained bundle directory from the session store
+   * @param revalidate - Re-checks session state after the user answers
+   * @returns false when the user keeps the draft
+   */
+  private async deleteFeedbackBundle(
+    bundlePath: string,
+    revalidate: () => Promise<void>
+  ): Promise<boolean> {
+    const bundleUri = vscode.Uri.file(bundlePath);
+    try {
+      await vscode.workspace.fs.delete(bundleUri, { recursive: true, useTrash: true });
+      return true;
+    } catch (error) {
+      console.warn('[MD4H] Could not move the Feedback draft to Trash:', error);
+    }
+    const choice = await vscode.window.showWarningMessage(
+      'Could not move this Feedback draft to Trash. Delete it permanently?',
+      {
+        modal: true,
+        detail:
+          'This location does not support Trash, for example a remote or container workspace. Permanent deletion cannot be undone.',
+      },
+      'Delete permanently'
+    );
+    if (choice !== 'Delete permanently') return false;
+    await revalidate();
+    await vscode.workspace.fs.delete(bundleUri, { recursive: true, useTrash: false });
+    return true;
   }
 
   /**
@@ -7505,7 +7741,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     // Import dynamically to avoid loading heavy dependencies on startup
     const { exportDocument } = await import('../features/documentExport');
 
-    await exportDocument(format, html, mermaidImages, title, document);
+    // SECURITY: export embeds only images the preview would show (#101).
+    const basePath = this.getImageBasePath(document);
+    const allowedRoots = this.getAllowedFileRoots(document);
+    await exportDocument(format, html, mermaidImages, title, document, source =>
+      basePath ? resolveContainedImageSource(source, basePath, allowedRoots) : undefined
+    );
   }
 
   /**
@@ -7918,10 +8159,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       });
       return;
     }
-    const relativePath = normalizeImagePath(rawRelativePath, basePath);
-    const absolutePath = path.resolve(basePath, relativePath);
-    const allowedRoots = this.getAllowedFileRoots(document);
-    if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, path.resolve(root)))) {
+    const resolved = resolveContainedImageSource(
+      rawRelativePath,
+      basePath,
+      this.getAllowedFileRoots(document)
+    );
+    if (!resolved) {
       webview.postMessage({
         type: 'imageUriResolved',
         requestId,
@@ -7931,7 +8174,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       });
       return;
     }
-    const fileUri = vscode.Uri.file(absolutePath);
+    const fileUri = vscode.Uri.file(resolved.absolutePath);
 
     // Convert to webview URI
     const webviewUri = webview.asWebviewUri(fileUri);
@@ -7939,7 +8182,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     webview.postMessage({
       type: 'imageUriResolved',
       requestId,
-      webviewUri: webviewUri.toString() + splitLocalImageSource(rawRelativePath, basePath).suffix,
+      webviewUri: webviewUri.toString() + resolved.suffix,
       relativePath: rawRelativePath, // Return original path for consistency
     });
   }
@@ -10967,7 +11210,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return true;
   }
 
-  /** Invoke VS Code save only after the renderer and document edit queue agree. */
+  /**
+   * Invoke VS Code save only after the renderer and document edit queue agree.
+   * A failed or timed-out renderer flush never falls back to saving the
+   * TextDocument, which may lack the newest typing. It shows an error with a
+   * Retry action that runs the whole flush and save again.
+   */
   private async executeSaveAfterDocumentEdits(
     document: vscode.TextDocument,
     webview: vscode.Webview
@@ -10980,6 +11228,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         'save-flush'
       ))
     ) {
+      console.error('[MD4H] Save skipped: the rich editor did not flush its latest changes');
+      const choice = await vscode.window.showErrorMessage(
+        'Not saved: the editor has changes that have not reached the file yet. Your changes are still in the editor.',
+        'Retry'
+      );
+      if (choice === 'Retry') await this.executeSaveAfterDocumentEdits(document, webview);
       return;
     }
     try {
@@ -10988,7 +11242,56 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       }
     } catch (error) {
       console.error('[MD4H] Document save failed:', error);
+      void vscode.window.showErrorMessage('VS Code could not save this Markdown document.');
     }
+  }
+
+  /**
+   * Tell the user a rich-editor resend replaced a concurrent change to the
+   * document, and keep the replaced text recoverable (Y1 conflict).
+   */
+  private async showDocumentSyncConflict(replacedContent: string): Promise<void> {
+    try {
+      const choice = await vscode.window.showWarningMessage(
+        'This file changed outside the rich editor while you were typing. Your typing was kept and replaced that change.',
+        'Open Replaced Version'
+      );
+      if (choice !== 'Open Replaced Version') return;
+      const replaced = await vscode.workspace.openTextDocument({
+        language: 'markdown',
+        content: replacedContent,
+      });
+      await vscode.window.showTextDocument(replaced, { preview: false });
+    } catch (error) {
+      console.error('[MD4H] Could not show the replaced document version:', error);
+    }
+  }
+
+  /**
+   * A renderer stopped requesting forced replays after repeated failures (Y2).
+   * Make the out-of-sync state visible and offer a fresh renderer.
+   */
+  private async showDocumentSyncFailure(webview: vscode.Webview): Promise<void> {
+    try {
+      const choice = await vscode.window.showErrorMessage(
+        'The rich editor is out of sync with this file and its edits are not being saved. Reload the editor to show the file again.',
+        'Reload Editor'
+      );
+      if (choice !== 'Reload Editor') return;
+      this.reloadOutOfSyncRenderer(webview);
+    } catch (error) {
+      console.error('[MD4H] Could not reload the out-of-sync rich editor:', error);
+    }
+  }
+
+  /**
+   * Replace an out-of-sync renderer, from the notification above or the
+   * renderer's own out-of-sync banner. Same recreation path as a hidden,
+   * non-retained webview: the new renderer sends `ready` and receives
+   * authoritative content.
+   */
+  private reloadOutOfSyncRenderer(webview: vscode.Webview): void {
+    webview.html = this.getHtmlForWebview(webview);
   }
 
   /**
@@ -11163,14 +11466,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
     if (options?.signal?.aborted) return false;
 
-    // Mark this edit to prevent feedback loop
     const docUri = document.uri.toString();
-    this.pendingEdits.set(docUri, Date.now());
     // When policy enforcement modifies the content (e.g., stripping blank lines),
     // set lastWebviewContent to the ORIGINAL content so that updateWebview()
     // will detect a mismatch and refresh the webview with the stripped content.
     // Otherwise, the webview would never refresh to show the policy-enforced state.
-    const contentWasModified = normalizedContent !== unwrappedContent;
+    // The MD047 trailing newline alone is not a visible change; treating it as
+    // one would replace the rich editor's content on every Ctrl+S.
+    const contentWasModified = normalizedContent !== ensureSingleTrailingNewline(unwrappedContent);
     if (shouldEnforcePolicy && contentWasModified) {
       this.lastWebviewContent.set(docUri, unwrappedContent);
     } else {
@@ -11197,6 +11500,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       replacement?.text ?? normalizedContent
     );
 
+    // VS Code fires the edit's change event, and so posts its echo, before
+    // applyEdit resolves. The tag must not outlive that echo.
+    const savePolicyEchoWebview =
+      shouldEnforcePolicy && contentWasModified ? options?.sourceWebview : undefined;
+    if (savePolicyEchoWebview) {
+      this.savePolicyEchoByWebview.set(savePolicyEchoWebview, normalizedContent);
+    }
     try {
       const success = await vscode.workspace.applyEdit(edit);
       if (!success) {
@@ -11213,6 +11523,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       vscode.window.showErrorMessage(errorMsg);
       console.error('[MD4H] applyEdit exception:', error);
       return false;
+    } finally {
+      if (savePolicyEchoWebview) this.savePolicyEchoByWebview.delete(savePolicyEchoWebview);
     }
   }
 
@@ -11444,6 +11756,54 @@ export function normalizeImagePath(imagePath: string, basePath?: string): string
       }
     })
     .join('/');
+}
+
+/**
+ * Resolve an authored local image destination the way the preview does, and
+ * accept it only inside the allowed roots. PDF and Word export share this
+ * decision so they never embed a file the editor refused to show.
+ *
+ * An existing file must also be contained once symlinks are resolved: a cloned
+ * repo can commit a link that points outside every root, and both the webview
+ * loader and Chrome follow it.
+ *
+ * @param source - Authored destination (relative, absolute, encoded, with optional query/fragment)
+ * @param basePath - Directory relative destinations resolve against
+ * @param allowedRoots - Absolute roots the file must be contained in
+ * @returns The file (lexical path) and its URL suffix, or undefined when the path,
+ *   or the real path of an existing file, escapes every root
+ */
+export function resolveContainedImageSource(
+  source: string,
+  basePath: string,
+  allowedRoots: readonly string[]
+): { absolutePath: string; suffix: string } | undefined {
+  const absolutePath = path.resolve(basePath, normalizeImagePath(source, basePath));
+  const roots = allowedRoots.map(root => path.resolve(root));
+  // Lexical check first, so realpath never touches a refused path (a UNC host, say).
+  // normalizeImagePath above still stats the literal name of a `?`/`#`-suffixed source.
+  if (!roots.some(root => isPathContainedWithin(absolutePath, root))) {
+    return undefined;
+  }
+  // SECURITY: compare real paths so a committed symlink cannot leave the roots.
+  // A missing file loads nothing, so it keeps the lexical decision.
+  const realTarget = realPathOrUndefined(absolutePath);
+  if (
+    realTarget &&
+    !roots.some(root => isPathContainedWithin(realTarget, realPathOrUndefined(root) ?? root))
+  ) {
+    return undefined;
+  }
+  return { absolutePath, suffix: splitLocalImageSource(source, basePath).suffix };
+}
+
+/** The symlink-free path of an existing file or directory, or undefined when it cannot be resolved. */
+function realPathOrUndefined(candidate: string): string | undefined {
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

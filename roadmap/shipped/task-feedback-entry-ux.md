@@ -3,11 +3,12 @@
 ## 1. Task Metadata
 
 - **Slug:** feedback-entry-ux
-- **Status:** implemented and verified; ready for review
+- **Status:** shipped
 - **Created / last updated:** 2026-09-30
 - **Branch:** feature/feedback-entry-ux
 - **PR base:** main (`15cc331`, merge of `feature/llm-feedback`)
-- **Shipped:** pending
+- **Shipped:** 2026-09-30, PR #100 (merge `355e037`)
+- **Follow-up:** post-merge fixes in `roadmap/pipeline/task-fix-postmerge-07-feedback-entry-ux.md`
 
 ## 2. Context & Problem
 

@@ -318,7 +318,7 @@ function updateViewport(
 ): FeedbackCaptureReduction {
   if (!validViewport(viewport)) return ignore(machine, 'invalid-viewport');
   const { state } = machine;
-  if (state.kind !== 'Armed' && state.kind !== 'Dragging') {
+  if (state.kind !== 'Armed' && state.kind !== 'Dragging' && state.kind !== 'Rasterizing') {
     return ignore(machine, 'wrong-phase');
   }
   if (viewport.generation < state.viewport.generation) {
@@ -338,6 +338,20 @@ function updateViewport(
         errorCode: 'viewport-changed',
       },
       [{ type: 'releasePointerCapture', pointerId: state.pointerId }]
+    );
+  }
+  if (state.kind === 'Rasterizing') {
+    // The crop and its block mapping were measured against the old viewport.
+    // Abort the in-flight raster so neither a late success nor a late failure
+    // can resurrect a selection the workflow no longer considers current.
+    return apply(
+      {
+        kind: 'Armed',
+        viewport,
+        selection: null,
+        errorCode: 'viewport-changed',
+      },
+      [{ type: 'abortPhase', phase: 'raster', phaseId: state.captureId }]
     );
   }
   return apply({ kind: 'Armed', viewport, selection: null, errorCode: null });

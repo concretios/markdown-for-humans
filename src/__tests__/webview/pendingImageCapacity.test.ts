@@ -156,6 +156,30 @@ describe('pending image renderer capacity', () => {
     expect(settled).toBe(true);
   });
 
+  it('bounds an explicit-action wait when an image save never completes', async () => {
+    jest.useFakeTimers();
+    try {
+      const neverCompletes = 'wait-never-completes';
+      reservedIds.push(neverCompletes);
+      expect(tryReservePendingImageSave(neverCompletes)).toBe(true);
+      const settled = jest.fn();
+      const bounded = waitForPendingImageSaves(2_000).then(settled);
+
+      await jest.advanceTimersByTimeAsync(1_999);
+      expect(settled).not.toHaveBeenCalled();
+      await jest.advanceTimersByTimeAsync(1);
+      await bounded;
+      expect(settled).toHaveBeenCalledWith(false);
+
+      // A completion after the deadline must not revive the expired waiter.
+      releasePendingImageSave(neverCompletes);
+      expect(settled).toHaveBeenCalledTimes(1);
+      await expect(waitForPendingImageSaves(2_000)).resolves.toBe(true);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('registers the host image write before publishing its pending document marker', async () => {
     const order: string[] = [];
     const editor = new Editor({

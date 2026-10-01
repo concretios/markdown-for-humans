@@ -20,8 +20,14 @@
  *       for path.resolve() before calling)
  */
 
+// Default import: the real module object, so `jest.spyOn` sees the provider's calls.
+import fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import { isPathContainedWithin } from '../../editor/MarkdownEditorProvider';
+import {
+  isPathContainedWithin,
+  resolveContainedImageSource,
+} from '../../editor/MarkdownEditorProvider';
 
 describe('isPathContainedWithin (path-traversal defense)', () => {
   const ROOT = path.resolve('/tmp/workspace');
@@ -91,4 +97,86 @@ describe('isPathContainedWithin (path-traversal defense)', () => {
       expect(isPathContainedWithin('/tmp/workspace/x', '')).toBe(false);
     });
   });
+});
+
+// Creating symlinks on Windows needs Developer Mode or admin rights.
+const describeWithSymlinks = process.platform === 'win32' ? describe.skip : describe;
+
+describeWithSymlinks('resolveContainedImageSource follows symlinks (02-F2)', () => {
+  // A cloned repo can commit symlinks. The webview loader and Chrome both follow
+  // them, so a lexically contained path must also be contained once resolved.
+  let temporary: string;
+  let workspace: string;
+  let docs: string;
+  let roots: string[];
+
+  beforeAll(() => {
+    temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'md4h-symlink-'));
+    workspace = path.join(temporary, 'ws');
+    docs = path.join(workspace, 'docs');
+    const outside = path.join(temporary, 'outside');
+    fs.mkdirSync(docs, { recursive: true });
+    fs.mkdirSync(path.join(workspace, 'shared'));
+    fs.mkdirSync(outside);
+    fs.writeFileSync(path.join(outside, 'secret.png'), 'secret');
+    fs.writeFileSync(path.join(workspace, 'shared', 'logo.png'), 'logo');
+    fs.writeFileSync(path.join(docs, 'plain.png'), 'plain');
+    fs.symlinkSync(outside, path.join(docs, 'link'), 'dir');
+    fs.symlinkSync(path.join(outside, 'secret.png'), path.join(docs, 'alias.png'), 'file');
+    fs.symlinkSync(path.join('..', 'shared'), path.join(docs, 'assets'), 'dir');
+    fs.symlinkSync(workspace, path.join(temporary, 'ws-link'), 'dir');
+    roots = [workspace, docs];
+  });
+
+  afterAll(() => {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  });
+
+  it('refuses a file reached through a directory symlink that leaves every root', () => {
+    expect(resolveContainedImageSource('link/secret.png', docs, roots)).toBeUndefined();
+  });
+
+  it('refuses a file symlink whose target is outside every root', () => {
+    expect(resolveContainedImageSource('alias.png', docs, roots)).toBeUndefined();
+  });
+
+  it('accepts an in-root symlink that resolves inside an allowed root, at its lexical path', () => {
+    expect(resolveContainedImageSource('assets/logo.png?v=2', docs, roots)).toEqual({
+      absolutePath: path.join(docs, 'assets', 'logo.png'),
+      suffix: '?v=2',
+    });
+  });
+
+  it('accepts files when the allowed root itself is reached through a symlink', () => {
+    const linkedDocs = path.join(temporary, 'ws-link', 'docs');
+    const linkedRoots = [path.join(temporary, 'ws-link'), linkedDocs];
+    expect(resolveContainedImageSource('plain.png', linkedDocs, linkedRoots)).toEqual({
+      absolutePath: path.join(linkedDocs, 'plain.png'),
+      suffix: '',
+    });
+    expect(resolveContainedImageSource('link/secret.png', linkedDocs, linkedRoots)).toBeUndefined();
+  });
+
+  it('keeps the lexical decision for a contained file that does not exist yet', () => {
+    expect(resolveContainedImageSource('new.png', docs, roots)).toEqual({
+      absolutePath: path.join(docs, 'new.png'),
+      suffix: '',
+    });
+  });
+});
+
+describe('resolveContainedImageSource refuses lexically before resolving symlinks (02-R3)', () => {
+  // realpath on a Windows UNC path (`\\host\share`) is an SMB lookup that can leak
+  // credentials, so a lexically refused source must never reach it.
+  afterEach(() => jest.restoreAllMocks());
+
+  it.each(['../../../../etc/hosts', '/etc/hosts', '//host/share/x.png'])(
+    'never resolves the real path of %s',
+    source => {
+      const realpathSync = jest.spyOn(fs, 'realpathSync');
+      const root = path.resolve('/tmp/workspace');
+      expect(resolveContainedImageSource(source, root, [root])).toBeUndefined();
+      expect(realpathSync).not.toHaveBeenCalled();
+    }
+  );
 });
