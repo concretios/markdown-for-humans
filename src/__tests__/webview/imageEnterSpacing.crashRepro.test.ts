@@ -37,7 +37,7 @@ describe('ImageEnterSpacing crash repro (Enter after image line)', () => {
       target: null,
     }) as unknown as KeyboardEvent & { preventDefault: jest.Mock; stopPropagation: jest.Mock };
 
-  it('does not intercept Enter when the computed gap-cursor position is not a valid block insertion boundary', () => {
+  it('inserts a paragraph after the containing block for gap-like selection after an inline image (no crash)', () => {
     const fixture = `# Repro — Enter at image gap cursor crash
 
 ## Markdown snippet (from crash report)
@@ -66,6 +66,7 @@ describe('ImageEnterSpacing crash repro (Enter after image line)', () => {
 - No crash.
 - Editor remains editable.
 - Markdown remains valid.
+- New paragraph is inserted at a document block boundary (after the containing paragraph), never at the invalid in-paragraph head.
 `;
 
     const md = fixture.match(/```md\n([\s\S]*?)\n```/m)?.[1] ?? '';
@@ -131,9 +132,7 @@ describe('ImageEnterSpacing crash repro (Enter after image line)', () => {
 
     const $from = doc.resolve(posAfterSecondImage);
 
-    // Create a "gapcursor-like" selection object inside the paragraph.
-    // In the reported crash, the ImageEnterSpacing handler treated the selection as a gap cursor
-    // and attempted to insert a paragraph at an invalid position, corrupting editor state.
+    // Gapcursor-like selection inside the paragraph (historically crashed when inserting at head).
     const selection = {
       type: 'gapcursor',
       $from,
@@ -163,9 +162,15 @@ describe('ImageEnterSpacing crash repro (Enter after image line)', () => {
 
     const handled = plugin.props?.handleKeyDown?.({ state, dispatch }, event);
 
-    expect(handled).toBe(false);
-    expect(event.preventDefault).not.toHaveBeenCalled();
-    expect(event.stopPropagation).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
+    // Must handle without crashing: insert at the document boundary AFTER the paragraph,
+    // never at the invalid in-paragraph head that corrupted editor state.
+    expect(handled).toBe(true);
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalled();
+    expect(mockTr.insert).toHaveBeenCalledWith(
+      doc.child(0).nodeSize,
+      expect.objectContaining({ type: expect.objectContaining({ name: 'paragraph' }) })
+    );
+    expect(mockTr.insert).not.toHaveBeenCalledWith(posAfterSecondImage, expect.anything());
   });
 });
