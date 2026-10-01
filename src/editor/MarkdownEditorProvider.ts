@@ -14,6 +14,7 @@ import * as https from 'https';
 import * as dns from 'dns';
 import { isIP } from 'net';
 import { readFile } from 'fs/promises';
+import { existsSync } from 'fs';
 import { outlineViewProvider, type OutlineEntry } from '../features/outlineView';
 import { setActiveWebviewPanel, getActiveWebviewPanel } from '../activeWebview';
 import {
@@ -740,6 +741,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   private static readonly PENDING_HOST_IMAGE_SAVE_LIMIT = MAX_PENDING_IMAGE_SAVES;
   private static readonly PENDING_HOST_IMAGE_SAVE_REJECTION_LIMIT = 128;
   private static readonly PENDING_HOST_IMAGE_SAVE_BYTE_LIMIT = 64 * 1024 * 1024;
+  /** Maximum serialized fallback, including the data URI header (256 KiB). */
+  private static readonly IMAGE_FALLBACK_URI_LIMIT = 256 * 1024;
   private static readonly IMAGE_SAVE_COMPLETION_ACK_TIMEOUT_MS = 1_000;
   private static readonly IMAGE_SAVE_COMPLETION_RETRY_DELAY_MS = 250;
   private static readonly IMAGE_SAVE_COMPLETION_MAX_RETRY_DELAY_MS = 4_000;
@@ -7531,7 +7534,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     try {
       // Basic normalization logic similar to handleResolveImageUri
       const normalizedPath = isImageFilePath(splitImageSource(rawRelativePath).path)
-        ? normalizeImagePath(rawRelativePath)
+        ? normalizeImagePath(rawRelativePath, basePath)
         : rawRelativePath.replace(/%20/g, ' ');
       const absolutePath = path.resolve(basePath, normalizedPath);
       const fileUri = vscode.Uri.file(absolutePath);
@@ -7547,7 +7550,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       try {
         // Enhanced fuzzy matching suggestions
         const normalizedPath = isImageFilePath(splitImageSource(rawRelativePath).path)
-          ? normalizeImagePath(rawRelativePath)
+          ? normalizeImagePath(rawRelativePath, basePath)
           : rawRelativePath.replace(/%20/g, ' ');
         const basename = path.basename(normalizedPath, path.extname(normalizedPath));
         const extension = path.extname(normalizedPath).toLowerCase();
@@ -7903,9 +7906,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       return;
     }
 
-    // Normalize the path (decode URL-encoded segments like %20 → space)
-    const relativePath = normalizeImagePath(rawRelativePath);
-
     // Resolve relative to document base path
     const basePath = this.getImageBasePath(document);
     if (!basePath) {
@@ -7918,6 +7918,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       });
       return;
     }
+    const relativePath = normalizeImagePath(rawRelativePath, basePath);
     const absolutePath = path.resolve(basePath, relativePath);
     const allowedRoots = this.getAllowedFileRoots(document);
     if (!allowedRoots.some(root => isPathContainedWithin(absolutePath, path.resolve(root)))) {
@@ -7938,7 +7939,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     webview.postMessage({
       type: 'imageUriResolved',
       requestId,
-      webviewUri: webviewUri.toString() + splitImageSource(rawRelativePath).suffix,
+      webviewUri: webviewUri.toString() + splitLocalImageSource(rawRelativePath, basePath).suffix,
       relativePath: rawRelativePath, // Return original path for consistency
     });
   }
@@ -8235,7 +8236,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     const completion = persistence.then(
       result => {
         entry.settled = true;
-        if (result.kind === 'error' && entry.data) {
+        if (result.kind === 'error' && this.canEmbedImageFallback(entry)) {
           // Failure is the only path that needs a durable preview fallback for
           // an accepted teardown marker. Encode without another binary copy,
           // then release the dense transfer buffer at settlement.
@@ -8251,7 +8252,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       },
       error => {
         entry.settled = true;
-        if (entry.data) {
+        if (this.canEmbedImageFallback(entry)) {
           entry.fallbackDataUri = `data:${entry.mimeType};base64,${Buffer.from(
             entry.data.buffer,
             entry.data.byteOffset,
@@ -8482,7 +8483,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     }
   }
 
-  /** Resolve only markers present in this exact renderer revision. */
+  /** Bound fallback allocation by its serialized size before base64 encoding. */
+  private canEmbedImageFallback(
+    entry: PendingHostImageSave
+  ): entry is PendingHostImageSave & { data: Uint8Array } {
+    return (
+      entry.data !== undefined &&
+      `data:${entry.mimeType};base64,`.length + 4 * Math.ceil(entry.data.byteLength / 3) <=
+        MarkdownEditorProvider.IMAGE_FALLBACK_URI_LIMIT
+    );
+  }
+
+  /** Resolve this revision's markers; reject failed saves whose fallback exceeds the cap. */
   private async resolvePendingImageDestinations(
     content: string,
     webview: vscode.Webview,
@@ -8511,6 +8523,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         continue;
       }
       const savedDestination = await entry.completion;
+      if (savedDestination === null && entry.fallbackDataUri === undefined) {
+        throw new Error('Image save failed. Retry the image insertion before saving this edit.');
+      }
       resolvedContent = replacePendingImageDestination(
         resolvedContent,
         entry.placeholderId,
@@ -8695,7 +8710,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         if (!basePath) {
           throw new Error('Cannot resolve image path: no base directory available');
         }
-        const normalizedPath = normalizeImagePath(imagePath);
+        const normalizedPath = normalizeImagePath(imagePath, basePath);
         absolutePath = path.resolve(basePath, normalizedPath);
         imageUri = vscode.Uri.file(absolutePath);
       }
@@ -8819,8 +8834,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       if (!basePath) {
         throw new Error('Cannot resolve image path: no base directory available');
       }
-      const normalizedImagePath = normalizeImagePath(imagePath);
-      const normalizedBackupPath = normalizeImagePath(backupPath);
+      const normalizedImagePath = normalizeImagePath(imagePath, basePath);
+      const normalizedBackupPath = normalizeImagePath(backupPath, basePath);
       const absoluteImagePath = path.resolve(basePath, normalizedImagePath);
       const absoluteBackupPath = path.resolve(basePath, normalizedBackupPath);
 
@@ -8889,7 +8904,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       if (!basePath) {
         throw new Error('Cannot resolve image path: no base directory available');
       }
-      const normalizedPath = normalizeImagePath(imagePath);
+      const normalizedPath = normalizeImagePath(imagePath, basePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
 
       const allowedRoots = this.getAllowedFileRoots(document);
@@ -8963,7 +8978,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         throw new Error('Cannot resolve image base path');
       }
 
-      const normalizedTargetPath = normalizeImagePath(imagePath);
+      const normalizedTargetPath = normalizeImagePath(imagePath, basePath);
       const absoluteTargetPath = path.resolve(basePath, normalizedTargetPath);
       const normalizedAbsoluteTarget = path.normalize(absoluteTargetPath);
 
@@ -9051,7 +9066,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     const results: Array<{ file: vscode.Uri; matches: Array<{ line: number; text: string }> }> = [];
 
     // Normalize the old path for comparison
-    const normalizedOldPath = normalizeImagePath(oldImagePath);
+    const normalizedOldPath = normalizeImagePath(oldImagePath, basePath);
     const absoluteOldPath = path.resolve(basePath, normalizedOldPath);
 
     for (const file of markdownFiles) {
@@ -9079,7 +9094,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   /** Resolve only local image references, keeping URL suffixes out of file identity. */
   private imageReferenceMatches(source: string, fileDir: string, absoluteTarget: string): boolean {
     if (/^(?:https?:|data:|blob:|vscode-webview:|\/\/)/i.test(source)) return false;
-    const absoluteReference = path.resolve(fileDir, normalizeImagePath(source));
+    const absoluteReference = path.resolve(
+      fileDir,
+      normalizeImagePath(
+        splitLocalImageSource(source, fileDir, absoluteTarget)
+          .path.replace(/#/g, '%23')
+          .replace(/\?/g, '%3F')
+      )
+    );
     return process.platform === 'win32'
       ? absoluteReference.toLowerCase() === path.resolve(absoluteTarget).toLowerCase()
       : absoluteReference === path.resolve(absoluteTarget);
@@ -9115,10 +9137,15 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     let updated = text;
     for (const reference of findImageSourceReferences(text).reverse()) {
       if (!this.imageReferenceMatches(reference.source, fileDir, absoluteOldPath)) continue;
+      const literalFilename =
+        splitLocalImageSource(reference.source, fileDir, absoluteOldPath).suffix === '';
       updated =
-        updated.slice(0, reference.filenameStart) +
+        updated.slice(
+          0,
+          literalFilename ? reference.literalFilenameStart : reference.filenameStart
+        ) +
         encodeImagePathSegment(newFilename) +
-        updated.slice(reference.pathEnd);
+        updated.slice(literalFilename ? reference.end : reference.pathEnd);
     }
     return updated;
   }
@@ -9156,27 +9183,35 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return result.status === 'completed' && result.value;
   }
 
-  /** Update exact image destinations across the selected Markdown documents. */
+  /** Update each document independently and report references left behind after rename. */
   private async updateImageReferences(
     references: Array<{ file: vscode.Uri; matches: Array<{ line: number; text: string }> }>,
     absoluteOldPath: string,
     newFilename: string
-  ): Promise<number> {
+  ): Promise<{ filesUpdated: number; failedFiles: string[] }> {
     let filesUpdated = 0;
+    const failedFiles: string[] = [];
     for (const { file } of references) {
-      const document = await vscode.workspace.openTextDocument(file);
-      if (
-        await this.updateDocumentImageReferences(
-          document,
-          path.dirname(file.fsPath),
-          absoluteOldPath,
-          newFilename
+      try {
+        const document = await vscode.workspace.openTextDocument(file);
+        if (
+          await this.updateDocumentImageReferences(
+            document,
+            path.dirname(file.fsPath),
+            absoluteOldPath,
+            newFilename
+          )
         )
-      ) {
-        filesUpdated++;
+          filesUpdated++;
+      } catch (error) {
+        failedFiles.push(file.fsPath);
+        console.error(
+          `[MD4H] Image renamed but references were not updated in ${file.fsPath}:`,
+          error
+        );
       }
     }
-    return filesUpdated;
+    return { filesUpdated, failedFiles };
   }
 
   private async handleCheckImageRename(
@@ -9194,7 +9229,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         throw new Error('Cannot resolve image path: no base directory available');
       }
 
-      const normalizedOldPath = normalizeImagePath(oldPath);
+      const normalizedOldPath = normalizeImagePath(oldPath, basePath);
       const absoluteOldPath = path.resolve(basePath, normalizedOldPath);
       const oldUri = vscode.Uri.file(absoluteOldPath);
 
@@ -9235,7 +9270,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         requestId,
         exists,
         newFilename,
-        newPath: encodeImageFilePath(normalizedNewPath) + splitImageSource(oldPath).suffix,
+        newPath:
+          encodeImageFilePath(normalizedNewPath) +
+          splitLocalImageSource(oldPath, basePath, absoluteOldPath).suffix,
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -9274,7 +9311,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         throw new Error('Cannot resolve image path: no base directory available');
       }
 
-      const normalizedOldPath = normalizeImagePath(oldPath);
+      const normalizedOldPath = normalizeImagePath(oldPath, basePath);
       const absoluteOldPath = path.resolve(basePath, normalizedOldPath);
       const oldUri = vscode.Uri.file(absoluteOldPath);
 
@@ -9352,19 +9389,30 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
       // Update references
       let filesUpdated = 0;
+      const failedFiles: string[] = [];
       if (updateAllReferences && references.length > 0) {
-        filesUpdated = await this.updateImageReferences(references, absoluteOldPath, newFilename);
+        const result = await this.updateImageReferences(references, absoluteOldPath, newFilename);
+        filesUpdated = result.filesUpdated;
+        failedFiles.push(...result.failedFiles);
       } else {
         const fileDir =
           document.uri.scheme === 'file' ? path.dirname(document.uri.fsPath) : basePath;
-        filesUpdated = (await this.updateDocumentImageReferences(
-          document,
-          fileDir,
-          absoluteOldPath,
-          newFilename
-        ))
-          ? 1
-          : 0;
+        try {
+          filesUpdated = (await this.updateDocumentImageReferences(
+            document,
+            fileDir,
+            absoluteOldPath,
+            newFilename
+          ))
+            ? 1
+            : 0;
+        } catch (error) {
+          failedFiles.push(document.uri.fsPath);
+          console.error(
+            '[MD4H] Image renamed but current document references were not updated:',
+            error
+          );
+        }
       }
 
       // Notify webview of success
@@ -9372,11 +9420,18 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         type: 'imageRenamed',
         success: true,
         oldPath,
-        newPath: encodeImageFilePath(normalizedNewPath) + splitImageSource(oldPath).suffix,
+        newPath:
+          encodeImageFilePath(normalizedNewPath) +
+          splitLocalImageSource(oldPath, basePath, absoluteOldPath).suffix,
         filesUpdated,
+        failedFiles,
       });
 
-      if (filesUpdated > 1) {
+      if (failedFiles.length > 0) {
+        vscode.window.showWarningMessage(
+          `Image renamed to ${newFilename}, but references could not be updated in: ${failedFiles.join(', ')}. Update those references manually.`
+        );
+      } else if (filesUpdated > 1) {
         vscode.window.showInformationMessage(
           `Image renamed to ${newFilename} (updated ${filesUpdated} files)`
         );
@@ -9418,7 +9473,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         });
         return;
       }
-      const normalizedPath = normalizeImagePath(imagePath);
+      const normalizedPath = normalizeImagePath(imagePath, basePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
 
       // SECURITY: never report on / disclose paths outside the document or
@@ -9506,7 +9561,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         return;
       }
 
-      const normalizedPath = normalizeImagePath(imagePath);
+      const normalizedPath = normalizeImagePath(imagePath, basePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
 
       // SECURITY: never disclose metadata for files outside the document or
@@ -9595,7 +9650,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         return;
       }
 
-      const normalizedPath = normalizeImagePath(imagePath);
+      const normalizedPath = normalizeImagePath(imagePath, basePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
 
       // SECURITY: reject paths that escape the document/workspace roots. Without
@@ -9655,7 +9710,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         return;
       }
 
-      const normalizedPath = normalizeImagePath(imagePath);
+      const normalizedPath = normalizeImagePath(imagePath, basePath);
       const absolutePath = path.resolve(basePath, normalizedPath);
 
       // SECURITY: reject paths that escape the document/workspace roots (see
@@ -9963,8 +10018,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
     console.warn('[MD4H] handleOpenImage called with path:', imagePath);
 
-    const normalizedPath = normalizeImagePath(imagePath);
-
     // Try document-relative first
     let baseDir: string | undefined;
     if (document.uri.scheme === 'file') {
@@ -9979,6 +10032,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       return;
     }
 
+    const normalizedPath = normalizeImagePath(imagePath, baseDir);
     let imageFullPath = path.resolve(baseDir, normalizedPath);
     let imageUri = vscode.Uri.file(imageFullPath);
     console.warn('[MD4H] Trying document-relative path:', imageFullPath);
@@ -9996,7 +10050,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
       if (workspaceFolder) {
         const workspacePath = workspaceFolder.uri.fsPath;
-        imageFullPath = path.resolve(workspacePath, normalizedPath);
+        imageFullPath = path.resolve(workspacePath, normalizeImagePath(imagePath, workspacePath));
         imageUri = vscode.Uri.file(imageFullPath);
         console.warn('[MD4H] Trying workspace-relative path:', imageFullPath);
 
@@ -11312,6 +11366,30 @@ function isImageFilePath(filePath: string): boolean {
 }
 
 /**
+ * Prefer a legacy literal filename when it exists. A known rename target keeps
+ * that identity stable after the file has moved. New destinations stay encoded.
+ */
+function splitLocalImageSource(
+  source: string,
+  basePath?: string,
+  knownPath?: string
+): { path: string; suffix: string } {
+  const parts = splitImageSource(source);
+  if (!basePath || !parts.suffix || /^(?:https?:|data:|blob:|vscode-webview:|\/\/)/i.test(source))
+    return parts;
+  const literalPath = path.resolve(
+    basePath,
+    normalizeImagePath(source.replace(/#/g, '%23').replace(/\?/g, '%3F'))
+  );
+  const sameTarget =
+    knownPath !== undefined &&
+    (process.platform === 'win32'
+      ? literalPath.toLowerCase() === knownPath.toLowerCase()
+      : literalPath === knownPath);
+  return sameTarget || existsSync(literalPath) ? { path: source, suffix: '' } : parts;
+}
+
+/**
  * Normalize an image path by URL-decoding each path segment.
  *
  * Handles paths like:
@@ -11323,9 +11401,10 @@ function isImageFilePath(filePath: string): boolean {
  * markdown imported from web tools, GitHub, or static site generators.
  *
  * @param imagePath - The raw image path from markdown src attribute
- * @returns Filesystem path with URL suffix removed before segments are decoded
+ * @param basePath - Optional directory for compatibility with existing raw #/? filenames
+ * @returns Decoded filesystem path, preferring an existing unsplit local filename
  */
-export function normalizeImagePath(imagePath: string): string {
+export function normalizeImagePath(imagePath: string, basePath?: string): string {
   // Don't touch remote URLs, data URIs, or already-resolved webview URIs
   if (
     imagePath.startsWith('http://') ||
@@ -11338,7 +11417,7 @@ export function normalizeImagePath(imagePath: string): string {
 
   // Strip delimiters before decoding: diagram%23view.svg names a file, while
   // diagram.svg#view names a view within the SVG (task-svg-image-support).
-  imagePath = splitImageSource(imagePath).path;
+  imagePath = splitLocalImageSource(imagePath, basePath).path;
 
   // Handle file:// URIs by stripping the scheme and decoding
   if (imagePath.startsWith('file://')) {

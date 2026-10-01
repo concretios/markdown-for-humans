@@ -51,6 +51,7 @@ Markdown entities are decoded only in inline text contexts. Authored entity spel
 - Host delivery and echo suppression are split-specific. Pending delivery is tracked separately from last proven delivery, so A to B to A races cannot suppress the final A. A skipped recent-edit update requests authoritative reconciliation instead of becoming a silent fork.
 - Pending image destinations retain at most 128 unresolved entries and 64 MiB per view. The renderer reserves the same bounded number before conversion. Typed-array input is copied once into an exact-size host buffer and released when the write settles.
 - Image completion is not complete when `postMessage()` queues it. The exact renderer generation atomically applies every matching ProseMirror mutation, ACKs application, and idempotently re-ACKs retries. Capacity errors use the same correlated path, and unknown or wrong-generation markers reject the document edit.
+- Image completion mutations stay outside undo history. Failed-save data URI fallback is limited to 256 KiB including its header; larger failures reject the edit instead of embedding the preview. Image paste/drop checks the live Feedback owner/peer lock before side effects, independently of capture-listener order.
 - Raw HTML token contexts are source-exact in structural-equivalence checks because HTML/CSS can make otherwise collapsible whitespace visible.
 - Never reintroduce a shared `ignoreNextUpdate` boolean.
 

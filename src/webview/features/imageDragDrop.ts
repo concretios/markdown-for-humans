@@ -154,12 +154,13 @@ const SUPPORTED_IMAGE_TYPES = [
 const IMAGE_PATH_REGEX = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
 
 /**
- * Setup image drag & drop and paste handling for the editor
+ * Set up image imports, consulting the live editing lock before any event side effects.
  */
 export function setupImageDragDrop(
   editor: Editor,
   vscodeApi: VsCodeApi,
-  viewGeneration: string
+  viewGeneration: string,
+  isEditingLocked: () => boolean = () => false
 ): void {
   const editorElement = document.querySelector('.ProseMirror');
   if (!editorElement) {
@@ -175,14 +176,17 @@ export function setupImageDragDrop(
   // Drag over styling
   editorElement.addEventListener('dragover', handleDragOver);
   editorElement.addEventListener('dragleave', handleDragLeave);
-  editorElement.addEventListener('drop', e =>
-    handleDrop(e as DragEvent, editor, generationBoundApi)
-  );
+  editorElement.addEventListener('drop', e => {
+    if (isEditingLocked()) return;
+    void handleDrop(e as DragEvent, editor, generationBoundApi);
+  });
 
   // Paste handling
   // Claim supported image payloads before ProseMirror's bubble listener starts
   // its native paste fallback (and delayed focus). Ordinary text still passes through.
   const handleImagePaste = (event: Event) => {
+    // Feedback capture guards may be registered later on this same element.
+    if (isEditingLocked()) return;
     void handlePaste(event as ClipboardEvent, editor, generationBoundApi);
   };
   editorElement.addEventListener('paste', handleImagePaste, true);
@@ -929,7 +933,7 @@ function findPendingImageNodes(editor: Editor, placeholderId: string): PendingIm
   return matches;
 }
 
-/** Atomically replace every matching preview and verify no placeholder remains. */
+/** Replace previews outside undo history so undo cannot resurrect transient data URLs. */
 export function applySavedImageCompletion(
   editor: Editor,
   placeholderId: string,
@@ -939,7 +943,7 @@ export function applySavedImageCompletion(
   if (matches.length === 0) return true;
 
   try {
-    let transaction = editor.state.tr;
+    let transaction = editor.state.tr.setMeta('addToHistory', false);
     for (const { pos, node } of matches) {
       transaction = transaction.setNodeMarkup(pos, undefined, {
         ...node.attrs,
@@ -955,13 +959,13 @@ export function applySavedImageCompletion(
   }
 }
 
-/** Atomically delete every failed preview and verify no placeholder remains. */
+/** Delete failed previews outside undo history and verify no placeholder remains. */
 export function applyFailedImageCompletion(editor: Editor, placeholderId: string): boolean {
   const matches = findPendingImageNodes(editor, placeholderId);
   if (matches.length === 0) return true;
 
   try {
-    let transaction = editor.state.tr;
+    let transaction = editor.state.tr.setMeta('addToHistory', false);
     for (const { pos, node } of [...matches].sort((left, right) => right.pos - left.pos)) {
       transaction = transaction.delete(pos, pos + node.nodeSize);
     }

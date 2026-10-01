@@ -9,6 +9,7 @@
 import { Editor } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
 import StarterKit from '@tiptap/starter-kit';
+import { closeHistory } from '@tiptap/pm/history';
 import {
   applyFailedImageCompletion,
   applySavedImageCompletion,
@@ -70,6 +71,35 @@ describe('pending image completion ProseMirror mutations', () => {
     expect(applyFailedImageCompletion(editor, 'shared')).toBe(true);
 
     expect(matchingImages(editor, 'shared')).toHaveLength(0);
+    editor.destroy();
+  });
+
+  it.each(['saved', 'failed'])('cannot undo a %s completion into a data URI', outcome => {
+    const editor = createEditor();
+    if (outcome === 'saved') applySavedImageCompletion(editor, 'shared', './images/final.png');
+    else applyFailedImageCompletion(editor, 'shared');
+    editor.commands.undo();
+    expect(JSON.stringify(editor.getJSON())).not.toContain('data:image');
+    expect(matchingImages(editor, 'shared')).toHaveLength(0);
+    editor.destroy();
+  });
+
+  it('preserves a saved destination across undo and redo of the original insertion', () => {
+    const editor = new Editor({
+      extensions: [StarterKit, PendingImage.configure({ allowBase64: true })],
+      content: '<p>Before</p>',
+    });
+    editor.commands.insertContent({
+      type: 'image',
+      attrs: { src: 'data:image/png;base64,AA==', 'data-placeholder-id': 'inserted' },
+    });
+    editor.view.dispatch(closeHistory(editor.state.tr));
+    applySavedImageCompletion(editor, 'inserted', './images/saved.png');
+    editor.commands.undo();
+    expect(JSON.stringify(editor.getJSON())).not.toContain('data:image');
+    editor.commands.redo();
+    expect(JSON.stringify(editor.getJSON())).toContain('./images/saved.png');
+    expect(JSON.stringify(editor.getJSON())).not.toContain('data:image');
     editor.destroy();
   });
 
