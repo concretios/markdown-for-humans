@@ -43,6 +43,40 @@ class FakeWorker {
 const flush = async (): Promise<void> => {
   for (let n = 0; n < 12; n++) await Promise.resolve();
 };
+class FakePort {
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  other!: FakePort;
+  closed = false;
+  postMessage(): void {
+    if (!this.closed) FakeMessageChannel.queue.push(this.other);
+  }
+  close(): void {
+    this.closed = true;
+  }
+}
+/** Deterministic MessageChannel: messages are delivered only by deliver(). */
+class FakeMessageChannel {
+  static instances: FakeMessageChannel[] = [];
+  static queue: FakePort[] = [];
+  static posted = 0;
+  port1 = new FakePort();
+  port2 = new FakePort();
+  constructor() {
+    this.port1.other = this.port2;
+    this.port2.other = this.port1;
+    const post = this.port2.postMessage.bind(this.port2);
+    this.port2.postMessage = () => {
+      FakeMessageChannel.posted++;
+      post();
+    };
+    FakeMessageChannel.instances.push(this);
+  }
+  static async deliver(): Promise<void> {
+    const target = FakeMessageChannel.queue.shift();
+    if (target && !target.closed) target.onmessage?.({ data: null } as MessageEvent);
+    await flush();
+  }
+}
 
 describe('bounded highlighting worker service', () => {
   let service: HighlightService;
@@ -427,5 +461,86 @@ describe('bounded highlighting worker service', () => {
     expect(FakeWorker.instances).toHaveLength(2);
     FakeWorker.instances[1].reply({ spans: [{ from: 0, to: 99999, classes: 'hljs-string' }] });
     expect((await pending).reason).toBe('invalid-worker-result');
+  });
+
+  describe('message-task yielding', () => {
+    const spansOf = (length: number, classes = 'r') =>
+      Array.from({ length }, (_, index) => ({ from: index, to: index + 1, classes }));
+    beforeEach(() => {
+      FakeMessageChannel.instances = [];
+      FakeMessageChannel.queue = [];
+      FakeMessageChannel.posted = 0;
+      Object.defineProperty(globalThis, 'MessageChannel', {
+        configurable: true,
+        value: FakeMessageChannel,
+      });
+    });
+    afterEach(() => {
+      Reflect.deleteProperty(globalThis, 'MessageChannel');
+    });
+
+    it('validates large results through message tasks without timer hops', async () => {
+      const pending = service.highlight('ts', 'x'.repeat(3000));
+      await flush();
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      FakeWorker.instances[0].reply({ spans: spansOf(3000) });
+      await flush();
+      // The first chunk runs synchronously; the rest wait for a message, not a timer.
+      expect(settled).toBe(false);
+      expect(jest.getTimerCount()).toBe(0);
+      expect(FakeMessageChannel.queue).toHaveLength(1);
+      for (let turn = 0; turn < 5 && !settled; turn++) {
+        await FakeMessageChannel.deliver();
+        expect(FakeMessageChannel.queue.length).toBeLessThanOrEqual(1);
+      }
+      expect(settled).toBe(true);
+      // 3,000 spans in 1,000-span chunks: two continuations, each a fresh message.
+      expect(FakeMessageChannel.posted).toBe(2);
+      expect((await pending).spans).toHaveLength(3000);
+      expect(FakeMessageChannel.instances).toHaveLength(1);
+    });
+
+    it('closes the channel and ignores an in-flight message after disposal', async () => {
+      const pending = service.highlight('ts', 'x'.repeat(3000));
+      await flush();
+      const spans = spansOf(3000);
+      FakeWorker.instances[0].reply({ spans });
+      await flush();
+      expect(FakeMessageChannel.queue).toHaveLength(1);
+      service.dispose();
+      expect((await pending).reason).toBe('disposed');
+      const [channel] = FakeMessageChannel.instances;
+      expect(channel.port1.closed).toBe(true);
+      expect(channel.port2.closed).toBe(true);
+      await FakeMessageChannel.deliver();
+      expect(Object.isFrozen(spans[spans.length - 1])).toBe(false);
+    });
+
+    it('reuses one in-flight message for the replacement job after a worker crash', async () => {
+      const pending = service.highlight('ts', 'x'.repeat(3000));
+      await flush();
+      const stale = spansOf(3000, 'c');
+      FakeWorker.instances[0].reply({ spans: stale });
+      await flush();
+      expect(FakeMessageChannel.posted).toBe(1);
+      FakeWorker.instances[0].onerror?.(new Event('error', { cancelable: true }));
+      await flush();
+      const replacement = spansOf(3000, 'r');
+      FakeWorker.instances[1].reply({ spans: replacement });
+      await flush();
+      // The stale continuation was cancelled; its queued message now carries the
+      // replacement's continuation instead of posting a second message.
+      expect(FakeMessageChannel.posted).toBe(1);
+      expect(FakeMessageChannel.queue).toHaveLength(1);
+      await FakeMessageChannel.deliver();
+      await FakeMessageChannel.deliver();
+      const result = await pending;
+      expect(result.spans).toBe(replacement);
+      expect(Object.isFrozen(replacement[replacement.length - 1])).toBe(true);
+      expect(Object.isFrozen(stale[stale.length - 1])).toBe(false);
+    });
   });
 });

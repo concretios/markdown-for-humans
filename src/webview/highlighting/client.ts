@@ -31,11 +31,67 @@ interface ActiveJob {
   failureKey: string;
   requestId: number;
   timer: ReturnType<typeof setTimeout> | null;
-  continuation: ReturnType<typeof setTimeout> | null;
+  /** Cancels the pending validation continuation, when one is scheduled. */
+  continuation: (() => void) | null;
   validating: boolean;
   resolve: (result: HighlightResult) => void;
 }
 let sessionSequence = 0;
+
+/** A cancellable yield to the event loop. */
+export interface TaskYield {
+  /** Schedule one task; the returned function cancels it if it has not run. */
+  post(task: () => void): () => void;
+  dispose(): void;
+}
+
+/**
+ * Yield through a MessageChannel task where available. Chained setTimeout(0)
+ * calls are clamped to 4 ms after five nested levels, which made a 40-chunk
+ * validation wait ~150 ms. At most one message is in flight; a task posted
+ * while one is queued replaces the pending task and reuses that message.
+ * JSDOM has no MessageChannel and keeps the timer path.
+ */
+export function createTaskYield(): TaskYield {
+  let channel: MessageChannel | null = null;
+  let pending: (() => void) | null = null;
+  let inFlight = false;
+  let disposed = false;
+  return {
+    post(task) {
+      if (disposed) return () => undefined;
+      if (typeof MessageChannel !== 'function') {
+        const timer = setTimeout(task, 0);
+        return () => clearTimeout(timer);
+      }
+      if (!channel) {
+        channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+          // Clear state before running, so a re-post from the task sends a new message.
+          inFlight = false;
+          const next = pending;
+          pending = null;
+          next?.();
+        };
+      }
+      pending = task;
+      if (!inFlight) {
+        inFlight = true;
+        channel.port2.postMessage(null);
+      }
+      return () => {
+        if (pending === task) pending = null;
+      };
+    },
+    dispose() {
+      disposed = true;
+      pending = null;
+      channel?.port1.close();
+      channel?.port2.close();
+      channel = null;
+    },
+  };
+}
 
 /** A bounded failure fingerprint. Collisions conservatively withhold a retry only. */
 function failureFingerprint(grammar: string, source: string): string {
@@ -65,6 +121,7 @@ export function createHighlightService(workerUrl: string): HighlightService {
   let active: ActiveJob | null = null;
   let cacheBytes = 0;
   let cacheRanges = 0;
+  const yielder = createTaskYield();
   const cache = new Map<string, CachedResult>();
   // Kept outside the evictable token cache: eviction cannot reset a failed job's
   // retry allowance. Exhaustion fails closed until the webview is reopened.
@@ -88,7 +145,8 @@ export function createHighlightService(workerUrl: string): HighlightService {
   const finish = (job: ActiveJob, result: HighlightResult): void => {
     if (active !== job) return;
     if (job.timer !== null) clearTimeout(job.timer);
-    if (job.continuation !== null) clearTimeout(job.continuation);
+    job.continuation?.();
+    job.continuation = null;
     active = null;
     job.resolve(result);
   };
@@ -120,7 +178,8 @@ export function createHighlightService(workerUrl: string): HighlightService {
   const fail = (job: ActiveJob, requestId: number, reason: string): void => {
     if (disposed || active !== job || job.requestId !== requestId) return;
     if (job.timer !== null) clearTimeout(job.timer);
-    if (job.continuation !== null) clearTimeout(job.continuation);
+    job.continuation?.();
+    job.continuation = null;
     stopWorker();
     let failure = failures.get(job.failureKey);
     if (!failure) {
@@ -187,7 +246,7 @@ export function createHighlightService(workerUrl: string): HighlightService {
           return;
         }
         if (status === 'pending') {
-          job.continuation = setTimeout(processChunk, 0);
+          job.continuation = yielder.post(processChunk);
           return;
         }
         // Recheck after the final chunk before retaining or publishing any data.
@@ -203,6 +262,7 @@ export function createHighlightService(workerUrl: string): HighlightService {
   const start = (job: ActiveJob): void => {
     const requestId = ++nextRequestId;
     job.requestId = requestId;
+    job.continuation?.();
     job.continuation = null;
     job.validating = false;
     job.timer = setTimeout(
@@ -305,6 +365,7 @@ export function createHighlightService(workerUrl: string): HighlightService {
       disposed = true;
       stopWorker();
       if (active) finish(active, { spans: [], reason: 'disposed' });
+      yielder.dispose();
       cache.clear();
       failures.clear();
       cacheBytes = 0;

@@ -63,6 +63,9 @@ textblock, so large removals rebuild the set. Edits remove only colors touching
 the changed text. Viewport probes skip overlays such as the sticky toolbar, and a
 projection is republished only after the visible range leaves it. Code blocks
 opt out of scroll anchoring because a moved projection reuses the long text node.
+Large-result validation yields through `MessageChannel` tasks; chained
+`setTimeout(0)` hops were clamped and, in an unfocused window, throttled to about
+one per second (32 s for a 10,000-line block).
 `codeHighlightingLargeBlockCost.test.ts` guards the 40,000-token budget.
 
 Focused regression suites are `codeHighlightingPlugin.test.ts`,

@@ -148,7 +148,7 @@ Use one worker per live webview, initialized once, with one active job and coale
 
 The worker transport correlates a view-scoped session, request ID, normalized grammar and source length. The plugin retains occurrence ID, per-block revision and the immutable source node for each request/publication. Validate the transport envelope and spans, then recheck the live occurrence and source and find its current mapped position. Reject results from earlier edits, A→B→A races, deleted/replaced blocks and disposed views. A global document revision alone is insufficient because unrelated prose edits should not discard useful results.
 
-Large-result validation, freezing and cache-byte accounting yield after at most 1,000 spans or a cooperative 4 ms deadline, checked every 64 spans. Continuations recheck job/session ownership and stop on disposal or worker replacement. The worker timeout ends when its response arrives; main-thread validation scheduling is measured separately. No partially validated result enters the cache or publication queue. These slices are an implementation mechanism, not proof that every browser task or input-to-paint interval stays below 4 ms.
+Large-result validation, freezing and cache-byte accounting yield after at most 1,000 spans or a cooperative 4 ms deadline, checked every 64 spans. Continuations run as `MessageChannel` tasks (a timer fallback remains for JSDOM), because chained `setTimeout(0)` hops are clamped after five nesting levels and were throttled to about one per second in an unfocused window. Continuations recheck job/session ownership and stop on disposal or worker replacement. The worker timeout ends when its response arrives; main-thread validation scheduling is measured separately. No partially validated result enters the cache or publication queue. These slices are an implementation mechanism, not proof that every browser task or input-to-paint interval stays below 4 ms.
 
 Publish decorations through a metadata-only transaction with `addToHistory: false`. Revalidate view generation, occurrence, revision, grammar and source identity before every deferred publication batch, not only when the worker result arrives; cancel remaining batches when any check fails. Assert zero document sync messages, dirty-state changes, undo entries and autosaves caused by highlighting.
 
@@ -396,6 +396,24 @@ the 1,000-block document also occurs with highlighting disabled, so it belongs t
 editor initialization rather than highlighting. These are synthetic dispatch
 measurements on an Apple M4 Pro, not physical keystroke-to-paint or reference
 hardware results.
+
+### 2026-10-01: Message-task validation yield
+
+Fixture tracing in the native host split time-to-color into worker reply and main-thread
+validation. On `32a3841`, a 10,000-line block's 40 validation hops cost 172 to 174 ms in
+the foreground, and about 32.3 s in each of three runs opened while the Extension
+Development Host window was unfocused. Rendering stayed active in those runs, so the
+delay came from timer throttling of the hop chain. This reproduces the intermittent slow
+first colors recorded above.
+
+Validation continuations now use one `MessageChannel` message at a time, with cancel
+functions in place of timer handles and the existing ownership guards unchanged. Four
+runs under the same unfocused conditions measured validation at 5 to 6 ms and job start
+to result at about 104 ms. The 1,000-block document settled with 1,000 results and no
+fallback, and the language matrix kept its colors. Tests drive the production path with
+a deterministic fake channel (no timer hops, one message in flight, disposal, crash
+replacement) and exercise the yielder with Node's real `MessageChannel`, where an
+open-handle check confirms that disposal closes its ports.
 
 The local-only execution report traces SH-01 through SH-20 and records overall
 acceptance as incomplete because the remaining gates above are open.
