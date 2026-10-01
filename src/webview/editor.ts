@@ -49,6 +49,7 @@ import {
   waitForPendingImageSaves,
   getPendingImageCount,
 } from './features/imageDragDrop';
+import { hideOutOfSyncBanner, showOutOfSyncBanner } from './features/outOfSyncBanner';
 import { hideTocOverlay, isTocVisible, toggleTocOverlay } from './features/tocOverlay';
 import { hideSearchOverlay, isSearchVisible, showSearchOverlay } from './features/searchOverlay';
 import { showLinkDialog } from './features/linkDialog';
@@ -193,6 +194,21 @@ let outlineUpdateTimeout: number | null = null;
 let allowNextHostSyncDespiteRecentEdit = false;
 let allowNextHostSyncDespiteEchoHash = false;
 let hostReconciliationPending = false;
+// The host rejected an edit as stale (its version moved past the edit's base).
+// The rejected content is still in this renderer and is rebased by the replay.
+let localEditRejected = false;
+// The host rejected an edit without a version change (read-only file, unknown
+// image marker). A resend would fail the same way, so the replay is applied
+// even over typing made after the rejection.
+let localEditHardRejected = false;
+let lastSentEditBaseVersion = 0;
+// A host content update was not applied (recent typing or apply failure), so
+// the host's current content may differ from this renderer's base.
+let hostContentDeferred = false;
+// Consecutive forced-replay requests without an accepted edit or applied replay.
+let hostReconciliationAttempts = 0;
+let hostReconciliationRetryTimer: number | null = null;
+let hostReconciliationFailed = false;
 // Math (KaTeX) feature flag. Captured from the first 'update'/'settingsUpdate'
 // message so the editor knows whether to register math extensions on init.
 // Toggling at runtime requires a reload — we surface a one-time notice.
@@ -322,6 +338,14 @@ const SYNC_ECHO_TIMEOUT_MS = 2000;
 const RECENT_EDIT_THRESHOLD_MS = 2000;
 const OUTLINE_UPDATE_DEBOUNCE_MS = 250;
 const INITIAL_CONTENT_RECOVERY_MS = 100;
+// One immediate forced-replay request plus three retries at 250, 500 and
+// 1000 ms. A replay that keeps failing (for example a parser exception) must
+// not ping-pong with the host forever.
+const MAX_HOST_RECONCILIATION_ATTEMPTS = 4;
+const HOST_RECONCILIATION_RETRY_BASE_MS = 250;
+// Matches the host's flush acknowledgement timeout (FEEDBACK_FLUSH_ACK_TIMEOUT_MS).
+// After it the host has abandoned the barrier, so the renderer must not resume it.
+const FLUSH_IMAGE_WAIT_TIMEOUT_MS = 2000;
 
 function requestWebviewFrame(callback: () => void): number {
   if (typeof window.requestAnimationFrame === 'function') {
@@ -444,16 +468,72 @@ const trackSentContent = (content: string) => {
   lastSentTimestamp = Date.now();
 };
 
-/** Request one forced host replay after renderer-side work is fully settled. */
+/**
+ * Request one forced host replay after renderer-side work is fully settled.
+ * The first request is immediate. Consecutive retries back off, and after
+ * MAX_HOST_RECONCILIATION_ATTEMPTS the host is told this view is out of sync
+ * so it can offer a reload instead of replaying forever. The view also shows a
+ * persistent banner with the same reload action until sync recovers.
+ */
 function requestHostReconciliation(forceNow = false): void {
   hostReconciliationPending = true;
   if (!forceNow && documentSyncController?.hasPendingSync()) return;
+  if (hostReconciliationRetryTimer !== null) return;
 
-  vscode.postMessage({
-    type: 'document.sync.request',
-    protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
-    viewGeneration,
-  });
+  if (hostReconciliationAttempts >= MAX_HOST_RECONCILIATION_ATTEMPTS) {
+    if (!hostReconciliationFailed) {
+      hostReconciliationFailed = true;
+      console.error('[MD4H] Rich editor could not reconcile with the document; reload required');
+      vscode.postMessage({
+        type: 'document.sync.failed',
+        protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+        viewGeneration,
+      });
+      showOutOfSyncBanner(() =>
+        vscode.postMessage({
+          type: 'document.sync.reload',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          viewGeneration,
+        })
+      );
+    }
+    return;
+  }
+
+  const delayMs =
+    hostReconciliationAttempts === 0
+      ? 0
+      : HOST_RECONCILIATION_RETRY_BASE_MS * 2 ** (hostReconciliationAttempts - 1);
+  hostReconciliationAttempts += 1;
+  const postRequest = () =>
+    vscode.postMessage({
+      type: 'document.sync.request',
+      protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+      viewGeneration,
+    });
+  if (delayMs === 0) {
+    postRequest();
+    return;
+  }
+  hostReconciliationRetryTimer = window.setTimeout(() => {
+    hostReconciliationRetryTimer = null;
+    if (hostReconciliationPending) postRequest();
+  }, delayMs);
+}
+
+/** Forget reconciliation state once this renderer holds authoritative host content. */
+function resetHostReconciliation(): void {
+  hostReconciliationPending = false;
+  localEditRejected = false;
+  localEditHardRejected = false;
+  hostContentDeferred = false;
+  hostReconciliationAttempts = 0;
+  hostReconciliationFailed = false;
+  hideOutOfSyncBanner();
+  if (hostReconciliationRetryTimer !== null) {
+    window.clearTimeout(hostReconciliationRetryTimer);
+    hostReconciliationRetryTimer = null;
+  }
 }
 
 /** Complete a deferred replay once no unsent or unacknowledged edit remains. */
@@ -686,14 +766,9 @@ function getDocumentSyncController(): DocumentSyncController {
     },
     send: (markdown, reason) => {
       trackSentContent(markdown);
-      if (reason === 'save-policy-enforce') {
-        // Save-time policy enforcement (e.g. strip blank lines) should be
-        // reflected immediately in the editor UI even after recent typing.
-        allowNextHostSyncDespiteRecentEdit = true;
-        allowNextHostSyncDespiteEchoHash = true;
-      }
       const editId = `${viewGeneration}:${localDocumentRevision}:${nextDocumentEditSequence}`;
       nextDocumentEditSequence += 1;
+      lastSentEditBaseVersion = acceptedDocumentVersion;
       vscode.postMessage({
         type: 'edit',
         protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
@@ -1372,7 +1447,7 @@ window.addEventListener('message', async (event: MessageEvent) => {
     applyAuthoritativeContent: (content, documentVersion) => {
       if (!editor || !updateEditorContentFromHost(content, true)) return false;
       documentSyncController?.acceptAuthoritativeState();
-      hostReconciliationPending = false;
+      resetHostReconciliation();
       acceptedDocumentVersion = documentVersion;
       return true;
     },
@@ -1464,18 +1539,46 @@ window.addEventListener('message', async (event: MessageEvent) => {
           }
           return;
         }
+        if (message.force === true && rebaseUnacceptedLocalEdits(message.documentVersion)) {
+          break;
+        }
+        if (message.savePolicyEcho === true) {
+          // Save-time policy enforcement (e.g. strip blank lines) of this view's
+          // Ctrl+S edit is shown at once, even after recent typing. Only the
+          // host-tagged echo may do this; a save participant or external write
+          // in the same round trip must respect the typing guard.
+          allowNextHostSyncDespiteRecentEdit = true;
+          allowNextHostSyncDespiteEchoHash = true;
+        }
         const hostUpdateApplied = updateEditorContentFromHost(
           message.content,
           message.force === true
         );
         if (hostUpdateApplied) {
+          hostContentDeferred = false;
           if (message.force === true) {
             documentSyncController?.acceptAuthoritativeState();
-            hostReconciliationPending = false;
+            resetHostReconciliation();
           }
           if (Number.isSafeInteger(message.documentVersion) && message.documentVersion >= 0) {
             acceptedDocumentVersion = message.documentVersion;
           }
+        }
+        break;
+      }
+      case 'document.version': {
+        // The host's content is unchanged from what it last delivered to or
+        // accepted from this view; only its version moved (an echo, or a
+        // blank-line change hidden by strip mode). Adopt it so the next edit
+        // is not rejected as stale. A deferred visible change must instead be
+        // settled by a forced replay.
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          Number.isSafeInteger(message.documentVersion) &&
+          message.documentVersion > acceptedDocumentVersion &&
+          !hostContentDeferred
+        ) {
+          acceptedDocumentVersion = message.documentVersion;
         }
         break;
       }
@@ -1496,11 +1599,23 @@ window.addEventListener('message', async (event: MessageEvent) => {
             acceptedDocumentVersion,
             acknowledgement.documentVersion
           );
+          // The host now holds this view's content, so any earlier rejected
+          // revision is included and reconciliation gets a fresh retry budget.
+          localEditRejected = false;
+          localEditHardRejected = false;
+          hostReconciliationAttempts = 0;
+          hostReconciliationFailed = false;
+          hideOutOfSyncBanner();
           syncController.resume();
           resumeHostReconciliation();
         } else {
           // The host rejected this base-version lineage. Do not emit a newer
-          // dirty revision until an authoritative replay resets its base.
+          // dirty revision until an authoritative replay resets its base. A
+          // stale-base rejection keeps its text for that replay to rebase. A
+          // rejection without a version change (read-only file, unknown image
+          // marker) would fail again, so the replay is applied instead.
+          localEditRejected = acknowledgement.documentVersion !== lastSentEditBaseVersion;
+          localEditHardRejected = !localEditRejected;
           requestHostReconciliation(true);
         }
         break;
@@ -1947,7 +2062,8 @@ window.addEventListener('message', async (event: MessageEvent) => {
             // Save and Feedback are explicit user actions. Keep their bounded
             // host barrier open while an already-posted image write reaches a
             // terminal result instead of making the user retry the action.
-            await waitForPendingImageSaves();
+            // Bounded: a late completion must not resume an abandoned barrier.
+            await waitForPendingImageSaves(FLUSH_IMAGE_WAIT_TIMEOUT_MS);
           }
           if (hasPendingImageSaves()) {
             ok = false;
@@ -2244,6 +2360,7 @@ function updateEditorContent(markdown: string): boolean {
     const timeSinceLastEdit = Date.now() - lastUserEditTime;
     if (timeSinceLastEdit < RECENT_EDIT_THRESHOLD_MS && !allowNextHostSyncDespiteRecentEdit) {
       console.log(`[MD4H] Skipping update - user recently edited (${timeSinceLastEdit}ms ago)`);
+      hostContentDeferred = true;
       requestHostReconciliation();
       return false;
     }
@@ -2271,6 +2388,7 @@ function updateEditorContent(markdown: string): boolean {
     const setContentResult = editor.commands.setContent(markdown, { contentType: 'markdown' });
     if (setContentResult === false) {
       console.error('[MD4H] Editor rejected host content replacement');
+      hostContentDeferred = true;
       requestHostReconciliation();
       return false;
     }
@@ -2298,6 +2416,7 @@ function updateEditorContent(markdown: string): boolean {
   } catch (error) {
     console.error('[MD4H] Error updating content:', error);
     console.error('[MD4H] Document size:', markdown.length, 'chars');
+    hostContentDeferred = true;
     requestHostReconciliation();
     return false;
   } finally {
@@ -2322,11 +2441,52 @@ function updateEditorContentFromHost(markdown: string, force = false): boolean {
   return updateEditorContent(markdown);
 }
 
+/**
+ * Answer this view's forced-replay request without discarding typing the host
+ * has not accepted. The view keeps its content and resends it on the replayed
+ * version. When a visible host change was deferred while the user typed, that
+ * resend replaces it, so the host is asked to surface the conflict first.
+ * After a hard rejection the replay is applied instead, because a resend would
+ * be rejected again.
+ *
+ * @returns true when local edits were rebased and the replay must not be applied
+ */
+function rebaseUnacceptedLocalEdits(documentVersion: unknown): boolean {
+  if (
+    !hostReconciliationPending ||
+    localEditHardRejected ||
+    isFeedbackEditingLocked() ||
+    !Number.isSafeInteger(documentVersion) ||
+    (documentVersion as number) < 0 ||
+    !(localEditRejected || documentSyncController?.hasPendingSync())
+  ) {
+    return false;
+  }
+  if (hostContentDeferred) {
+    vscode.postMessage({
+      type: 'document.sync.conflict',
+      protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+      viewGeneration,
+      documentVersion,
+    });
+  }
+  documentSyncController?.acceptAuthoritativeState();
+  acceptedDocumentVersion = documentVersion as number;
+  hostReconciliationPending = false;
+  localEditRejected = false;
+  hostContentDeferred = false;
+  // The retry budget is kept: if this resend is rejected again, the next
+  // replay request still counts toward the out-of-sync limit.
+  debouncedUpdate();
+  documentSyncController?.flush();
+  return true;
+}
+
 /** Apply a peer barrier snapshot and advance the renderer's document lineage. */
 function applyFeedbackPeerAuthoritativeContent(markdown: string, documentVersion: number): boolean {
   if (!updateEditorContentFromHost(markdown, true)) return false;
   documentSyncController?.acceptAuthoritativeState();
-  hostReconciliationPending = false;
+  resetHostReconciliation();
   acceptedDocumentVersion = documentVersion;
   return true;
 }
@@ -2911,7 +3071,7 @@ export const __testing = {
   resetSyncState() {
     lastSentContentHash = null;
     lastSentTimestamp = 0;
-    hostReconciliationPending = false;
+    resetHostReconciliation();
   },
   isCodeContextForPasteForTests(event: ClipboardEvent) {
     if (!editor) return false;

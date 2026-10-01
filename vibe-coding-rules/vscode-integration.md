@@ -83,7 +83,7 @@ The renderer serializes only after a 500 ms quiet period or an explicit flush. I
 
 The provider validates the generation and sends every accepted mutation through `DocumentEditCoordinator`. Coalescing is allowed only for adjacent pending typing from the same generation and base version. Save, autosave, Feedback and recovery use ordered barriers.
 
-Host updates carry `documentVersion`, use per-webview delivery caches, and request reconciliation if an ordinary recent-edit guard delays application. Do not implement synchronization with `ignoreNextUpdate`.
+Host updates carry `documentVersion`, use per-webview delivery caches, and request reconciliation if an ordinary recent-edit guard delays application. Content a split already has gets a version-only `document.version` message, so every version change reaches the renderer's edit base. Do not implement synchronization with `ignoreNextUpdate`.
 
 ## Save and Autosave
 
@@ -93,6 +93,8 @@ sends a correlated host-version flush barrier to the current renderer generation
 requires any revision emitted by the barrier to be accepted, drains again, and
 only then calls `save()` on the captured `TextDocument`. Do not use the global
 save command after an asynchronous wait because focus may have moved to another file.
+If the flush fails or times out, show an error with a Retry action that reruns the
+flush and save. Never fall back to saving a `TextDocument` that may lack the newest typing.
 
 Custom-editor focus does not behave exactly like a normal `TextEditor` for `files.autoSave` focus modes. The provider bridges panel and window focus changes by flushing the active rich view, draining the edit queue and saving only after the `TextDocument` is current.
 

@@ -3888,6 +3888,7 @@ body.vscode-high-contrast-light.feedback-completion-open {
 
 /* Find uses the toolbar row while a recovery banner occupies the row below it. */
 body:has(.feedback-draft-banner) .search-overlay,
+body:has(.out-of-sync-banner) .search-overlay,
 .feedback-peer-locked .search-overlay {
   padding-top: 4px;
 }
@@ -4623,6 +4624,61 @@ body[data-feedback-comments-state='expanded'] .feedback-frame-label {
 .feedback-sync-retry-message {
   flex: 1;
   min-width: 0;
+}
+
+/* Persistent document out-of-sync notice: shown only after the renderer's
+   replay retries are exhausted, removed once sync recovers. */
+.out-of-sync-banner {
+  position: fixed;
+  top: 48px;
+  left: 50%;
+  z-index: 230;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  box-sizing: border-box;
+  width: min(620px, calc(100vw - 32px));
+  gap: 8px 12px;
+  padding: 9px 10px;
+  color: var(--vscode-inputValidation-errorForeground, var(--vscode-foreground));
+  /* The widget background keeps text readable when a theme's error background has alpha. */
+  background:
+    linear-gradient(
+      var(--vscode-inputValidation-errorBackground, transparent),
+      var(--vscode-inputValidation-errorBackground, transparent)
+    ),
+    var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+  border-radius: 7px;
+  box-shadow: 0 8px 28px var(--vscode-widget-shadow);
+  transform: translateX(-50%);
+  font: 12px/1.4 var(--vscode-font-family);
+}
+
+.out-of-sync-banner-message {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.out-of-sync-banner-action {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 4px 10px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 5px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.out-of-sync-banner-action:hover {
+  background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+}
+
+.out-of-sync-banner-action:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
 }
 
 .feedback-live-region {

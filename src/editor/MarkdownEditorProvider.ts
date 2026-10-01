@@ -627,9 +627,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   // assets, while a rebuilt or reloaded host cannot reuse an older bundle.
   private readonly webviewAssetRevision = crypto.randomBytes(8).toString('hex');
 
-  // Track pending edits to avoid feedback loops
-  // Key: document URI, Value: timestamp of last edit from webview
-  private pendingEdits = new Map<string, number>();
   // Remember the latest content received from a rich view and which split sent
   // it. Echo suppression is source-specific so sibling splits still update.
   private lastWebviewContent = new Map<string, string>();
@@ -641,6 +638,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   // Keep in-flight payloads separate and promote only the latest successful
   // delivery into the deduplication cache.
   private pendingHostContentByWebview = new WeakMap<vscode.Webview, { readonly content: string }>();
+  // While a split's Ctrl+S edit is applied with content changed by the
+  // save-time policy, that policy result. Only the update carrying exactly it
+  // is tagged `savePolicyEcho`, the one host update allowed to replace the
+  // renderer's recent typing; a save participant or external write is not.
+  private readonly savePolicyEchoByWebview = new WeakMap<vscode.Webview, string>();
   // Every mutation of one TextDocument passes through this coordinator. VS Code
   // applies WorkspaceEdits asynchronously, so fire-and-forget webview messages
   // must be serialized explicitly to prevent an older completion from landing
@@ -1238,7 +1240,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       this.lastHostContentByWebview.delete(panelWebview);
       this.pendingHostContentByWebview.delete(panelWebview);
       if (!hasRemainingWebviews) {
-        this.pendingEdits.delete(docUri);
         this.lastWebviewContent.delete(docUri);
         this.lastWebviewContentSource.delete(docUri);
         this.preservePendingAutoSaveOnFinalPanelDispose(document);
@@ -1259,8 +1260,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /**
    * Send document content to webview
-   * Skips recent echoes by default. A forced update is reserved for restoring
-   * authoritative source after a frozen Feedback owner has closed locally.
+   * Content this split already has (its own echo, a repeated delivery, or blank
+   * lines hidden by strip mode) is sent as a version-only update, so every
+   * version change still reaches the renderer's edit base. A forced update is
+   * reserved for authoritative replays and Feedback restoration. The update
+   * carrying the save-time policy result of this split's own Ctrl+S edit is
+   * tagged `savePolicyEcho`.
    */
   private updateWebview(
     document: vscode.TextDocument,
@@ -1272,7 +1277,6 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     if (!force && this.feedbackSessions.get(docUri)?.ownerWebview === webview) {
       return;
     }
-    const lastEditTime = this.pendingEdits.get(docUri);
     const mode = this.getBlankLineMode();
     const rawContent = document.getText();
     const currentContent = applyBlankLinePolicy(rawContent, mode);
@@ -1281,7 +1285,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     // payload is still in flight. Otherwise A -> B -> A can suppress the final
     // corrective A while B is still able to arrive and leave the renderer stale.
     const pendingHostContent = this.pendingHostContentByWebview.get(webview);
-    if (!force && pendingHostContent?.content === currentContent) return;
+    if (!force && pendingHostContent?.content === currentContent) {
+      this.postDocumentVersion(document, webview);
+      return;
+    }
     const lastHostContent = this.lastHostContentByWebview.get(webview);
     if (
       !force &&
@@ -1289,28 +1296,27 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       lastHostContent !== undefined &&
       lastHostContent === currentContent
     ) {
+      this.postDocumentVersion(document, webview);
       return;
     }
 
-    // Suppress an immediate echo only for the split that originated it.
+    // Suppress an immediate echo only for the split that originated it, and only
+    // while nothing was posted to that split after its edit was accepted
+    // (`applyEditNow` clears both delivery caches for its source). Once the
+    // split was sent other content, its old edit no longer proves what it shows:
+    // A -> B -> A must resend A, or a version-only update would let the split's
+    // next edit overwrite A with B. Line endings are ignored: VS Code stores the
+    // renderer's LF text with a CRLF document's EOL, and preserve mode keeps it.
     const lastSentContent = this.lastWebviewContent.get(docUri);
     if (
       !force &&
+      pendingHostContent === undefined &&
+      lastHostContent === undefined &&
       this.lastWebviewContentSource.get(docUri) === webview &&
       lastSentContent !== undefined &&
-      lastSentContent === currentContent
+      lastSentContent.replace(/\r\n/g, '\n') === currentContent.replace(/\r\n/g, '\n')
     ) {
-      return;
-    }
-
-    // Skip update if this change came from webview within last 100ms
-    // This prevents feedback loops while allowing external Git changes to sync
-    if (
-      !force &&
-      this.lastWebviewContentSource.get(docUri) === webview &&
-      lastEditTime &&
-      Date.now() - lastEditTime < 100
-    ) {
+      this.postDocumentVersion(document, webview);
       return;
     }
 
@@ -1341,6 +1347,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     );
     const blankLineMode = this.getBlankLineMode();
     const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
+    const savePolicyEcho = !force && this.savePolicyEchoByWebview.get(webview) === currentContent;
 
     const payload = {
       type: 'update',
@@ -1348,6 +1355,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       documentVersion: this.getDocumentVersion(document),
       content: transformedContent,
       ...(force ? { force: true } : {}),
+      ...(savePolicyEcho ? { savePolicyEcho: true } : {}),
       skipResizeWarning: skipWarning,
       imagePath: imagePath,
       imagePathBase: imagePathBase,
@@ -1384,6 +1392,27 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         this.pendingHostContentByWebview.delete(webview);
       }
       console.error('[MD4H] Failed posting document update:', error);
+    }
+  }
+
+  /**
+   * Advance one split's edit base without resending content it already shows.
+   * A save participant or a strip-mode blank-line change bumps the version; if
+   * the renderer never learns it, its next edit is rejected as stale (Y1).
+   */
+  private postDocumentVersion(document: vscode.TextDocument, webview: vscode.Webview): void {
+    try {
+      void Promise.resolve(
+        webview.postMessage({
+          type: 'document.version',
+          protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+          documentVersion: this.getDocumentVersion(document),
+        })
+      ).catch(error => {
+        console.error('[MD4H] Failed posting document version:', error);
+      });
+    } catch (error) {
+      console.error('[MD4H] Failed posting document version:', error);
     }
   }
 
@@ -1754,6 +1783,36 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           message.viewGeneration === this.editViewGenerations.get(webview)
         ) {
           this.updateWebview(document, webview, { force: true });
+        }
+        break;
+      }
+      case 'document.sync.conflict': {
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          message.viewGeneration === this.editViewGenerations.get(webview)
+        ) {
+          // Capture now: the renderer's resend that replaces this text is the
+          // next message in order from the same view.
+          void this.showDocumentSyncConflict(document.getText());
+        }
+        break;
+      }
+      case 'document.sync.failed': {
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          message.viewGeneration === this.editViewGenerations.get(webview)
+        ) {
+          void this.showDocumentSyncFailure(webview);
+        }
+        break;
+      }
+      case 'document.sync.reload': {
+        // The Reload editor action of the renderer's out-of-sync banner.
+        if (
+          message.protocolVersion === DOCUMENT_SYNC_PROTOCOL_VERSION &&
+          message.viewGeneration === this.editViewGenerations.get(webview)
+        ) {
+          this.reloadOutOfSyncRenderer(webview);
         }
         break;
       }
@@ -10974,7 +11033,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     return true;
   }
 
-  /** Invoke VS Code save only after the renderer and document edit queue agree. */
+  /**
+   * Invoke VS Code save only after the renderer and document edit queue agree.
+   * A failed or timed-out renderer flush never falls back to saving the
+   * TextDocument, which may lack the newest typing. It shows an error with a
+   * Retry action that runs the whole flush and save again.
+   */
   private async executeSaveAfterDocumentEdits(
     document: vscode.TextDocument,
     webview: vscode.Webview
@@ -10987,6 +11051,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         'save-flush'
       ))
     ) {
+      console.error('[MD4H] Save skipped: the rich editor did not flush its latest changes');
+      const choice = await vscode.window.showErrorMessage(
+        'Not saved: the editor has changes that have not reached the file yet. Your changes are still in the editor.',
+        'Retry'
+      );
+      if (choice === 'Retry') await this.executeSaveAfterDocumentEdits(document, webview);
       return;
     }
     try {
@@ -10995,7 +11065,56 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       }
     } catch (error) {
       console.error('[MD4H] Document save failed:', error);
+      void vscode.window.showErrorMessage('VS Code could not save this Markdown document.');
     }
+  }
+
+  /**
+   * Tell the user a rich-editor resend replaced a concurrent change to the
+   * document, and keep the replaced text recoverable (Y1 conflict).
+   */
+  private async showDocumentSyncConflict(replacedContent: string): Promise<void> {
+    try {
+      const choice = await vscode.window.showWarningMessage(
+        'This file changed outside the rich editor while you were typing. Your typing was kept and replaced that change.',
+        'Open Replaced Version'
+      );
+      if (choice !== 'Open Replaced Version') return;
+      const replaced = await vscode.workspace.openTextDocument({
+        language: 'markdown',
+        content: replacedContent,
+      });
+      await vscode.window.showTextDocument(replaced, { preview: false });
+    } catch (error) {
+      console.error('[MD4H] Could not show the replaced document version:', error);
+    }
+  }
+
+  /**
+   * A renderer stopped requesting forced replays after repeated failures (Y2).
+   * Make the out-of-sync state visible and offer a fresh renderer.
+   */
+  private async showDocumentSyncFailure(webview: vscode.Webview): Promise<void> {
+    try {
+      const choice = await vscode.window.showErrorMessage(
+        'The rich editor is out of sync with this file and its edits are not being saved. Reload the editor to show the file again.',
+        'Reload Editor'
+      );
+      if (choice !== 'Reload Editor') return;
+      this.reloadOutOfSyncRenderer(webview);
+    } catch (error) {
+      console.error('[MD4H] Could not reload the out-of-sync rich editor:', error);
+    }
+  }
+
+  /**
+   * Replace an out-of-sync renderer, from the notification above or the
+   * renderer's own out-of-sync banner. Same recreation path as a hidden,
+   * non-retained webview: the new renderer sends `ready` and receives
+   * authoritative content.
+   */
+  private reloadOutOfSyncRenderer(webview: vscode.Webview): void {
+    webview.html = this.getHtmlForWebview(webview);
   }
 
   /**
@@ -11170,14 +11289,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
     if (options?.signal?.aborted) return false;
 
-    // Mark this edit to prevent feedback loop
     const docUri = document.uri.toString();
-    this.pendingEdits.set(docUri, Date.now());
     // When policy enforcement modifies the content (e.g., stripping blank lines),
     // set lastWebviewContent to the ORIGINAL content so that updateWebview()
     // will detect a mismatch and refresh the webview with the stripped content.
     // Otherwise, the webview would never refresh to show the policy-enforced state.
-    const contentWasModified = normalizedContent !== unwrappedContent;
+    // The MD047 trailing newline alone is not a visible change; treating it as
+    // one would replace the rich editor's content on every Ctrl+S.
+    const contentWasModified = normalizedContent !== ensureSingleTrailingNewline(unwrappedContent);
     if (shouldEnforcePolicy && contentWasModified) {
       this.lastWebviewContent.set(docUri, unwrappedContent);
     } else {
@@ -11204,6 +11323,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       replacement?.text ?? normalizedContent
     );
 
+    // VS Code fires the edit's change event, and so posts its echo, before
+    // applyEdit resolves. The tag must not outlive that echo.
+    const savePolicyEchoWebview =
+      shouldEnforcePolicy && contentWasModified ? options?.sourceWebview : undefined;
+    if (savePolicyEchoWebview) {
+      this.savePolicyEchoByWebview.set(savePolicyEchoWebview, normalizedContent);
+    }
     try {
       const success = await vscode.workspace.applyEdit(edit);
       if (!success) {
@@ -11220,6 +11346,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       vscode.window.showErrorMessage(errorMsg);
       console.error('[MD4H] applyEdit exception:', error);
       return false;
+    } finally {
+      if (savePolicyEchoWebview) this.savePolicyEchoByWebview.delete(savePolicyEchoWebview);
     }
   }
 
