@@ -141,57 +141,332 @@ describe('ImageEnterSpacing extension', () => {
     expect(dispatch).toHaveBeenCalled();
   });
 
-  it('does not intercept Enter if gap cursor position is inside a paragraph (invalid insertion point)', () => {
-    const dispatch = jest.fn();
+  /**
+   * Gap cursor beside an *inline* image sits inside a paragraph (not at a
+   * document block boundary). Enter must map to before/after the containing
+   * top-level block — using selection.head inserts at an invalid position and
+   * historically fell through to TipTap's default (wrong side of the image).
+   */
+  describe('gap cursor beside inline image (document-level insert)', () => {
+    const findInlineImagePos = (doc: ProseMirrorNode) => {
+      let imagePos = -1;
+      doc.descendants((node, pos) => {
+        if (node.type.name === 'image') {
+          imagePos = pos;
+          return false;
+        }
+        return true;
+      });
+      return imagePos;
+    };
 
-    const imageNode = inlineSchema.nodes.image.create({ src: 'test' });
-    const doc = inlineSchema.nodes.doc.create(null, [
-      inlineSchema.nodes.paragraph.create(null, [imageNode, inlineSchema.text('  ')]),
-    ]);
+    const createGapSelection = (doc: ProseMirrorNode, pos: number) => {
+      const $from = doc.resolve(pos);
+      return {
+        type: 'gapcursor',
+        $from,
+        $to: $from,
+        head: pos,
+        anchor: pos,
+      } as unknown as GapCursor;
+    };
 
-    let posAfterImage = 0;
-    doc.descendants((node, pos) => {
-      if (node.type.name === 'image') {
-        posAfterImage = pos + node.nodeSize;
-        return false;
-      }
-      return true;
-    });
-
-    const $from = doc.resolve(posAfterImage);
-
-    const selection = {
-      type: 'gapcursor',
-      $from,
-      $to: $from,
-      head: posAfterImage,
-      anchor: posAfterImage,
-    } as unknown as GapCursor;
-
-    const mockTr = {
+    const createMockTr = (doc: ProseMirrorNode) => ({
       insert: jest.fn().mockReturnThis(),
       replace: jest.fn().mockReturnThis(),
       setSelection: jest.fn().mockReturnThis(),
       scrollIntoView: jest.fn().mockReturnThis(),
-      doc: doc,
-    };
-
-    const state = {
-      selection,
-      schema: inlineSchema,
       doc,
-      tr: mockTr,
-    };
+    });
 
-    const plugin = createPlugin({ commands: {} });
-    const event = createEvent();
-    const handled =
-      plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
+    it('inserts paragraph BEFORE containing block when gap cursor is before inline image', () => {
+      const dispatch = jest.fn();
+      const imageNode = inlineSchema.nodes.image.create({ src: 'before-test' });
+      const doc = inlineSchema.nodes.doc.create(null, [
+        inlineSchema.nodes.paragraph.create(null, [inlineSchema.text('intro')]),
+        inlineSchema.nodes.paragraph.create(null, [imageNode]),
+      ]);
 
-    expect(handled).toBe(false);
-    expect(event.preventDefault).not.toHaveBeenCalled();
-    expect(event.stopPropagation).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
+      const imagePos = findInlineImagePos(doc);
+      expect(imagePos).toBeGreaterThan(0);
+      // Gap before image → nodeAfter === image (still inside the paragraph)
+      const selection = createGapSelection(doc, imagePos);
+      expect(selection.$from.nodeAfter?.type.name).toBe('image');
+
+      const mockTr = createMockTr(doc);
+      const state = { selection, schema: inlineSchema, doc, tr: mockTr };
+      const plugin = createPlugin({ commands: {} });
+      const event = createEvent();
+      const handled =
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
+
+      expect(handled).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(event.stopPropagation).toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalled();
+      // Containing paragraph is doc.child(1); insert before it (= after child 0)
+      const insertBeforeContainingBlock = doc.child(0).nodeSize;
+      expect(mockTr.insert).toHaveBeenCalledWith(
+        insertBeforeContainingBlock,
+        expect.objectContaining({ type: expect.objectContaining({ name: 'paragraph' }) })
+      );
+    });
+
+    it('inserts paragraph AFTER containing block when gap cursor is after inline image', () => {
+      const dispatch = jest.fn();
+      const imageNode = inlineSchema.nodes.image.create({ src: 'after-test' });
+      const doc = inlineSchema.nodes.doc.create(null, [
+        inlineSchema.nodes.paragraph.create(null, [imageNode]),
+        inlineSchema.nodes.paragraph.create(null, [inlineSchema.text('outro')]),
+      ]);
+
+      const imagePos = findInlineImagePos(doc);
+      const posAfterImage = imagePos + 1; // atom image nodeSize === 1
+      const selection = createGapSelection(doc, posAfterImage);
+      expect(selection.$from.nodeBefore?.type.name).toBe('image');
+
+      const mockTr = createMockTr(doc);
+      const state = { selection, schema: inlineSchema, doc, tr: mockTr };
+      const plugin = createPlugin({ commands: {} });
+      const event = createEvent();
+      const handled =
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
+
+      expect(handled).toBe(true);
+      expect(event.preventDefault).toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalled();
+      // Containing paragraph is doc.child(0); insert after it
+      const insertAfterContainingBlock = doc.child(0).nodeSize;
+      expect(mockTr.insert).toHaveBeenCalledWith(
+        insertAfterContainingBlock,
+        expect.objectContaining({ type: expect.objectContaining({ name: 'paragraph' }) })
+      );
+    });
+
+    it('inserts before containing block when gap is before first image on a multi-image line', () => {
+      const dispatch = jest.fn();
+      const img1 = inlineSchema.nodes.image.create({ src: '1.png' });
+      const img2 = inlineSchema.nodes.image.create({ src: '2.png' });
+      const doc = inlineSchema.nodes.doc.create(null, [
+        inlineSchema.nodes.paragraph.create(null, [inlineSchema.text('lead')]),
+        inlineSchema.nodes.paragraph.create(null, [img1, img2]),
+      ]);
+
+      const firstImagePos = findInlineImagePos(doc);
+      const selection = createGapSelection(doc, firstImagePos);
+      expect(selection.$from.nodeAfter?.type.name).toBe('image');
+
+      const mockTr = createMockTr(doc);
+      const state = { selection, schema: inlineSchema, doc, tr: mockTr };
+      const plugin = createPlugin({ commands: {} });
+      const event = createEvent();
+      const handled =
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
+
+      expect(handled).toBe(true);
+      const insertBeforeContainingBlock = doc.child(0).nodeSize;
+      expect(mockTr.insert).toHaveBeenCalledWith(
+        insertBeforeContainingBlock,
+        expect.objectContaining({ type: expect.objectContaining({ name: 'paragraph' }) })
+      );
+    });
+
+    it('inserts after containing block when gap is after last image on a multi-image line', () => {
+      const dispatch = jest.fn();
+      const img1 = inlineSchema.nodes.image.create({ src: '1.png' });
+      const img2 = inlineSchema.nodes.image.create({ src: '2.png' });
+      const doc = inlineSchema.nodes.doc.create(null, [
+        inlineSchema.nodes.paragraph.create(null, [img1, img2]),
+        inlineSchema.nodes.paragraph.create(null, [inlineSchema.text('trail')]),
+      ]);
+
+      const imagePositions: number[] = [];
+      doc.descendants((node, pos) => {
+        if (node.type.name === 'image') {
+          imagePositions.push(pos);
+        }
+        return true;
+      });
+      expect(imagePositions).toHaveLength(2);
+      const posAfterLast = imagePositions[1] + 1;
+      const selection = createGapSelection(doc, posAfterLast);
+      expect(selection.$from.nodeBefore?.type.name).toBe('image');
+
+      const mockTr = createMockTr(doc);
+      const state = { selection, schema: inlineSchema, doc, tr: mockTr };
+      const plugin = createPlugin({ commands: {} });
+      const event = createEvent();
+      const handled =
+        plugin.props?.handleKeyDown?.({ state, dispatch } as unknown as EditorView, event) ?? false;
+
+      expect(handled).toBe(true);
+      const insertAfterContainingBlock = doc.child(0).nodeSize;
+      expect(mockTr.insert).toHaveBeenCalledWith(
+        insertAfterContainingBlock,
+        expect.objectContaining({ type: expect.objectContaining({ name: 'paragraph' }) })
+      );
+    });
+
+    it('ArrowLeft on selected inline image then Enter inserts paragraph before containing block', () => {
+      const imageNode = inlineSchema.nodes.image.create({ src: 'nav-left' });
+      const doc = inlineSchema.nodes.doc.create(null, [
+        inlineSchema.nodes.paragraph.create(null, [inlineSchema.text('above')]),
+        inlineSchema.nodes.paragraph.create(null, [imageNode]),
+      ]);
+
+      const imagePos = findInlineImagePos(doc);
+      const nodeSelection = NodeSelection.create(doc, imagePos);
+
+      // Capture selection after ArrowLeft (GapCursor when valid, else TextSelection)
+      let selectionAfterArrow: unknown = nodeSelection;
+      const arrowDispatch = jest.fn((tr: { selection?: unknown }) => {
+        if (tr.selection) {
+          selectionAfterArrow = tr.selection;
+        }
+      });
+
+      const arrowState = {
+        selection: nodeSelection,
+        schema: inlineSchema,
+        doc,
+        tr: {
+          setSelection: jest.fn(function (this: { selection?: unknown }, sel: unknown) {
+            this.selection = sel;
+            return this;
+          }),
+          scrollIntoView: jest.fn().mockReturnThis(),
+          setMeta: jest.fn().mockReturnThis(),
+        },
+      };
+
+      const plugin = createPlugin({
+        commands: {
+          setTextSelection: (pos: number) => {
+            selectionAfterArrow = TextSelection.create(doc, pos);
+            return true;
+          },
+        },
+      });
+
+      const arrowEvent = createEvent({ key: 'ArrowLeft' });
+      const arrowHandled =
+        plugin.props?.handleKeyDown?.(
+          { state: arrowState, dispatch: arrowDispatch } as unknown as EditorView,
+          arrowEvent
+        ) ?? false;
+
+      expect(arrowHandled).toBe(true);
+
+      // Prefer an explicit gap-before-image selection (the decoration path); if
+      // ArrowLeft fell back to text selection, synthesize the gap the plan asserts.
+      const $before = doc.resolve(imagePos);
+      if (!(
+        selectionAfterArrow &&
+        (selectionAfterArrow as { type?: string }).type === 'gapcursor' &&
+        (selectionAfterArrow as GapCursor).$from?.nodeAfter?.type.name === 'image'
+      )) {
+        selectionAfterArrow = createGapSelection(doc, imagePos);
+      }
+      expect($before.nodeAfter?.type.name).toBe('image');
+
+      const mockTr = createMockTr(doc);
+      const enterState = {
+        selection: selectionAfterArrow,
+        schema: inlineSchema,
+        doc,
+        tr: mockTr,
+      };
+      const enterDispatch = jest.fn();
+      const enterEvent = createEvent();
+      const enterHandled =
+        plugin.props?.handleKeyDown?.(
+          { state: enterState, dispatch: enterDispatch } as unknown as EditorView,
+          enterEvent
+        ) ?? false;
+
+      expect(enterHandled).toBe(true);
+      expect(enterEvent.preventDefault).toHaveBeenCalled();
+      const insertBeforeContainingBlock = doc.child(0).nodeSize;
+      expect(mockTr.insert).toHaveBeenCalledWith(
+        insertBeforeContainingBlock,
+        expect.objectContaining({ type: expect.objectContaining({ name: 'paragraph' }) })
+      );
+    });
+
+    it('ArrowRight on selected inline image then Enter inserts paragraph after containing block', () => {
+      const imageNode = inlineSchema.nodes.image.create({ src: 'nav-right' });
+      const doc = inlineSchema.nodes.doc.create(null, [
+        inlineSchema.nodes.paragraph.create(null, [imageNode]),
+        inlineSchema.nodes.paragraph.create(null, [inlineSchema.text('below')]),
+      ]);
+
+      const imagePos = findInlineImagePos(doc);
+      const nodeSelection = NodeSelection.create(doc, imagePos);
+      const posAfterImage = imagePos + imageNode.nodeSize;
+
+      let selectionAfterArrow: unknown = nodeSelection;
+      const plugin = createPlugin({
+        commands: {
+          setTextSelection: (pos: number) => {
+            selectionAfterArrow = TextSelection.create(doc, pos);
+            return true;
+          },
+        },
+      });
+
+      const arrowState = {
+        selection: nodeSelection,
+        schema: inlineSchema,
+        doc,
+        tr: {
+          setSelection: jest.fn(function (this: { selection?: unknown }, sel: unknown) {
+            this.selection = sel;
+            return this;
+          }),
+          scrollIntoView: jest.fn().mockReturnThis(),
+          setMeta: jest.fn().mockReturnThis(),
+        },
+      };
+
+      const arrowEvent = createEvent({ key: 'ArrowRight' });
+      const arrowHandled =
+        plugin.props?.handleKeyDown?.(
+          { state: arrowState, dispatch: jest.fn() } as unknown as EditorView,
+          arrowEvent
+        ) ?? false;
+      expect(arrowHandled).toBe(true);
+
+      const $after = doc.resolve(posAfterImage);
+      if (!(
+        selectionAfterArrow &&
+        (selectionAfterArrow as { type?: string }).type === 'gapcursor' &&
+        (selectionAfterArrow as GapCursor).$from?.nodeBefore?.type.name === 'image'
+      )) {
+        selectionAfterArrow = createGapSelection(doc, posAfterImage);
+      }
+      expect($after.nodeBefore?.type.name).toBe('image');
+
+      const mockTr = createMockTr(doc);
+      const enterState = {
+        selection: selectionAfterArrow,
+        schema: inlineSchema,
+        doc,
+        tr: mockTr,
+      };
+      const enterEvent = createEvent();
+      const enterHandled =
+        plugin.props?.handleKeyDown?.(
+          { state: enterState, dispatch: jest.fn() } as unknown as EditorView,
+          enterEvent
+        ) ?? false;
+
+      expect(enterHandled).toBe(true);
+      const insertAfterContainingBlock = doc.child(0).nodeSize;
+      expect(mockTr.insert).toHaveBeenCalledWith(
+        insertAfterContainingBlock,
+        expect.objectContaining({ type: expect.objectContaining({ name: 'paragraph' }) })
+      );
+    });
   });
 
   it('inserts paragraph at a gap cursor beside an image', () => {

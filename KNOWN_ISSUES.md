@@ -18,13 +18,6 @@ _None currently. All critical issues have been resolved._
 
 ## 🟡 Medium Priority Issues
 
-### Enter Key at Gap Cursor Before Image
-**Type:** Bug
-**Description:** When navigating with arrow keys on a selected image, pressing ArrowLeft moves the cursor to the left of the image (with left highlight visible). However, pressing Enter at this position creates a new paragraph to the right of the image instead of to the left.
-**Status:** Under investigation
-**Plan:** [Fix Enter Key at Gap Cursor Before Image](roadmap/shipped/fix_enter_key_at_gap_cursor_before_image_6b029688.plan.md)
-**Workaround:** Use source view to manually add blank lines, or position cursor after the image and press Enter.
-
 ### Enter Key in Table Cells
 **Type:** Bug
 **Description:** Pressing Enter in table cells creates new paragraphs within the cell, which breaks markdown table formatting when serialized. Markdown tables require single-line cells or `<br>` tags for line breaks, not multiple paragraphs.
@@ -40,6 +33,17 @@ _None currently. All critical issues have been resolved._
 **Current Behavior:** Workspace file drag-drop is not detected in Cursor IDE, so images are not inserted into the editor. External file drag-drop (from Finder/desktop) may work, but workspace file explorer drag-drop does not.
 **Workaround:** Use the image insert dialog (click the image button in the toolbar) or use source view to manually add image references. Alternatively, use external file drag-drop from Finder/desktop if the file is accessible outside the workspace.
 **Future Consideration:** Cursor IDE may handle drag-drop events differently than VS Code/Windsurf, requiring additional event handling or data transfer format detection for workspace files.
+
+---
+
+## ✅ Recently Fixed
+
+### Enter Key at Gap Cursor Before Image
+**Type:** Bug (fixed)
+**Description:** ArrowLeft beside a selected inline image placed a gap/text caret before the image, but Enter inserted a new paragraph to the **right** (after the containing block) instead of to the **left**.
+**Status:** Fixed — gap-cursor Enter now maps to document-level insert before/after the containing block; text-caret fallback is direction-aware. Hot-path debug `console.log` removed.
+**Plan:** [Fix Enter Key at Gap Cursor Before Image](roadmap/shipped/fix_enter_key_at_gap_cursor_before_image_6b029688.plan.md)
+**Tests:** `src/__tests__/webview/imageEnterSpacing.test.ts` (inline gap before/after, multi-image, ArrowLeft/Right→Enter); crash repro updated to assert boundary insert.
 
 ---
 
@@ -330,7 +334,7 @@ If you find a workaround for a known issue or have additional information, pleas
 
 ---
 
-**Last Updated:** 2025-12-27
+**Last Updated:** 2026-10-01
 **Status:** ✅ Production Ready for v0.1.0
 **Next Review:** After v0.1.0 marketplace release (plan v0.2.0 improvements)
 
