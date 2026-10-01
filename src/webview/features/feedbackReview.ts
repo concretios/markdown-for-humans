@@ -1915,8 +1915,9 @@ export function createFeedbackReviewController(options: {
     hideBlockAction();
     // QA-001/QA-002: capturing on the editor retargets native text drags,
     // corrupting selection endpoints in lists and table cells. Observe the
-    // gesture without owning it; document pointerup/cancel and window blur
-    // already restore the block action when selection ends.
+    // gesture without owning it; document pointerup/cancel, context menu,
+    // window blur and visibility change restore the block action when
+    // selection ends.
   };
 
   const handleBlockPointerUp = (): void => {
@@ -3922,6 +3923,15 @@ export function createFeedbackReviewController(options: {
   const handleSelectionChange = (): void => {
     removePendingButton();
     if (!hasWritableSession() || !session || composer) {
+      hideBlockAction();
+      return;
+    }
+    if (blockPointerSelecting) {
+      // A drag reports a selection change every frame, and a full sample
+      // serializes the whole selected DOM, which breaks the 16 ms budget on
+      // large documents. Pointer release or cancel, a context menu, window
+      // blur or a visibility change schedules one full sample once the
+      // selection settles.
       hideBlockAction();
       return;
     }
@@ -5962,6 +5972,10 @@ export function createFeedbackReviewController(options: {
     editorDom.addEventListener('pointerleave', handleBlockPointerLeave);
     document.addEventListener('pointerup', handleBlockPointerUp, true);
     document.addEventListener('pointercancel', handleBlockPointerUp, true);
+    // A native context menu (macOS opens it on mousedown) or a hidden page can
+    // swallow the button release, which would leave selection sampling off.
+    document.addEventListener('contextmenu', handleBlockPointerUp, true);
+    document.addEventListener('visibilitychange', handleBlockWindowBlur);
     window.addEventListener('blur', handleBlockWindowBlur);
     editorDom.addEventListener('beforeinput', guardMutation, true);
     editorDom.addEventListener('cut', guardMutation, true);
@@ -5989,6 +6003,8 @@ export function createFeedbackReviewController(options: {
     editorDom.removeEventListener('pointerleave', handleBlockPointerLeave);
     document.removeEventListener('pointerup', handleBlockPointerUp, true);
     document.removeEventListener('pointercancel', handleBlockPointerUp, true);
+    document.removeEventListener('contextmenu', handleBlockPointerUp, true);
+    document.removeEventListener('visibilitychange', handleBlockWindowBlur);
     window.removeEventListener('blur', handleBlockWindowBlur);
     editorDom.removeEventListener('beforeinput', guardMutation, true);
     editorDom.removeEventListener('cut', guardMutation, true);

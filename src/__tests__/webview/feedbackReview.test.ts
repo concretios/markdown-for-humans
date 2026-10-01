@@ -8734,6 +8734,156 @@ describe('Feedback review controller', () => {
     }
   });
 
+  it('defers selection serialization during a pointer drag until the selection settles', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [
+        { ordinal: 0, startLine: 1, endLine: 1 },
+        { ordinal: 1, startLine: 3, endLine: 3 },
+      ],
+      items: [],
+    });
+    const title = editor.view.dom.children[0] as HTMLElement;
+    const titleText = title.firstChild;
+    const paragraphText = editor.view.dom.children[1].firstChild;
+    const selectionRect = {
+      left: 180,
+      right: 300,
+      top: 220,
+      bottom: 242,
+      width: 120,
+      height: 22,
+      x: 180,
+      y: 220,
+      toJSON: () => ({}),
+    } as DOMRect;
+    // Each serialization stands in for O(selected DOM) work on a large drag.
+    let serializations = 0;
+    const draggedSelection = {
+      anchorNode: titleText,
+      focusNode: paragraphText,
+      anchorOffset: 0,
+      focusOffset: 5,
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => {
+        serializations += 1;
+        return {
+          getClientRects: () => [selectionRect],
+          getBoundingClientRect: () => selectionRect,
+        } as unknown as Range;
+      },
+      toString: () => {
+        serializations += 1;
+        return 'Title\nAlpha';
+      },
+    } as unknown as Selection;
+    const selectionSpy = jest
+      .spyOn(window, 'getSelection')
+      .mockImplementation(() => draggedSelection);
+
+    try {
+      title.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+      for (let frame = 0; frame < 30; frame += 1) {
+        document.dispatchEvent(new Event('selectionchange'));
+        await waitForFeedbackFrame();
+      }
+
+      expect(serializations).toBe(0);
+      expect(document.querySelector('[data-feedback-selection-action]')).toBeNull();
+
+      document.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+      await waitForFeedbackFrame();
+
+      const settledSerializations = serializations;
+      expect(settledSerializations).toBeGreaterThan(0);
+      expect(settledSerializations).toBeLessThanOrEqual(8);
+      expect(
+        document.querySelector('[data-feedback-selection-action]')?.getAttribute('aria-label')
+      ).toBe('Add feedback to selected text');
+    } finally {
+      controller.deactivate();
+      selectionSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    [
+      'a context menu opens',
+      (target: HTMLElement) => {
+        target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2 }));
+      },
+    ],
+    [
+      'the page is hidden',
+      () => {
+        document.dispatchEvent(new Event('visibilitychange'));
+      },
+    ],
+  ])('resumes selection sampling when %s without a pointerup', async (_, interrupt) => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'e'.repeat(64),
+      round: 'round-1',
+      anchors: [
+        { ordinal: 0, startLine: 1, endLine: 1 },
+        { ordinal: 1, startLine: 3, endLine: 3 },
+      ],
+      items: [],
+    });
+    const title = editor.view.dom.children[0] as HTMLElement;
+    const titleText = title.firstChild;
+    const selectionRect = {
+      left: 180,
+      right: 300,
+      top: 220,
+      bottom: 242,
+      width: 120,
+      height: 22,
+      x: 180,
+      y: 220,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const selectionSpy = jest.spyOn(window, 'getSelection').mockReturnValue({
+      anchorNode: titleText,
+      focusNode: titleText,
+      anchorOffset: 0,
+      focusOffset: 5,
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () =>
+        ({
+          getClientRects: () => [selectionRect],
+          getBoundingClientRect: () => selectionRect,
+        }) as unknown as Range,
+      toString: () => 'Title',
+    } as unknown as Selection);
+
+    try {
+      // A native context menu (macOS opens it on mousedown) or a hidden page
+      // can swallow the button release, so pointerup never arrives.
+      title.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, button: 2 }));
+      interrupt(title);
+      document.dispatchEvent(new Event('selectionchange'));
+      await waitForFeedbackFrame();
+
+      expect(
+        document.querySelector('[data-feedback-selection-action]')?.getAttribute('aria-label')
+      ).toBe('Add feedback to selected text');
+    } finally {
+      controller.deactivate();
+      selectionSpy.mockRestore();
+    }
+  });
+
   it('leaves native text drags uncaptured and uncancelled in Feedback', async () => {
     const editor = createEditorFixture();
     const title = editor.view.dom.children[0] as HTMLElement;

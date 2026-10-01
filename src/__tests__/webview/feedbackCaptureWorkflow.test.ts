@@ -1501,6 +1501,148 @@ describe('keyboard Feedback block selector', () => {
       expect(document.querySelector('.feedback-area-capture')).toBeNull();
     });
 
+    it('hides Retry when the viewport changes after a rasterization failure', async () => {
+      const harness = createAreaHarness();
+      harness.rasterize.mockRejectedValue(
+        new FeedbackCaptureError('MD4H-FB-CAPTURE-002', 'Rasterization failed.')
+      );
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+      const retry = Array.from(overlay.querySelectorAll<HTMLButtonElement>('button')).find(
+        button => button.textContent === 'Retry'
+      )!;
+      overlay.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, bubbles: true })
+      );
+      overlay.dispatchEvent(
+        new MouseEvent('pointerup', { button: 0, clientX: 110, clientY: 70, bubbles: true })
+      );
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      expect(retry.hidden).toBe(false);
+      retry.focus();
+
+      // The failed crop no longer matches the visible area, so Retry has
+      // nothing to rasterize; only a new drag can recover.
+      harness.editor.view.dom.getBoundingClientRect = () => domRectangle(0, 0, 420, 300);
+      window.dispatchEvent(new Event('resize'));
+
+      expect(retry.hidden).toBe(true);
+      expect(document.activeElement).toBe(overlay);
+      expect(overlay.querySelector('.feedback-capture-error')?.textContent).toBe(
+        'The viewport changed. Drag again using the current visible area.'
+      );
+      expect(harness.rasterize).toHaveBeenCalledTimes(1);
+
+      overlay.querySelector<HTMLButtonElement>('.feedback-capture-cancel')?.click();
+    });
+
+    it('recovers when the viewport changes while rasterizing and the stale raster then fails', async () => {
+      const gate = createFeedbackDraftSurfaceGate();
+      const harness = createAreaHarness({ draftSurfaceGate: gate });
+      const setAnnotationsSuspended = jest.fn();
+      let rejectFirstRaster!: (error: unknown) => void;
+      harness.rasterize
+        .mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              rejectFirstRaster = reject;
+            })
+        )
+        .mockResolvedValue({ dataUrl: 'data:image/png;base64,AAAA', width: 80, height: 40 });
+      startFeedbackAreaCapture({ ...harness, setAnnotationsSuspended });
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+      const instruction = overlay.querySelector<HTMLElement>('.feedback-capture-instruction')!;
+      const drag = (fromX: number, toX: number): void => {
+        overlay.dispatchEvent(
+          new MouseEvent('pointerdown', { button: 0, clientX: fromX, clientY: 10, bubbles: true })
+        );
+        overlay.dispatchEvent(
+          new MouseEvent('pointerup', { button: 0, clientX: toX, clientY: 70, bubbles: true })
+        );
+      };
+
+      drag(10, 110);
+      await Promise.resolve();
+      expect(harness.rasterize).toHaveBeenCalledTimes(1);
+      expect(overlay.getAttribute('aria-busy')).toBe('true');
+      const firstSignal = (harness.rasterize.mock.calls[0]?.[0] as DomRasterizeRequest).signal;
+
+      // The panel narrows while "Preparing capture" is shown.
+      harness.editor.view.dom.getBoundingClientRect = () => domRectangle(0, 0, 420, 300);
+      window.dispatchEvent(new Event('resize'));
+
+      expect(firstSignal?.aborted).toBe(true);
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
+      expect(overlay.getAttribute('aria-busy')).toBe('false');
+      expect(overlay.classList.contains('rasterizing')).toBe(false);
+      expect(instruction.textContent).toBe(
+        'Capture area ready. Drag over the visible document area. Press Escape to cancel.'
+      );
+      expect(document.body.getAttribute('data-feedback-capture-state')).toBe('armed');
+      expect(harness.setCaptureState).toHaveBeenLastCalledWith('armed');
+      expect(gate.activeKind()).toBe('area-capture');
+      expect(overlay.querySelector('.feedback-capture-selection')?.hasAttribute('hidden')).toBe(
+        true
+      );
+
+      // A Mermaid or resource timeout now rejects the invalidated raster.
+      rejectFirstRaster(new FeedbackCaptureError('MD4H-FB-CAPTURE-002', 'Rasterization failed.'));
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      expect(document.querySelector('.feedback-area-capture')).toBe(overlay);
+      expect(overlay.getAttribute('aria-busy')).toBe('false');
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
+
+      // A fresh drag at the new generation rasterizes and opens annotation.
+      drag(20, 120);
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      expect(harness.rasterize).toHaveBeenCalledTimes(2);
+      expect(
+        (harness.rasterize.mock.calls[1]?.[0] as DomRasterizeRequest).rectangle.width
+      ).toBeGreaterThan(0);
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false], [true], [false]]);
+      expect(document.querySelector('.feedback-area-capture')).toBeNull();
+      expect(document.querySelector('.feedback-annotation-dialog')).not.toBeNull();
+      document
+        .querySelector<HTMLButtonElement>(
+          '.feedback-annotation-dialog [data-feedback-action="cancel"]'
+        )
+        ?.click();
+    });
+
+    it('discards a raster that succeeds after the viewport changed mid-capture', async () => {
+      const harness = createAreaHarness();
+      let resolveFirstRaster!: (capture: {
+        dataUrl: string;
+        width: number;
+        height: number;
+      }) => void;
+      harness.rasterize.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            resolveFirstRaster = resolve;
+          })
+      );
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+      overlay.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, bubbles: true })
+      );
+      overlay.dispatchEvent(
+        new MouseEvent('pointerup', { button: 0, clientX: 110, clientY: 70, bubbles: true })
+      );
+      await Promise.resolve();
+
+      harness.editor.view.dom.getBoundingClientRect = () => domRectangle(0, 40, 500, 300);
+      window.dispatchEvent(new Event('scroll'));
+      resolveFirstRaster({ dataUrl: 'data:image/png;base64,AAAA', width: 100, height: 60 });
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+
+      expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+      expect(document.querySelector('.feedback-area-capture')).toBe(overlay);
+      expect(document.body.getAttribute('data-feedback-capture-state')).toBe('armed');
+      overlay.querySelector<HTMLButtonElement>('.feedback-capture-cancel')?.click();
+    });
+
     it('cancels the armed crop from the toolbar event and restores idle state', () => {
       const harness = createAreaHarness();
       startFeedbackAreaCapture(harness);

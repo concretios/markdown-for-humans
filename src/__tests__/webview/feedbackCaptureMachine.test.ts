@@ -230,6 +230,71 @@ describe('Feedback capture lifecycle machine', () => {
     expect(stale.effects).toEqual([]);
   });
 
+  it('invalidates an in-flight raster when a newer viewport arrives during rasterization', () => {
+    const rasterizing = rasterizingMachine('capture-moved');
+    const newerViewport = { ...VIEWPORT, generation: 8, width: 420 };
+
+    const viewportChanged = reduceFeedbackCapture(rasterizing, {
+      type: 'viewportMeasured',
+      viewport: newerViewport,
+    });
+
+    expect(viewportChanged.disposition).toBe('applied');
+    expect(viewportChanged.machine.state).toEqual({
+      kind: 'Armed',
+      viewport: newerViewport,
+      selection: null,
+      errorCode: 'viewport-changed',
+    });
+    expect(viewportChanged.effects).toEqual([
+      { type: 'abortPhase', phase: 'raster', phaseId: 'capture-moved' },
+    ]);
+
+    // Late results from the invalidated raster must not move the machine.
+    for (const late of [
+      { type: 'rasterFailed', captureId: 'capture-moved', errorCode: 'MD4H-FB-CAPTURE-002' },
+      { type: 'rasterSucceeded', captureId: 'capture-moved' },
+    ] as const) {
+      const result = reduceFeedbackCapture(viewportChanged.machine, late);
+      expect(result).toMatchObject({ disposition: 'ignored', reason: 'wrong-phase' });
+      expect(result.machine).toBe(viewportChanged.machine);
+    }
+
+    // The armed overlay accepts a fresh drag at the workflow's new generation.
+    const redrag = reduceFeedbackCapture(viewportChanged.machine, {
+      type: 'pointerDown',
+      pointerId: 12,
+      viewportGeneration: 8,
+      point: { x: 150, y: 240 },
+    });
+    expect(redrag.disposition).toBe('applied');
+    expect(redrag.machine.state).toMatchObject({ kind: 'Dragging', viewport: newerViewport });
+  });
+
+  it('keeps rasterizing for duplicate viewports and rejects stale or conflicting ones', () => {
+    const rasterizing = rasterizingMachine('capture-steady');
+
+    const sameViewport = reduceFeedbackCapture(rasterizing, {
+      type: 'viewportMeasured',
+      viewport: VIEWPORT,
+    });
+    expect(sameViewport.disposition).toBe('duplicate');
+    expect(sameViewport.machine).toBe(rasterizing);
+
+    const stale = reduceFeedbackCapture(rasterizing, {
+      type: 'viewportMeasured',
+      viewport: { ...VIEWPORT, generation: 6, left: 0 },
+    });
+    expect(stale).toMatchObject({ disposition: 'ignored', reason: 'stale-viewport-generation' });
+
+    const conflict = reduceFeedbackCapture(rasterizing, {
+      type: 'viewportMeasured',
+      viewport: { ...VIEWPORT, left: 0 },
+    });
+    expect(conflict).toMatchObject({ disposition: 'ignored', reason: 'generation-conflict' });
+    expect(conflict.machine).toBe(rasterizing);
+  });
+
   it('starts rasterization once and accepts only the matching success', () => {
     const ready = readyToRasterMachine();
     const started = reduceFeedbackCapture(ready, {

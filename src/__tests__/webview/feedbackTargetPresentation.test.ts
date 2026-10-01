@@ -389,6 +389,7 @@ describe('Feedback target presentation', () => {
     }).fingerprint;
     const cell = tableNode.child(0).child(0);
     const textBetweenSpy = jest.spyOn(cell, 'textBetween');
+    const nodesBetweenSpy = jest.spyOn(cell, 'nodesBetween');
 
     try {
       const presentation = getFeedbackTargetPresentation(doc, {
@@ -408,13 +409,113 @@ describe('Feedback target presentation', () => {
         expect(presentation.preview.rows[0][0].text).toHaveLength(120);
         expect(presentation.preview.rows[0][0].text.endsWith('…')).toBe(true);
       }
-      expect(textBetweenSpy).toHaveBeenCalled();
+      // One bounded walk that stops past the 120-character limit, never a
+      // textBetween read over the whole multi-megabyte cell.
+      expect(nodesBetweenSpy).toHaveBeenCalledTimes(1);
       expect(textBetweenSpy.mock.calls.every(([, to]) => typeof to === 'number' && to <= 120)).toBe(
         true
       );
     } finally {
       textBetweenSpy.mockRestore();
+      nodesBetweenSpy.mockRestore();
     }
+  });
+
+  describe('previews measured in characters, not ProseMirror positions', () => {
+    const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+    function singleCellPreviewText(text: string): string | undefined {
+      const tableNode = schema.nodes.table.create(null, [
+        schema.nodes.tableRow.create(null, [
+          schema.nodes.tableCell.create(
+            { colspan: 1, rowspan: 1, colwidth: null },
+            schema.nodes.paragraph.create(null, schema.text(text))
+          ),
+        ]),
+      ]);
+      const presentation = getFeedbackTargetPresentation(documentWith(tableNode), {
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: 'selected cell',
+        cellTarget: {
+          version: 1,
+          tableOrdinal: 0,
+          rectangle: { top: 0, left: 0, bottom: 1, right: 1 },
+          tableFingerprint: fingerprintFeedbackTable({
+            version: 1,
+            tableOrdinal: 0,
+            table: tableNode,
+          }).fingerprint,
+        },
+      });
+      return presentation.preview?.kind === 'cells'
+        ? presentation.preview.rows[0][0].text
+        : undefined;
+    }
+
+    it.each([119, 120])('keeps a %i-character cell preview intact', length => {
+      const text = 'a'.repeat(length);
+
+      expect(singleCellPreviewText(text)).toBe(text);
+    });
+
+    it('keeps a 120-character cell preview with an astral character intact', () => {
+      // 120 code points but 121 UTF-16 code units.
+      const text = `${'a'.repeat(119)}\u{1F600}`;
+
+      expect(singleCellPreviewText(text)).toBe(text);
+    });
+
+    it('cuts an oversized cell preview on a code point boundary', () => {
+      const kept = `${'a'.repeat(118)}\u{1F600}`;
+      const preview = singleCellPreviewText(`${kept}${'b'.repeat(10)}`);
+
+      expect(preview).toBe(`${kept}…`);
+      expect(preview).not.toMatch(LONE_SURROGATE);
+    });
+
+    it('does not mark a list preview limited when its text fits', () => {
+      // 500 items: 3,499 characters with separators, but more than 4,000 positions.
+      const items = Array.from(
+        { length: 500 },
+        (_, index) => `it${String(index).padStart(4, '0')}`
+      );
+      const list = bulletList(items);
+      const presentation = getFeedbackTargetPresentation(documentWith(list), {
+        startOrdinal: 0,
+        endOrdinal: 0,
+        focus: items.join('\n'),
+        presentationReason: 'whole-block-action',
+      });
+
+      expect(list.content.size).toBeGreaterThan(4_000);
+      expect(presentation.preview).toMatchObject({
+        kind: 'quote',
+        text: items.join('\n'),
+        truncated: false,
+      });
+    });
+
+    it('marks a whole-block preview limited when its text is cut', () => {
+      // The bounded read keeps exactly 4,000 of these 4,001 characters, so only
+      // its truncation flag tells the preview that text was omitted.
+      const text = 'a'.repeat(4_001);
+      const presentation = getFeedbackTargetPresentation(
+        documentWith(textBlock('paragraph', text)),
+        {
+          startOrdinal: 0,
+          endOrdinal: 0,
+          focus: text,
+          presentationReason: 'whole-block-action',
+        }
+      );
+
+      expect(presentation.preview).toMatchObject({
+        kind: 'quote',
+        text: `${'a'.repeat(3_999)}…`,
+        truncated: true,
+      });
+    });
   });
 
   it('falls an oversized cold cell target back before fingerprint or preview traversal', () => {

@@ -219,6 +219,7 @@ const ANNOTATION_PALETTE: readonly {
 const DEFAULT_ANNOTATION_COLOR: AnnotationColor = 'coral';
 const ANNOTATION_STROKE_WIDTH = 3;
 const ANNOTATION_HALO_WIDTH = 7;
+const IMAGE_DECODE_ERROR_MESSAGE = 'Could not load this screenshot. Retake it to try again.';
 
 let modalSequence = 0;
 
@@ -398,62 +399,71 @@ function hasVisibleBoxStyle(element: HTMLElement | SVGElement): boolean {
   }
 }
 
-function textClientRectangles(root: HTMLElement): CaptureRectangle[] {
-  if (typeof document === 'undefined' || typeof document.createTreeWalker !== 'function') return [];
-  const rectangles: CaptureRectangle[] = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  let current = walker.nextNode();
-  while (current) {
-    if (current.textContent?.trim()) {
-      const range = document.createRange();
-      try {
-        range.selectNodeContents(current);
-        for (const rectangle of Array.from(range.getClientRects())) {
-          const captureRectangle = fromDomRect(rectangle);
-          if (isUsableRectangle(captureRectangle)) rectangles.push(captureRectangle);
-        }
-      } catch {
-        // Range geometry is authoritative. Fail closed if the browser cannot
-        // expose it rather than widening the target to the containing block.
-      } finally {
-        range.detach?.();
+/**
+ * Upper bound on descendant nodes inspected while mapping one crop to blocks,
+ * shared by every candidate block. It matches the capture staging node cap.
+ */
+const CAPTURE_HIT_TEST_NODE_LIMIT = 4_096;
+
+interface CaptureHitTestBudget {
+  remaining: number;
+}
+
+function textNodeHitsRectangle(node: Text, rectangle: CaptureRectangle): boolean {
+  if (!node.textContent?.trim()) return false;
+  const range = document.createRange();
+  try {
+    range.selectNodeContents(node);
+    for (const clientRectangle of Array.from(range.getClientRects())) {
+      const captureRectangle = fromDomRect(clientRectangle);
+      if (isUsableRectangle(captureRectangle) && rectanglesIntersect(rectangle, captureRectangle)) {
+        return true;
       }
     }
-    current = walker.nextNode();
+  } catch {
+    // Range geometry is authoritative. Fail closed if the browser cannot
+    // expose it rather than widening the target to the containing block.
+  } finally {
+    range.detach?.();
   }
-  return rectangles;
+  return false;
 }
 
-function renderedElementRectangles(
-  root: HTMLElement,
-  rootRectangle?: CaptureRectangle
-): CaptureRectangle[] {
-  const rectangles: CaptureRectangle[] = [];
-  const candidates: Array<HTMLElement | SVGElement> = [
-    root,
-    ...Array.from(root.querySelectorAll<HTMLElement | SVGElement>('*')),
-  ];
-  for (const element of candidates) {
-    if (!BOX_RENDERING_TAGS.has(element.tagName) && !hasVisibleBoxStyle(element)) continue;
-    const rectangle =
-      element === root && rootRectangle
-        ? rootRectangle
-        : fromDomRect(element.getBoundingClientRect());
-    if (isUsableRectangle(rectangle)) rectangles.push(rectangle);
-  }
-  return rectangles;
+function elementBoxHitsRectangle(
+  element: HTMLElement | SVGElement,
+  rectangle: CaptureRectangle,
+  knownRectangle?: CaptureRectangle
+): boolean {
+  if (!BOX_RENDERING_TAGS.has(element.tagName) && !hasVisibleBoxStyle(element)) return false;
+  const elementRectangle = knownRectangle ?? fromDomRect(element.getBoundingClientRect());
+  return isUsableRectangle(elementRectangle) && rectanglesIntersect(rectangle, elementRectangle);
 }
 
+/**
+ * Walks a block's text and box-drawing descendants in document order and stops
+ * at the first one that intersects the crop. The caller has already confirmed
+ * that the block's own box intersects, so once the shared node budget runs out
+ * the block counts as hit: a huge table or list is then included rather than
+ * stalling the main thread to prove the crop only covers its blank margin.
+ */
 function rectangleHitsRenderedBlockContent(
   rectangle: CaptureRectangle,
   block: HTMLElement,
-  blockRectangle: CaptureRectangle
+  blockRectangle: CaptureRectangle,
+  budget: CaptureHitTestBudget
 ): boolean {
-  const renderedRectangles = [
-    ...textClientRectangles(block),
-    ...renderedElementRectangles(block, blockRectangle),
-  ];
-  return renderedRectangles.some(rendered => rectanglesIntersect(rectangle, rendered));
+  if (elementBoxHitsRectangle(block, rectangle, blockRectangle)) return true;
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (budget.remaining <= 0) return true;
+    budget.remaining -= 1;
+    const hit =
+      node.nodeType === Node.TEXT_NODE
+        ? textNodeHitsRectangle(node as Text, rectangle)
+        : elementBoxHitsRectangle(node as HTMLElement | SVGElement, rectangle);
+    if (hit) return true;
+  }
+  return false;
 }
 
 function orderedCaptureBlocks(blocks: readonly CaptureBlock[]): CaptureBlock[] {
@@ -523,11 +533,18 @@ function firstBlockAfterCropIndex(
  * flow. Two binary searches therefore narrow detailed DOM inspection to the
  * vertical crop candidates. Candidate blocks still pass the same exact block,
  * text-range, and rendered-element intersections, so whitespace is never mapped
- * merely because it lies between the first and last candidate.
+ * merely because it lies between the first and last candidate (within the node
+ * budget below).
  *
  * A transformed or absolutely-positioned block can break that top ordering. When
  * the first and last blocks' measured rectangles show that, this falls back to
  * scanning every block instead of trusting the binary-search-narrowed range.
+ *
+ * Descendant inspection exits on the first rendered hit and shares a
+ * {@link CAPTURE_HIT_TEST_NODE_LIMIT} node budget across candidates. Once it
+ * runs out, every remaining candidate whose own box intersects the crop counts
+ * as hit (fail open), so a crop over only blank space in a huge block, or in a
+ * block checked after it, can widen the range by those blocks.
  *
  * @returns Sorted, unique block ordinals. Zero-area/unmeasured blocks are ignored.
  */
@@ -540,12 +557,13 @@ export function findIntersectingTopLevelBlocks(
   if (orderedBlocks.length === 0) return [];
   const readRectangle = cachedBlockRectangleReader();
   const indices = new Set<number>();
+  const hitTestBudget: CaptureHitTestBudget = { remaining: CAPTURE_HIT_TEST_NODE_LIMIT };
   const testAndAddBlock = (index: number): void => {
     const block = orderedBlocks[index];
     const blockRectangle = readRectangle(block);
     if (
       rectanglesIntersect(rectangle, blockRectangle) &&
-      rectangleHitsRenderedBlockContent(rectangle, block.element, blockRectangle)
+      rectangleHitsRenderedBlockContent(rectangle, block.element, blockRectangle, hitTestBudget)
     ) {
       indices.add(block.index);
     }
@@ -963,6 +981,14 @@ function getFocusableElements(container: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * Resolves once the base screenshot is decoded and safe to draw.
+ * Engines without `HTMLImageElement.decode` (jsdom) resolve immediately.
+ */
+function decodeAnnotationImage(image: HTMLImageElement): Promise<void> {
+  return typeof image.decode === 'function' ? image.decode() : Promise.resolve();
+}
+
+/**
  * Creates and opens the accessible screenshot annotation dialog.
  * All pointer and keyboard listeners are scoped to the dialog subtree; this
  * feature deliberately registers no global shortcut.
@@ -1077,6 +1103,12 @@ export function createFeedbackAnnotationModal(
   image.src = options.image.dataUrl;
   image.alt = 'Captured document area';
   image.draggable = false;
+  // Retake and Replace prefill the draft, so Add can be clicked before a large
+  // PNG decodes. drawImage on an undecoded image paints nothing and would save
+  // a blank screenshot, so Add waits for this and stays disabled until then.
+  let imageReady = false;
+  let imageDecodeFailed = false;
+  const imageDecoded = decodeAnnotationImage(image);
   const overlay = createSvgElement('svg');
   overlay.classList.add('feedback-annotation-overlay');
   overlay.setAttribute('viewBox', `0 0 ${bitmap.width} ${bitmap.height}`);
@@ -1140,7 +1172,7 @@ export function createFeedbackAnnotationModal(
   let stickySubmissionError = false;
 
   function updateSubmissionState(): void {
-    addButton.disabled = busy || feedbackInput.value.trim().length === 0;
+    addButton.disabled = busy || !imageReady || feedbackInput.value.trim().length === 0;
     feedbackInput.readOnly = busy;
     retakeButton.disabled = busy;
     cancelButton.disabled = busy;
@@ -1150,10 +1182,16 @@ export function createFeedbackAnnotationModal(
     updateCancelState();
     // Keep a failed submit/retake message visible until the user edits the
     // feedback text (or succeeds). Clearing here whenever feedback is nonempty
-    // made Save failures look like a silent no-op.
+    // made Save failures look like a silent no-op. A decode failure disables
+    // Add for good, so its Retake prompt outlives those edits.
     if (feedbackInput.value.trim().length > 0 && !stickySubmissionError) {
-      feedbackInput.removeAttribute('aria-invalid');
-      validation.textContent = '';
+      if (imageDecodeFailed) {
+        feedbackInput.setAttribute('aria-invalid', 'true');
+        validation.textContent = IMAGE_DECODE_ERROR_MESSAGE;
+      } else {
+        feedbackInput.removeAttribute('aria-invalid');
+        validation.textContent = '';
+      }
     }
   }
 
@@ -1383,6 +1421,15 @@ export function createFeedbackAnnotationModal(
     busy = true;
     updateSubmissionState();
     try {
+      await imageDecoded;
+    } catch (error) {
+      busy = false;
+      reportError(error, IMAGE_DECODE_ERROR_MESSAGE);
+      updateSubmissionState();
+      return false;
+    }
+    if (destroyed) return false;
+    try {
       const commands = history.commands;
       const pngDataUrl = flattenAnnotationsToPng(image, bitmap, commands, options.canvasFactory);
       await options.onAdd({ feedback, pngDataUrl, commands });
@@ -1497,6 +1544,20 @@ export function createFeedbackAnnotationModal(
   overlay.addEventListener('pointercancel', handlePointerCancel);
   window.addEventListener('feedbackInvalidated', handleFeedbackLifecycleEnd);
   window.addEventListener(FEEDBACK_SESSION_ENDED_EVENT, handleFeedbackLifecycleEnd);
+
+  imageDecoded.then(
+    () => {
+      imageReady = true;
+      if (!destroyed && !busy) updateSubmissionState();
+    },
+    error => {
+      imageDecodeFailed = true;
+      if (!destroyed && !busy) {
+        reportError(error, IMAGE_DECODE_ERROR_MESSAGE);
+        updateSubmissionState();
+      }
+    }
+  );
 
   mount.appendChild(dialog);
   updateSubmissionState();

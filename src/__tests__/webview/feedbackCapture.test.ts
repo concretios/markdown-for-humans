@@ -263,6 +263,134 @@ describe('feedback capture geometry', () => {
     // proportional to the block count rather than become unbounded.
     expect(geometryReads).toBeLessThanOrEqual(blockCount * 2);
   });
+
+  describe('rendered-content hit test inside one large block', () => {
+    const ROW_HEIGHT = 20;
+    let domWork: number;
+    let rowRectangles: WeakMap<Node, DOMRect>;
+
+    beforeEach(() => {
+      domWork = 0;
+      rowRectangles = new WeakMap();
+      // A transparent computed style: rows and cells draw no box of their own.
+      const transparentStyle = {
+        display: 'block',
+        visibility: 'visible',
+        opacity: '1',
+        backgroundColor: 'rgba(0, 0, 0, 0)',
+        backgroundImage: 'none',
+        boxShadow: 'none',
+        outlineStyle: 'none',
+        getPropertyValue: () => '',
+      } as unknown as CSSStyleDeclaration;
+      jest.spyOn(window, 'getComputedStyle').mockImplementation(() => {
+        domWork += 1;
+        return transparentStyle;
+      });
+      jest.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (
+        this: Element
+      ) {
+        domWork += 1;
+        return rowRectangles.get(this) ?? domRect(0, 0, 0, 0);
+      });
+      jest.spyOn(document, 'createRange').mockImplementation(() => {
+        domWork += 1;
+        let parent: Node | null = null;
+        return {
+          selectNodeContents: (node: Node) => {
+            parent = node.parentNode;
+          },
+          getClientRects: () => {
+            const rectangle = parent ? rowRectangles.get(parent) : undefined;
+            return rectangle ? [rectangle] : [];
+          },
+          detach: jest.fn(),
+        } as unknown as Range;
+      });
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    function largeTableBlock(rowCount: number): CaptureBlock {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'tableWrapper';
+      const table = document.createElement('table');
+      const body = document.createElement('tbody');
+      for (let row = 0; row < rowCount; row += 1) {
+        const tr = document.createElement('tr');
+        for (let column = 0; column < 2; column += 1) {
+          const td = document.createElement('td');
+          td.textContent = `Row ${row} column ${column}`;
+          rowRectangles.set(td, domRect(column * 200, row * ROW_HEIGHT, 200, ROW_HEIGHT));
+          tr.append(td);
+        }
+        rowRectangles.set(tr, domRect(0, row * ROW_HEIGHT, 400, ROW_HEIGHT));
+        body.append(tr);
+      }
+      table.append(body);
+      wrapper.append(table);
+      const tableRectangle = domRect(0, 0, 400, rowCount * ROW_HEIGHT);
+      rowRectangles.set(table, tableRectangle);
+      rowRectangles.set(wrapper, tableRectangle);
+      return { index: 0, element: wrapper };
+    }
+
+    function largeListBlock(itemCount: number, index = 0, top = 0): CaptureBlock {
+      const list = document.createElement('ul');
+      for (let item = 0; item < itemCount; item += 1) {
+        const li = document.createElement('li');
+        li.textContent = `Item ${item}`;
+        rowRectangles.set(li, domRect(0, top + item * ROW_HEIGHT, 120, ROW_HEIGHT));
+        list.append(li);
+      }
+      rowRectangles.set(list, domRect(0, top, 400, itemCount * ROW_HEIGHT));
+      return { index, element: list };
+    }
+
+    it('maps a small crop over a 5,000-row table with bounded DOM work', () => {
+      const block = largeTableBlock(5_000);
+
+      expect(
+        findIntersectingTopLevelBlocks(captureRect(20, 10 * ROW_HEIGHT, 120, 40), [block])
+      ).toEqual([0]);
+      // Exits on the first rendered hit instead of measuring all 15,000 descendants.
+      expect(domWork).toBeLessThanOrEqual(16);
+    });
+
+    it('caps the walk when the cropped content is deep inside a 5,000-item list', () => {
+      const block = largeListBlock(5_000);
+
+      expect(
+        findIntersectingTopLevelBlocks(captureRect(20, 4_990 * ROW_HEIGHT, 60, 30), [block])
+      ).toEqual([0]);
+      // 10,000 descendants (items and text) are never all visited. A crop whose
+      // block box already intersects counts as a hit once the ceiling is reached.
+      expect(domWork).toBeLessThanOrEqual(4_096 + 16);
+    });
+
+    it('still excludes blank space beside short content in a large list', () => {
+      const block = largeListBlock(40);
+
+      expect(
+        findIntersectingTopLevelBlocks(captureRect(200, 5 * ROW_HEIGHT, 100, 60), [block])
+      ).toEqual([]);
+    });
+
+    it('shares one node budget across every candidate block in a mapping', () => {
+      const listHeight = 5_000 * ROW_HEIGHT;
+      const blocks = [largeListBlock(5_000), largeListBlock(5_000, 1, listHeight)];
+
+      // The crop covers only the blank margin beside both lists' items. The
+      // first list spends the whole budget, so both boxes count as hit (fail
+      // open) instead of walking a second 4,096 nodes in the next list.
+      expect(
+        findIntersectingTopLevelBlocks(captureRect(200, listHeight - 40, 100, 80), blocks)
+      ).toEqual([0, 1]);
+      expect(domWork).toBeLessThanOrEqual(4_096 + 16);
+    });
+  });
 });
 
 describe('visible-area rasterization boundary', () => {
@@ -561,6 +689,118 @@ describe('PNG flattening', () => {
 describe('feedback annotation modal', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
+  });
+
+  describe('base image decode before flattening', () => {
+    // jsdom has no HTMLImageElement.decode; install a controllable one so the
+    // test can hold the decode open the way a 12 MP PNG does in Chromium.
+    let decodes: Array<{
+      image: HTMLImageElement;
+      resolve: () => void;
+      reject: (error: Error) => void;
+    }>;
+
+    beforeEach(() => {
+      decodes = [];
+      Object.defineProperty(HTMLImageElement.prototype, 'decode', {
+        configurable: true,
+        writable: true,
+        value(this: HTMLImageElement): Promise<void> {
+          return new Promise<void>((resolve, reject) => {
+            decodes.push({ image: this, resolve, reject });
+          });
+        },
+      });
+    });
+
+    afterEach(() => {
+      delete (HTMLImageElement.prototype as Partial<HTMLImageElement>).decode;
+    });
+
+    function openPrefilledModal(onAdd: jest.Mock) {
+      const { canvasFactory, context } = fakeCanvas();
+      const controller = createFeedbackAnnotationModal({
+        image: { dataUrl: 'data:image/png;base64,large', width: 4000, height: 3000 },
+        // Retake and Replace prefill the draft, so Add would be enabled at once.
+        initialFeedback: 'Tighten this table.',
+        canvasFactory,
+        onAdd,
+        onRetake: jest.fn(),
+        onCancel: jest.fn(),
+      });
+      const addButton = controller.element.querySelector<HTMLButtonElement>(
+        '[data-feedback-action="add"]'
+      )!;
+      return { controller, canvasFactory, context, addButton };
+    }
+
+    it('keeps Add disabled until the screenshot decodes, then enables it', async () => {
+      const { addButton } = openPrefilledModal(jest.fn());
+
+      expect(decodes).toHaveLength(1);
+      expect(decodes[0].image.classList.contains('feedback-annotation-image')).toBe(true);
+      expect(addButton.disabled).toBe(true);
+
+      decodes[0].resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(addButton.disabled).toBe(false);
+    });
+
+    it('waits for decode before drawing the base image when submitted early', async () => {
+      const onAdd = jest.fn();
+      const { controller, canvasFactory, context } = openPrefilledModal(onAdd);
+
+      const submission = controller.submit();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(canvasFactory).not.toHaveBeenCalled();
+      expect(context.drawImage).not.toHaveBeenCalled();
+      expect(onAdd).not.toHaveBeenCalled();
+
+      decodes[0].resolve();
+      await expect(submission).resolves.toBe(true);
+      expect(context.drawImage).toHaveBeenCalledTimes(1);
+      expect(context.drawImage.mock.calls[0][0]).toBe(decodes[0].image);
+      expect(onAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ pngDataUrl: 'data:image/png;base64,flattened' })
+      );
+    });
+
+    it('never saves a screenshot whose base image fails to decode', async () => {
+      const onAdd = jest.fn();
+      const { controller, canvasFactory, addButton } = openPrefilledModal(onAdd);
+
+      decodes[0].reject(new Error('EncodingError'));
+      await expect(controller.submit()).resolves.toBe(false);
+
+      expect(canvasFactory).not.toHaveBeenCalled();
+      expect(onAdd).not.toHaveBeenCalled();
+      expect(addButton.disabled).toBe(true);
+      expect(controller.element.querySelector('.feedback-annotation-validation')?.textContent).toBe(
+        'Could not load this screenshot. Retake it to try again.'
+      );
+    });
+
+    it('keeps the decode failure message after the feedback is edited', async () => {
+      const { controller, addButton } = openPrefilledModal(jest.fn());
+      const input = controller.element.querySelector<HTMLTextAreaElement>('textarea')!;
+      const validation = controller.element.querySelector('.feedback-annotation-validation')!;
+
+      decodes[0].reject(new Error('EncodingError'));
+      await Promise.resolve();
+      await Promise.resolve();
+      input.value = 'Tighten this table more.';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+
+      // An edit clears ordinary submit errors, but Add stays disabled for good,
+      // so the reason and the Retake prompt must stay visible with it.
+      expect(addButton.disabled).toBe(true);
+      expect(validation.textContent).toBe(
+        'Could not load this screenshot. Retake it to try again.'
+      );
+      expect(input.getAttribute('aria-invalid')).toBe('true');
+    });
   });
 
   it('uses a base image plus SVG overlay with accessible tool state', () => {

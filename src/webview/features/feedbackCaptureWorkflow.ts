@@ -606,14 +606,25 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
     }
     viewport = measured;
     viewportGeneration += 1;
+    const wasRasterizing = captureMachine.state.kind === 'Rasterizing';
     applyCaptureEvent({
       type: 'viewportMeasured',
       viewport: toMachineViewport(viewport, viewportGeneration),
     });
+    if (wasRasterizing && captureMachine.state.kind === 'Armed') {
+      // The reducer aborted the stale raster. Return to the armed overlay now
+      // rather than when that raster settles, so a slow abort cannot block a
+      // new drag and its finally block cannot restore a newer capture.
+      restoreCaptureAnnotations();
+      restoreArmedSurface();
+    }
     if (captureMachine.state.kind === 'Armed' && !captureMachine.state.selection) {
       start = null;
       end = null;
       selection.hidden = true;
+      // Retry has no crop left to replay, so only a new drag can recover.
+      if (document.activeElement === retry) overlay.focus();
+      retry.hidden = true;
       error.textContent = 'The viewport changed. Drag again using the current visible area.';
     }
   };
@@ -685,6 +696,16 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
       renderSelection();
     }
   };
+  const restoreArmedSurface = (): void => {
+    busy = false;
+    workflow.kind = 'area-capture';
+    updateCaptureWorkflowSurface(workflow);
+    overlay.classList.remove('rasterizing');
+    overlay.setAttribute('aria-busy', 'false');
+    instruction.textContent = AREA_CAPTURE_READY_INSTRUCTION;
+    document.body.setAttribute('data-feedback-capture-state', 'armed');
+    options.review.setCaptureState?.('armed');
+  };
   const pointerIdFor = (event: PointerEvent): number =>
     Number.isInteger(event.pointerId) && event.pointerId >= 0 ? event.pointerId : 1;
 
@@ -754,14 +775,7 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
           captureError instanceof FeedbackCaptureError ? captureError.code : 'MD4H-FB-CAPTURE-002',
       });
       reportCaptureError(options.review, captureError);
-      busy = false;
-      workflow.kind = 'area-capture';
-      updateCaptureWorkflowSurface(workflow);
-      overlay.classList.remove('rasterizing');
-      overlay.setAttribute('aria-busy', 'false');
-      instruction.textContent = AREA_CAPTURE_READY_INSTRUCTION;
-      document.body.setAttribute('data-feedback-capture-state', 'armed');
-      options.review.setCaptureState?.('armed');
+      restoreArmedSurface();
       const message =
         captureError instanceof Error
           ? captureError.message
@@ -769,8 +783,12 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
       error.textContent = message;
       retry.hidden = false;
     } finally {
-      if (activeRasterAbort === rasterAbort) activeRasterAbort = null;
-      restoreCaptureAnnotations();
+      // A viewport change already restored this attempt's annotations, and a
+      // newer attempt may own them now, so only the active attempt restores.
+      if (activeRasterAbort === rasterAbort) {
+        activeRasterAbort = null;
+        restoreCaptureAnnotations();
+      }
     }
   };
 
@@ -991,7 +1009,9 @@ async function captureBlockRange(
     // The crop rectangle is fixed client coordinates captured before this async
     // rasterization. If the document scrolls/resizes while we rasterize, those
     // coordinates now cover different content, so abort rather than save a stale
-    // crop. (The area-capture path guards the same way via handleViewportMutation.)
+    // crop. (The area-capture path reaches the same outcome differently: its
+    // handleViewportMutation feeds a new viewport generation to the capture
+    // machine, which aborts the in-flight raster and re-arms the overlay.)
     const guardedOrdinal = Math.min(startOrdinal, endOrdinal);
     const guardedElement = topLevelBlockElements(root)[guardedOrdinal] ?? null;
     const guardedTop = guardedElement?.getBoundingClientRect().top ?? null;
