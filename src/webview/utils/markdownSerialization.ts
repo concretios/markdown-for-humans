@@ -73,6 +73,36 @@ function escapeMarkdownSyntaxForProse(text: string): string {
 }
 
 /**
+ * Return the inline text that precedes `node` on its current line inside
+ * `parentNode`, walking back through siblings to the nearest hard break or
+ * newline, or to a heading's own marker. Non-text inline content (images,
+ * math) counts as visible text, and so does a mark on `node`: code and literal
+ * marks never reach this check, so the mark is formatting whose opening
+ * delimiter (`**`, `*`, `~~`, `[`) is on this line before the text. A node
+ * that cannot be located is treated as starting its line, which keeps the
+ * conservative `&gt;` spelling.
+ */
+function lineTextBeforeNode(node: JSONContent, parentNode?: JSONContent): string {
+  const siblings = parentNode?.content;
+  const index = Array.isArray(siblings) ? siblings.indexOf(node) : -1;
+  if (index < 0) return '';
+  if (node.marks?.length) return '\uFFFC';
+  let prefix = '';
+  for (let siblingIndex = index - 1; siblingIndex >= 0; siblingIndex--) {
+    const sibling = siblings![siblingIndex];
+    if (sibling.type === 'hardBreak' || sibling.type === 'hard_break') return prefix;
+    if (sibling.type !== 'text') return `\uFFFC${prefix}`;
+    const text = typeof sibling.text === 'string' ? sibling.text : '';
+    const newline = text.lastIndexOf('\n');
+    if (newline >= 0) return text.slice(newline + 1) + prefix;
+    prefix = text + prefix;
+    if (!/^[ \t]*$/.test(prefix)) return prefix;
+  }
+  // The heading marker (`## `) precedes its first line, not text after a break.
+  return parentNode?.type === 'heading' ? `#${prefix}` : prefix;
+}
+
+/**
  * Undo TipTap's HTML-entity over-encoding outside code, without turning
  * authored `&lt;div&gt;`-style entity text into real HTML that marked later
  * drops. Decode `&lt;` only when it cannot start an HTML tag (`a < b`); keep
@@ -86,12 +116,23 @@ function escapeMarkdownSyntaxForProse(text: string): string {
  *
  * Do not decode `&gt;` at a CommonMark blockquote position (start of line,
  * optional 0–3 spaces) — that turns literal greater-than prose into a quote (T04).
+ * The line start comes from the paragraph's inline content, not from the text
+ * node boundary: `**File** > **Save**` is mid-line although `>` starts a node (R1).
+ * A heading's first line is never a blockquote position; text after a hard
+ * break inside a heading is.
  */
-function decodeNonTagHtmlEntities(encoded: string): string {
+function decodeNonTagHtmlEntities(
+  encoded: string,
+  node: JSONContent,
+  parentNode?: JSONContent
+): string {
   return encoded
     .replace(/&gt;/g, (match, offset, full: string) => {
-      const lineStart = full.lastIndexOf('\n', offset - 1) + 1;
-      const prefix = full.slice(lineStart, offset);
+      const newline = full.lastIndexOf('\n', offset - 1);
+      let prefix = full.slice(newline + 1, offset);
+      if (newline < 0 && /^[ \t]{0,3}$/.test(prefix)) {
+        prefix = lineTextBeforeNode(node, parentNode) + prefix;
+      }
       if (/^[ \t]{0,3}$/.test(prefix)) {
         return match;
       }
@@ -133,7 +174,7 @@ export function patchMarkdownSerialization(manager: MarkdownManager): void {
       }
       const encoded = original(text, node, parentNode);
       if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
-      return decodeNonTagHtmlEntities(encoded);
+      return decodeNonTagHtmlEntities(encoded, node, parentNode);
     };
   }
 

@@ -9,7 +9,7 @@
  * corrupted relative to main. These cases pin the production sync serializer.
  */
 
-import { Editor } from '@tiptap/core';
+import { Editor, type JSONContent } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { ListKit } from '@tiptap/extension-list';
@@ -70,6 +70,14 @@ function roundTrip(markdown: string): string {
   } finally {
     editor.destroy();
   }
+}
+
+function text(value: string, marks?: JSONContent['marks']): JSONContent {
+  return marks ? { type: 'text', text: value, marks } : { type: 'text', text: value };
+}
+
+function paragraph(...content: JSONContent[]): JSONContent {
+  return { type: 'paragraph', content };
 }
 
 function multiRoundTrip(markdown: string, rounds: number): string[] {
@@ -249,6 +257,118 @@ describe('explicit angle-bracket autolinks (real editor)', () => {
     } finally {
       mailtoEditor.destroy();
       telEditor.destroy();
+    }
+  });
+});
+
+describe('mid-line greater-than after a text node boundary (R1, real editor)', () => {
+  // T04 decided "line start" per ProseMirror text node, so a `>` that follows a
+  // mark, code span or link was saved as `&gt;` although it is mid-line.
+  it.each([
+    ['after bold marks', 'Click **File** > **Save**'],
+    ['between code spans', '`a` > `b`'],
+    ['after a link', '[docs](https://example.com) > more'],
+    ['after italic at the end', 'Go *here* >'],
+    ['inside a heading', '# > Not a quote'],
+    // The mark's opening delimiter precedes `>` on the line.
+    ['at the start of bold text', '**> note** rest'],
+    ['at the start of italic text', '*> aside*'],
+    ['at the start of struck text', '~~> struck~~'],
+    ['at the start of link text', '[> Next chapter](ch2.md)'],
+    ['at the start of bold text after a hard break', 'First line  \n**> note**'],
+  ])('keeps a literal > %s', (_name, source) => {
+    const [save1, save2] = multiRoundTrip(source, 2);
+    expect(save1).toBe(source);
+    expect(save2).toBe(source);
+  });
+
+  // An authored `&gt;` keeps its source through the literal mark and never
+  // reaches the line-start guard, so these cases use plain-text `>` nodes, as
+  // typing or HTML paste produces them (T04).
+  it.each<[string, JSONContent[], string]>([
+    ['at block start', [paragraph(text('> typed text'))], '&gt; typed text'],
+    [
+      'after a hard break',
+      [paragraph(text('First line'), { type: 'hardBreak' }, text('> second line'))],
+      'First line  \n&gt; second line',
+    ],
+    [
+      'after a hard break and up to three spaces',
+      [paragraph(text('First line'), { type: 'hardBreak' }, text('   > second line'))],
+      'First line  \n   &gt; second line',
+    ],
+    [
+      'inside a list item',
+      [{ type: 'bulletList', content: [{ type: 'listItem', content: [paragraph(text('> x'))] }] }],
+      '- &gt; x',
+    ],
+  ])('keeps a plain-text line-leading > escaped %s', (_name, content, saved) => {
+    const editor = createRealEditor('');
+    try {
+      editor.commands.setContent({ type: 'doc', content });
+      expect(getEditorMarkdownForSync(editor).trim()).toBe(saved);
+    } finally {
+      editor.destroy();
+    }
+    const reopened = createRealEditor(saved);
+    try {
+      expect(reopened.getHTML()).not.toMatch(/<blockquote\b/i);
+      expect(getEditorMarkdownForSync(reopened).trim()).toBe(saved);
+    } finally {
+      reopened.destroy();
+    }
+  });
+
+  it('keeps > escaped after a hard break inside a heading', () => {
+    const editor = createRealEditor('## Title');
+    try {
+      // Shift+Enter in a heading runs setHardBreak; the next text starts a line.
+      editor.commands.setTextSelection(editor.state.doc.firstChild!.nodeSize - 1);
+      expect(editor.commands.setHardBreak()).toBe(true);
+      editor.view.dispatch(editor.state.tr.insertText('> quote'));
+      expect(getEditorMarkdownForSync(editor).trim()).toBe('## Title  \n&gt; quote');
+    } finally {
+      editor.destroy();
+    }
+    const reopened = createRealEditor('## Title  \n&gt; quote');
+    try {
+      expect(reopened.getHTML()).not.toMatch(/<blockquote\b/i);
+    } finally {
+      reopened.destroy();
+    }
+  });
+
+  it('keeps a typed line-leading > escaped', () => {
+    const editor = createRealEditor('');
+    try {
+      editor.view.dispatch(editor.state.tr.insertText('>x', 1));
+      expect(getEditorMarkdownForSync(editor).trim()).toBe('&gt;x');
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  // A node that is not among its parent's children (TipTap renders a
+  // multi-paragraph table cell with the table as parent) keeps `&gt;`, even
+  // with a mark or a heading parent that would otherwise look mid-line.
+  it.each<[string, JSONContent, JSONContent]>([
+    ['plain text', text('> x'), paragraph(text('Before'), { type: 'hardBreak' })],
+    [
+      'bold text',
+      text('> x', [{ type: 'bold' }]),
+      paragraph(text('Before'), { type: 'hardBreak' }),
+    ],
+    ['a heading parent', text('> x'), { type: 'heading', content: [text('Before')] }],
+  ])('keeps &gt; for %s it cannot locate in its parent', (_name, node, parent) => {
+    const editor = createRealEditor('Other text');
+    try {
+      getEditorMarkdownForSync(editor);
+      const manager = editor.markdown as unknown as {
+        encodeTextForMarkdown: (value: string, node: JSONContent, parent?: JSONContent) => string;
+      };
+      expect(manager.encodeTextForMarkdown('> x', node, parent)).toBe('&gt; x');
+    } finally {
+      editor.destroy();
     }
   });
 });
