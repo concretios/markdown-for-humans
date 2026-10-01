@@ -48,15 +48,25 @@ describe('out-of-sync banner', () => {
     expect(document.querySelectorAll('[role="alert"]')).toHaveLength(1);
   });
 
-  it('uses theme variables only and moves Find into the toolbar row while shown', () => {
+  it('uses theme variables only and moves below Find instead of covering the live toolbar', () => {
     const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
     const rules = [...css.matchAll(/\.out-of-sync-banner[^{]*\{([^}]*)\}/g)].map(match => match[1]);
     expect(rules.length).toBeGreaterThanOrEqual(3);
     for (const rule of rules) {
       expect(rule).not.toMatch(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(|\b(?:white|black|red)\b/i);
     }
-    expect(css).toMatch(
-      /body:has\(\.out-of-sync-banner\)\s+\.search-overlay[^{}]*\{[^}]*padding-top:\s*4px/
+    // The banner leaves the toolbar live, so Find must keep its row below it
+    // (same rule as the saved-draft banner); the banner moves below Find instead.
+    expect(css).not.toMatch(/body:has\(\.out-of-sync-banner\)\s+\.search-overlay/);
+    const findTop = Number(
+      css.match(/\n\s*\.search-overlay\s*\{[^}]*padding-top:\s*(\d+)px/)?.[1] ?? Number.NaN
     );
+    const bannerTop = Number(
+      css.match(
+        /body:has\(\.search-overlay\.visible\)\s+\.out-of-sync-banner\s*\{[^}]*top:\s*(\d+)px/
+      )?.[1] ?? Number.NaN
+    );
+    // The Find panel is 46 CSS px tall (see the matching saved-draft banner test).
+    expect(bannerTop).toBeGreaterThanOrEqual(findTop + 46);
   });
 });

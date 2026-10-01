@@ -3895,7 +3895,10 @@ body.vscode-high-contrast-light.feedback-completion-open {
 /* The saved-draft and out-of-sync banners leave the toolbar live. Find keeps
    its row below the toolbar, and each banner moves below Find's 46 px panel
    while Find is open. */
-body:has(.search-overlay.visible) .feedback-draft-banner,
+body:has(.search-overlay.visible) .feedback-draft-banner {
+  top: 104px;
+}
+
 body:has(.search-overlay.visible) .out-of-sync-banner {
   top: 104px;
 }
