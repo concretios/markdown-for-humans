@@ -16,6 +16,8 @@ import { MERMAID_TEMPLATES } from './mermaidTemplates';
 import { showTableInsertDialog } from './features/tableInsert';
 import { showLinkDialog } from './features/linkDialog';
 import { showImageInsertDialog } from './features/imageInsertDialog';
+import { parseFenceInfo, replaceFenceLanguage } from './highlighting/fenceInfo';
+import { resolveGrammar } from './highlighting/languageRegistry';
 import type { Editor } from '@tiptap/core';
 import type { Transaction } from '@tiptap/pm/state';
 
@@ -71,7 +73,8 @@ let feedbackToolbarState: FeedbackToolbarState = { active: false };
  * Normalize selection and create a code block
  *
  * Strips all formatting (marks) from the selection, extracts plain text,
- * and replaces it with a single code block node.
+ * and replaces it with a single code block node. Existing code blocks keep their
+ * authored fence metadata when the language changes.
  *
  * @param editor - TipTap editor instance
  * @param language - Programming language for syntax highlighting
@@ -80,9 +83,25 @@ function setCodeBlockNormalized(editor: Editor, language: string): void {
   const { state } = editor;
   const { from, to, empty } = state.selection;
 
-  // If already in a code block, just update the language
+  // Metadata belongs to the authored fence, so changing its language must retain it.
   if (editor.isActive('codeBlock')) {
-    editor.chain().focus().updateAttributes('codeBlock', { language }).run();
+    editor
+      .chain()
+      .focus()
+      .command(({ tr, dispatch }) => {
+        if (dispatch) {
+          tr.doc.nodesBetween(tr.selection.from, tr.selection.to, (node, pos) => {
+            if (node.type.name !== 'codeBlock') return;
+            tr.setNodeMarkup(pos, undefined, {
+              ...node.attrs,
+              language: replaceFenceLanguage(node.attrs.language, language),
+            });
+            return false;
+          });
+        }
+        return true;
+      })
+      .run();
     return;
   }
 
@@ -167,6 +186,7 @@ type ToolbarDropdownItem = {
   action: () => void;
   icon?: ToolbarIcon;
   isEnabled?: () => boolean; // Function to check if item should be enabled
+  isActive?: () => boolean;
 };
 
 type ToolbarDropdown = {
@@ -567,59 +587,27 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       requiresFocus: true,
       isActive: () => editor.isActive('codeBlock'),
       items: [
-        {
-          label: 'Plain Text',
-          action: () => setCodeBlockNormalized(editor, 'plaintext'),
-        },
-        {
-          label: 'JavaScript',
-          action: () => setCodeBlockNormalized(editor, 'javascript'),
-        },
-        {
-          label: 'TypeScript',
-          action: () => setCodeBlockNormalized(editor, 'typescript'),
-        },
-        {
-          label: 'Python',
-          action: () => setCodeBlockNormalized(editor, 'python'),
-        },
-        {
-          label: 'Bash',
-          action: () => setCodeBlockNormalized(editor, 'bash'),
-        },
-        {
-          label: 'JSON',
-          action: () => setCodeBlockNormalized(editor, 'json'),
-        },
-        {
-          label: 'Markdown',
-          action: () => setCodeBlockNormalized(editor, 'markdown'),
-        },
-        {
-          label: 'CSS',
-          action: () => setCodeBlockNormalized(editor, 'css'),
-        },
-        {
-          label: 'HTML',
-          action: () => setCodeBlockNormalized(editor, 'html'),
-        },
-        {
-          label: 'SQL',
-          action: () => setCodeBlockNormalized(editor, 'sql'),
-        },
-        {
-          label: 'Java',
-          action: () => setCodeBlockNormalized(editor, 'java'),
-        },
-        {
-          label: 'Go',
-          action: () => setCodeBlockNormalized(editor, 'go'),
-        },
-        {
-          label: 'Rust',
-          action: () => setCodeBlockNormalized(editor, 'rust'),
-        },
-      ],
+        ['Plain Text', 'plaintext'],
+        ['JavaScript', 'javascript'],
+        ['TypeScript', 'typescript'],
+        ['Python', 'python'],
+        ['Bash', 'bash'],
+        ['JSON', 'json'],
+        ['Markdown', 'markdown'],
+        ['CSS', 'css'],
+        ['HTML', 'html'],
+        ['SQL', 'sql'],
+        ['Java', 'java'],
+        ['Go', 'go'],
+        ['Rust', 'rust'],
+      ].map(([label, language]) => ({
+        label,
+        action: () => setCodeBlockNormalized(editor, language),
+        isActive: () =>
+          editor.isActive('codeBlock') &&
+          resolveGrammar(parseFenceInfo(editor.getAttributes('codeBlock').language).language) ===
+            resolveGrammar(language),
+      })),
     },
     {
       type: 'button',
@@ -826,12 +814,17 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       }
     });
 
-    // Update dropdown item disabled states
+    // Language choices expose their selected grammar to both sighted and screen-reader users.
     dropdownItems.forEach(({ config, element }) => {
       const enabled = !feedbackTransitionLocked && (config.isEnabled ? config.isEnabled() : true);
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
+      if (config.isActive) {
+        const active = config.isActive();
+        element.classList.toggle('active', active);
+        element.setAttribute('aria-pressed', String(active));
+      }
     });
   };
 

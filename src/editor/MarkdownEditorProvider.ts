@@ -11240,7 +11240,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
   }
 
   /**
-   * Generate HTML for webview
+   * Generate nonce-protected HTML and trusted local editor/worker asset URLs.
    */
   private getHtmlForWebview(webview: vscode.Webview): string {
     // The development host can recreate its extension host while Chromium
@@ -11250,6 +11250,12 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     // rebuilt host receives a new asset URL.
     const scriptUri = this.getVersionedWebviewAssetUri(webview, 'webview.js');
     const styleUri = this.getVersionedWebviewAssetUri(webview, 'webview.css');
+    const highlightingWorkerUri = this.getVersionedWebviewAssetUri(
+      webview,
+      'highlighting-worker.js'
+    )
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;');
 
     // Use a nonce for security
     const nonce = getNonce();
@@ -11266,12 +11272,13 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
                        script-src 'nonce-${nonce}';
                        font-src ${webview.cspSource};
                        connect-src ${webview.cspSource};
+                       worker-src blob:;
                        img-src ${webview.cspSource} https: data: blob:;">
         
         <link href="${styleUri}" rel="stylesheet">
         <title>Markdown for Humans</title>
       </head>
-      <body>
+      <body data-highlighting-worker-uri="${highlightingWorkerUri}">
         <div id="editor"></div>
         <script nonce="${nonce}" src="${scriptUri}"></script>
       </body>

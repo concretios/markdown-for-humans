@@ -66,6 +66,33 @@ suite('Markdown for Humans Extension Development Host', () => {
     assert.equal(commands.includes('markdownForHumans.openFile'), true);
   });
 
+  test('ships the self-contained worker at a readable extension resource URI', async () => {
+    const workerUri = vscode.Uri.joinPath(extension.extensionUri, 'dist', 'highlighting-worker.js');
+    const bytes = await vscode.workspace.fs.readFile(workerUri);
+    const source = new TextDecoder().decode(bytes);
+    assert.ok(source.includes('md4h.highlight.request'));
+    assert.ok(source.includes('md4h.highlight.result'));
+    assert.doesNotMatch(source, /\b(?:importScripts|import|eval)\s*\(|\bnew\s+Function\s*\(/);
+
+    // The provider uses the same API and extension root on minimum/stable hosts.
+    // Actual fetch/Blob-worker/CSP execution remains a real-webview QA check.
+    const panel = vscode.window.createWebviewPanel(
+      'md4h.worker-resource-test',
+      'Worker asset test',
+      vscode.ViewColumn.Beside,
+      {
+        localResourceRoots: [extension.extensionUri],
+      }
+    );
+    try {
+      const resource = panel.webview.asWebviewUri(workerUri);
+      assert.notEqual(resource.scheme, 'file');
+      assert.ok(resource.toString().includes('highlighting-worker.js'));
+    } finally {
+      panel.dispose();
+    }
+  });
+
   test('opens a Markdown fixture through the registered custom text editor', async function () {
     this.timeout(60_000);
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];

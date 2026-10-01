@@ -76,6 +76,88 @@
   ],
   "main": "./dist/extension.js",
   "contributes": {
+    "colors": [
+      {
+        "id": "markdownForHumans.codeKeyword",
+        "description": "Keyword color in Markdown for Humans code blocks.",
+        "defaults": {
+          "light": "#a31545",
+          "dark": "#c586c0",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeString",
+        "description": "String and regular expression color in Markdown for Humans code blocks.",
+        "defaults": {
+          "light": "#a31515",
+          "dark": "#ce9178",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeValue",
+        "description": "Number, attribute, and variable color in Markdown for Humans code blocks.",
+        "defaults": {
+          "light": "#0451a5",
+          "dark": "#b5cea8",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeFunction",
+        "description": "Function and declaration color in Markdown for Humans code blocks.",
+        "defaults": {
+          "light": "#6f42c1",
+          "dark": "#dcdcaa",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeType",
+        "description": "Type, built-in, and tag name color in Markdown for Humans code blocks.",
+        "defaults": {
+          "light": "#00695c",
+          "dark": "#4ec9b0",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeComment",
+        "description": "Comment color in Markdown for Humans code blocks.",
+        "defaults": {
+          "light": "#57606a",
+          "dark": "#a3a3a3",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeAddition",
+        "description": "Added-line color in Markdown for Humans diff code blocks.",
+        "defaults": {
+          "light": "#116329",
+          "dark": "#7ee787",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeDeletion",
+        "description": "Deleted-line color in Markdown for Humans diff code blocks.",
+        "defaults": {
+          "light": "#a40e26",
+          "dark": "#ffa198",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      }
+    ],
     "customEditors": [
       {
         "viewType": "markdownForHumans.editor",
@@ -365,7 +447,7 @@
   "dependencies": {
     "@tiptap/core": "3.30.5",
     "@tiptap/extension-code": "3.30.5",
-    "@tiptap/extension-code-block-lowlight": "3.30.5",
+    "@tiptap/extension-code-block": "3.30.5",
     "@tiptap/extension-image": "3.30.5",
     "@tiptap/extension-link": "3.30.5",
     "@tiptap/extension-list": "3.30.5",

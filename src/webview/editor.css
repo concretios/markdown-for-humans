@@ -203,12 +203,13 @@
     color: var(--md-code-fg);
     padding: 0.2em 0.2em;
     border-radius: 3px;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-weight: var(--vscode-editor-font-weight, normal);
     font-size: 90%;
   }
   
   .markdown-editor pre {
-    background-color: var(--md-code-bg);
+    background-color: var(--md-code-bg, var(--vscode-editor-background));
     border: 1px solid var(--md-border);
     padding: 20px;
     border-radius: 6px;
@@ -226,28 +227,29 @@
   
   }
   
-  /* Syntax highlighting - Code blocks */
-  .code-block-highlighted {
-    position: relative;
-    background-color: var(--md-code-bg);
-    border: 1px solid var(--md-border);
-    border-radius: 6px;
-    padding: 20px;
-    margin: 1em 0;
-    font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, monospace;
-  
-    line-height: 1.5;
-    overflow-x: auto;
-  }
-
   .code-block-wrapper {
     position: relative;
     margin: 1em 0;
   }
 
-  .code-block-wrapper .code-block-highlighted {
+  /* Geometry is independent of whether asynchronous token colors have arrived. */
+  .code-block-wrapper > pre {
     margin: 0;
-    padding-right: 60px;
+    padding-right: 48px; /* 32px copy control + 8px inset + 8px text clearance */
+  }
+
+  .code-block-highlight-status {
+    display: block;
+    margin-top: 6px;
+    color: var(--vscode-descriptionForeground, var(--md-foreground));
+    font-family: var(--vscode-font-family);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: normal;
+  }
+
+  .code-block-highlight-status[hidden] {
+    display: none;
   }
 
   .code-block-copy-button {
@@ -329,223 +331,107 @@
     color: var(--vscode-errorForeground);
   }
   
-  /* ============================================
-     Syntax Highlighting - GitHub Theme (Light)
-     Official highlight.js GitHub theme colors
-     
-     NOTE: Colors are intentionally hardcoded here for consistent
-     syntax highlighting across all VS Code themes. These provide
-     semantic meaning (keywords, strings, comments) that work
-     regardless of the user's theme choice.
-     ============================================ */
-  
-  .code-block-highlighted .hljs-doctag,
-  .code-block-highlighted .hljs-keyword,
-  .code-block-highlighted .hljs-meta .hljs-keyword,
-  .code-block-highlighted .hljs-template-tag,
-  .code-block-highlighted .hljs-template-variable,
-  .code-block-highlighted .hljs-type,
-  .code-block-highlighted .hljs-variable.language_ {
-    color: #d73a49;
+  /* Token colors are contributed VS Code colors, so all four theme kinds and
+     workbench.colorCustomizations can override them without retokenizing code.
+     The separate scope attribute selects the deepest token, because flattened
+     ancestor classes alone cannot express the original AST's color inheritance. */
+  .code-block-highlighted [data-highlight-scope~="doctag"],
+  .code-block-highlighted [data-highlight-scope~="keyword"],
+  .code-block-highlighted [data-highlight-scope~="template-tag"],
+  .code-block-highlighted [data-highlight-scope~="template-variable"] {
+    color: var(--vscode-markdownForHumans-codeKeyword, var(--vscode-editor-foreground));
   }
-  
-  .code-block-highlighted .hljs-title,
-  .code-block-highlighted .hljs-title.class_,
-  .code-block-highlighted .hljs-title.class_.inherited__,
-  .code-block-highlighted .hljs-title.function_ {
-    color: #6f42c1;
+
+  .code-block-highlighted [data-highlight-scope~="title"] {
+    color: var(--vscode-markdownForHumans-codeFunction, var(--vscode-editor-foreground));
   }
-  
-  .code-block-highlighted .hljs-attr,
-  .code-block-highlighted .hljs-attribute,
-  .code-block-highlighted .hljs-literal,
-  .code-block-highlighted .hljs-meta,
-  .code-block-highlighted .hljs-number,
-  .code-block-highlighted .hljs-operator,
-  .code-block-highlighted .hljs-variable,
-  .code-block-highlighted .hljs-selector-attr,
-  .code-block-highlighted .hljs-selector-class,
-  .code-block-highlighted .hljs-selector-id {
-    color: #005cc5;
+
+  .code-block-highlighted [data-highlight-scope~="attr"],
+  .code-block-highlighted [data-highlight-scope~="attribute"],
+  .code-block-highlighted [data-highlight-scope~="literal"],
+  .code-block-highlighted [data-highlight-scope~="meta"],
+  .code-block-highlighted [data-highlight-scope~="number"],
+  .code-block-highlighted [data-highlight-scope~="operator"],
+  .code-block-highlighted [data-highlight-scope~="variable"],
+  .code-block-highlighted [data-highlight-scope~="selector-attr"],
+  .code-block-highlighted [data-highlight-scope~="selector-class"],
+  .code-block-highlighted [data-highlight-scope~="selector-id"],
+  .code-block-highlighted [data-highlight-scope~="section"],
+  .code-block-highlighted [data-highlight-scope~="bullet"] {
+    color: var(--vscode-markdownForHumans-codeValue, var(--vscode-editor-foreground));
   }
-  
-  .code-block-highlighted .hljs-regexp,
-  .code-block-highlighted .hljs-string,
-  .code-block-highlighted .hljs-meta .hljs-string {
-    color: #032f62;
+
+  .code-block-highlighted [data-highlight-scope~="variable"][data-highlight-scope~="language_"] {
+    color: var(--vscode-markdownForHumans-codeKeyword, var(--vscode-editor-foreground));
   }
-  
-  .code-block-highlighted .hljs-built_in,
-  .code-block-highlighted .hljs-symbol {
-    color: #e36209;
+
+  .code-block-highlighted [data-highlight-scope~="regexp"],
+  .code-block-highlighted [data-highlight-scope~="string"] {
+    color: var(--vscode-markdownForHumans-codeString, var(--vscode-editor-foreground));
   }
-  
-  .code-block-highlighted .hljs-comment,
-  .code-block-highlighted .hljs-code,
-  .code-block-highlighted .hljs-formula {
-    color: #6a737d;
+
+  .code-block-highlighted [data-highlight-scope~="type"],
+  .code-block-highlighted [data-highlight-scope~="built_in"],
+  .code-block-highlighted [data-highlight-scope~="symbol"],
+  .code-block-highlighted [data-highlight-scope~="name"],
+  .code-block-highlighted [data-highlight-scope~="quote"],
+  .code-block-highlighted [data-highlight-scope~="selector-tag"],
+  .code-block-highlighted [data-highlight-scope~="selector-pseudo"] {
+    color: var(--vscode-markdownForHumans-codeType, var(--vscode-editor-foreground));
   }
-  
-  .code-block-highlighted .hljs-name,
-  .code-block-highlighted .hljs-quote,
-  .code-block-highlighted .hljs-selector-tag,
-  .code-block-highlighted .hljs-selector-pseudo {
-    color: #22863a;
+
+  .code-block-highlighted [data-highlight-scope~="comment"],
+  .code-block-highlighted [data-highlight-scope~="code"],
+  .code-block-highlighted [data-highlight-scope~="formula"] {
+    color: var(--vscode-markdownForHumans-codeComment, var(--vscode-editor-foreground));
   }
-  
-  .code-block-highlighted .hljs-subst {
-    color: #24292e;
-  }
-  
-  .code-block-highlighted .hljs-section {
-    color: #005cc5;
-    font-weight: bold;
-  }
-  
-  .code-block-highlighted .hljs-bullet {
-    color: #735c0f;
-  }
-  
-  .code-block-highlighted .hljs-emphasis {
-    color: #24292e;
-    font-style: italic;
-  }
-  
+
+  .code-block-highlighted .hljs-section,
   .code-block-highlighted .hljs-strong {
-    color: #24292e;
     font-weight: bold;
   }
-  
-  .code-block-highlighted .hljs-addition {
-    color: #22863a;
-    background-color: #f0fff4;
-  }
-  
-  .code-block-highlighted .hljs-deletion {
-    color: #b31d28;
-    background-color: #ffeef0;
-  }
-  
-  .code-block-highlighted .hljs-char.escape_,
-  .code-block-highlighted .hljs-link,
-  .code-block-highlighted .hljs-params,
-  .code-block-highlighted .hljs-property,
-  .code-block-highlighted .hljs-punctuation,
-  .code-block-highlighted .hljs-tag {
-    color: #24292e;
-  }
-  
-  /* ============================================
-     Syntax Highlighting - GitHub Theme (Dark)
-     Uses VS Code's body class for theme detection
-     
-     NOTE: Colors are intentionally hardcoded for consistent
-     syntax highlighting. Dark theme variants adjust brightness
-     for better contrast and visibility in dark themes.
-     ============================================ */
-  
-  .vscode-dark .code-block-highlighted,
-  .vscode-high-contrast .code-block-highlighted {
-    background-color: #161b22;
-    border-color: #30363d;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-doctag,
-  .vscode-dark .code-block-highlighted .hljs-keyword,
-  .vscode-dark .code-block-highlighted .hljs-meta .hljs-keyword,
-  .vscode-dark .code-block-highlighted .hljs-template-tag,
-  .vscode-dark .code-block-highlighted .hljs-template-variable,
-  .vscode-dark .code-block-highlighted .hljs-type,
-  .vscode-dark .code-block-highlighted .hljs-variable.language_ {
-    color: #ff7b72;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-title,
-  .vscode-dark .code-block-highlighted .hljs-title.class_,
-  .vscode-dark .code-block-highlighted .hljs-title.class_.inherited__,
-  .vscode-dark .code-block-highlighted .hljs-title.function_ {
-    color: #d2a8ff;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-attr,
-  .vscode-dark .code-block-highlighted .hljs-attribute,
-  .vscode-dark .code-block-highlighted .hljs-literal,
-  .vscode-dark .code-block-highlighted .hljs-meta,
-  .vscode-dark .code-block-highlighted .hljs-number,
-  .vscode-dark .code-block-highlighted .hljs-operator,
-  .vscode-dark .code-block-highlighted .hljs-variable,
-  .vscode-dark .code-block-highlighted .hljs-selector-attr,
-  .vscode-dark .code-block-highlighted .hljs-selector-class,
-  .vscode-dark .code-block-highlighted .hljs-selector-id {
-    color: #79c0ff;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-regexp,
-  .vscode-dark .code-block-highlighted .hljs-string,
-  .vscode-dark .code-block-highlighted .hljs-meta .hljs-string {
-    color: #a5d6ff;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-built_in,
-  .vscode-dark .code-block-highlighted .hljs-symbol {
-    color: #ffa657;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-comment,
-  .vscode-dark .code-block-highlighted .hljs-code,
-  .vscode-dark .code-block-highlighted .hljs-formula {
-    color: #8b949e;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-name,
-  .vscode-dark .code-block-highlighted .hljs-quote,
-  .vscode-dark .code-block-highlighted .hljs-selector-tag,
-  .vscode-dark .code-block-highlighted .hljs-selector-pseudo {
-    color: #7ee787;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-subst {
-    color: #c9d1d9;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-section {
-    color: #1f6feb;
-    font-weight: bold;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-bullet {
-    color: #f2cc60;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-emphasis {
-    color: #c9d1d9;
+
+  .code-block-highlighted .hljs-emphasis {
     font-style: italic;
   }
-  
-  .vscode-dark .code-block-highlighted .hljs-strong {
-    color: #c9d1d9;
+
+  .code-block-highlighted [data-highlight-scope~="addition"] {
+    color: var(--vscode-markdownForHumans-codeAddition, var(--vscode-editor-foreground));
+  }
+
+  .code-block-highlighted [data-highlight-scope~="deletion"] {
+    color: var(--vscode-markdownForHumans-codeDeletion, var(--vscode-editor-foreground));
+  }
+
+  .code-block-highlighted [data-highlight-scope~="subst"],
+  .code-block-highlighted [data-highlight-scope~="char"][data-highlight-scope~="escape_"],
+  .code-block-highlighted [data-highlight-scope~="link"],
+  .code-block-highlighted [data-highlight-scope~="params"],
+  .code-block-highlighted [data-highlight-scope~="property"],
+  .code-block-highlighted [data-highlight-scope~="punctuation"],
+  .code-block-highlighted [data-highlight-scope~="tag"] {
+    color: var(--vscode-editor-foreground);
+  }
+
+  /* High-contrast themes retain their editor surface and use typography cues
+     alongside the foreground-based palette, without forcing a dark background. */
+  .vscode-high-contrast .code-block-wrapper > pre,
+  .vscode-high-contrast-light .code-block-wrapper > pre {
+    border-color: var(--vscode-contrastBorder, var(--md-border));
+  }
+
+  .vscode-high-contrast .code-block-highlighted [data-highlight-scope~="keyword"],
+  .vscode-high-contrast-light .code-block-highlighted [data-highlight-scope~="keyword"],
+  .vscode-high-contrast .code-block-highlighted [data-highlight-scope~="title"],
+  .vscode-high-contrast-light .code-block-highlighted [data-highlight-scope~="title"] {
     font-weight: bold;
   }
-  
-  .vscode-dark .code-block-highlighted .hljs-addition {
-    color: #aff5b4;
-    background-color: #033a16;
+
+  .vscode-high-contrast .code-block-highlighted [data-highlight-scope~="comment"],
+  .vscode-high-contrast-light .code-block-highlighted [data-highlight-scope~="comment"] {
+    font-style: italic;
   }
-  
-  .vscode-dark .code-block-highlighted .hljs-deletion {
-    color: #ffdcd7;
-    background-color: #67060c;
-  }
-  
-  .vscode-dark .code-block-highlighted .hljs-char.escape_,
-  .vscode-dark .code-block-highlighted .hljs-link,
-  .vscode-dark .code-block-highlighted .hljs-params,
-  .vscode-dark .code-block-highlighted .hljs-property,
-  .vscode-dark .code-block-highlighted .hljs-punctuation,
-  .vscode-dark .code-block-highlighted .hljs-tag {
-    color: #c9d1d9;
-  }
-  
+
   /* ============================================
      Blockquotes
      ============================================ */
@@ -1729,6 +1615,11 @@
   
   .toolbar-dropdown-item:hover {
     background-color: var(--md-hover-bg);
+  }
+
+  .toolbar-dropdown-item.active {
+    color: var(--vscode-list-activeSelectionForeground);
+    background-color: var(--vscode-list-activeSelectionBackground);
   }
   
   .toolbar-dropdown-item:active {

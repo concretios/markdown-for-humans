@@ -61,10 +61,6 @@ jest.mock('../../webview/extensions/markdownCompatibilityMarks', () => ({
   MarkdownCode: {},
   MarkdownLink: { configure: () => ({}) },
 }));
-jest.mock('@tiptap/extension-code-block-lowlight', () => ({
-  __esModule: true,
-  default: { configure: () => ({}) },
-}));
 jest.mock('../../webview/extensions/codeBlockWithCopy', () => ({
   CodeBlockWithCopy: { configure: () => ({}) },
 }));
