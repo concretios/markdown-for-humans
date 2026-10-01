@@ -40,6 +40,7 @@ import {
 import { findImageSourceReferences } from './imageSourceReferences';
 import { applyBlankLinePolicy, type BlankLineMode } from '../shared/blankLinePolicy';
 import {
+  FeedbackReportLockBusyError,
   FeedbackSessionError,
   FeedbackSessionStore,
   type FeedbackItem,
@@ -339,6 +340,11 @@ interface ActiveFeedbackSession {
   targets: Map<string, { startOrdinal: number; endOrdinal: number }>;
   previewNonce: string;
   previewRevisions: Map<string, number>;
+  /**
+   * Screenshot Add idempotency keys mapped to the one item each keeps, the
+   * newest attempt applied to it, and a hash of that attempt's content.
+   */
+  screenshotAddKeys?: Map<string, { itemId: string; attempt: number; contentSha256: string }>;
   /** Exact draft ranges that were structurally valid but no longer resolve. */
   degradedRenderedRangeIds: Set<string>;
   /** Draft table-cell targets whose containing table identity no longer validates. */
@@ -373,6 +379,8 @@ interface FeedbackTransition {
   /** Only this webview may complete or release the transition. */
   ownerWebview: vscode.Webview;
   acceptingFlushEdit: boolean;
+  /** Save participants may edit the buffer while the snapshot save runs. */
+  acceptingSaveEdits?: boolean;
   invalidated: boolean;
   /** An accepted pre-lock edit must be reflected back before this lock retires. */
   recoveryRequired: boolean;
@@ -405,6 +413,22 @@ const FEEDBACK_DURABLE_MUTATION_MESSAGES = new Set<FeedbackWebviewMessage['type'
   'feedback.item.edit',
   'feedback.item.delete',
   'feedback.item.restore',
+]);
+
+/**
+ * In-session actions whose webview UI has no visible error surface; their
+ * errors otherwise reach only the screen-reader live region. Screenshot,
+ * Finish and preview failures are shown in their own dialogs.
+ */
+const FEEDBACK_NOTIFIED_ERROR_MESSAGES = new Set<FeedbackWebviewMessage['type']>([
+  'feedback.text.add',
+  'feedback.item.edit',
+  'feedback.item.delete',
+  'feedback.item.restore',
+  'feedback.discard',
+  'feedback.reveal',
+  'feedback.revealInOS',
+  'feedback.copyDiagnostics',
 ]);
 
 type FeedbackHostErrorCode = NonNullable<
@@ -1718,9 +1742,14 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           // owns the document. If any later transition step fails, keep the
           // lock until this accepted content is reflected back exactly.
           feedbackTransition.recoveryRequired = true;
+          // Compare EOL-normalized text: VS Code converts the inserted LF
+          // content to the document's EOL, so a CRLF file never matches raw.
           feedbackTransition.expectedFlushContentSha256 = crypto
             .createHash('sha256')
-            .update(this.normalizeWebviewEditContent(message.content), 'utf8')
+            .update(
+              this.normalizeWebviewEditContent(message.content).replace(/\r\n/g, '\n'),
+              'utf8'
+            )
             .digest('hex');
           if (feedbackTransition.ownerWebview !== webview) {
             // Preserve the peer's edit, then cancel this start. The owner's
@@ -3925,10 +3954,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       );
     }
 
-    const capturedDocumentVersion = this.getDocumentVersion(document);
-    const capturedSourceText = document.getText();
-
     if (document.isDirty) {
+      // Save participants (format or trim on save) can edit the buffer inside
+      // save(). Accept those edits and capture the snapshot after save below.
+      const transition = this.feedbackTransitions.get(document.uri.toString());
+      if (transition) transition.acceptingSaveEdits = true;
       let saved = false;
       try {
         saved = await document.save();
@@ -3937,6 +3967,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           'MD4H-FB-STORE-002',
           `Could not save the Markdown snapshot: ${error instanceof Error ? error.message : String(error)}`
         );
+      } finally {
+        if (transition) transition.acceptingSaveEdits = false;
       }
       if (!saved || document.isDirty) {
         throw new FeedbackSessionError(
@@ -3945,6 +3977,9 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         );
       }
     }
+
+    const capturedDocumentVersion = this.getDocumentVersion(document);
+    const capturedSourceText = document.getText();
 
     const sourceBytes = await readFile(document.uri.fsPath);
     const prepared = this.feedbackSnapshotService.prepareSource({
@@ -4283,6 +4318,39 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         sourceSliceSha256: source.sourceSliceSha256,
       },
     };
+  }
+
+  /**
+   * Replace one screenshot item's PNG, comment and target in place, and bump
+   * its preview revision so webviews reload the image.
+   */
+  private async replaceFeedbackScreenshot(
+    session: ActiveFeedbackSession,
+    document: vscode.TextDocument,
+    id: string,
+    input: { startOrdinal: number; endOrdinal: number; feedback: string; imageDataUrl: string }
+  ): Promise<void> {
+    const target = this.mapFeedbackTarget(session, input.startOrdinal, input.endOrdinal);
+    const migrationItems = await this.feedbackMigrationItemsV2(session);
+    await session.store.replaceScreenshotFeedbackV2(
+      id,
+      {
+        startLine: target.startLine,
+        endLine: target.endLine,
+        feedback: input.feedback,
+        pngData: input.imageDataUrl,
+        ...this.resolveFeedbackVisualTargetV2(session, target),
+      },
+      {
+        beforeCommit: this.feedbackCommitGuard(session, document),
+        ...(migrationItems === undefined ? {} : { migrationItems }),
+      }
+    );
+    session.targets.set(id, {
+      startOrdinal: target.startOrdinal,
+      endOrdinal: target.endOrdinal,
+    });
+    session.previewRevisions.set(id, (session.previewRevisions.get(id) ?? 1) + 1);
   }
 
   /** Return a fully v2 item set or fail on mixed in-memory schema state. */
@@ -5252,26 +5320,74 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         }
 
         case 'feedback.screenshot.add': {
-          const target = this.mapFeedbackTarget(session, message.startOrdinal, message.endOrdinal);
-          const migrationItems = await this.feedbackMigrationItemsV2(session);
-          const item = await session.store.addScreenshotFeedbackV2(
-            {
-              startLine: target.startLine,
-              endLine: target.endLine,
-              feedback: message.feedback,
-              pngData: message.imageDataUrl,
-              ...this.resolveFeedbackVisualTargetV2(session, target),
-            },
-            {
-              beforeCommit: this.feedbackCommitGuard(session, document),
-              ...(migrationItems === undefined ? {} : { migrationItems }),
+          // The webview times out a slow Add after 15 s, but the request may
+          // still commit while the user retries or Retakes under the same key.
+          // Keep one item per key holding the newest attempt, in either order.
+          const key = message.idempotencyKey;
+          const attempt = message.attempt ?? 1;
+          const contentSha256 =
+            key === undefined
+              ? ''
+              : crypto
+                  .createHash('sha256')
+                  .update(
+                    JSON.stringify([
+                      message.startOrdinal,
+                      message.endOrdinal,
+                      message.feedback,
+                      message.imageDataUrl,
+                    ]),
+                    'utf8'
+                  )
+                  .digest('hex');
+          const prior = key === undefined ? undefined : session.screenshotAddKeys?.get(key);
+          const priorIsLive =
+            prior !== undefined &&
+            session.store.items.some(existing => existing.id === prior.itemId);
+          if (
+            prior !== undefined &&
+            (attempt <= prior.attempt || (priorIsLive && contentSha256 === prior.contentSha256))
+          ) {
+            // An older attempt, or the committed content again: no write.
+            prior.attempt = Math.max(prior.attempt, attempt);
+          } else if (prior !== undefined && priorIsLive) {
+            // A newer attempt with edited text, annotation or crop: last write wins.
+            await this.replaceFeedbackScreenshot(session, document, prior.itemId, message);
+            prior.attempt = attempt;
+            prior.contentSha256 = contentSha256;
+          } else {
+            const target = this.mapFeedbackTarget(
+              session,
+              message.startOrdinal,
+              message.endOrdinal
+            );
+            const migrationItems = await this.feedbackMigrationItemsV2(session);
+            const item = await session.store.addScreenshotFeedbackV2(
+              {
+                startLine: target.startLine,
+                endLine: target.endLine,
+                feedback: message.feedback,
+                pngData: message.imageDataUrl,
+                ...this.resolveFeedbackVisualTargetV2(session, target),
+              },
+              {
+                beforeCommit: this.feedbackCommitGuard(session, document),
+                ...(migrationItems === undefined ? {} : { migrationItems }),
+              }
+            );
+            session.targets.set(item.id, {
+              startOrdinal: target.startOrdinal,
+              endOrdinal: target.endOrdinal,
+            });
+            session.previewRevisions.set(item.id, 1);
+            if (key !== undefined) {
+              (session.screenshotAddKeys ??= new Map()).set(key, {
+                itemId: item.id,
+                attempt,
+                contentSha256,
+              });
             }
-          );
-          session.targets.set(item.id, {
-            startOrdinal: target.startOrdinal,
-            endOrdinal: target.endOrdinal,
-          });
-          session.previewRevisions.set(item.id, 1);
+          }
           this.postFeedbackMessage(webview, {
             type: 'feedback.updated',
             requestId: message.requestId,
@@ -5282,30 +5398,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         }
 
         case 'feedback.screenshot.replace': {
-          const target = this.mapFeedbackTarget(session, message.startOrdinal, message.endOrdinal);
-          const migrationItems = await this.feedbackMigrationItemsV2(session);
-          await session.store.replaceScreenshotFeedbackV2(
-            message.id,
-            {
-              startLine: target.startLine,
-              endLine: target.endLine,
-              feedback: message.feedback,
-              pngData: message.imageDataUrl,
-              ...this.resolveFeedbackVisualTargetV2(session, target),
-            },
-            {
-              beforeCommit: this.feedbackCommitGuard(session, document),
-              ...(migrationItems === undefined ? {} : { migrationItems }),
-            }
-          );
-          session.targets.set(message.id, {
-            startOrdinal: target.startOrdinal,
-            endOrdinal: target.endOrdinal,
-          });
-          session.previewRevisions.set(
-            message.id,
-            (session.previewRevisions.get(message.id) ?? 1) + 1
-          );
+          await this.replaceFeedbackScreenshot(session, document, message.id, message);
           this.postFeedbackMessage(webview, {
             type: 'feedback.updated',
             requestId: message.requestId,
@@ -5577,10 +5670,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
               );
             }
             await session.store.validateContainedPaths();
-            await vscode.workspace.fs.delete(vscode.Uri.file(session.store.getDiscardPath()), {
-              recursive: true,
-              useTrash: true,
-            });
+            const deleted = await this.deleteFeedbackBundle(
+              session.store.getDiscardPath(),
+              async () => {
+                if (this.feedbackSessions.get(document.uri.toString()) !== session) {
+                  throw new FeedbackSessionError(
+                    'MD4H-FB-STORE-001',
+                    'This feedback session is no longer active.'
+                  );
+                }
+                await session.store.validateContainedPaths();
+              }
+            );
+            if (!deleted) {
+              session.phase = 'active';
+              return;
+            }
             session.store.finalizeDiscard();
             session.pendingClose = {
               requestId: message.requestId,
@@ -5645,12 +5750,22 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           message: 'The Markdown source changed outside the frozen feedback snapshot.',
         });
       }
+      const errorMessage = error instanceof Error ? error.message : 'The feedback request failed.';
+      if (
+        error instanceof FeedbackReportLockBusyError ||
+        FEEDBACK_NOTIFIED_ERROR_MESSAGES.has(message.type)
+      ) {
+        // The webview toast auto-dismisses and in-session errors only reach the
+        // live region, so a blocked write or Resume, and an in-session action
+        // without its own error surface, also get a notification.
+        void vscode.window.showErrorMessage(errorMessage);
+      }
       this.postFeedbackMessage(webview, {
         type: 'feedback.error',
         requestId: message.requestId,
         ...(requestSession ? { sessionId: requestSession.sessionId } : {}),
         ...(code ? { code } : {}),
-        message: error instanceof Error ? error.message : 'The feedback request failed.',
+        message: errorMessage,
         recoverable: true,
       });
     } finally {
@@ -6953,8 +7068,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
 
   /**
    * Consumes document changes that occur while Feedback owns the document.
-   * Flush-generated edits remain allowed until the snapshot is locked. Any
-   * later change cancels an in-progress transition or invalidates the session.
+   * Flush-generated edits (compared EOL-normalized) remain allowed until the
+   * snapshot is locked, and any change made while the snapshot save runs (save
+   * participants) is accepted and marks the transition for recovery. Any other
+   * change cancels an in-progress transition or invalidates the session.
    */
   private handleFeedbackDocumentChange(
     documentKey: string,
@@ -6971,11 +7088,20 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     if (transition === undefined) {
       return false;
     }
+    if (transition.acceptingSaveEdits) {
+      // The snapshot binds to the text observed after save resolves, but the
+      // renderers still need that text if the transition fails afterward.
+      transition.recoveryRequired = true;
+      return true;
+    }
     if (transition.acceptingFlushEdit) {
       const currentSha256 =
         currentText === undefined
           ? undefined
-          : crypto.createHash('sha256').update(currentText, 'utf8').digest('hex');
+          : crypto
+              .createHash('sha256')
+              .update(currentText.replace(/\r\n/g, '\n'), 'utf8')
+              .digest('hex');
       if (
         transition.expectedFlushContentSha256 !== undefined &&
         transition.expectedFlushContentSha256 === currentSha256
@@ -7532,10 +7658,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       }
       await store.validateContainedPaths();
       this.assertFeedbackTransition(documentKey, transitionToken);
-      await vscode.workspace.fs.delete(vscode.Uri.file(store.getDiscardPath()), {
-        recursive: true,
-        useTrash: true,
+      const deleted = await this.deleteFeedbackBundle(store.getDiscardPath(), async () => {
+        await store.validateContainedPaths();
+        this.assertFeedbackTransition(documentKey, transitionToken);
       });
+      if (!deleted) return;
       store.finalizeDiscard();
       this.postFeedbackMessage(webview, {
         type: 'feedback.draft.discarded',
@@ -7545,6 +7672,44 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     } finally {
       await this.endFeedbackTransition(documentKey, transitionToken, document);
     }
+  }
+
+  /**
+   * Move a Feedback bundle to Trash, or delete it permanently after a second
+   * modal confirmation when Trash fails. VS Code's FileService rejects
+   * `useTrash` for providers without the Trash capability, which includes the
+   * server-side disk provider on Remote-SSH, WSL and dev containers. The error
+   * text is localized, so any Trash failure gets the same fallback the
+   * Explorer offers.
+   *
+   * @param bundlePath - Contained bundle directory from the session store
+   * @param revalidate - Re-checks session state after the user answers
+   * @returns false when the user keeps the draft
+   */
+  private async deleteFeedbackBundle(
+    bundlePath: string,
+    revalidate: () => Promise<void>
+  ): Promise<boolean> {
+    const bundleUri = vscode.Uri.file(bundlePath);
+    try {
+      await vscode.workspace.fs.delete(bundleUri, { recursive: true, useTrash: true });
+      return true;
+    } catch (error) {
+      console.warn('[MD4H] Could not move the Feedback draft to Trash:', error);
+    }
+    const choice = await vscode.window.showWarningMessage(
+      'Could not move this Feedback draft to Trash. Delete it permanently?',
+      {
+        modal: true,
+        detail:
+          'This location does not support Trash, for example a remote or container workspace. Permanent deletion cannot be undone.',
+      },
+      'Delete permanently'
+    );
+    if (choice !== 'Delete permanently') return false;
+    await revalidate();
+    await vscode.workspace.fs.delete(bundleUri, { recursive: true, useTrash: false });
+    return true;
   }
 
   /**

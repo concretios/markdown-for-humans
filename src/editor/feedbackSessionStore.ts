@@ -9,7 +9,10 @@
  * - Embed strict AI-agent instructions while accepting legacy guide variants for recovery
  * - Validate screenshot bytes and keep asset writes contained
  * - Enforce monotonic item IDs and frozen-source SHA-256 integrity
- * - Bound report/item/image resources and recover only proven-dead stale locks
+ * - Bound report/item/image resources and recover stale report locks: locks
+ *   older than 5 minutes not owned by this live extension host (matched by a
+ *   random per-instance tag; no host identity is written), or legacy locks
+ *   whose owner PID is proven dead
  * - Discover and strictly resume drafts after extension-host restarts
  */
 
@@ -181,6 +184,10 @@ const REPORT_LOCK_WAIT_MS = 20;
 // over a legitimately slow owner while allowing recovery after a host crash.
 const REPORT_LOCK_STALE_AFTER_MS = 5 * 60 * 1_000;
 const REPORT_LOCK_TOKEN_BYTES = 12;
+// Lock owner identity: a random tag per extension host. It distinguishes this
+// host from an earlier one that crashed and whose PID was recycled (common in
+// containers), and records nothing about the machine.
+const REPORT_LOCK_INSTANCE_TAG = randomBytes(REPORT_LOCK_TOKEN_BYTES).toString('hex');
 const MAX_FEEDBACK_TEXT_LENGTH = 100_000;
 const MAX_FOCUS_TEXT_LENGTH = 1_000_000;
 const MAX_RENDERED_BLOCK_ORDINAL = 99_999;
@@ -245,6 +252,17 @@ export class FeedbackSessionError extends Error {
     super(message);
     this.name = 'FeedbackSessionError';
     this.code = code;
+  }
+}
+
+/** Another live writer holds the report lock; the caller should surface it durably. */
+export class FeedbackReportLockBusyError extends FeedbackSessionError {
+  public constructor() {
+    super(
+      'MD4H-FB-STORE-002',
+      'Another window or process is updating this feedback report. Try again in a moment. A lock left by a closed window clears after 5 minutes.'
+    );
+    this.name = 'FeedbackReportLockBusyError';
   }
 }
 
@@ -3255,7 +3273,11 @@ async function readAndValidateDraft(
     }
     return await loadValidatedReport();
   } catch (error) {
-    if (error instanceof FeedbackDraftValidationError) {
+    // Lock contention is not an unreadable draft; keep its own actionable error.
+    if (
+      error instanceof FeedbackDraftValidationError ||
+      error instanceof FeedbackReportLockBusyError
+    ) {
       throw error;
     }
     throw new FeedbackDraftValidationError(
@@ -5060,7 +5082,7 @@ async function withExclusiveReportLock<T>(
 ): Promise<T> {
   const lockPath = `${reportPath}.lock`;
   const lockContents = Buffer.from(
-    `${process.pid} ${new Date().toISOString()} ${randomBytes(REPORT_LOCK_TOKEN_BYTES).toString('hex')}\n`,
+    `${process.pid} ${new Date().toISOString()} ${randomBytes(REPORT_LOCK_TOKEN_BYTES).toString('hex')} ${REPORT_LOCK_INSTANCE_TAG}\n`,
     'utf8'
   );
   await acquireReportLock(lockPath, lockContents);
@@ -5076,6 +5098,8 @@ type StaleLockRecoveryResult = 'recovered' | 'missing' | 'blocked';
 interface ParsedReportLock {
   pid: number;
   createdAtMs: number;
+  /** Owner extension host; absent on locks written before owner identity was recorded. */
+  instanceTag?: string;
 }
 
 async function acquireReportLock(lockPath: string, lockContents: Buffer): Promise<void> {
@@ -5097,10 +5121,7 @@ async function acquireReportLock(lockPath: string, lockContents: Buffer): Promis
     }
     await new Promise<void>(resolve => setTimeout(resolve, REPORT_LOCK_WAIT_MS));
   }
-  throw new FeedbackSessionError(
-    'MD4H-FB-STORE-002',
-    'Another window or process is updating this feedback report. Try again.'
-  );
+  throw new FeedbackReportLockBusyError();
 }
 
 async function recoverStaleReportLock(lockPath: string): Promise<StaleLockRecoveryResult> {
@@ -5135,7 +5156,15 @@ async function recoverStaleReportLock(lockPath: string): Promise<StaleLockRecove
     ) {
       return 'blocked';
     }
-    if (!isProcessDemonstrablyDead(parsed.pid)) {
+    if (parsed.instanceTag === undefined) {
+      if (!isProcessDemonstrablyDead(parsed.pid)) {
+        return 'blocked';
+      }
+    } else if (parsed.instanceTag === REPORT_LOCK_INSTANCE_TAG) {
+      // Only this live extension host can prove the owner is still running.
+      // Any other old identity-stamped lock is stale: a live PID may belong to
+      // an unrelated process after a crash, and a PID from another host cannot
+      // be checked at all. Feedback writes hold the lock for milliseconds.
       return 'blocked';
     }
 
@@ -5166,8 +5195,15 @@ async function recoverStaleReportLock(lockPath: string): Promise<StaleLockRecove
   }
 }
 
+/**
+ * Parses `<pid> <ISO time> <token>[ <instance tag>]`. Lines from the
+ * unreleased build that also wrote a 16-hex host hash before the instance tag
+ * still parse (the hash is ignored), since an unparseable lock blocks forever.
+ */
 function parseReportLock(contents: Buffer): ParsedReportLock | undefined {
-  const match = /^([1-9]\d*) (\S+) ([a-f0-9]{24})\n$/.exec(contents.toString('utf8'));
+  const match = /^([1-9]\d*) (\S+) ([a-f0-9]{24})(?: (?:[a-f0-9]{16} )?([a-f0-9]{24}))?\n$/.exec(
+    contents.toString('utf8')
+  );
   if (match === null) {
     return undefined;
   }
@@ -5181,9 +5217,14 @@ function parseReportLock(contents: Buffer): ParsedReportLock | undefined {
   ) {
     return undefined;
   }
-  return { pid, createdAtMs: createdAt.getTime() };
+  return {
+    pid,
+    createdAtMs: createdAt.getTime(),
+    ...(match[4] === undefined ? {} : { instanceTag: match[4] }),
+  };
 }
 
+// Used only for legacy locks without owner identity.
 // process.kill(pid, 0) is only meaningful when the checking process and the lock's
 // owning process share a PID namespace. A lock file visible across different
 // namespaces (e.g., NFS between hosts) can produce a false dead verdict. This is a

@@ -443,6 +443,13 @@ export interface FeedbackReviewController {
     imageDataUrl: string;
     feedback: string;
     replaceId?: string;
+    /**
+     * Same value for every Add attempt of one capture, across Retake; the host
+     * keeps one item per key. Sent with `attempt`.
+     */
+    idempotencyKey?: string;
+    /** Increases with every Add attempt under one key, so the newest attempt wins. */
+    attempt?: number;
   }): Promise<void>;
   /** Apply the correlated authoritative source while all DOM guards remain active. */
   applyCloseSync(
@@ -496,7 +503,6 @@ type PendingFeedbackMutation =
   | {
       kind: 'restore';
       id: string;
-      button: HTMLButtonElement;
     };
 
 interface FeedbackCompletionSummary {
@@ -2773,16 +2779,24 @@ export function createFeedbackReviewController(options: {
 
     if (!editDraft) {
       const undoStack = createElement('div', 'feedback-undo-stack');
+      const pendingRestoreIds = new Set(
+        Array.from(pendingMutations.values())
+          .filter(
+            (mutation): mutation is Extract<PendingFeedbackMutation, { kind: 'restore' }> =>
+              mutation.kind === 'restore'
+          )
+          .map(mutation => mutation.id)
+      );
       for (const deleted of deletedItems.values()) {
         const undo = createElement('button', 'feedback-undo-delete', `Undo delete ${deleted.id}`);
         undo.type = 'button';
-        undo.disabled = !hasWritableSession();
+        undo.disabled = !hasWritableSession() || pendingRestoreIds.has(deleted.id);
         undo.setAttribute('data-feedback-undo-id', deleted.id);
         undo.addEventListener('click', () => {
           if (!hasWritableSession() || !session) return;
           undo.disabled = true;
           const requestId = nextRequestId();
-          pendingMutations.set(requestId, { kind: 'restore', id: deleted.id, button: undo });
+          pendingMutations.set(requestId, { kind: 'restore', id: deleted.id });
           post({
             type: 'feedback.item.restore',
             requestId,
@@ -5244,6 +5258,9 @@ export function createFeedbackReviewController(options: {
         endOrdinal: input.endOrdinal,
         imageDataUrl: input.imageDataUrl,
         feedback: input.feedback,
+        ...(input.idempotencyKey === undefined
+          ? {}
+          : { idempotencyKey: input.idempotencyKey, attempt: input.attempt }),
       });
       return completion;
     },
@@ -5492,8 +5509,19 @@ export function createFeedbackReviewController(options: {
         message.type === 'feedback.close.release' ||
         message.type === 'feedback.diagnosticsCopied';
       if (requiresActiveSession && (!session || message.sessionId !== session.sessionId)) return;
+      // A host error raised before the request session resolves (for example
+      // "no longer active") has no sessionId. It still settles the exact pending
+      // mutation, Finish or preview by request id, since none outlive a session.
+      const settlesPendingRequest =
+        message.type === 'feedback.error' &&
+        message.sessionId === undefined &&
+        message.requestId !== undefined &&
+        (pendingMutations.has(message.requestId) ||
+          message.requestId === pendingFinishRequestId ||
+          message.requestId === pendingPreviewRequestId);
       if (
         message.type === 'feedback.error' &&
+        !settlesPendingRequest &&
         ((session !== null && message.sessionId !== session.sessionId) ||
           (session === null && message.sessionId !== undefined))
       ) {
@@ -5829,8 +5857,12 @@ export function createFeedbackReviewController(options: {
               );
               if (liveEdit) liveEdit.disabled = !hasWritableSession();
               if (liveRemove) liveRemove.disabled = !hasWritableSession();
-            } else if (pending?.kind === 'restore' && pending.button.isConnected) {
-              pending.button.disabled = invalidated;
+            } else if (pending?.kind === 'restore') {
+              // A re-render during the round trip replaces the clicked button.
+              const liveUndo = panel?.querySelector<HTMLButtonElement>(
+                `[data-feedback-undo-id="${pending.id}"]`
+              );
+              if (liveUndo) liveUndo.disabled = invalidated;
             }
             pendingMutations.delete(message.requestId);
           }

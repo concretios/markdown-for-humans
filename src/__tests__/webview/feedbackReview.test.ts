@@ -4407,6 +4407,261 @@ describe('Feedback review controller', () => {
     expect(undo.disabled).toBe(false);
   });
 
+  it('F7: keeps Undo disabled across a re-render while its restore is in flight', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    const first = {
+      id: 'F1',
+      kind: 'text' as const,
+      startOrdinal: 1,
+      endOrdinal: 1,
+      startLine: 3,
+      endLine: 3,
+      focus: 'Alpha beta',
+      feedback: 'Clarify this.',
+    };
+    const second = { ...first, id: 'F2', feedback: 'Keep this one.' };
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'c'.repeat(64),
+      round: 'round-1',
+      items: [first, second],
+    });
+    (document.querySelector('[data-feedback-marker]') as HTMLButtonElement).click();
+    const remove = Array.from(
+      document.querySelector('[data-feedback-card="F1"]')!.querySelectorAll('button')
+    ).find(button => button.textContent === 'Delete') as HTMLButtonElement;
+    remove.click();
+    const deleteRequest = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.item.delete');
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId: deleteRequest.requestId,
+      sessionId: controller.getSession()!.sessionId,
+      items: [second],
+    });
+    (document.querySelector('[data-feedback-undo-id="F1"]') as HTMLButtonElement).click();
+    const restoreRequest = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.item.restore');
+
+    // Any unrelated update re-renders the rail while the restore is pending.
+    controller.handleHostMessage({
+      type: 'feedback.updated',
+      requestId: 'unrelated-update',
+      sessionId: controller.getSession()!.sessionId,
+      items: [{ ...second, feedback: 'Edited elsewhere.' }],
+    });
+
+    const rerendered = document.querySelector('[data-feedback-undo-id="F1"]') as HTMLButtonElement;
+    expect(rerendered).not.toBeNull();
+    expect(rerendered.disabled).toBe(true);
+    rerendered.click();
+    expect(
+      (host.postMessage as jest.Mock).mock.calls.filter(
+        call => call[0].type === 'feedback.item.restore'
+      )
+    ).toHaveLength(1);
+
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: restoreRequest.requestId,
+      sessionId: controller.getSession()!.sessionId,
+      message: 'Restore failed.',
+      recoverable: true,
+    });
+    expect(
+      (document.querySelector('[data-feedback-undo-id="F1"]') as HTMLButtonElement).disabled
+    ).toBe(false);
+  });
+
+  it('F3: settles a pending text add when the host error omits the session id', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    controller.openTextComposer({
+      startOrdinal: 1,
+      endOrdinal: 1,
+      focus: 'Alpha beta',
+      startLine: 3,
+      endLine: 3,
+    });
+    const field = document.querySelector('[data-feedback-input]') as HTMLTextAreaElement;
+    const submit = document.querySelector('[data-feedback-submit]') as HTMLButtonElement;
+    field.value = 'Do not get stuck.';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    submit.click();
+    const request = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0])
+      .find(message => message.type === 'feedback.text.add');
+    expect(submit.textContent).toBe('Saving…');
+
+    // requireFeedbackSession rejects before the host knows the request session.
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: request.requestId,
+      code: 'MD4H-FB-STORE-001',
+      message: 'This feedback session is no longer active.',
+      recoverable: true,
+    });
+
+    expect(submit.textContent).toBe('Add feedback');
+    expect(submit.disabled).toBe(false);
+    expect(field.readOnly).toBe(false);
+    expect(field.value).toBe('Do not get stuck.');
+  });
+
+  it('F3: ignores a sessionless host error that matches no pending request', async () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+    // announce() writes the live region on the next task; flush activation's.
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+    const liveRegion = document.querySelector<HTMLElement>('.feedback-live-region')!;
+    expect(liveRegion).not.toBeNull();
+
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: 'unknown-request',
+      message: 'Unrelated failure.',
+      recoverable: true,
+    });
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+
+    expect(liveRegion.textContent).not.toContain('Unrelated failure.');
+  });
+
+  it('F3: reopens the completion checkpoint when a Finish error omits the session id', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      feedbackFile: '.md4h/feedback/docs/guide.md--round-1/feedback.md',
+      items: createSavedFeedbackItems(1),
+    });
+    controller.finish();
+    const dialog = document.querySelector<HTMLElement>('[data-feedback-completion-dialog]')!;
+    dialog.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')!.click();
+    const finish = (host.postMessage as jest.Mock).mock.calls
+      .map(call => call[0] as FeedbackWebviewMessage)
+      .find(message => message.type === 'feedback.finish');
+    if (!finish) throw new Error('Finish request was not posted.');
+    expect(dialog.getAttribute('data-feedback-completion-state')).toBe('finishing');
+
+    // requireFeedbackSession rejects before the host knows the request session.
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: finish.requestId,
+      code: 'MD4H-FB-STORE-001',
+      message: 'This feedback session is no longer active.',
+      recoverable: true,
+    });
+
+    expect(dialog.getAttribute('data-feedback-completion-state')).toBe('confirm');
+    expect(dialog.querySelector('[data-feedback-completion-status]')?.textContent).toBe(
+      'This feedback session is no longer active.'
+    );
+    expect(
+      dialog.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')?.disabled
+    ).toBe(false);
+    const resume = dialog.querySelector<HTMLButtonElement>('[data-feedback-completion-resume]');
+    expect(resume?.disabled).toBe(false);
+    resume!.click();
+    expect(document.querySelector('[data-feedback-completion-dialog]')).toBeNull();
+  });
+
+  it('F3: lets a finish preview retry when its error omits the session id', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      feedbackFile: '.md4h/feedback/docs/guide.md--round-1/feedback.md',
+      items: createSavedFeedbackItems(1),
+    });
+    controller.finish();
+    const disclosure = document.querySelector<HTMLDetailsElement>(
+      '.feedback-completion-disclosure'
+    )!;
+    const previewRequests = (): FeedbackWebviewMessage[] =>
+      (host.postMessage as jest.Mock).mock.calls
+        .map(call => call[0] as FeedbackWebviewMessage)
+        .filter(message => message.type === 'feedback.finish.preview');
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event('toggle'));
+    expect(previewRequests()).toHaveLength(1);
+    expect(disclosure.getAttribute('data-feedback-preview-state')).toBe('loading');
+
+    controller.handleHostMessage({
+      type: 'feedback.error',
+      requestId: previewRequests()[0].requestId,
+      code: 'MD4H-FB-STORE-001',
+      message: 'This feedback session is no longer active.',
+      recoverable: true,
+    });
+
+    expect(disclosure.getAttribute('data-feedback-preview-state')).toBe('error');
+    expect(document.querySelector('[data-feedback-completion-preview]')?.textContent).toMatch(
+      /could not load the preview/i
+    );
+    disclosure.open = false;
+    disclosure.dispatchEvent(new Event('toggle'));
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event('toggle'));
+    expect(previewRequests()).toHaveLength(2);
+  });
+
+  it('F2: forwards the capture idempotency key and attempt on screenshot additions', () => {
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    controller.activate({
+      sessionId: 'session-1',
+      source: 'docs/guide.md',
+      sourceSha256: 'b'.repeat(64),
+      round: 'round-1',
+      items: [],
+    });
+
+    void controller
+      .addScreenshotFeedback({
+        startOrdinal: 0,
+        endOrdinal: 0,
+        imageDataUrl: 'data:image/png;base64,AAAA',
+        feedback: 'Keyed capture.',
+        idempotencyKey: 'capture-key-1',
+        attempt: 2,
+      })
+      .catch(() => undefined);
+
+    expect(host.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'feedback.screenshot.add',
+        idempotencyKey: 'capture-key-1',
+        attempt: 2,
+      })
+    );
+    controller.deactivate();
+  });
+
   it('returns a successfully restored comment to an active and focused stable target', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });
@@ -9407,6 +9662,56 @@ describe('Feedback review controller', () => {
       }
     }
   );
+
+  it('F6: surfaces a saved-draft Resume error that arrives while the transition lock is held', () => {
+    // Regression guard for the pre-session toast path; the F6 fix itself is
+    // host side. The fixture is the FeedbackReportLockBusyError text.
+    const LOCK_BUSY_MESSAGE =
+      'Another window or process is updating this feedback report. Try again in a moment. A lock left by a closed window clears after 5 minutes.';
+    const editor = createEditorFixture();
+    const controller = createFeedbackReviewController({ editor, host });
+    const onLocalError = jest.fn();
+    window.addEventListener('feedbackLocalError', onLocalError);
+    try {
+      controller.handleHostMessage({
+        type: 'feedback.drafts.available',
+        drafts: [
+          {
+            round: '20260821T093000Z-k4p9',
+            createdAt: '2026-08-21T09:30:00.000Z',
+            itemCount: 1,
+            feedbackFile: '.md4h/feedback/docs/guide.md--20260821T093000Z-k4p9/feedback.md',
+          },
+        ],
+      });
+      document.querySelector<HTMLButtonElement>('[data-feedback-draft-resume]')!.click();
+      const resume = (host.postMessage as jest.Mock).mock.calls
+        .map(call => call[0] as FeedbackWebviewMessage)
+        .find(message => message.type === 'feedback.draft.resume');
+      if (!resume) throw new Error('Resume request was not posted.');
+
+      controller.handleHostMessage({
+        type: 'feedback.transition.locked',
+        requestId: resume.requestId,
+        lockId: 'transition-lock-1',
+      });
+      controller.handleHostMessage({
+        type: 'feedback.error',
+        requestId: resume.requestId,
+        code: 'MD4H-FB-STORE-002',
+        message: LOCK_BUSY_MESSAGE,
+        recoverable: true,
+      });
+
+      expect(onLocalError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          detail: { message: LOCK_BUSY_MESSAGE },
+        })
+      );
+    } finally {
+      window.removeEventListener('feedbackLocalError', onLocalError);
+    }
+  });
 
   it('turns a correlated active-session conflict into a focused Resume choice', () => {
     const editor = createEditorFixture();

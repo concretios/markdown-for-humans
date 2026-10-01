@@ -232,6 +232,121 @@ describe('keyboard Feedback block selector', () => {
       ?.click();
   });
 
+  it('F2: reuses one idempotency key when Add is retried within the same annotation', async () => {
+    const modalOptions: Array<
+      Parameters<typeof feedbackCaptureModule.createFeedbackAnnotationModal>[0]
+    > = [];
+    jest
+      .spyOn(feedbackCaptureModule, 'createFeedbackAnnotationModal')
+      .mockImplementation(options => {
+        modalOptions.push(options);
+        return {
+          element: document.createElement('div'),
+          focus: jest.fn(),
+        } as unknown as ReturnType<typeof feedbackCaptureModule.createFeedbackAnnotationModal>;
+      });
+    const openAnnotation = async () => {
+      const harness = openGeometricBlockSelector({
+        blockRectangles: [domRectangle(80, 120, 680, 200), domRectangle(80, 230, 680, 310)],
+      });
+      harness.dialog.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      return harness;
+    };
+
+    const first = await openAnnotation();
+    first.addScreenshotFeedback
+      .mockRejectedValueOnce(new Error('Saving this screenshot timed out.'))
+      .mockResolvedValueOnce(undefined);
+    const submission = {
+      pngDataUrl: 'data:image/png;base64,AAAA',
+      feedback: 'Retry me.',
+      commands: [],
+    };
+    await expect(modalOptions[0].onAdd(submission)).rejects.toThrow(/timed out/);
+    await modalOptions[0].onAdd(submission);
+
+    const [firstAttempt, retry] = first.addScreenshotFeedback.mock.calls.map(call => call[0]);
+    expect(typeof firstAttempt.idempotencyKey).toBe('string');
+    expect(firstAttempt.idempotencyKey.length).toBeGreaterThan(0);
+    expect(retry.idempotencyKey).toBe(firstAttempt.idempotencyKey);
+    expect([firstAttempt.attempt, retry.attempt]).toEqual([1, 2]);
+
+    const second = await openAnnotation();
+    second.addScreenshotFeedback.mockResolvedValueOnce(undefined);
+    await modalOptions[1].onAdd(submission);
+    expect(second.addScreenshotFeedback.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ attempt: 1 })
+    );
+    expect(second.addScreenshotFeedback.mock.calls[0][0].idempotencyKey).not.toBe(
+      firstAttempt.idempotencyKey
+    );
+  });
+
+  it('D7: keeps the idempotency key across Retake with a newer attempt', async () => {
+    const modalOptions: Array<
+      Parameters<typeof feedbackCaptureModule.createFeedbackAnnotationModal>[0]
+    > = [];
+    jest
+      .spyOn(feedbackCaptureModule, 'createFeedbackAnnotationModal')
+      .mockImplementation(options => {
+        modalOptions.push(options);
+        return {
+          element: document.createElement('div'),
+          focus: jest.fn(),
+        } as unknown as ReturnType<typeof feedbackCaptureModule.createFeedbackAnnotationModal>;
+      });
+    const settle = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+    };
+    const harness = openGeometricBlockSelector({
+      blockRectangles: [domRectangle(80, 120, 680, 200), domRectangle(80, 230, 680, 310)],
+    });
+    harness.dialog.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    harness.addScreenshotFeedback
+      .mockRejectedValueOnce(new Error('Saving this screenshot timed out.'))
+      .mockResolvedValueOnce(undefined);
+    await expect(
+      modalOptions[0].onAdd({
+        pngDataUrl: 'data:image/png;base64,AAAA',
+        feedback: 'Before Retake.',
+        commands: [],
+      })
+    ).rejects.toThrow(/timed out/);
+
+    // Retake after the timeout opens a fresh crop, then a fresh annotation.
+    await modalOptions[0].onRetake('Before Retake.');
+    const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+    overlay.dispatchEvent(
+      new MouseEvent('pointerdown', { button: 0, clientX: 100, clientY: 130, bubbles: true })
+    );
+    overlay.dispatchEvent(
+      new MouseEvent('pointerup', { button: 0, clientX: 300, clientY: 190, bubbles: true })
+    );
+    await settle();
+    expect(modalOptions).toHaveLength(2);
+    await modalOptions[1].onAdd({
+      pngDataUrl: 'data:image/png;base64,BBBB',
+      feedback: 'After Retake.',
+      commands: [],
+    });
+
+    const [timedOut, retaken] = harness.addScreenshotFeedback.mock.calls.map(call => call[0]);
+    expect(retaken.idempotencyKey).toBe(timedOut.idempotencyKey);
+    expect([timedOut.attempt, retaken.attempt]).toEqual([1, 2]);
+    expect(retaken).toEqual(
+      expect.objectContaining({
+        imageDataUrl: 'data:image/png;base64,BBBB',
+        feedback: 'After Retake.',
+      })
+    );
+  });
+
   it('captures non-contiguous mapped ordinals without treating omitted empty blocks as errors', async () => {
     const harness = openGeometricBlockSelector({
       anchorOrdinals: [2, 5],

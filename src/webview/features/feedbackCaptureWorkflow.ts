@@ -50,6 +50,11 @@ export interface FeedbackCaptureWorkflowOptions {
    * cancellation while rasterization is still in flight.
    */
   setAnnotationsSuspended?: (suspended: boolean) => void;
+  /**
+   * Add retry identity carried across Retake (set by this workflow, not by
+   * callers). The host keeps one item per key and lets the newest attempt win.
+   */
+  addRetry?: { key: string; attempts: number };
 }
 
 type CaptureWorkflowKind = Extract<
@@ -67,6 +72,7 @@ interface ActiveCaptureWorkflow {
 
 const fallbackDraftSurfaceGates = new WeakMap<object, FeedbackDraftSurfaceGate>();
 const captureChromeOwners = new Set<symbol>();
+let annotationAddSequence = 0;
 const AREA_CAPTURE_READY_INSTRUCTION =
   'Capture area ready. Drag over the visible document area. Press Escape to cancel.';
 
@@ -308,6 +314,14 @@ function openAnnotation(
   returnFocus: HTMLElement | undefined
 ): void {
   let controller: ReturnType<typeof createFeedbackAnnotationModal> | null = null;
+  // One key per capture, kept across Retake, with a numbered attempt per Add
+  // click: an Add timed out after 15 s may still commit, and the host keeps
+  // one item per key holding the newest attempt, in either commit order.
+  if (!options.addRetry) annotationAddSequence += 1;
+  const retry = options.addRetry ?? {
+    key: `capture-${Date.now().toString(36)}-${annotationAddSequence.toString(36)}`,
+    attempts: 0,
+  };
   const handleFeedbackLifecycleEnd = (): void => releaseCaptureWorkflow(workflow);
   const workflow: ActiveCaptureWorkflow = {
     kind: 'capture-annotation',
@@ -331,19 +345,27 @@ function openAnnotation(
       fallbackFocus: options.editor.view.dom as HTMLElement,
       onAdd: async submission => {
         if (!isReviewWritable(options.review)) throw snapshotChangedError();
+        retry.attempts += 1;
         await options.review.addScreenshotFeedback({
           startOrdinal: capture.blockRange.firstBlock,
           endOrdinal: capture.blockRange.lastBlock,
           imageDataUrl: submission.pngDataUrl,
           feedback: submission.feedback,
-          ...(options.replaceId ? { replaceId: options.replaceId } : {}),
+          ...(options.replaceId
+            ? { replaceId: options.replaceId }
+            : { idempotencyKey: retry.key, attempt: retry.attempts }),
         });
         releaseCaptureWorkflow(workflow);
       },
       onRetake: feedback => {
         if (!isReviewWritable(options.review)) throw snapshotChangedError();
         releaseCaptureWorkflow(workflow);
-        startFeedbackAreaCapture({ ...options, initialFeedback: feedback, returnFocus });
+        startFeedbackAreaCapture({
+          ...options,
+          initialFeedback: feedback,
+          returnFocus,
+          addRetry: retry,
+        });
       },
       onCancel: () => releaseCaptureWorkflow(workflow),
       onError: error => {
