@@ -243,6 +243,38 @@ describe('SVG imports preserve vector files', () => {
     }
   );
 
+  it.each(['file', 'path'])(
+    'blocks a locked child paste before any %s side effect',
+    async payload => {
+      let locked = false;
+      setupImageDragDrop(editor, { postMessage }, 'locked-view', () => locked);
+      // Feedback installs its capture guard after the image listener.
+      editor.view.dom.addEventListener(
+        'paste',
+        event => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        },
+        true
+      );
+      locked = true;
+      const event = new Event('paste', { bubbles: true, cancelable: true });
+      Object.defineProperty(event, 'clipboardData', {
+        value:
+          payload === 'file'
+            ? transfer([svgFile()])
+            : {
+                ...transfer([]),
+                getData: () => '/workspace/image.png',
+              },
+      });
+      editor.view.dom.querySelector('p')!.dispatchEvent(event);
+      await new Promise(resolve => setTimeout(resolve, 60));
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(getPendingImageCount()).toBe(0);
+    }
+  );
+
   it('claims image paste before ProseMirror schedules its fallback focus callback', async () => {
     setupImageDragDrop(editor, { postMessage }, 'svg-import-view');
     const event = new Event('paste', { bubbles: true, cancelable: true });

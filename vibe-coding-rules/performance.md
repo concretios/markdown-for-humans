@@ -92,6 +92,16 @@ node scripts/feedback-performance-fixture/run.mjs
 
 CI runs these contracts on both Ubuntu and Windows. Real VS Code Extension Development Host smoke tests also run on those operating systems against VS Code 1.98.0 and stable.
 
+The Jest scanner regressions in `src/__tests__/editor/imageSourceReferencesPerformance.test.ts`
+count loop iterations and sliced-character volume in a test-only instrumented copy
+of the production scanner. Each 280 KB and 560 KB malformed fixture must stay
+within 20 work units per source character and retain the valid trailing image.
+A separate spy forbids unnecessary markdown-it inline parsing. These gates catch
+the reported repeated-suffix regressions without timing coverage-instrumented
+code on a shared runner. They do not prove every parser input is linear or certify
+physical-machine latency. Large-input output assertions also run against the
+ordinary production import under coverage.
+
 ## Bundle Budget
 
 Release artifacts are produced by `npm run build:release`. The latest generated release profile at the time of this update is approximately:

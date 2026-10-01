@@ -200,6 +200,47 @@ describe('generated image destination encoding', () => {
     }
   );
 
+  it.each(['open', 'apply'])(
+    'reports partial rename success after a document %s failure',
+    async failure => {
+      const oldPath = path.join(ROOT, 'assets', 'old.svg');
+      files.set(oldPath, SVG);
+      source = '![Diagram](./assets/old.svg)\n';
+      const bad = vscode.Uri.file(path.join(ROOT, 'bad.md'));
+      const good = vscode.Uri.file(path.join(ROOT, 'good.md'));
+      (provider as unknown as { findImageReferences: jest.Mock }).findImageReferences = jest
+        .fn()
+        .mockResolvedValue([
+          { file: bad, matches: [] },
+          { file: good, matches: [] },
+        ]);
+      Object.assign(vscode.workspace, { openTextDocument: jest.fn() });
+      (vscode.workspace.openTextDocument as jest.Mock).mockImplementation(
+        async (uri: vscode.Uri) => {
+          if (uri === bad && failure === 'open') throw new Error('unreadable');
+          return { ...document, uri };
+        }
+      );
+      if (failure === 'apply')
+        (vscode.workspace.applyEdit as jest.Mock).mockRejectedValueOnce(new Error('read-only'));
+      await provider.handleRenameImage(
+        { oldPath: './assets/old.svg', newName: 'new', updateAllReferences: true },
+        document,
+        webview
+      );
+      expect(files.has(path.join(ROOT, 'assets', 'new.svg'))).toBe(true);
+      expect(reply('imageRenamed')).toMatchObject({
+        success: true,
+        filesUpdated: 1,
+        failedFiles: [bad.fsPath],
+      });
+      expect(source).toContain('./assets/new.svg');
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining(bad.fsPath)
+      );
+    }
+  );
+
   it('renames an inserted literal-delimiter file without encoding its authored suffix twice', async () => {
     const folder = 'assets#one/percent%23';
     const filename = 'diagram%23#view.svg';

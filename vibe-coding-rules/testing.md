@@ -80,6 +80,11 @@ on Ubuntu and Windows against VS Code 1.98.0 and current stable. To select a
 host version locally, set `VSCODE_TEST_VERSION` before running
 `npm run test:integration`; the default is `stable`.
 
+CI runs Jest with coverage and parallel workers. Do not assert physical elapsed
+budgets inside that suite: instrumentation and runner contention change timing.
+For scanner complexity, keep the deterministic loop/slice work-budget tests and
+their output parity checks. Record actual latency separately on relevant hardware.
+
 ---
 
 ## Coverage Thresholds

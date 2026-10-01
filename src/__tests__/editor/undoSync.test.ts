@@ -2552,6 +2552,63 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     }
   });
 
+  it.each(['error', 'reject'])(
+    'rejects oversized failed image fallback (%s) without changing Markdown',
+    async mode => {
+      const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
+      const document = createDocument('base\n');
+      const webview = { postMessage: jest.fn(async () => true) } as unknown as vscode.Webview;
+      const internal = provider as unknown as {
+        editViewGenerations: WeakMap<vscode.Webview, string>;
+        trackPendingImageSave(
+          message: Record<string, unknown>,
+          doc: vscode.TextDocument,
+          view: vscode.Webview
+        ): void;
+        resolvePendingImageDestinations(
+          content: string,
+          view: vscode.Webview,
+          generation: string
+        ): Promise<string>;
+        persistImage: jest.Mock;
+      };
+      internal.editViewGenerations.set(webview, 'large-image-view');
+      internal.persistImage =
+        mode === 'error'
+          ? jest.fn().mockResolvedValue({ kind: 'error', error: 'Disk full' })
+          : jest.fn().mockRejectedValue(new Error('Disk full'));
+      try {
+        internal.trackPendingImageSave(
+          {
+            type: 'saveImage',
+            protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+            viewGeneration: 'large-image-view',
+            placeholderId: 'large-image',
+            name: 'large.png',
+            mimeType: 'image/png',
+            data: new Uint8Array(256 * 1024),
+          },
+          document as unknown as vscode.TextDocument,
+          webview
+        );
+        await expect(
+          internal.resolvePendingImageDestinations(
+            '![Pending](md4h-pending-image:large-image)',
+            webview,
+            'large-image-view'
+          )
+        ).rejects.toThrow(/image.*save|save.*image/i);
+        expect(workspace.applyEdit).not.toHaveBeenCalled();
+        expect(document.getText()).toBe('base\n');
+        expect(webview.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'imageError' })
+        );
+      } finally {
+        provider.dispose();
+      }
+    }
+  );
+
   it('does not start image completion delivery when persistence settles after disposal', async () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('base\n', 'file://dispose-pending-image-write.md');

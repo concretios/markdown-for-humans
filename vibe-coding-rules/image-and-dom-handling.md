@@ -410,7 +410,11 @@ Local SVGs use `svgDisplaySize.ts`. Size changes are document transactions, not 
 
 The shared paragraph renderer uses a backslash hard break after a leading sized HTML image when more Markdown follows. A two-space break at that boundary starts a CommonMark HTML block and makes the following Markdown literal. Keep authored HTML blocks unchanged, and preserve leading image indentation in the sync serializer so image-only indented blocks retain their existing parser path.
 
-Imports validate SVG XML and preserve exact bytes, including valid `.svg` files with absent/generic MIME. They bypass the huge-image raster dialog and canvas conversion while keeping pending-image capacity/ACK rules. Local paths are split from query/fragment before decoding through `shared/imageSource.ts`; resolve/reveal/metadata/rename must agree on file identity. Rename updates exact Markdown and HTML image source spans through `imageSourceReferences.ts` and the document edit queue.
+Imports validate SVG XML and preserve exact bytes, including valid `.svg` files with absent/generic MIME. They bypass the huge-image raster dialog and canvas conversion while keeping pending-image capacity/ACK rules. Local paths are split from query/fragment before decoding through `shared/imageSource.ts`; resolve/reveal/metadata/rename must agree on file identity. For legacy destinations containing raw `#` or `?`, host normalization prefers the complete decoded path when that file exists. Rename also preserves the known original identity after the file has moved. Otherwise the authored query/fragment remains a URL suffix.
+
+Rename updates exact Markdown and HTML image source spans through `imageSourceReferences.ts` and the document edit queue. Its scanner indexes bracket matches and quoted HTML tag endings once and uses only markdown-it block parsing, avoiding repeated suffix searches for malformed openers. Keep the 280/560 KB malformed-input work budgets and renderer/scanner parity tests. After a successful file move, reference failures are isolated per document: report success for the rename, continue other updates, and warn with the files requiring manual repair.
+
+Block-only parsing bypasses markdown-it's core newline normalization. Normalize CRLF and CR to LF only in the parser input, and map token line numbers to the original source using all three line endings. Scan and replace the original text so rename preserves authored line endings and exact destination spans. Keep regressions for standalone space-containing paths and mixed indented code after prose; CRLF blank lines must separate these blocks just as LF blank lines do.
 
 Generated destinations must encode each filesystem path segment exactly once with `encodeImageFilePath`, including literal `#`, `?`, and `%` in filenames or directories. Do not apply this encoder to authored URLs: their query/fragment remains a real suffix. Preview and Document Audit consume the same decoded file identity. Rename scanning includes the renderer's standalone space-containing paths and image-only indented blocks, while excluding tight-list literals, mixed prose/code, escaped examples and comments. Keep renderer/scanner parity tests when changing either grammar.
 
@@ -425,3 +429,13 @@ claimed before ProseMirror schedules its native paste fallback and delayed focus
 Ordinary text/HTML payloads pass through to the existing paste pipeline. Dispose
 the capture listener with its editor. The SVG import regressions cover both image
 claiming and ordinary text paste.
+
+Consult the live Feedback owner/peer editing lock before paste or drop side effects.
+Capture listener registration order cannot enforce that lock because image setup
+can run before the Feedback guards. Keep the host mutation guards as well.
+
+Saved-image replacement and failed-preview deletion use `addToHistory: false` so
+undo/redo cannot resurrect transient data URLs or stale placeholder IDs. A failed
+host save may use a fallback only when the complete serialized data URI is at most
+256 KiB. Check the encoded size before allocating base64; larger failures reject
+the pending document edit visibly and release the transfer buffer.
