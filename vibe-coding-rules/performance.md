@@ -57,6 +57,14 @@ not silently truncate its result to meet a frame target. Long-result publication
 saturated queues, replacement/undo, stale-result rejection and disposal require
 their own tests and real-host measurements.
 
+Long blocks keep foreground work proportional to the edit and the viewport.
+`DecorationSet.remove()` is quadratic for many inline decorations in one
+textblock, so large removals rebuild the set. Edits remove only colors touching
+the changed text. Viewport probes skip overlays such as the sticky toolbar, and a
+projection is republished only after the visible range leaves it. Code blocks
+opt out of scroll anchoring because a moved projection reuses the long text node.
+`codeHighlightingLargeBlockCost.test.ts` guards the 40,000-token budget.
+
 Focused regression suites are `codeHighlightingPlugin.test.ts`,
 `highlighting/client.test.ts`, `highlighting/tokenize.test.ts`,
 `codeFenceMenu.test.ts` and `codeHighlightAppearance.test.ts` under

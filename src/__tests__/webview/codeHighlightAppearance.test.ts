@@ -150,6 +150,14 @@ describe('code highlight appearance contract', () => {
     }
   });
 
+  it('excludes code blocks from browser scroll anchoring', () => {
+    // Moving a long block's projection reuses its large text node for a later
+    // range. An anchored text node made Chromium scroll by the projection shift,
+    // which started the next projection and ran to the end of the block.
+    const rule = /\.code-block-wrapper\s*>\s*pre\s*\{([^}]*)\}/.exec(codeCss);
+    expect(rule?.[1]).toMatch(/overflow-anchor:\s*none\s*;/);
+  });
+
   it('keeps fallback explanations in normal flow and hides them until needed', () => {
     const style = document.createElement('style');
     style.textContent = codeCss;

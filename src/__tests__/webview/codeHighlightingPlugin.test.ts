@@ -128,6 +128,42 @@ describe('incremental background code highlighting', () => {
     expect(decorations()).toHaveLength(2);
   });
 
+  it('keeps untouched token colors in an edited block until its new result arrives', async () => {
+    const source = 'const a = 1;\nlet b = "x";';
+    open([code(source)]);
+    await tick();
+    service.complete(0, {
+      spans: [
+        { from: 0, to: 5, classes: 'hljs-keyword' },
+        { from: 10, to: 11, classes: 'hljs-number' },
+        { from: 13, to: 16, classes: 'hljs-keyword' },
+        { from: 21, to: 24, classes: 'hljs-string' },
+      ],
+    });
+    await tick();
+    expect(decorations()).toHaveLength(4);
+    // Typing inside the string invalidates only that token. Clearing the whole
+    // block made every keystroke flash it uncolored until the worker replied.
+    view.dispatch(view.state.tr.insertText('z', 1 + 22));
+    expect(decorations().map(item => [item.from, item.to])).toEqual([
+      [1, 6],
+      [11, 12],
+      [14, 17],
+    ]);
+    await tick();
+    service.complete(1, {
+      spans: [
+        { from: 0, to: 5, classes: 'hljs-keyword' },
+        { from: 21, to: 25, classes: 'hljs-string' },
+      ],
+    });
+    await tick();
+    expect(decorations().map(item => [item.from, item.to])).toEqual([
+      [1, 6],
+      [22, 26],
+    ]);
+  });
+
   it('does not tokenize prose, selection or unrelated metadata and does not enumerate the document', async () => {
     open();
     await settle();

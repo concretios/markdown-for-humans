@@ -97,7 +97,7 @@ A new editor inside each code block, IntelliSense, semantic diagnostics, line nu
 
 - Existing open, code-block insertion and language menu flows remain the entry points.
 - Show text immediately. Colors can arrive asynchronously; input, selection, copy and save do not wait for colors.
-- Clear invalid coloring in a changed block while its current result is pending. Keep unrelated blocks stable. Tune ordinary-block updates to avoid visible flicker.
+- Remove colors that touch edited text while the block's new result is pending. Keep mapped colors elsewhere in that block and in unrelated blocks, so typing does not flash the block uncolored.
 - Unknown languages, explicit `text/txt/plaintext/none/nohighlight`, and unlabeled diagrams stay plain. Preserve their authored fence labels.
 - Resolve only the first info-string token as a grammar; preserve its metadata suffix. Choosing a new menu language replaces only the first token.
 - Keep copy controls outside ProseMirror's managed content DOM. Preserve focus, keyboard behavior, raw clipboard text and accessibility names.
@@ -328,11 +328,11 @@ performance acceptance gate remains open despite removing foreground tokenizatio
 
 | Gate | Current status | Recorded result / evidence limit |
 |---|---|---|
-| Full automated suite and included deterministic work-count contracts | Passed | 3,373 tests in 181 suites; 27 skipped tests, 120 todo, one skipped suite. The final post-merge full-run log is local-only supporting evidence. |
+| Full automated suite and included deterministic work-count contracts | Passed | 3,380 tests in 182 suites after the 2026-10-01 review fixes; 27 skipped tests, 120 todo, one skipped suite. Logs are local-only supporting evidence. |
 | Lint and TypeScript | Passed | `npm run lint` and `npx tsc --noEmit` completed successfully; logs are local-only supporting evidence. |
 | Release build, worker packaging/CSP and VSIX | Passed | Post-merge release build and asset verification passed; review package contained 74 files, 3,148,764 bytes. Editor plus worker JS: 4,905,157 bytes; worker: 219,244 bytes. Packaged worker matched the release asset; no source maps or source/test/scripts files were included. The package and build log remain local-only. |
 | Native reference fixture and 1,000-block behavior, typing/paste/copy/save/undo/source split/reopen | Partly verified; remaining interaction matrix open | Reference-fixture keyboard/save/undo results are summarized above. A native 1,000-block synthetic burst measured document p95 8.5 ms, color publication 1.0 ms, one worker job and no fallback/long task. |
-| Native 10,000-line single block, publication/validation/paint timing and queue settling | Open: foreground dispatch exceeds 16 ms | QA-001 and DOM attribution above; input-to-paint and remaining gates incomplete. |
+| Native 10,000-line single block, publication/validation/paint timing and queue settling | Synthetic dispatch probes pass; input-to-paint open | After the review fixes below, QA-001's 20-edit probe measured document dispatch p95 2.3 ms; paced edits at 50% and 95% depth measured 2.4 ms and 1.1 ms with no uncolored frames. Physical keyboard input-to-paint remains unmeasured. |
 | Four native themes, custom color overrides and 100/150/200% zoom | Four themes observed; complete override/zoom matrix open | Dark 2026, Light Modern, Dark High Contrast and Light High Contrast showed token colors and readable controls. Screenshots are local-only supporting evidence. |
 | Supported VS Code 1.98 and current stable host integration matrix | Passed | VS Code 1.98.0: 7/7; stable 1.140.0: 7/7. Stable used a shorter test profile after the initial profile exceeded macOS's IPC path limit. Host logs are local-only supporting evidence. |
 | Input-ready initialization below 500 ms | Unverified | No startup budget claim follows from tokenization or native typing measurements. |
@@ -355,8 +355,50 @@ with release assets. An earlier restoration claim was unverified and is not used
 as acceptance evidence. Native copy/paste also retained literal code with tabs and
 Unicode, while nested TypeScript and embedded HTML/CSS colors were visually checked.
 
+### 2026-10-01: Review fixes for long blocks
+
+A clean-worktree review in a native VS Code 1.139.1 Extension Development Host
+found that long-block cost depended on scroll depth, which the block-start probes
+above could not show. Five defects were fixed test first:
+
+- `DecorationSet.remove()` is quadratic for many inline decorations in one
+  textblock. Every code edit and publication used it; one keystroke in a
+  40,000-token block took about 21 s in Node, and native scrolling froze for
+  13 to 14 s. Large removals now rebuild the set.
+- Viewport probes at the top edge hit the sticky formatting toolbar, so each
+  projection started at the block start and grew with scroll depth (40,000
+  decorations at the tail). Edge probes now step past overlays, and the viewport
+  also reports its visible range before overscan.
+- Every scroll frame republished the projection. It now republishes only when the
+  visible range leaves the current window.
+- Each edit removed every color in the block until the worker replied: 138
+  consecutive uncolored frames during paced typing at 50% depth, and a DOM update
+  p95 of 77.3 ms from re-rendering the whole text node. Only tokens touching the
+  edit are removed now.
+- Moving a projection reuses the long text node for a later range. Chromium scroll
+  anchoring followed that node, jumped by the projection shift and triggered the
+  next projection until the block end. Code blocks now set `overflow-anchor: none`.
+
+| Native probe on the fixed build | Before | After |
+|---|---|---|
+| 20 synchronous edits at block start (QA-001), document dispatch p95 | 27.1 ms | 2.3 ms |
+| 10 paced edits at 50% depth, document dispatch p95 / uncolored frames | 78.3 ms / 138 | 2.4 ms / 0 |
+| 10 paced edits at 95% depth, document dispatch p95 / uncolored frames | not measured | 1.1 ms / 0 |
+| Mounted spans with the viewport at 50% depth | about 20,000 | 1,067 |
+| Jump from 50% to 95% depth | scrolled to block end | stayed at target |
+
+The same session observed correct colors and plain fences in the language matrix,
+metadata-preserving language changes, byte-identical files after undo and save in
+the language matrix and a mixed Mermaid/math/table/SVG document, raw copy output,
+live external file edits, source split sync, three theme switches without worker
+jobs and a settled 1,000-block document. The 601 to 631 ms long task while opening
+the 1,000-block document also occurs with highlighting disabled, so it belongs to
+editor initialization rather than highlighting. These are synthetic dispatch
+measurements on an Apple M4 Pro, not physical keystroke-to-paint or reference
+hardware results.
+
 The local-only execution report traces SH-01 through SH-20 and records overall
-acceptance as incomplete because QA-001 and the remaining gates above are open.
+acceptance as incomplete because the remaining gates above are open.
 Do not treat a passing automated suite or a final QA report as a release-acceptance
 pass.
 

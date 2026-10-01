@@ -236,6 +236,9 @@
   .code-block-wrapper > pre {
     margin: 0;
     padding-right: 48px; /* 32px copy control + 8px inset + 8px text clearance */
+    /* Projected long blocks reuse a large text node for a later range. Anchoring
+       to it made Chromium scroll by each projection shift, repeatedly. */
+    overflow-anchor: none;
   }
 
   .code-block-highlight-status {

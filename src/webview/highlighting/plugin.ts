@@ -20,7 +20,7 @@ import { Decoration, DecorationSet, type EditorView } from '@tiptap/pm/view';
 import { parseFenceInfo } from './fenceInfo';
 import { resolveGrammar } from './languageRegistry';
 import { innermostScope } from './innermostScope';
-import { projectTokenSpans, readViewportRange } from './projection';
+import { projectTokenSpans, readViewportRange, type ViewportRange } from './projection';
 import { explainHighlightFailure, type HighlightResult, type HighlightService } from './types';
 
 interface BlockOccurrence {
@@ -66,16 +66,60 @@ function freshOccurrence(node: ProseMirrorNode, pos: number, id: number): BlockO
   return { id, revision: 0, pos, node, grammar, pending: grammar !== null };
 }
 
+/** Above this count, rebuilding the set is cheaper than DecorationSet.remove(). */
+const REMOVE_IN_PLACE_LIMIT = 64;
+
+function withoutDecorations(
+  decorations: DecorationSet,
+  doc: ProseMirrorNode,
+  doomed: Decoration[],
+  isDoomed: (item: Decoration) => boolean
+): DecorationSet {
+  if (doomed.length <= REMOVE_IN_PLACE_LIMIT) return decorations.remove(doomed);
+  // remove() scans a textblock's whole local decoration array for each removed
+  // item, which is quadratic for a large block (40,000 tokens took ~10 s).
+  return DecorationSet.create(
+    doc,
+    decorations.find().filter(item => !isDoomed(item))
+  );
+}
+
 function removeBlockDecorations(
   decorations: DecorationSet,
+  doc: ProseMirrorNode,
   pos: number,
   size: number
 ): DecorationSet {
   // find() includes touching endpoints. Do not remove a neighbouring block's
   // status decoration when its opening boundary equals this block's end.
-  return decorations.remove(
-    decorations.find(pos, pos + size).filter(item => item.from < pos + size && item.to > pos)
+  const inside = (item: Decoration): boolean => item.from < pos + size && item.to > pos;
+  return withoutDecorations(
+    decorations,
+    doc,
+    decorations.find(pos, pos + size).filter(inside),
+    inside
   );
+}
+
+/**
+ * Remove only colors touching edited text, plus the block's status explanation.
+ * Mapped colors elsewhere in the block stay until its new result replaces them;
+ * clearing the whole block flashed it uncolored on every keystroke.
+ */
+function removeEditedDecorations(
+  decorations: DecorationSet,
+  doc: ProseMirrorNode,
+  pos: number,
+  size: number,
+  ranges: Array<[number, number]>
+): DecorationSet {
+  const end = pos + size;
+  const edits = ranges.filter(([from, to]) => from <= end && to >= pos);
+  const touched = (item: Decoration): boolean =>
+    item.from < end &&
+    item.to > pos &&
+    edits.some(([from, to]) => item.from <= to && item.to >= from);
+  return withoutDecorations(decorations, doc, decorations.find(pos, end).filter(touched), touched);
 }
 
 /** Map step output coordinates through subsequent steps; attribute steps have no map. */
@@ -148,7 +192,7 @@ function updateDocument(tr: Transaction, current: HighlightState): HighlightStat
         if (end > start && tr.doc.resolve(position).parent.type.name !== 'codeBlock') {
           // Node-type changes preserve their text gap. The mapped inline colors
           // must be removed when that gap now belongs to ordinary prose.
-          decorations = removeBlockDecorations(decorations, start, end - start);
+          decorations = removeBlockDecorations(decorations, tr.doc, start, end - start);
         }
       }
     }
@@ -195,7 +239,10 @@ function updateDocument(tr: Transaction, current: HighlightState): HighlightStat
       blocks = blocks.add(tr.doc, [indexedOccurrence({ ...old, node })]);
       continue;
     }
-    decorations = removeBlockDecorations(decorations, pos, node.nodeSize);
+    decorations =
+      old && ranges !== null && old.grammar === grammar
+        ? removeEditedDecorations(decorations, tr.doc, pos, node.nodeSize, ranges)
+        : removeBlockDecorations(decorations, tr.doc, pos, node.nodeSize);
     const record = old
       ? { ...old, node, grammar, revision: old.revision + 1, pending: grammar !== null }
       : freshOccurrence(node, pos, nextId++);
@@ -226,7 +273,7 @@ function publish(
     )
       continue;
     const start = record.pos + 1;
-    decorations = removeBlockDecorations(decorations, record.pos, record.node.nodeSize);
+    decorations = removeBlockDecorations(decorations, tr.doc, record.pos, record.node.nodeSize);
     const spans = publication.result.spans;
     const added = publication.result.reason
       ? [
@@ -315,7 +362,7 @@ function createHighlightView(view: EditorView, service: HighlightService) {
   let frame: number | undefined;
   let viewportFrame: number | undefined;
   let publications: Publication[] = [];
-  let viewport = { from: 0, to: 0 };
+  let viewport: ViewportRange = { from: 0, to: 0 };
   const awaiting = new Set<string>();
   const canonical = new Map<number, { revision: number; result: WeakRef<HighlightResult> }>();
   const LARGE_RESULT_RANGES = 2000;
@@ -326,6 +373,22 @@ function createHighlightView(view: EditorView, service: HighlightService) {
     const from = Math.max(0, Math.min(size, viewport.from - start));
     const to = Math.max(from, Math.min(size, viewport.to - start));
     return [from, to];
+  };
+
+  /**
+   * Scrolling inside the overscan keeps the current projection. Republishing on
+   * every scroll frame rebuilt every projected span and produced long frames.
+   */
+  const stillCovers = (record: BlockOccurrence, target: readonly [number, number]): boolean => {
+    const current = record.window;
+    if (!current || current[0] === current[1] || target[0] === target[1]) return false;
+    const start = record.pos + 1;
+    const size = record.node.content.size;
+    const [visibleFrom, visibleTo] = viewport.visible ?? [viewport.from, viewport.to];
+    const from = Math.max(0, Math.min(size, visibleFrom - start));
+    const to = Math.max(from, Math.min(size, visibleTo - start));
+    // A block visible only through overscan keeps its colors until it leaves it.
+    return from === to || (from >= current[0] && to <= current[1]);
   };
 
   const project = (publication: Publication, record: BlockOccurrence): Publication => {
@@ -392,6 +455,7 @@ function createHighlightView(view: EditorView, service: HighlightService) {
       if (!record.projected || record.pending || !record.grammar) continue;
       const window = windowFor(record);
       if (record.window?.[0] === window[0] && record.window[1] === window[1]) continue;
+      if (stillCovers(record, window)) continue;
       const cached = canonical.get(record.id);
       const result = cached?.revision === record.revision ? cached.result.deref() : undefined;
       if (window[0] !== window[1] && !result) {

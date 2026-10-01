@@ -79,7 +79,7 @@ describe('deferred viewport geometry', () => {
         return left < 400 ? 19900 : 20000;
       }
     );
-    expect(readViewportRange(view)).toEqual({ from: 6000, to: 24000 });
+    expect(readViewportRange(view)).toEqual({ from: 6000, to: 24000, visible: [10000, 20000] });
     expect(view.posAtCoords).toHaveBeenCalledTimes(4);
     for (const [coordinates] of (view.posAtCoords as jest.Mock).mock.calls) {
       expect(coordinates.top).toBeGreaterThanOrEqual(0);
@@ -94,7 +94,62 @@ describe('deferred viewport geometry', () => {
       { top: 0, bottom: 300, left: 0, right: 700, width: 700, height: 300 },
       ({ left }) => (left < 300 ? 39999 : 3)
     );
-    expect(readViewportRange(view)).toEqual({ from: 0, to: documentSize });
+    expect(readViewportRange(view)).toEqual({ from: 0, to: documentSize, visible: [3, 39999] });
+  });
+
+  function withHitTesting<T>(
+    view: EditorView,
+    hit: (x: number, y: number) => Element | null,
+    run: () => T
+  ): T {
+    const owner = view.dom.ownerDocument;
+    const descriptor = Object.getOwnPropertyDescriptor(owner, 'elementFromPoint');
+    Object.defineProperty(owner, 'elementFromPoint', { configurable: true, value: jest.fn(hit) });
+    owner.body.append(view.dom);
+    try {
+      return run();
+    } finally {
+      view.dom.remove();
+      if (descriptor) Object.defineProperty(owner, 'elementFromPoint', descriptor);
+      else Reflect.deleteProperty(owner, 'elementFromPoint');
+    }
+  }
+
+  it('measures the visible range below a sticky toolbar that covers the editor edge', () => {
+    // A scrolled editor extends above the webview; its formatting toolbar is fixed
+    // over the top 40 px. ProseMirror maps covered points to the code block start.
+    const view = fakeView(
+      { top: -50000, bottom: 50000, left: 0, right: 800, width: 800, height: 100000 },
+      ({ top }) => (top < 40 ? 13 : 20000 + Math.round(top))
+    );
+    const toolbar = document.createElement('div');
+    const line = document.createElement('span');
+    view.dom.append(line);
+    const range = withHitTesting(
+      view,
+      (_x, y) => (y < 40 ? toolbar : line),
+      () => readViewportRange(view)
+    );
+    expect(range.visible![0]).toBeGreaterThanOrEqual(20040);
+    expect(range.from).toBeGreaterThanOrEqual(16040);
+    expect(range.to - range.from).toBeLessThan(10000);
+  });
+
+  it('measures the visible range above an overlay that covers the editor bottom edge', () => {
+    const view = fakeView(
+      { top: -50000, bottom: 50000, left: 0, right: 800, width: 800, height: 100000 },
+      ({ top }) => (top > window.innerHeight - 60 ? 0 : 20000 + Math.round(top))
+    );
+    const panel = document.createElement('aside');
+    const line = document.createElement('span');
+    view.dom.append(line);
+    const range = withHitTesting(
+      view,
+      (_x, y) => (y > window.innerHeight - 60 ? panel : line),
+      () => readViewportRange(view)
+    );
+    expect(range.visible![1]).toBeLessThanOrEqual(20000 + window.innerHeight - 60);
+    expect(range.visible![0]).toBeGreaterThanOrEqual(20000);
   });
 
   it('returns the full range when layout is unavailable in deterministic tests', () => {
@@ -117,7 +172,7 @@ describe('deferred viewport geometry', () => {
     });
     owner.body.append(view.dom);
     try {
-      expect(readViewportRange(view)).toEqual({ from: 0, to: 0 });
+      expect(readViewportRange(view)).toEqual({ from: 0, to: 0, visible: [0, 0] });
       expect(view.posAtCoords).not.toHaveBeenCalled();
     } finally {
       view.dom.remove();

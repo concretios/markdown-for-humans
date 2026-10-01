@@ -8,6 +8,7 @@ import {
   createCodeHighlightingPlugin,
 } from '../../webview/highlighting/plugin';
 import * as projection from '../../webview/highlighting/projection';
+import type { ViewportRange } from '../../webview/highlighting/projection';
 import type { HighlightResult, HighlightService } from '../../webview/highlighting/types';
 
 const schema = new Schema({
@@ -75,7 +76,7 @@ class CollectableWeakRef<T extends object> {
 describe('large-block projection interaction and lifecycle', () => {
   let view: EditorView;
   let service: ControlledService;
-  let viewport: jest.SpyInstance<{ from: number; to: number }, [EditorView]>;
+  let viewport: jest.SpyInstance<ViewportRange, [EditorView]>;
   let documentEdits: number;
   let dispatches: number;
   let container: HTMLElement;
@@ -153,6 +154,31 @@ describe('large-block projection interaction and lifecycle', () => {
     expect(service.highlight).toHaveBeenCalledTimes(initialCalls);
     expect(service.requests[0].source).toBe(text);
     expect(documentEdits).toBe(0);
+  });
+
+  it('keeps the projection while scrolling inside its overscan, then re-centers it once', async () => {
+    viewport.mockReturnValue({ from: 1, to: 2001, visible: [801, 1201] });
+    open();
+    await settleInitial();
+    expect(ranges()).toHaveLength(1000);
+    expect(ranges()[0]).toEqual([1, 2]);
+    const before = dispatches;
+    for (const offset of [100, 200, 300, 400, 500]) {
+      viewport.mockReturnValue({
+        from: 1 + offset,
+        to: 2001 + offset,
+        visible: [801 + offset, 1201 + offset],
+      });
+      window.dispatchEvent(new Event('scroll'));
+      await tick();
+    }
+    expect(dispatches).toBe(before);
+    viewport.mockReturnValue({ from: 1601, to: 3601, visible: [2401, 2801] });
+    window.dispatchEvent(new Event('scroll'));
+    await tick();
+    expect(dispatches).toBe(before + 1);
+    expect(ranges()[0]).toEqual([1601, 1602]);
+    expect(service.highlight).toHaveBeenCalledTimes(1);
   });
 
   it('chooses the latest viewport after a job finishes, rather than the requested viewport', async () => {
