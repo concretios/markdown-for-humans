@@ -12,6 +12,7 @@
  * - base64 preview during upload
  * - Automatic URI resolution for relative paths
  * - Responsive decoded image dimensions, load errors and SVG display sizing
+ * - Column-width layout for SVGs that have no concrete intrinsic width
  * - Source-preserving HTML image dimensions
  * - Proper atomic node behavior for reliable selection/deletion
  */
@@ -40,6 +41,43 @@ import { isSvgImageSource } from '../../shared/imageSource';
 const INDENT_PIXELS_PER_LEVEL = 30;
 const INDENT_SPACES_PER_LEVEL = 4;
 const MAX_INDENT_PIXELS = 240;
+/** Wide enough that a 300×150 default-object SVG cannot fill it by accident. */
+const SVG_COLUMN_PROBE_WIDTH_PX = 800;
+
+/**
+ * A viewBox-only or percentage SVG lays out at the probe column, while Chrome
+ * still reports naturalWidth as the default object size. A concrete width lays
+ * out at that intrinsic size, so the two differ by more than a subpixel.
+ *
+ * @param naturalWidth - Decoded `naturalWidth` in CSS pixels
+ * @param laidOutWidth - Width used in an unconstrained column probe
+ * @returns Whether the image should fill the reading column
+ */
+export function svgFillsReadingColumn(naturalWidth: number, laidOutWidth: number): boolean {
+  return naturalWidth > 0 && laidOutWidth > naturalWidth + 1;
+}
+
+/**
+ * Measure the width Chrome gives this image in a normal block, outside the
+ * shrink-to-fit wrapper. Returns 0 when layout is unavailable.
+ *
+ * @param image - Decoded image element
+ * @returns Laid-out CSS width in the probe column
+ */
+function measureImageWidthInColumn(image: HTMLImageElement): number {
+  const probe = document.createElement('div');
+  probe.setAttribute('data-svg-size-probe', 'true');
+  probe.style.cssText = `position:absolute;left:-10000px;top:0;width:${SVG_COLUMN_PROBE_WIDTH_PX}px;visibility:hidden;pointer-events:none;`;
+  const parent = image.parentNode;
+  const next = image.nextSibling;
+  probe.appendChild(image);
+  document.body.appendChild(probe);
+  const width = image.getBoundingClientRect().width;
+  if (parent) parent.insertBefore(image, next);
+  else probe.removeChild(image);
+  probe.remove();
+  return width;
+}
 
 type CustomImageOptions = ImageOptions & {
   getShowImageHoverOverlay: () => boolean;
@@ -269,14 +307,29 @@ export const CustomImage = Image.extend({
         dom.removeAttribute('data-loading');
         errorLabel.hidden = true;
         wrapper.classList.remove('image-load-failed');
-        // A ratio-only SVG has no intrinsic width for a shrink-to-fit wrapper.
-        // Use the decoder's default size only in the view, never in saved attributes.
+        // fit-content plus max-width:100% collapses an SVG that has no concrete
+        // intrinsic width. Chrome's preview lays that image out at the column
+        // and only reports the 300×150 default object size as naturalWidth.
+        // Stamping naturalWidth is what made those diagrams tiny. The attribute
+        // below is view-only and is never written back to the document.
         if (!authoredWidth && dom.naturalWidth > 0) {
-          const width =
-            authoredHeight && dom.naturalHeight > 0
-              ? (authoredHeight * dom.naturalWidth) / dom.naturalHeight
-              : dom.naturalWidth;
-          dom.setAttribute('width', String(width));
+          if (authoredHeight && dom.naturalHeight > 0) {
+            dom.setAttribute(
+              'width',
+              String((authoredHeight * dom.naturalWidth) / dom.naturalHeight)
+            );
+            return;
+          }
+          const source = String(node.attrs['markdown-src'] || node.attrs.src || '');
+          if (isSvgImageSource(source) && dom.naturalHeight > 0) {
+            const laidOutWidth = measureImageWidthInColumn(dom);
+            if (svgFillsReadingColumn(dom.naturalWidth, laidOutWidth)) {
+              dom.style.aspectRatio = `${dom.naturalWidth} / ${dom.naturalHeight}`;
+              wrapper.classList.add('image-fluid-svg');
+              return;
+            }
+          }
+          dom.setAttribute('width', String(dom.naturalWidth));
         }
       };
       dom.addEventListener('load', onLoad);
