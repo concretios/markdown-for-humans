@@ -20,7 +20,7 @@ import {
   utimes,
   writeFile,
 } from 'fs/promises';
-import { tmpdir } from 'os';
+import { hostname, tmpdir } from 'os';
 import * as path from 'path';
 import { deflateSync } from 'zlib';
 import {
@@ -3779,6 +3779,166 @@ describe('FeedbackSessionStore', () => {
       await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       killSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('F6: recovers an old identity-stamped lock even when an unrelated process reuses its PID', async () => {
+    const store = await createStore('k006');
+    const lockPath = `${store.feedbackFilePath}.lock`;
+    const oldTime = new Date(Date.now() - 10 * 60 * 1_000);
+    await writeFile(
+      lockPath,
+      `2000000000 ${oldTime.toISOString()} ${'e'.repeat(24)} ${'2'.repeat(24)}\n`,
+      { flag: 'wx' }
+    );
+    await utimes(lockPath, oldTime, oldTime);
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1_000);
+    // The crashed owner's PID now belongs to a live, unrelated process.
+    const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+
+    try {
+      await expect(
+        store.addTextFeedback({
+          startLine: 1,
+          endLine: 1,
+          focus: 'Guide',
+          feedback: 'Recover after a crash with a recycled PID.',
+        })
+      ).resolves.toMatchObject({ id: 'F1' });
+      await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      killSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('F6: recovers an old lock left by an earlier extension host that had this same PID', async () => {
+    const store = await createStore('k007');
+    const lockPath = `${store.feedbackFilePath}.lock`;
+    const oldTime = new Date(Date.now() - 10 * 60 * 1_000);
+    await writeFile(
+      lockPath,
+      `${process.pid} ${oldTime.toISOString()} ${'f'.repeat(24)} ${'4'.repeat(24)}\n`,
+      { flag: 'wx' }
+    );
+    await utimes(lockPath, oldTime, oldTime);
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1_000);
+
+    try {
+      await expect(
+        store.addTextFeedback({
+          startLine: 1,
+          endLine: 1,
+          focus: 'Guide',
+          feedback: 'Recover after a container restart.',
+        })
+      ).resolves.toMatchObject({ id: 'F1' });
+      await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('F6: does not reclaim an old-stamped lock whose file was written within 5 minutes', async () => {
+    // touch can backdate mtime but never ctime, so a lock written by hand
+    // stays blocked until its inode is 5 minutes old.
+    const store = await createStore('k009');
+    const lockPath = `${store.feedbackFilePath}.lock`;
+    const oldTime = new Date(Date.now() - 74 * 60 * 1_000);
+    const handWritten = Buffer.from(
+      `1 2026-01-01T00:00:00.000Z ${'a'.repeat(24)} ${'b'.repeat(24)}\n`
+    );
+    await writeFile(lockPath, handWritten, { flag: 'wx' });
+    await utimes(lockPath, oldTime, oldTime);
+    try {
+      await expect(
+        store.addTextFeedback({
+          startLine: 1,
+          endLine: 1,
+          focus: 'Guide',
+          feedback: 'Fresh inode stays locked.',
+        })
+      ).rejects.toThrow(/another window or process.*5 minutes/i);
+      await expect(readFile(lockPath)).resolves.toEqual(handWritten);
+    } finally {
+      await unlink(lockPath);
+    }
+  });
+
+  it('D8: stamps locks with only a per-instance tag and never reclaims an old lock owned by this live host', async () => {
+    const store = await createStore('k008');
+    const lockPath = `${store.feedbackFilePath}.lock`;
+    let ownLock: Buffer | undefined;
+    await store.addTextFeedback(
+      {
+        startLine: 1,
+        endLine: 1,
+        focus: 'Guide',
+        feedback: 'Capture the live lock identity.',
+      },
+      async () => {
+        ownLock ??= await readFile(lockPath);
+      }
+    );
+    // pid, timestamp, per-acquire token, per-extension-host instance tag.
+    expect(ownLock?.toString('utf8')).toMatch(
+      new RegExp(`^${process.pid} \\S+ [a-f0-9]{24} [a-f0-9]{24}\\n$`)
+    );
+    expect(ownLock?.toString('utf8')).not.toContain(hostname());
+    expect(ownLock?.toString('utf8')).not.toContain(
+      createHash('sha256').update(hostname(), 'utf8').digest('hex').slice(0, 16)
+    );
+
+    const oldTime = new Date(Date.now() - 10 * 60 * 1_000);
+    const stampedOld = Buffer.from(
+      ownLock!.toString('utf8').replace(/^(\d+) \S+ /, `$1 ${oldTime.toISOString()} `)
+    );
+    await writeFile(lockPath, stampedOld, { flag: 'wx' });
+    await utimes(lockPath, oldTime, oldTime);
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1_000);
+    try {
+      await expect(
+        store.addTextFeedback({
+          startLine: 1,
+          endLine: 1,
+          focus: 'Guide',
+          feedback: 'Do not steal from this live host.',
+        })
+      ).rejects.toThrow(/another window|process/i);
+      await expect(readFile(lockPath)).resolves.toEqual(stampedOld);
+    } finally {
+      nowSpy.mockRestore();
+      // force: a regression that steals the lock must report its assertion, not ENOENT.
+      await rm(lockPath, { force: true });
+    }
+  });
+
+  it('D8: recovers an old lock in the earlier format that also carried a host hash', async () => {
+    // Unreleased pre-D8 line: pid, timestamp, token, host hash, instance tag.
+    // An unparseable lock would block the bundle forever, so it must still parse.
+    const store = await createStore('k010');
+    const lockPath = `${store.feedbackFilePath}.lock`;
+    const oldTime = new Date(Date.now() - 10 * 60 * 1_000);
+    await writeFile(
+      lockPath,
+      `1 ${oldTime.toISOString()} ${'a'.repeat(24)} 0123456789abcdef ${'b'.repeat(24)}\n`,
+      { flag: 'wx' }
+    );
+    await utimes(lockPath, oldTime, oldTime);
+    const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60 * 1_000);
+
+    try {
+      await expect(
+        store.addTextFeedback({
+          startLine: 1,
+          endLine: 1,
+          focus: 'Guide',
+          feedback: 'Recover a lock left by the earlier build.',
+        })
+      ).resolves.toMatchObject({ id: 'F1' });
+      await expect(stat(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
       nowSpy.mockRestore();
     }
   });

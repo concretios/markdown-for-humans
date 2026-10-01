@@ -232,6 +232,121 @@ describe('keyboard Feedback block selector', () => {
       ?.click();
   });
 
+  it('F2: reuses one idempotency key when Add is retried within the same annotation', async () => {
+    const modalOptions: Array<
+      Parameters<typeof feedbackCaptureModule.createFeedbackAnnotationModal>[0]
+    > = [];
+    jest
+      .spyOn(feedbackCaptureModule, 'createFeedbackAnnotationModal')
+      .mockImplementation(options => {
+        modalOptions.push(options);
+        return {
+          element: document.createElement('div'),
+          focus: jest.fn(),
+        } as unknown as ReturnType<typeof feedbackCaptureModule.createFeedbackAnnotationModal>;
+      });
+    const openAnnotation = async () => {
+      const harness = openGeometricBlockSelector({
+        blockRectangles: [domRectangle(80, 120, 680, 200), domRectangle(80, 230, 680, 310)],
+      });
+      harness.dialog.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      return harness;
+    };
+
+    const first = await openAnnotation();
+    first.addScreenshotFeedback
+      .mockRejectedValueOnce(new Error('Saving this screenshot timed out.'))
+      .mockResolvedValueOnce(undefined);
+    const submission = {
+      pngDataUrl: 'data:image/png;base64,AAAA',
+      feedback: 'Retry me.',
+      commands: [],
+    };
+    await expect(modalOptions[0].onAdd(submission)).rejects.toThrow(/timed out/);
+    await modalOptions[0].onAdd(submission);
+
+    const [firstAttempt, retry] = first.addScreenshotFeedback.mock.calls.map(call => call[0]);
+    expect(typeof firstAttempt.idempotencyKey).toBe('string');
+    expect(firstAttempt.idempotencyKey.length).toBeGreaterThan(0);
+    expect(retry.idempotencyKey).toBe(firstAttempt.idempotencyKey);
+    expect([firstAttempt.attempt, retry.attempt]).toEqual([1, 2]);
+
+    const second = await openAnnotation();
+    second.addScreenshotFeedback.mockResolvedValueOnce(undefined);
+    await modalOptions[1].onAdd(submission);
+    expect(second.addScreenshotFeedback.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ attempt: 1 })
+    );
+    expect(second.addScreenshotFeedback.mock.calls[0][0].idempotencyKey).not.toBe(
+      firstAttempt.idempotencyKey
+    );
+  });
+
+  it('D7: keeps the idempotency key across Retake with a newer attempt', async () => {
+    const modalOptions: Array<
+      Parameters<typeof feedbackCaptureModule.createFeedbackAnnotationModal>[0]
+    > = [];
+    jest
+      .spyOn(feedbackCaptureModule, 'createFeedbackAnnotationModal')
+      .mockImplementation(options => {
+        modalOptions.push(options);
+        return {
+          element: document.createElement('div'),
+          focus: jest.fn(),
+        } as unknown as ReturnType<typeof feedbackCaptureModule.createFeedbackAnnotationModal>;
+      });
+    const settle = async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+    };
+    const harness = openGeometricBlockSelector({
+      blockRectangles: [domRectangle(80, 120, 680, 200), domRectangle(80, 230, 680, 310)],
+    });
+    harness.dialog.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await settle();
+    harness.addScreenshotFeedback
+      .mockRejectedValueOnce(new Error('Saving this screenshot timed out.'))
+      .mockResolvedValueOnce(undefined);
+    await expect(
+      modalOptions[0].onAdd({
+        pngDataUrl: 'data:image/png;base64,AAAA',
+        feedback: 'Before Retake.',
+        commands: [],
+      })
+    ).rejects.toThrow(/timed out/);
+
+    // Retake after the timeout opens a fresh crop, then a fresh annotation.
+    await modalOptions[0].onRetake('Before Retake.');
+    const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+    overlay.dispatchEvent(
+      new MouseEvent('pointerdown', { button: 0, clientX: 100, clientY: 130, bubbles: true })
+    );
+    overlay.dispatchEvent(
+      new MouseEvent('pointerup', { button: 0, clientX: 300, clientY: 190, bubbles: true })
+    );
+    await settle();
+    expect(modalOptions).toHaveLength(2);
+    await modalOptions[1].onAdd({
+      pngDataUrl: 'data:image/png;base64,BBBB',
+      feedback: 'After Retake.',
+      commands: [],
+    });
+
+    const [timedOut, retaken] = harness.addScreenshotFeedback.mock.calls.map(call => call[0]);
+    expect(retaken.idempotencyKey).toBe(timedOut.idempotencyKey);
+    expect([timedOut.attempt, retaken.attempt]).toEqual([1, 2]);
+    expect(retaken).toEqual(
+      expect.objectContaining({
+        imageDataUrl: 'data:image/png;base64,BBBB',
+        feedback: 'After Retake.',
+      })
+    );
+  });
+
   it('captures non-contiguous mapped ordinals without treating omitted empty blocks as errors', async () => {
     const harness = openGeometricBlockSelector({
       anchorOrdinals: [2, 5],
@@ -1297,7 +1412,8 @@ describe('keyboard Feedback block selector', () => {
     });
 
     it('announces preparation on the crop overlay and removes it after success', async () => {
-      const gate = createFeedbackDraftSurfaceGate();
+      const onBlockedAction = jest.fn();
+      const gate = createFeedbackDraftSurfaceGate(undefined, onBlockedAction);
       const harness = createAreaHarness({ draftSurfaceGate: gate });
       let resolveRasterize!: (capture: { dataUrl: string; width: number; height: number }) => void;
       harness.rasterize.mockImplementation(
@@ -1327,10 +1443,12 @@ describe('keyboard Feedback block selector', () => {
       window.addEventListener('feedbackLocalError', onLocalError);
       try {
         startFeedbackAreaCapture(harness);
-        expect(onLocalError).toHaveBeenCalledTimes(1);
-        expect((onLocalError.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
-          message: 'A Feedback capture is already being prepared.',
-        });
+        // The gate's guidance on the owning surface is the only message.
+        expect(onBlockedAction).toHaveBeenCalledTimes(1);
+        expect(onBlockedAction.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({ kind: 'capture-rasterizing' })
+        );
+        expect(onLocalError).not.toHaveBeenCalled();
       } finally {
         window.removeEventListener('feedbackLocalError', onLocalError);
       }
@@ -1384,6 +1502,148 @@ describe('keyboard Feedback block selector', () => {
 
       overlay.querySelector<HTMLButtonElement>('.feedback-capture-cancel')?.click();
       expect(document.querySelector('.feedback-area-capture')).toBeNull();
+    });
+
+    it('hides Retry when the viewport changes after a rasterization failure', async () => {
+      const harness = createAreaHarness();
+      harness.rasterize.mockRejectedValue(
+        new FeedbackCaptureError('MD4H-FB-CAPTURE-002', 'Rasterization failed.')
+      );
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+      const retry = Array.from(overlay.querySelectorAll<HTMLButtonElement>('button')).find(
+        button => button.textContent === 'Retry'
+      )!;
+      overlay.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, bubbles: true })
+      );
+      overlay.dispatchEvent(
+        new MouseEvent('pointerup', { button: 0, clientX: 110, clientY: 70, bubbles: true })
+      );
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      expect(retry.hidden).toBe(false);
+      retry.focus();
+
+      // The failed crop no longer matches the visible area, so Retry has
+      // nothing to rasterize; only a new drag can recover.
+      harness.editor.view.dom.getBoundingClientRect = () => domRectangle(0, 0, 420, 300);
+      window.dispatchEvent(new Event('resize'));
+
+      expect(retry.hidden).toBe(true);
+      expect(document.activeElement).toBe(overlay);
+      expect(overlay.querySelector('.feedback-capture-error')?.textContent).toBe(
+        'The viewport changed. Drag again using the current visible area.'
+      );
+      expect(harness.rasterize).toHaveBeenCalledTimes(1);
+
+      overlay.querySelector<HTMLButtonElement>('.feedback-capture-cancel')?.click();
+    });
+
+    it('recovers when the viewport changes while rasterizing and the stale raster then fails', async () => {
+      const gate = createFeedbackDraftSurfaceGate();
+      const harness = createAreaHarness({ draftSurfaceGate: gate });
+      const setAnnotationsSuspended = jest.fn();
+      let rejectFirstRaster!: (error: unknown) => void;
+      harness.rasterize
+        .mockImplementationOnce(
+          () =>
+            new Promise((_resolve, reject) => {
+              rejectFirstRaster = reject;
+            })
+        )
+        .mockResolvedValue({ dataUrl: 'data:image/png;base64,AAAA', width: 80, height: 40 });
+      startFeedbackAreaCapture({ ...harness, setAnnotationsSuspended });
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+      const instruction = overlay.querySelector<HTMLElement>('.feedback-capture-instruction')!;
+      const drag = (fromX: number, toX: number): void => {
+        overlay.dispatchEvent(
+          new MouseEvent('pointerdown', { button: 0, clientX: fromX, clientY: 10, bubbles: true })
+        );
+        overlay.dispatchEvent(
+          new MouseEvent('pointerup', { button: 0, clientX: toX, clientY: 70, bubbles: true })
+        );
+      };
+
+      drag(10, 110);
+      await Promise.resolve();
+      expect(harness.rasterize).toHaveBeenCalledTimes(1);
+      expect(overlay.getAttribute('aria-busy')).toBe('true');
+      const firstSignal = (harness.rasterize.mock.calls[0]?.[0] as DomRasterizeRequest).signal;
+
+      // The panel narrows while "Preparing capture" is shown.
+      harness.editor.view.dom.getBoundingClientRect = () => domRectangle(0, 0, 420, 300);
+      window.dispatchEvent(new Event('resize'));
+
+      expect(firstSignal?.aborted).toBe(true);
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
+      expect(overlay.getAttribute('aria-busy')).toBe('false');
+      expect(overlay.classList.contains('rasterizing')).toBe(false);
+      expect(instruction.textContent).toBe(
+        'Capture area ready. Drag over the visible document area. Press Escape to cancel.'
+      );
+      expect(document.body.getAttribute('data-feedback-capture-state')).toBe('armed');
+      expect(harness.setCaptureState).toHaveBeenLastCalledWith('armed');
+      expect(gate.activeKind()).toBe('area-capture');
+      expect(overlay.querySelector('.feedback-capture-selection')?.hasAttribute('hidden')).toBe(
+        true
+      );
+
+      // A Mermaid or resource timeout now rejects the invalidated raster.
+      rejectFirstRaster(new FeedbackCaptureError('MD4H-FB-CAPTURE-002', 'Rasterization failed.'));
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      expect(document.querySelector('.feedback-area-capture')).toBe(overlay);
+      expect(overlay.getAttribute('aria-busy')).toBe('false');
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false]]);
+
+      // A fresh drag at the new generation rasterizes and opens annotation.
+      drag(20, 120);
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+      expect(harness.rasterize).toHaveBeenCalledTimes(2);
+      expect(
+        (harness.rasterize.mock.calls[1]?.[0] as DomRasterizeRequest).rectangle.width
+      ).toBeGreaterThan(0);
+      expect(setAnnotationsSuspended.mock.calls).toEqual([[true], [false], [true], [false]]);
+      expect(document.querySelector('.feedback-area-capture')).toBeNull();
+      expect(document.querySelector('.feedback-annotation-dialog')).not.toBeNull();
+      document
+        .querySelector<HTMLButtonElement>(
+          '.feedback-annotation-dialog [data-feedback-action="cancel"]'
+        )
+        ?.click();
+    });
+
+    it('discards a raster that succeeds after the viewport changed mid-capture', async () => {
+      const harness = createAreaHarness();
+      let resolveFirstRaster!: (capture: {
+        dataUrl: string;
+        width: number;
+        height: number;
+      }) => void;
+      harness.rasterize.mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            resolveFirstRaster = resolve;
+          })
+      );
+      startFeedbackAreaCapture(harness);
+      const overlay = document.querySelector<HTMLElement>('.feedback-area-capture')!;
+      overlay.dispatchEvent(
+        new MouseEvent('pointerdown', { button: 0, clientX: 10, clientY: 10, bubbles: true })
+      );
+      overlay.dispatchEvent(
+        new MouseEvent('pointerup', { button: 0, clientX: 110, clientY: 70, bubbles: true })
+      );
+      await Promise.resolve();
+
+      harness.editor.view.dom.getBoundingClientRect = () => domRectangle(0, 40, 500, 300);
+      window.dispatchEvent(new Event('scroll'));
+      resolveFirstRaster({ dataUrl: 'data:image/png;base64,AAAA', width: 100, height: 60 });
+      await new Promise(resolve => window.setTimeout(resolve, 0));
+
+      expect(document.querySelector('.feedback-annotation-dialog')).toBeNull();
+      expect(document.querySelector('.feedback-area-capture')).toBe(overlay);
+      expect(document.body.getAttribute('data-feedback-capture-state')).toBe('armed');
+      overlay.querySelector<HTMLButtonElement>('.feedback-capture-cancel')?.click();
     });
 
     it('cancels the armed crop from the toolbar event and restores idle state', () => {
@@ -1503,7 +1763,8 @@ describe('keyboard Feedback block selector', () => {
     });
 
     it('focuses and preserves a text draft while explaining why capture is blocked', () => {
-      const gate = createFeedbackDraftSurfaceGate();
+      const onBlockedAction = jest.fn();
+      const gate = createFeedbackDraftSurfaceGate(undefined, onBlockedAction);
       const draft = document.createElement('textarea');
       draft.value = 'Keep this unfinished feedback.';
       document.body.append(draft);
@@ -1521,10 +1782,12 @@ describe('keyboard Feedback block selector', () => {
         expect(document.activeElement).toBe(draft);
         expect(draft.value).toBe('Keep this unfinished feedback.');
         expect(harness.setCaptureState).not.toHaveBeenCalled();
-        expect(onLocalError).toHaveBeenCalledTimes(1);
-        expect((onLocalError.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
-          message: 'Finish or cancel this comment before capturing.',
-        });
+        // The gate's guidance on the owning surface is the only message.
+        expect(onBlockedAction).toHaveBeenCalledTimes(1);
+        expect(onBlockedAction.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({ kind: 'text-composer', element: draft })
+        );
+        expect(onLocalError).not.toHaveBeenCalled();
       } finally {
         window.removeEventListener('feedbackLocalError', onLocalError);
         lease?.release();
@@ -1532,7 +1795,8 @@ describe('keyboard Feedback block selector', () => {
     });
 
     it('focuses the completion checkpoint and explains how to leave it before capturing', () => {
-      const gate = createFeedbackDraftSurfaceGate();
+      const onBlockedAction = jest.fn();
+      const gate = createFeedbackDraftSurfaceGate(undefined, onBlockedAction);
       const checkpoint = document.createElement('section');
       checkpoint.setAttribute('role', 'dialog');
       checkpoint.tabIndex = -1;
@@ -1554,10 +1818,11 @@ describe('keyboard Feedback block selector', () => {
         expect(focusCheckpoint).toHaveBeenCalledTimes(1);
         expect(document.activeElement).toBe(checkpoint);
         expect(harness.setCaptureState).not.toHaveBeenCalled();
-        expect(onLocalError).toHaveBeenCalledTimes(1);
-        expect((onLocalError.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
-          message: 'Resume feedback or finish the current completion step before capturing.',
-        });
+        expect(onBlockedAction).toHaveBeenCalledTimes(1);
+        expect(onBlockedAction.mock.calls[0]?.[0]).toEqual(
+          expect.objectContaining({ kind: 'finish-checkpoint', element: checkpoint })
+        );
+        expect(onLocalError).not.toHaveBeenCalled();
       } finally {
         window.removeEventListener('feedbackLocalError', onLocalError);
         lease?.release();

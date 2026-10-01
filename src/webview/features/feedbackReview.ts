@@ -443,6 +443,13 @@ export interface FeedbackReviewController {
     imageDataUrl: string;
     feedback: string;
     replaceId?: string;
+    /**
+     * Same value for every Add attempt of one capture, across Retake; the host
+     * keeps one item per key. Sent with `attempt`.
+     */
+    idempotencyKey?: string;
+    /** Increases with every Add attempt under one key, so the newest attempt wins. */
+    attempt?: number;
   }): Promise<void>;
   /** Apply the correlated authoritative source while all DOM guards remain active. */
   applyCloseSync(
@@ -496,7 +503,6 @@ type PendingFeedbackMutation =
   | {
       kind: 'restore';
       id: string;
-      button: HTMLButtonElement;
     };
 
 interface FeedbackCompletionSummary {
@@ -977,7 +983,10 @@ export function createFeedbackReviewController(options: {
   let draftNotice: HTMLElement | null = null;
   let draftAttentionTarget: HTMLElement | null = null;
   let draftAttentionTimer: number | null = null;
+  let draftNoticeHostObserver: MutationObserver | null = null;
   const clearDraftSurfaceAttention = (): void => {
+    draftNoticeHostObserver?.disconnect();
+    draftNoticeHostObserver = null;
     if (draftAttentionTimer !== null) window.clearTimeout(draftAttentionTimer);
     draftAttentionTimer = null;
     draftAttentionTarget?.classList.remove('feedback-draft-attention');
@@ -1294,7 +1303,7 @@ export function createFeedbackReviewController(options: {
     clearDraftSurfaceAttention();
     const noticeSurface =
       element?.querySelector<HTMLElement>(
-        '.feedback-annotation-panel, .feedback-capture-instruction, .math-editor-dialog, .mermaid-editor-dialog, .image-insert-dialog, .rename-dialog, .huge-image-dialog, .export-settings-overlay-panel'
+        '.feedback-annotation-panel, .feedback-capture-instruction, .math-editor-dialog, .mermaid-editor-dialog, .image-insert-dialog, .rename-dialog, .huge-image-dialog, .export-settings-overlay-panel, .toc-overlay-panel'
       ) ?? element;
     draftNotice = createElement('p', 'feedback-draft-notice', instruction);
     draftNotice.setAttribute('data-feedback-draft-notice', '');
@@ -1484,13 +1493,9 @@ export function createFeedbackReviewController(options: {
   const restoreTransitionFocus = (): void => {
     const preferred = transitionReturnFocus;
     transitionReturnFocus = null;
-    if (
-      preferred?.isConnected &&
-      (!(preferred instanceof HTMLButtonElement) || !preferred.disabled)
-    ) {
-      preferred.focus({ preventScroll: true });
-      return;
-    }
+    // The remembered control can be hidden by the time Start ends. Chromium
+    // ignores focus() on hidden elements, so fall back unless focus landed.
+    if (focusElementWithoutScroll(preferred)) return;
     const draftAction = draftBanner?.querySelector<HTMLElement>(
       'button:not(:disabled), select:not(:disabled)'
     );
@@ -1909,8 +1914,9 @@ export function createFeedbackReviewController(options: {
     hideBlockAction();
     // QA-001/QA-002: capturing on the editor retargets native text drags,
     // corrupting selection endpoints in lists and table cells. Observe the
-    // gesture without owning it; document pointerup/cancel and window blur
-    // already restore the block action when selection ends.
+    // gesture without owning it; document pointerup/cancel, context menu,
+    // window blur and visibility change restore the block action when
+    // selection ends.
   };
 
   const handleBlockPointerUp = (): void => {
@@ -2773,16 +2779,24 @@ export function createFeedbackReviewController(options: {
 
     if (!editDraft) {
       const undoStack = createElement('div', 'feedback-undo-stack');
+      const pendingRestoreIds = new Set(
+        Array.from(pendingMutations.values())
+          .filter(
+            (mutation): mutation is Extract<PendingFeedbackMutation, { kind: 'restore' }> =>
+              mutation.kind === 'restore'
+          )
+          .map(mutation => mutation.id)
+      );
       for (const deleted of deletedItems.values()) {
         const undo = createElement('button', 'feedback-undo-delete', `Undo delete ${deleted.id}`);
         undo.type = 'button';
-        undo.disabled = !hasWritableSession();
+        undo.disabled = !hasWritableSession() || pendingRestoreIds.has(deleted.id);
         undo.setAttribute('data-feedback-undo-id', deleted.id);
         undo.addEventListener('click', () => {
           if (!hasWritableSession() || !session) return;
           undo.disabled = true;
           const requestId = nextRequestId();
-          pendingMutations.set(requestId, { kind: 'restore', id: deleted.id, button: undo });
+          pendingMutations.set(requestId, { kind: 'restore', id: deleted.id });
           post({
             type: 'feedback.item.restore',
             requestId,
@@ -3911,6 +3925,15 @@ export function createFeedbackReviewController(options: {
       hideBlockAction();
       return;
     }
+    if (blockPointerSelecting) {
+      // A drag reports a selection change every frame, and a full sample
+      // serializes the whole selected DOM, which breaks the 16 ms budget on
+      // large documents. Pointer release or cancel, a context menu, window
+      // blur or a visibility change schedules one full sample once the
+      // selection settles.
+      hideBlockAction();
+      return;
+    }
     const nativeSelection = window.getSelection();
     const hasStructuralCellSelection = editor.state.selection instanceof CellSelection;
     if (
@@ -4103,20 +4126,27 @@ export function createFeedbackReviewController(options: {
     activateFeedbackItem(preferredId, marker.dataset.feedbackIds?.split(',').filter(Boolean));
   };
 
+  /**
+   * The TOC and Table dialogs stay mounted and fade out through a CSS visibility
+   * transition, so their computed style still reads visible right after they
+   * close. Their `visible` class is the synchronous open state.
+   */
+  const isOpenModal = (candidate: HTMLElement): boolean =>
+    candidate.isConnected &&
+    !candidate.hidden &&
+    !candidate.closest('[aria-hidden="true"], [hidden]') &&
+    (candidate.matches('.toc-overlay, .export-settings-overlay')
+      ? candidate.classList.contains('visible')
+      : window.getComputedStyle(candidate).display !== 'none' &&
+        window.getComputedStyle(candidate).visibility !== 'hidden');
+
   const focusModalSurfaceBefore = (action: string): boolean => {
     const activeModal = Array.from(
       document.querySelectorAll<HTMLElement>(
         '[data-md4h-modal], [role="dialog"][aria-modal="true"], .math-editor-overlay, .mermaid-editor-overlay, .image-insert-dialog-overlay, .rename-dialog-overlay, .huge-image-overlay'
       )
     )
-      .filter(
-        candidate =>
-          candidate.isConnected &&
-          !candidate.hidden &&
-          !candidate.closest('[aria-hidden="true"], [hidden]') &&
-          window.getComputedStyle(candidate).display !== 'none' &&
-          window.getComputedStyle(candidate).visibility !== 'hidden'
-      )
+      .filter(isOpenModal)
       .at(-1);
     if (!activeModal) return false;
 
@@ -4130,6 +4160,15 @@ export function createFeedbackReviewController(options: {
       if (!focusedControl) focusElementWithoutScroll(activeModal);
     }
     showSurfaceAttention(activeModal, `Complete or close this dialog before ${action}.`);
+    // Link and Table dialogs are hidden and reused, not removed. Clear the notice
+    // when this dialog closes so its next, unrelated open does not repeat it.
+    draftNoticeHostObserver = new MutationObserver(() => {
+      if (!isOpenModal(activeModal)) clearDraftSurfaceAttention();
+    });
+    draftNoticeHostObserver.observe(activeModal, {
+      attributes: true,
+      attributeFilter: ['class', 'style', 'hidden', 'aria-hidden'],
+    });
     return true;
   };
 
@@ -4143,6 +4182,20 @@ export function createFeedbackReviewController(options: {
             completionDialog
         );
         return;
+      }
+      // editor.ts closes Find, the TOC and the audit overlay before Start. Their
+      // controls keep focus while the overlay fades, then Chromium drops it to
+      // BODY, so a Start that fails fast, succeeds or is a no-op during a session
+      // would leave no focused control. Use the editor.
+      // EditorView.focus() writes the editor selection to the DOM. A bare focus()
+      // lets Chromium move the caret to the document start, and ProseMirror then
+      // scrolls to the old caret or, without a focus event, keeps the moved one.
+      if (
+        document.activeElement?.closest(
+          '.search-overlay:not(.visible), .toc-overlay:not(.visible), .audit-overlay:not(.visible)'
+        )
+      ) {
+        editor.view.focus();
       }
       if (session || startRequestId) return;
       if (focusModalSurfaceBefore('starting Feedback')) return;
@@ -5244,6 +5297,9 @@ export function createFeedbackReviewController(options: {
         endOrdinal: input.endOrdinal,
         imageDataUrl: input.imageDataUrl,
         feedback: input.feedback,
+        ...(input.idempotencyKey === undefined
+          ? {}
+          : { idempotencyKey: input.idempotencyKey, attempt: input.attempt }),
       });
       return completion;
     },
@@ -5492,8 +5548,19 @@ export function createFeedbackReviewController(options: {
         message.type === 'feedback.close.release' ||
         message.type === 'feedback.diagnosticsCopied';
       if (requiresActiveSession && (!session || message.sessionId !== session.sessionId)) return;
+      // A host error raised before the request session resolves (for example
+      // "no longer active") has no sessionId. It still settles the exact pending
+      // mutation, Finish or preview by request id, since none outlive a session.
+      const settlesPendingRequest =
+        message.type === 'feedback.error' &&
+        message.sessionId === undefined &&
+        message.requestId !== undefined &&
+        (pendingMutations.has(message.requestId) ||
+          message.requestId === pendingFinishRequestId ||
+          message.requestId === pendingPreviewRequestId);
       if (
         message.type === 'feedback.error' &&
+        !settlesPendingRequest &&
         ((session !== null && message.sessionId !== session.sessionId) ||
           (session === null && message.sessionId !== undefined))
       ) {
@@ -5829,8 +5896,12 @@ export function createFeedbackReviewController(options: {
               );
               if (liveEdit) liveEdit.disabled = !hasWritableSession();
               if (liveRemove) liveRemove.disabled = !hasWritableSession();
-            } else if (pending?.kind === 'restore' && pending.button.isConnected) {
-              pending.button.disabled = invalidated;
+            } else if (pending?.kind === 'restore') {
+              // A re-render during the round trip replaces the clicked button.
+              const liveUndo = panel?.querySelector<HTMLButtonElement>(
+                `[data-feedback-undo-id="${pending.id}"]`
+              );
+              if (liveUndo) liveUndo.disabled = invalidated;
             }
             pendingMutations.delete(message.requestId);
           }
@@ -5930,6 +6001,10 @@ export function createFeedbackReviewController(options: {
     editorDom.addEventListener('pointerleave', handleBlockPointerLeave);
     document.addEventListener('pointerup', handleBlockPointerUp, true);
     document.addEventListener('pointercancel', handleBlockPointerUp, true);
+    // A native context menu (macOS opens it on mousedown) or a hidden page can
+    // swallow the button release, which would leave selection sampling off.
+    document.addEventListener('contextmenu', handleBlockPointerUp, true);
+    document.addEventListener('visibilitychange', handleBlockWindowBlur);
     window.addEventListener('blur', handleBlockWindowBlur);
     editorDom.addEventListener('beforeinput', guardMutation, true);
     editorDom.addEventListener('cut', guardMutation, true);
@@ -5957,6 +6032,8 @@ export function createFeedbackReviewController(options: {
     editorDom.removeEventListener('pointerleave', handleBlockPointerLeave);
     document.removeEventListener('pointerup', handleBlockPointerUp, true);
     document.removeEventListener('pointercancel', handleBlockPointerUp, true);
+    document.removeEventListener('contextmenu', handleBlockPointerUp, true);
+    document.removeEventListener('visibilitychange', handleBlockWindowBlur);
     window.removeEventListener('blur', handleBlockWindowBlur);
     editorDom.removeEventListener('beforeinput', guardMutation, true);
     editorDom.removeEventListener('cut', guardMutation, true);

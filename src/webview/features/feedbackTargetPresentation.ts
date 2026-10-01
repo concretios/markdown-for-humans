@@ -14,6 +14,7 @@ import type {
   FeedbackCellTargetInputV1,
   FeedbackRenderedRangeInputV1,
 } from '../../shared/feedbackProtocol';
+import { boundedNodeText, codePointLength, codePointPrefix } from './feedbackRenderedRange';
 import {
   fingerprintFeedbackTable,
   isFeedbackCellRectangleWithinExactLimit,
@@ -102,13 +103,14 @@ function normalizeText(value: string): string {
   return value.replace(/\r\n/g, '\n');
 }
 
+/** Bounds `value` to `limit` code points, ellipsis included, without splitting a surrogate pair. */
 function truncateText(
   value: string,
   limit: number,
   forceTruncation = false
 ): { text: string; truncated: boolean } {
-  if (!forceTruncation && value.length <= limit) return { text: value, truncated: false };
-  return { text: `${value.slice(0, Math.max(0, limit - 1))}…`, truncated: true };
+  if (!forceTruncation && codePointLength(value) <= limit) return { text: value, truncated: false };
+  return { text: `${codePointPrefix(value, Math.max(0, limit - 1))}…`, truncated: true };
 }
 
 function collapsePreviewText(value: string): string {
@@ -141,10 +143,10 @@ function textPreview(
  */
 function wholeBlockTextPreview(node: ProseMirrorNode): FeedbackTextTargetPreview | null {
   if (node.isAtom || node.content.size === 0) return null;
-  const traversalEnd = Math.min(node.content.size, FEEDBACK_TEXT_PREVIEW_LIMIT);
-  const semanticText = normalizeText(node.textBetween(0, traversalEnd, '\n', '\n'));
+  const bounded = boundedNodeText(node, FEEDBACK_TEXT_PREVIEW_LIMIT);
+  const semanticText = normalizeText(bounded.text);
   if (semanticText.trim().length === 0) return null;
-  return textPreview('quote', semanticText, traversalEnd < node.content.size);
+  return textPreview('quote', semanticText, bounded.truncated);
 }
 
 function lineCount(value: string): number {
@@ -218,10 +220,12 @@ function tableDimensions(node: ProseMirrorNode): { rows: number; columns: number
 }
 
 function safeTableCellText(node: ProseMirrorNode): string {
-  const traversalEnd = Math.min(node.content.size, FEEDBACK_CELL_PREVIEW_TEXT_LIMIT);
-  const value = normalizeText(node.textBetween(0, traversalEnd, '\n', '\n'));
-  return truncateText(value, FEEDBACK_CELL_PREVIEW_TEXT_LIMIT, traversalEnd < node.content.size)
-    .text;
+  const bounded = boundedNodeText(node, FEEDBACK_CELL_PREVIEW_TEXT_LIMIT);
+  return truncateText(
+    normalizeText(bounded.text),
+    FEEDBACK_CELL_PREVIEW_TEXT_LIMIT,
+    bounded.truncated
+  ).text;
 }
 
 function cellPreview(

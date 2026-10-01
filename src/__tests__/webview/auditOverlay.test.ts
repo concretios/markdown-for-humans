@@ -629,6 +629,25 @@ describe('Toast Notifications', () => {
     }, 50);
   });
 
+  it('renders host error text literally instead of parsing it as markup (#93)', () => {
+    const payload = '<img src=https://x/y>';
+    const toastId = showToast(payload, 'info');
+
+    const toast = document.getElementById(toastId);
+    expect(toast?.querySelector('img')).toBeNull();
+    expect(toast?.querySelector('.toast-message')?.textContent).toBe(payload);
+  });
+
+  it('renders a first keyed Feedback error literally as well', () => {
+    const payload = 'Draft failed: <b id="injected">bad</b>';
+    const toastId = showToast(payload, 'info', { dedupeKey: 'feedback-local-error' });
+
+    const toast = document.getElementById(toastId);
+    expect(toast?.querySelector('#injected')).toBeNull();
+    expect(toast?.querySelector('.toast-message')?.textContent).toBe(payload);
+    expect(toast?.querySelector('.toast-icon.codicon-info')).not.toBeNull();
+  });
+
   it('shows an info toast', () => {
     const toastId = showToast('Info message', 'info');
 

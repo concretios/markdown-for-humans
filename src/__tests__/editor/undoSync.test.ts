@@ -154,12 +154,9 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
 
     expect(result).toBe(true);
     expect(workspace.applyEdit).not.toHaveBeenCalled();
-    expect((provider as unknown as { pendingEdits: Map<unknown, unknown> }).pendingEdits.size).toBe(
-      0
-    );
   });
 
-  it('should apply edit and mark pending when content changes', async () => {
+  it('should apply edit when content changes', async () => {
     const provider = new MarkdownEditorProvider({} as unknown as vscode.ExtensionContext);
     const document = createDocument('hello world');
 
@@ -179,9 +176,6 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     expect(replaces).toHaveLength(1);
     // applyEdit adds an MD047 trailing newline before writing.
     expect(replaces?.[0]?.text).toBe('hi world\n');
-    expect((provider as unknown as { pendingEdits: Map<unknown, unknown> }).pendingEdits.size).toBe(
-      1
-    );
   });
 
   it('applies whitespace edits that raw HTML makes visually significant', async () => {
@@ -783,17 +777,16 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     content = 'A\n';
     updateWebview(document as unknown as vscode.TextDocument, webview as unknown as vscode.Webview);
 
-    expect(webview.postMessage.mock.calls.map(call => call[0].content)).toEqual([
-      'A\n',
-      'B\n',
-      'A\n',
-    ]);
+    const contentUpdates = () =>
+      webview.postMessage.mock.calls.filter(call => call[0].type === 'update');
+    expect(contentUpdates().map(call => call[0].content)).toEqual(['A\n', 'B\n', 'A\n']);
 
     resolveDeferredDelivery?.(true);
     await Promise.resolve();
     updateWebview(document as unknown as vscode.TextDocument, webview as unknown as vscode.Webview);
 
-    expect(webview.postMessage).toHaveBeenCalledTimes(3);
+    // Already-delivered content is not resent; only its version is announced.
+    expect(contentUpdates()).toHaveLength(3);
   });
 
   it.each(['false', 'rejected'] as const)(
@@ -826,6 +819,8 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
           updateWebview: (doc: vscode.TextDocument, target: vscode.Webview) => void;
         }
       ).updateWebview.bind(provider);
+      const contentUpdates = () =>
+        webview.postMessage.mock.calls.filter(call => call[0].type === 'update');
 
       updateWebview(
         document as unknown as vscode.TextDocument,
@@ -852,12 +847,7 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
           webview as unknown as vscode.Webview
         );
 
-        expect(webview.postMessage.mock.calls.map(call => call[0].content)).toEqual([
-          'A\n',
-          'B\n',
-          'A\n',
-          'A\n',
-        ]);
+        expect(contentUpdates().map(call => call[0].content)).toEqual(['A\n', 'B\n', 'A\n', 'A\n']);
       } finally {
         consoleError.mockRestore();
       }
@@ -869,7 +859,8 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
         webview as unknown as vscode.Webview
       );
 
-      expect(webview.postMessage).toHaveBeenCalledTimes(4);
+      // Already-delivered content is not resent; only its version is announced.
+      expect(contentUpdates()).toHaveLength(4);
     }
   );
 
@@ -2675,7 +2666,13 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
       }
     ).updateWebview(document as unknown as vscode.TextDocument, webview);
 
-    expect(webview.postMessage).not.toHaveBeenCalled();
+    // The content is not resent, but the renderer still learns the version.
+    expect(webview.postMessage).toHaveBeenCalledTimes(1);
+    expect(webview.postMessage).toHaveBeenCalledWith({
+      type: 'document.version',
+      protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
+      documentVersion: 1,
+    });
   });
 
   it.each([
@@ -2809,7 +2806,6 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
         doc: vscode.TextDocument,
         options: { sourceWebview: vscode.Webview }
       ) => Promise<boolean>;
-      pendingEdits: Map<string, number>;
       updateWebview: (doc: vscode.TextDocument, target: vscode.Webview) => void;
     };
 
@@ -2822,7 +2818,6 @@ describe('MarkdownEditorProvider undo/redo safety', () => {
     });
 
     content = 'A\n';
-    internal.pendingEdits.delete(document.uri.toString());
     internal.updateWebview(
       document as unknown as vscode.TextDocument,
       webview as unknown as vscode.Webview

@@ -45,7 +45,6 @@ interface ProviderLifecycleInternals {
     }
   >;
   feedbackWebviews: Map<string, Set<vscode.Webview>>;
-  pendingEdits: Map<string, number>;
   documentEditCoordinator: DocumentEditCoordinator<string>;
   hasPendingDocumentEdits: (documentKey: string) => boolean;
   autoSaveTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -229,7 +228,7 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     }
   });
 
-  it('keeps the owner flush, pending marker, and autosave timer when a peer split closes', async () => {
+  it('keeps the owner flush and autosave timer when a peer split closes', async () => {
     const provider = createProvider(workspaceRoot);
     const providerInternals = internals(provider);
     let documentText = ORIGINAL_SOURCE;
@@ -300,7 +299,6 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
 
     await waitUntil(() => peerDisposedDuringFlush && releaseOwnerEdit !== undefined);
     const stateImmediatelyAfterPeerDispose = {
-      pendingOwnerEdit: providerInternals.pendingEdits.has(documentKey),
       inFlightOwnerEdit: providerInternals.hasPendingDocumentEdits(documentKey),
       sameAutoSaveTimer: providerInternals.autoSaveTimers.get(documentKey) === existingAutoSave,
     };
@@ -319,7 +317,6 @@ describe('MarkdownEditorProvider split lifecycle ownership', () => {
     providerInternals.autoSaveTimers.delete(documentKey);
 
     expect(stateImmediatelyAfterPeerDispose).toEqual({
-      pendingOwnerEdit: true,
       inFlightOwnerEdit: true,
       sameAutoSaveTimer: true,
     });

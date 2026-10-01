@@ -232,6 +232,19 @@ export type FeedbackWebviewMessage =
       endOrdinal: number;
       imageDataUrl: string;
       feedback: string;
+      /**
+       * Retry identity of one capture, sent with `attempt`. The webview keeps
+       * one key from the first annotation until the capture is saved or
+       * cancelled, across every Add click and Retake, because a request the
+       * webview timed out after 15 s may still commit. The host keeps at most
+       * one item per key: the first commit adds it, a newer attempt with
+       * different content replaces it (last write wins), and an older attempt
+       * or identical content is answered without a write. So the session ends
+       * with one item holding the newest attempt in either commit order.
+       */
+      idempotencyKey?: string;
+      /** 1 for the first Add of a capture, then +1 per Add click; present only with the key. */
+      attempt?: number;
     })
   | (FeedbackSessionRequestBase & {
       type: 'feedback.screenshot.replace';
@@ -1096,10 +1109,15 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
           'endOrdinal',
           'imageDataUrl',
           'feedback',
+          ...(hasOwn(value, 'idempotencyKey') ? ['idempotencyKey', 'attempt'] : []),
         ]) ||
         !isRange(value) ||
         !isPngDataUrl(value.imageDataUrl) ||
-        !isBoundedString(value.feedback, MAX_FEEDBACK_LENGTH)
+        !isBoundedString(value.feedback, MAX_FEEDBACK_LENGTH) ||
+        (hasOwn(value, 'idempotencyKey') &&
+          (!isRequestId(value.idempotencyKey) ||
+            !Number.isSafeInteger(value.attempt) ||
+            (value.attempt as number) < 1))
       ) {
         return null;
       }
@@ -1110,6 +1128,9 @@ export function parseFeedbackWebviewMessage(value: unknown): FeedbackWebviewMess
         endOrdinal: value.endOrdinal as number,
         imageDataUrl: value.imageDataUrl,
         feedback: value.feedback,
+        ...(hasOwn(value, 'idempotencyKey')
+          ? { idempotencyKey: value.idempotencyKey as string, attempt: value.attempt as number }
+          : {}),
       };
 
     case 'feedback.screenshot.replace':

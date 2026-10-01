@@ -168,10 +168,10 @@ describe('typed Feedback selection mapping', () => {
   it('bounds aggregate Focus for 256 oversized cells before traversing complete cell content', () => {
     const editor = createEditor(rectangularTable(16, 16, () => 'x'.repeat(4_100)));
     const positions = cellPositions(editor.state.doc);
-    const textBetweenSpies = positions.map(position => {
+    const cellReads = positions.map(position => {
       const cell = editor.state.doc.nodeAt(position);
       if (!cell) throw new Error('Expected a table cell');
-      return jest.spyOn(cell, 'textBetween');
+      return jest.spyOn(cell, 'nodesBetween');
     });
 
     try {
@@ -184,16 +184,96 @@ describe('typed Feedback selection mapping', () => {
         expect(result.focusText.length).toBeLessThanOrEqual(64 * 1024);
         expect(result.focusText).toContain('[truncated]');
       }
-      expect(textBetweenSpies.every(spy => spy.mock.calls.length === 1)).toBe(true);
-      expect(
-        textBetweenSpies.every(spy =>
-          spy.mock.calls.every(([, to]) => typeof to === 'number' && to <= 240)
-        )
-      ).toBe(true);
+      // Every cell is read exactly once, by one walk that stops at the first
+      // character past the 240-character cell limit.
+      expect(cellReads.map(spy => spy.mock.calls.length)).toEqual(positions.map(() => 1));
     } finally {
-      textBetweenSpies.forEach(spy => spy.mockRestore());
+      cellReads.forEach(spy => spy.mockRestore());
       editor.destroy();
     }
+  });
+
+  describe('selected-cell Focus measured in characters', () => {
+    const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+    function selectedFocusFor(cellText: string): string {
+      const editor = createEditor(
+        rectangularTable(2, 2, (row, column) =>
+          row === 1 && column === 0 ? cellText : `R${row}C${column + 1}`
+        )
+      );
+      const cells = cellPositions(editor.state.doc);
+      try {
+        const result = mapFeedbackSelection(
+          cellSelectionInput(editor.state.doc, cells[0], cells[cells.length - 1])
+        );
+        if (result.kind !== 'cells') throw new Error(`Expected cells, got ${result.kind}`);
+        return result.focusText;
+      } finally {
+        editor.destroy();
+      }
+    }
+
+    it('keeps a 240-character cell intact', () => {
+      const cellText = 'a'.repeat(240);
+
+      expect(selectedFocusFor(cellText)).toBe(['R0C1\tR0C2', `${cellText}\tR1C2`].join('\n'));
+    });
+
+    it('keeps a cell of 240 astral characters intact', () => {
+      const cellText = '\u{1F600}'.repeat(240);
+
+      expect(selectedFocusFor(cellText)).toBe(['R0C1\tR0C2', `${cellText}\tR1C2`].join('\n'));
+    });
+
+    it('cuts an oversized cell on a code point boundary', () => {
+      const sentinel = '… [truncated]';
+      const kept = `${'a'.repeat(240 - sentinel.length - 1)}\u{1F600}`;
+      const focus = selectedFocusFor(`${kept}${'b'.repeat(20)}`);
+
+      expect(focus).toBe(['R0C1\tR0C2', `${kept}${sentinel}\tR1C2`].join('\n'));
+      expect(focus).not.toMatch(LONE_SURROGATE);
+    });
+
+    it('bounds a cell of horizontal rules to the cell limit', () => {
+      // 200 rules span 200 positions but 399 characters: each rule after the
+      // first adds a block separator and its own newline.
+      const sentinel = '… [truncated]';
+      const editor = createEditor({
+        type: 'doc',
+        content: [
+          {
+            type: 'table',
+            content: [
+              {
+                type: 'tableRow',
+                content: [
+                  { type: 'tableCell', content: [paragraph('A')] },
+                  {
+                    type: 'tableCell',
+                    content: Array.from({ length: 200 }, () => ({ type: 'horizontalRule' })),
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      const cells = cellPositions(editor.state.doc);
+
+      try {
+        const result = mapFeedbackSelection(
+          cellSelectionInput(editor.state.doc, cells[0], cells[1])
+        );
+
+        expect(result).toMatchObject({
+          kind: 'cells',
+          focusText: `A\t${'\n'.repeat(240 - sentinel.length)}${sentinel}`,
+        });
+      } finally {
+        editor.destroy();
+      }
+    });
   });
 
   it('keeps CellSelection authoritative over a transient collapsed native caret', () => {

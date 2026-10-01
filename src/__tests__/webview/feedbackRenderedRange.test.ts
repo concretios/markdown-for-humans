@@ -7,6 +7,9 @@ import StarterKit from '@tiptap/starter-kit';
 import { createCodeBlockCopyNodeView } from '../../webview/extensions/codeBlockCopyNodeView';
 import {
   blockRelativeRangeFromPositions,
+  boundedNodeText,
+  codePointLength,
+  codePointPrefix,
   feedbackFocusForBlockRange,
   feedbackFocusForMappedBlock,
   getFeedbackTargetFromDomRange,
@@ -1069,6 +1072,7 @@ describe('feedback rendered ranges', () => {
     });
     const block = editor.state.doc.child(0);
     const textBetweenSpy = jest.spyOn(block, 'textBetween');
+    const nodesBetweenSpy = jest.spyOn(block, 'nodesBetween');
     editor.view.dispatch(editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, 0)));
 
     try {
@@ -1089,12 +1093,180 @@ describe('feedback rendered ranges', () => {
       });
       expect(target?.focus).toHaveLength(64 * 1024);
       expect(target?.focus.endsWith('\n[Focus truncated]')).toBe(true);
-      expect(textBetweenSpy).toHaveBeenCalled();
+      // Focus comes from a bounded walk that stops past the 64 Ki-character
+      // limit, never from textBetween over the whole multi-megabyte node.
+      expect(nodesBetweenSpy).toHaveBeenCalled();
       expect(
-        textBetweenSpy.mock.calls.every(([, to]) => typeof to === 'number' && to <= 64 * 1024)
+        textBetweenSpy.mock.calls.every(([, to]) => typeof to === 'number' && to <= 64 * 1024 + 1)
       ).toBe(true);
     } finally {
       textBetweenSpy.mockRestore();
+      nodesBetweenSpy.mockRestore();
+      editor.destroy();
+    }
+  });
+
+  it('measures whole-block Focus in characters, not ProseMirror positions', () => {
+    // Each item costs 14 positions but only 11 characters, so the list spans
+    // more than 64 Ki positions while its text stays well below 64 Ki characters.
+    const items = Array.from(
+      { length: 5_000 },
+      (_, index) => `item${String(index).padStart(6, '0')}`
+    );
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: items.map(text => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+          })),
+        },
+      ],
+    });
+
+    try {
+      expect(editor.state.doc.child(0).content.size).toBeGreaterThan(64 * 1024);
+      const focus = feedbackFocusForBlockRange(editor, 0, 0);
+      expect(focus).not.toContain('[Focus truncated]');
+      expect(focus).toBe(items.join('\n'));
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('cuts truncated whole-block Focus on a code point boundary', () => {
+    const sentinel = '\n[Focus truncated]';
+    const prefix = 'x'.repeat(64 * 1024 - sentinel.length - 1);
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: `${prefix}\u{1F600}${'y'.repeat(100)}` }],
+        },
+      ],
+    });
+
+    try {
+      const focus = feedbackFocusForBlockRange(editor, 0, 0);
+      expect(focus).toBe(`${prefix}\u{1F600}${sentinel}`);
+      expect(focus).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+      );
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('reads a structure-heavy block once and stops at the character limit', () => {
+    // Each item is 5 positions but 2 characters ("a" plus a block separator),
+    // the shape of sparse tables and short lists.
+    const editor = createEditor({
+      type: 'doc',
+      content: [
+        {
+          type: 'bulletList',
+          content: Array.from({ length: 2_000 }, () => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'a' }] }],
+          })),
+        },
+      ],
+    });
+    const list = editor.state.doc.child(0);
+    const itemReads = Array.from({ length: list.childCount }, (_, index) =>
+      jest.spyOn(list.child(index), 'nodesBetween')
+    );
+
+    try {
+      const bounded = boundedNodeText(list, 1_000);
+
+      expect(bounded).toEqual({ text: 'a\n'.repeat(500), truncated: true });
+      // Item 500 holds the first character past the limit, so 501 items is the
+      // least any reader can enter. Re-reading from position 0 with a growing
+      // window entered 1,403.
+      const enteredItems = itemReads.reduce((total, spy) => total + spy.mock.calls.length, 0);
+      expect(enteredItems).toBeLessThanOrEqual(501);
+    } finally {
+      itemReads.forEach(spy => spy.mockRestore());
+      editor.destroy();
+    }
+  });
+
+  it('matches textBetween block and leaf separators at every limit', () => {
+    const editor = createEditor(
+      [
+        '<blockquote><p>one<br>two</p><p></p><ul><li><p>\u{1F600}x</p><ul><li><p>deep</p></li></ul></li></ul><hr><pre><code>a\nb</code></pre></blockquote>',
+        '<table><tbody><tr><th><p>H</p></th><th><p></p></th></tr><tr><td><p></p></td><td><p>c\u{1F600}</p></td></tr></tbody></table>',
+      ].join('')
+    );
+
+    try {
+      for (let index = 0; index < editor.state.doc.childCount; index += 1) {
+        const block = editor.state.doc.child(index);
+        const full = block.textBetween(0, block.content.size, '\n', '\n');
+        expect(boundedNodeText(block, 1_000)).toEqual({ text: full, truncated: false });
+        for (let limit = 0; limit <= codePointLength(full); limit += 1) {
+          expect(boundedNodeText(block, limit)).toEqual({
+            text: codePointPrefix(full, limit),
+            truncated: codePointLength(full) > limit,
+          });
+        }
+      }
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('never exceeds the limit for a block whose rules yield more characters than positions', () => {
+    // A horizontal rule takes one position but yields two characters, a block
+    // separator and its leaf newline, so this block's text outgrows its size.
+    const editor = createEditor(`<blockquote>${'<hr>'.repeat(10)}</blockquote>`);
+
+    try {
+      const block = editor.state.doc.child(0);
+      const full = block.textBetween(0, block.content.size, '\n', '\n');
+      expect(block.content.size).toBe(10);
+      expect(codePointLength(full)).toBe(19);
+      for (let limit = 0; limit <= codePointLength(full); limit += 1) {
+        expect(boundedNodeText(block, limit)).toEqual({
+          text: codePointPrefix(full, limit),
+          truncated: codePointLength(full) > limit,
+        });
+      }
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('counts code points, not UTF-16 units, when it cuts a block read whole', () => {
+    // Both blocks fit the limit in positions, so each is read whole and then
+    // cut. An emoji is one code point but two UTF-16 units.
+    const emoji = '\u{1F600}';
+    const editor = createEditor(
+      `<blockquote><p>${emoji}</p><hr><hr><hr></blockquote>` +
+        `<blockquote>${'<hr>'.repeat(5)}<p>${emoji}${emoji}</p></blockquote>`
+    );
+
+    try {
+      // 7 positions, 7 code points, 8 UTF-16 units: nothing is omitted.
+      const fits = editor.state.doc.child(0);
+      expect(fits.content.size).toBe(7);
+      expect(boundedNodeText(fits, 7)).toEqual({
+        text: `${emoji}${'\n'.repeat(6)}`,
+        truncated: false,
+      });
+
+      // 11 positions, 12 code points: the cut keeps 11 whole code points.
+      const cut = editor.state.doc.child(1);
+      expect(cut.content.size).toBe(11);
+      expect(boundedNodeText(cut, 11)).toEqual({
+        text: `${'\n'.repeat(10)}${emoji}`,
+        truncated: true,
+      });
+    } finally {
       editor.destroy();
     }
   });

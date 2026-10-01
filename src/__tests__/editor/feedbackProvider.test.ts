@@ -18,6 +18,7 @@ import { FEEDBACK_DELIVERY_PROTOCOL_VERSION } from '../../shared/feedbackDeliver
 import { DOCUMENT_SYNC_PROTOCOL_VERSION } from '../../shared/documentSyncProtocol';
 import { FEEDBACK_SNAPSHOT_PROTOCOL_VERSION } from '../../shared/feedbackSnapshotProtocol';
 import { FeedbackSessionStore } from '../../editor/feedbackSessionStore';
+import type { FeedbackWebviewMessage } from '../../shared/feedbackProtocol';
 import type {
   FeedbackBlockKindV2,
   FeedbackBlockSpanV2,
@@ -7933,6 +7934,9 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
         announceConfirmation();
         return confirmation;
       });
+      // A failed Trash move offers permanent deletion; accept it so the
+      // permanent delete fails too and the error path stays covered.
+      if (deleteFails) showWarningMessage.mockResolvedValueOnce('Delete permanently');
       const deleteFromWorkspace = jest.fn(async () => {
         if (deleteFails) throw new Error('Trash is unavailable');
       });
@@ -8002,7 +8006,9 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
       });
       expect(peerUnlock).toEqual(ownerUnlock);
       expect(internals(provider).feedbackTransitions.size).toBe(0);
-      expect(deleteFromWorkspace).toHaveBeenCalledTimes(outcome === 'cancel' ? 0 : 1);
+      expect(deleteFromWorkspace).toHaveBeenCalledTimes(
+        outcome === 'cancel' ? 0 : outcome === 'error' ? 2 : 1
+      );
       expect(messagesOfType(ownerWebview, 'feedback.draft.discarded')).toHaveLength(
         outcome === 'success' ? 1 : 0
       );
@@ -8411,6 +8417,844 @@ describe('MarkdownEditorProvider Feedback sessions', () => {
     await expect(flushPromise).rejects.toMatchObject({
       code: 'MD4H-FB-STORE-002',
       message: expect.stringMatching(/apply the latest editor changes/i),
+    });
+  });
+
+  describe('post-merge session reliability (task-fix-postmerge-05)', () => {
+    const TRASH_UNSUPPORTED = (target: string) =>
+      new Error(
+        `Unable to delete file '${target}' via trash because provider does not support it.`
+      );
+
+    it('F1: permanently deletes a live draft after a second confirmation when Trash is unsupported', async () => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      const started = await startAndAddTextFeedback(provider, document, webview);
+      const bundleDirectory = path.dirname(
+        path.join(workspaceRoot, started.feedbackFile as string)
+      );
+      const showWarningMessage = vscode.window.showWarningMessage as jest.Mock;
+      showWarningMessage.mockReset();
+      showWarningMessage
+        .mockResolvedValueOnce('Discard draft')
+        .mockResolvedValueOnce('Delete permanently');
+      const deleteFromWorkspace = jest.fn(
+        async (uri: vscode.Uri, options: { recursive: boolean; useTrash: boolean }) => {
+          if (options.useTrash) throw TRASH_UNSUPPORTED(uri.fsPath);
+          await rm(uri.fsPath, { recursive: true, force: true });
+        }
+      );
+      (vscode.workspace as unknown as { fs: { delete: typeof deleteFromWorkspace } }).fs = {
+        delete: deleteFromWorkspace,
+      };
+
+      internals(provider).handleWebviewMessage(
+        { type: 'feedback.discard', requestId: 'discard-no-trash', sessionId: started.sessionId },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+
+      await waitForMessage(webview, 'feedback.discarded', 'discard-no-trash');
+      expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+      expect(showWarningMessage).toHaveBeenCalledTimes(2);
+      expect(showWarningMessage.mock.calls[1]).toEqual([
+        expect.stringMatching(/Trash.*permanently/i),
+        expect.objectContaining({ modal: true }),
+        'Delete permanently',
+      ]);
+      expect(deleteFromWorkspace).toHaveBeenCalledTimes(2);
+      expect(deleteFromWorkspace.mock.calls[0][1]).toEqual({ recursive: true, useTrash: true });
+      expect(deleteFromWorkspace.mock.calls[1][1]).toEqual({ recursive: true, useTrash: false });
+      await expect(pathExists(bundleDirectory)).resolves.toBe(false);
+    });
+
+    it('F1: keeps a live draft active when permanent deletion is declined', async () => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      const started = await startAndAddTextFeedback(provider, document, webview);
+      const bundleDirectory = path.dirname(
+        path.join(workspaceRoot, started.feedbackFile as string)
+      );
+      const showWarningMessage = vscode.window.showWarningMessage as jest.Mock;
+      showWarningMessage.mockReset();
+      showWarningMessage.mockResolvedValueOnce('Discard draft').mockResolvedValueOnce(undefined);
+      const deleteFromWorkspace = jest.fn(async (uri: vscode.Uri) => {
+        throw TRASH_UNSUPPORTED(uri.fsPath);
+      });
+      (vscode.workspace as unknown as { fs: { delete: typeof deleteFromWorkspace } }).fs = {
+        delete: deleteFromWorkspace,
+      };
+
+      internals(provider).handleWebviewMessage(
+        { type: 'feedback.discard', requestId: 'discard-declined', sessionId: started.sessionId },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+
+      await waitUntil(() => showWarningMessage.mock.calls.length === 2);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(deleteFromWorkspace).toHaveBeenCalledTimes(1);
+      expect(messagesOfType(webview, 'feedback.discarded')).toHaveLength(0);
+      expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+      expect(internals(provider).feedbackSessions.get(document.uri.toString())).toEqual(
+        expect.objectContaining({ phase: 'active' })
+      );
+      await expect(pathExists(bundleDirectory)).resolves.toBe(true);
+    });
+
+    it('F1: permanently deletes an inactive draft after a second confirmation when Trash is unsupported', async () => {
+      const firstProvider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const firstWebview = createWebview(firstProvider, document);
+      const started = await startAndAddTextFeedback(firstProvider, document, firstWebview);
+      const bundleDirectory = path.dirname(
+        path.join(workspaceRoot, started.feedbackFile as string)
+      );
+      const showWarningMessage = vscode.window.showWarningMessage as jest.Mock;
+      showWarningMessage.mockReset();
+      showWarningMessage
+        .mockResolvedValueOnce('Discard draft')
+        .mockResolvedValueOnce('Delete permanently');
+      const deleteFromWorkspace = jest.fn(
+        async (uri: vscode.Uri, options: { recursive: boolean; useTrash: boolean }) => {
+          if (options.useTrash) throw TRASH_UNSUPPORTED(uri.fsPath);
+          await rm(uri.fsPath, { recursive: true, force: true });
+        }
+      );
+      (vscode.workspace as unknown as { fs: { delete: typeof deleteFromWorkspace } }).fs = {
+        delete: deleteFromWorkspace,
+      };
+
+      const recoveryProvider = createProvider(workspaceRoot);
+      const recoveryWebview = createWebview(recoveryProvider, document);
+      internals(recoveryProvider).handleWebviewMessage(
+        {
+          type: 'feedback.draft.discard',
+          requestId: 'discard-inactive-no-trash',
+          round: started.round,
+        },
+        document as unknown as vscode.TextDocument,
+        recoveryWebview as unknown as vscode.Webview
+      );
+
+      await waitForMessage(
+        recoveryWebview,
+        'feedback.draft.discarded',
+        'discard-inactive-no-trash'
+      );
+      expect(deleteFromWorkspace).toHaveBeenCalledTimes(2);
+      expect(deleteFromWorkspace.mock.calls[1][1]).toEqual({ recursive: true, useTrash: false });
+      await expect(pathExists(bundleDirectory)).resolves.toBe(false);
+    });
+
+    /** Resolve the first modal, then hold the "Delete permanently" modal open. */
+    const holdPermanentDeleteConfirmation = () => {
+      let resolveChoice!: (choice: string | undefined) => void;
+      let reportShown!: () => void;
+      const shown = new Promise<void>(resolve => {
+        reportShown = resolve;
+      });
+      const showWarningMessage = vscode.window.showWarningMessage as jest.Mock;
+      showWarningMessage.mockReset();
+      showWarningMessage.mockResolvedValueOnce('Discard draft').mockImplementationOnce(() => {
+        reportShown();
+        return new Promise<string | undefined>(resolve => {
+          resolveChoice = resolve;
+        });
+      });
+      const deleteFromWorkspace = jest.fn(
+        async (uri: vscode.Uri, options: { recursive: boolean; useTrash: boolean }) => {
+          if (options.useTrash) throw TRASH_UNSUPPORTED(uri.fsPath);
+          await rm(uri.fsPath, { recursive: true, force: true });
+        }
+      );
+      (vscode.workspace as unknown as { fs: { delete: typeof deleteFromWorkspace } }).fs = {
+        delete: deleteFromWorkspace,
+      };
+      return { shown, answer: (choice?: string) => resolveChoice(choice), deleteFromWorkspace };
+    };
+
+    it('F1: rechecks the live session after the permanent-delete answer before deleting', async () => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      const started = await startAndAddTextFeedback(provider, document, webview);
+      const bundleDirectory = path.dirname(
+        path.join(workspaceRoot, started.feedbackFile as string)
+      );
+      const confirmation = holdPermanentDeleteConfirmation();
+
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.discard',
+          requestId: 'discard-session-ended',
+          sessionId: started.sessionId,
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      await confirmation.shown;
+      // The session ends elsewhere while the irreversible prompt is open.
+      internals(provider).feedbackSessions.delete(document.uri.toString());
+      confirmation.answer('Delete permanently');
+
+      await expect(
+        waitForMessage(webview, 'feedback.error', 'discard-session-ended')
+      ).resolves.toEqual(
+        expect.objectContaining({ message: 'This feedback session is no longer active.' })
+      );
+      expect(confirmation.deleteFromWorkspace).toHaveBeenCalledTimes(1);
+      expect(messagesOfType(webview, 'feedback.discarded')).toHaveLength(0);
+      await expect(pathExists(bundleDirectory)).resolves.toBe(true);
+    });
+
+    it('F1: rechecks live-draft path containment after the permanent-delete answer', async () => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      const started = await startAndAddTextFeedback(provider, document, webview);
+      const feedbackFile = path.join(workspaceRoot, started.feedbackFile as string);
+      const outsideFile = path.join(workspaceRoot, 'outside.md');
+      await writeFile(outsideFile, 'Not part of the bundle.\n');
+      const confirmation = holdPermanentDeleteConfirmation();
+
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.discard',
+          requestId: 'discard-live-escaped',
+          sessionId: started.sessionId,
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      await confirmation.shown;
+      // The report becomes a link out of the bundle while the prompt is open.
+      await rm(feedbackFile);
+      await symlink(outsideFile, feedbackFile);
+      confirmation.answer('Delete permanently');
+
+      await expect(
+        waitForMessage(webview, 'feedback.error', 'discard-live-escaped')
+      ).resolves.toEqual(
+        expect.objectContaining({ message: expect.stringMatching(/not a safe/i) })
+      );
+      expect(confirmation.deleteFromWorkspace).toHaveBeenCalledTimes(1);
+      expect(messagesOfType(webview, 'feedback.discarded')).toHaveLength(0);
+      await expect(pathExists(path.dirname(feedbackFile))).resolves.toBe(true);
+      await expect(readFile(outsideFile, 'utf8')).resolves.toBe('Not part of the bundle.\n');
+    });
+
+    it('F1: rechecks the inactive-draft transition after the permanent-delete answer', async () => {
+      const firstProvider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const firstWebview = createWebview(firstProvider, document);
+      const started = await startAndAddTextFeedback(firstProvider, document, firstWebview);
+      const bundleDirectory = path.dirname(
+        path.join(workspaceRoot, started.feedbackFile as string)
+      );
+      const confirmation = holdPermanentDeleteConfirmation();
+
+      const recoveryProvider = createProvider(workspaceRoot);
+      const recoveryWebview = createWebview(recoveryProvider, document);
+      internals(recoveryProvider).handleWebviewMessage(
+        {
+          type: 'feedback.draft.discard',
+          requestId: 'discard-source-changed',
+          round: started.round,
+        },
+        document as unknown as vscode.TextDocument,
+        recoveryWebview as unknown as vscode.Webview
+      );
+      await confirmation.shown;
+      // The source changes outside the locked transition while the prompt is open.
+      expect(
+        internals(recoveryProvider).handleFeedbackDocumentChange(
+          document.uri.toString(),
+          recoveryWebview as unknown as vscode.Webview,
+          `${SOURCE_TEXT}Changed elsewhere.\n`
+        )
+      ).toBe(true);
+      confirmation.answer('Delete permanently');
+
+      await expect(
+        waitForMessage(recoveryWebview, 'feedback.error', 'discard-source-changed')
+      ).resolves.toEqual(
+        expect.objectContaining({ message: expect.stringMatching(/source changed/i) })
+      );
+      expect(confirmation.deleteFromWorkspace).toHaveBeenCalledTimes(1);
+      expect(messagesOfType(recoveryWebview, 'feedback.draft.discarded')).toHaveLength(0);
+      await expect(pathExists(bundleDirectory)).resolves.toBe(true);
+    });
+
+    it('F1: rechecks inactive-draft path containment after the permanent-delete answer', async () => {
+      const firstProvider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const firstWebview = createWebview(firstProvider, document);
+      const started = await startAndAddTextFeedback(firstProvider, document, firstWebview);
+      const feedbackFile = path.join(workspaceRoot, started.feedbackFile as string);
+      const outsideFile = path.join(workspaceRoot, 'outside.md');
+      await writeFile(outsideFile, 'Not part of the bundle.\n');
+      const confirmation = holdPermanentDeleteConfirmation();
+
+      const recoveryProvider = createProvider(workspaceRoot);
+      const recoveryWebview = createWebview(recoveryProvider, document);
+      internals(recoveryProvider).handleWebviewMessage(
+        { type: 'feedback.draft.discard', requestId: 'discard-escaped', round: started.round },
+        document as unknown as vscode.TextDocument,
+        recoveryWebview as unknown as vscode.Webview
+      );
+      await confirmation.shown;
+      // The report becomes a link out of the bundle while the prompt is open.
+      await rm(feedbackFile);
+      await symlink(outsideFile, feedbackFile);
+      confirmation.answer('Delete permanently');
+
+      await expect(
+        waitForMessage(recoveryWebview, 'feedback.error', 'discard-escaped')
+      ).resolves.toEqual(
+        expect.objectContaining({ message: expect.stringMatching(/not a safe/i) })
+      );
+      expect(confirmation.deleteFromWorkspace).toHaveBeenCalledTimes(1);
+      expect(messagesOfType(recoveryWebview, 'feedback.draft.discarded')).toHaveLength(0);
+      await expect(pathExists(path.dirname(feedbackFile))).resolves.toBe(true);
+      await expect(readFile(outsideFile, 'utf8')).resolves.toBe('Not part of the bundle.\n');
+    });
+
+    it('F1: keeps an inactive draft when permanent deletion is declined', async () => {
+      const firstProvider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const firstWebview = createWebview(firstProvider, document);
+      const started = await startAndAddTextFeedback(firstProvider, document, firstWebview);
+      const bundleDirectory = path.dirname(
+        path.join(workspaceRoot, started.feedbackFile as string)
+      );
+      const confirmation = holdPermanentDeleteConfirmation();
+
+      const recoveryProvider = createProvider(workspaceRoot);
+      const recoveryWebview = createWebview(recoveryProvider, document);
+      internals(recoveryProvider).handleWebviewMessage(
+        { type: 'feedback.draft.discard', requestId: 'discard-kept', round: started.round },
+        document as unknown as vscode.TextDocument,
+        recoveryWebview as unknown as vscode.Webview
+      );
+      await confirmation.shown;
+      confirmation.answer(undefined);
+
+      await waitUntil(() => internals(recoveryProvider).feedbackTransitions.size === 0);
+      expect(confirmation.deleteFromWorkspace).toHaveBeenCalledTimes(1);
+      expect(messagesOfType(recoveryWebview, 'feedback.draft.discarded')).toHaveLength(0);
+      expect(messagesOfType(recoveryWebview, 'feedback.error')).toHaveLength(0);
+      await expect(pathExists(bundleDirectory)).resolves.toBe(true);
+    });
+
+    it('F6: surfaces a durable error when a fresh report lock blocks banner Resume', async () => {
+      const firstProvider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const firstWebview = createWebview(firstProvider, document);
+      const started = await startAndAddTextFeedback(firstProvider, document, firstWebview);
+      const lockPath = `${path.join(workspaceRoot, started.feedbackFile as string)}.lock`;
+      // Real on-disk format, written moments ago by another live host.
+      await writeFile(
+        lockPath,
+        `1 ${new Date().toISOString()} ${'a'.repeat(24)} ${'b'.repeat(24)}\n`,
+        { flag: 'wx' }
+      );
+
+      const recoveryProvider = createProvider(workspaceRoot);
+      const recoveryWebview = createWebview(recoveryProvider, document);
+      internals(recoveryProvider).handleWebviewMessage(
+        {
+          type: 'feedback.draft.resume',
+          requestId: 'resume-blocked-by-lock',
+          round: started.round,
+          blocks: START_BLOCKS,
+        },
+        document as unknown as vscode.TextDocument,
+        recoveryWebview as unknown as vscode.Webview
+      );
+
+      const error = await waitForMessage(
+        recoveryWebview,
+        'feedback.error',
+        'resume-blocked-by-lock'
+      );
+      expect(error).toEqual(
+        expect.objectContaining({
+          message: expect.stringMatching(/another window or process.*5 minutes/i),
+          recoverable: true,
+        })
+      );
+      // The webview toast auto-dismisses after 3 s; a blocked action must
+      // also leave a VS Code notification the user can still read.
+      expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(error.message);
+      expect(internals(recoveryProvider).feedbackSessions.size).toBe(0);
+    });
+
+    it('F6: banner Resume reclaims an old identity-stamped lock whose PID is alive', async () => {
+      const firstProvider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const firstWebview = createWebview(firstProvider, document);
+      const started = await startAndAddTextFeedback(firstProvider, document, firstWebview);
+      const lockPath = `${path.join(workspaceRoot, started.feedbackFile as string)}.lock`;
+      // PID 1 is always alive. This is the exact line used for manual checks.
+      await writeFile(
+        lockPath,
+        `1 2026-01-01T00:00:00.000Z ${'a'.repeat(24)} ${'b'.repeat(24)}\n`,
+        { flag: 'wx' }
+      );
+      // Shift the clock but keep it moving, so waitForMessage can still time
+      // out with its descriptive error and the finally block restores it.
+      const realDateNow = Date.now.bind(Date);
+      const nowSpy = jest
+        .spyOn(Date, 'now')
+        .mockImplementation(() => realDateNow() + 10 * 60 * 1_000);
+      try {
+        const recoveryProvider = createProvider(workspaceRoot);
+        const recoveryWebview = createWebview(recoveryProvider, document);
+        internals(recoveryProvider).handleWebviewMessage(
+          {
+            type: 'feedback.draft.resume',
+            requestId: 'resume-reclaims-lock',
+            round: started.round,
+            blocks: START_BLOCKS,
+          },
+          document as unknown as vscode.TextDocument,
+          recoveryWebview as unknown as vscode.Webview
+        );
+        await waitForMessage(recoveryWebview, 'feedback.started', 'resume-reclaims-lock');
+      } finally {
+        nowSpy.mockRestore();
+      }
+      await expect(pathExists(lockPath)).resolves.toBe(false);
+    });
+
+    it('F2: dedupes a retried screenshot add by idempotency key while the first write is still queued', async () => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      sendStart(provider, document, webview, 'start-idempotent-screenshot');
+      const started = await waitForMessage(
+        webview,
+        'feedback.started',
+        'start-idempotent-screenshot'
+      );
+      const add = (requestId: string, idempotencyKey: string, attempt: number) =>
+        internals(provider).handleWebviewMessage(
+          {
+            type: 'feedback.screenshot.add',
+            requestId,
+            sessionId: started.sessionId,
+            startOrdinal: 1,
+            endOrdinal: 1,
+            imageDataUrl: `data:image/png;base64,${ONE_PIXEL_PNG_BASE64}`,
+            feedback: 'Slow host screenshot.',
+            idempotencyKey,
+            attempt,
+          },
+          document as unknown as vscode.TextDocument,
+          webview as unknown as vscode.Webview
+        );
+
+      // The webview timed out the first request and the user clicked Add again
+      // before the host committed it.
+      add('add-screenshot-slow', 'capture-key-1', 1);
+      add('add-screenshot-retry', 'capture-key-1', 2);
+
+      const first = await waitForMessage(webview, 'feedback.updated', 'add-screenshot-slow');
+      const retried = await waitForMessage(webview, 'feedback.updated', 'add-screenshot-retry');
+      expect(retried.items).toEqual([expect.objectContaining({ id: 'F1', kind: 'screenshot' })]);
+      // Identical content is answered without a rewrite, so the preview stays.
+      expect((retried.items as Array<{ imageUri: string }>)[0].imageUri).toBe(
+        (first.items as Array<{ imageUri: string }>)[0].imageUri
+      );
+
+      add('add-screenshot-next-capture', 'capture-key-2', 1);
+      const next = await waitForMessage(webview, 'feedback.updated', 'add-screenshot-next-capture');
+      expect((next.items as Array<{ id: string }>).map(item => item.id)).toEqual(['F1', 'F2']);
+    });
+
+    describe('D7: Add retry and Retake after a screenshot timeout', () => {
+      // A second valid PNG, so a replacement is observable in the asset bytes.
+      const OTHER_PIXEL_PNG_BASE64 =
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNQaHgAAAJEAYFxwsaxAAAAAElFTkSuQmCC';
+
+      async function startKeyedSession(requestId: string) {
+        const provider = createProvider(workspaceRoot);
+        const document = createDocument(sourcePath, SOURCE_TEXT);
+        const webview = createWebview(provider, document);
+        sendStart(provider, document, webview, requestId);
+        const started = await waitForMessage(webview, 'feedback.started', requestId);
+        const add = (
+          addRequestId: string,
+          input: { attempt: number; feedback: string; png: string; ordinal?: number }
+        ) =>
+          internals(provider).handleWebviewMessage(
+            {
+              type: 'feedback.screenshot.add',
+              requestId: addRequestId,
+              sessionId: started.sessionId,
+              startOrdinal: input.ordinal ?? 1,
+              endOrdinal: input.ordinal ?? 1,
+              imageDataUrl: `data:image/png;base64,${input.png}`,
+              feedback: input.feedback,
+              idempotencyKey: 'capture-key-1',
+              attempt: input.attempt,
+            },
+            document as unknown as vscode.TextDocument,
+            webview as unknown as vscode.Webview
+          );
+        const assetBytes = () =>
+          readFile(
+            path.join(
+              workspaceRoot,
+              '.md4h',
+              'feedback',
+              'docs',
+              `guide.md--${started.round as string}`,
+              'assets',
+              'F1.png'
+            )
+          );
+        return { webview, add, assetBytes };
+      }
+
+      it('D7: a same-dialog retry with edited text and annotation replaces the late first item', async () => {
+        const { webview, add, assetBytes } = await startKeyedSession('start-d7-edited-retry');
+
+        add('d7-slow', { attempt: 1, feedback: 'First wording.', png: ONE_PIXEL_PNG_BASE64 });
+        add('d7-edited', {
+          attempt: 2,
+          feedback: 'Edited wording.',
+          png: OTHER_PIXEL_PNG_BASE64,
+        });
+
+        const first = await waitForMessage(webview, 'feedback.updated', 'd7-slow');
+        const edited = await waitForMessage(webview, 'feedback.updated', 'd7-edited');
+        expect(edited.items).toEqual([
+          expect.objectContaining({ id: 'F1', kind: 'screenshot', feedback: 'Edited wording.' }),
+        ]);
+        expect((edited.items as Array<{ imageUri: string }>)[0].imageUri).not.toBe(
+          (first.items as Array<{ imageUri: string }>)[0].imageUri
+        );
+        await expect(assetBytes()).resolves.toEqual(Buffer.from(OTHER_PIXEL_PNG_BASE64, 'base64'));
+      });
+
+      it('D7: a Retake that commits after the late first write replaces that item', async () => {
+        const { webview, add, assetBytes } = await startKeyedSession('start-d7-retake-after');
+
+        add('d7-late-first', { attempt: 1, feedback: 'Old capture.', png: ONE_PIXEL_PNG_BASE64 });
+        add('d7-retake', {
+          attempt: 2,
+          feedback: 'Retaken capture.',
+          png: OTHER_PIXEL_PNG_BASE64,
+          ordinal: 0,
+        });
+
+        await waitForMessage(webview, 'feedback.updated', 'd7-late-first');
+        const retake = await waitForMessage(webview, 'feedback.updated', 'd7-retake');
+        expect(retake.items).toEqual([
+          expect.objectContaining({
+            id: 'F1',
+            feedback: 'Retaken capture.',
+            startOrdinal: 0,
+            endOrdinal: 0,
+          }),
+        ]);
+        await expect(assetBytes()).resolves.toEqual(Buffer.from(OTHER_PIXEL_PNG_BASE64, 'base64'));
+      });
+
+      it('D7: a late first write that commits after the Retake leaves the Retake in place', async () => {
+        const { webview, add, assetBytes } = await startKeyedSession('start-d7-retake-before');
+
+        add('d7-retake-first', {
+          attempt: 2,
+          feedback: 'Retaken capture.',
+          png: OTHER_PIXEL_PNG_BASE64,
+        });
+        await waitForMessage(webview, 'feedback.updated', 'd7-retake-first');
+        add('d7-late-after', { attempt: 1, feedback: 'Old capture.', png: ONE_PIXEL_PNG_BASE64 });
+
+        const late = await waitForMessage(webview, 'feedback.updated', 'd7-late-after');
+        expect(late.items).toEqual([
+          expect.objectContaining({ id: 'F1', feedback: 'Retaken capture.' }),
+        ]);
+        await expect(assetBytes()).resolves.toEqual(Buffer.from(OTHER_PIXEL_PNG_BASE64, 'base64'));
+      });
+    });
+
+    it('F3: raises a VS Code notification when an in-session item action fails', async () => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      const started = await startAndAddTextFeedback(provider, document, webview);
+      const showErrorMessage = vscode.window.showErrorMessage as jest.Mock;
+      showErrorMessage.mockClear();
+
+      // In-session failure: the webview has no visible surface for it.
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.item.delete',
+          requestId: 'delete-missing',
+          sessionId: started.sessionId,
+          id: 'F9',
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      const deleteError = await waitForMessage(webview, 'feedback.error', 'delete-missing');
+      expect(deleteError.sessionId).toBe(started.sessionId);
+      expect(showErrorMessage).toHaveBeenCalledWith(deleteError.message);
+
+      // Sessionless failure for a pending text add (the F3 settle path).
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.text.add',
+          requestId: 'add-stale-session',
+          sessionId: 'stale-session',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          focus: 'Paragraph.',
+          feedback: 'Lost with no visible reason.',
+          renderedRange: PARAGRAPH_RENDERED_RANGE_INPUT,
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      const addError = await waitForMessage(webview, 'feedback.error', 'add-stale-session');
+      expect(addError.sessionId).toBeUndefined();
+      expect(showErrorMessage).toHaveBeenLastCalledWith(
+        'This feedback session is no longer active.'
+      );
+
+      // The capture modal shows screenshot failures itself; no second channel.
+      showErrorMessage.mockClear();
+      internals(provider).handleWebviewMessage(
+        {
+          type: 'feedback.screenshot.add',
+          requestId: 'screenshot-stale-session',
+          sessionId: 'stale-session',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          imageDataUrl: `data:image/png;base64,${ONE_PIXEL_PNG_BASE64}`,
+          feedback: 'Shown in the capture modal.',
+        },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      await waitForMessage(webview, 'feedback.error', 'screenshot-stale-session');
+      expect(showErrorMessage).not.toHaveBeenCalled();
+    });
+
+    it('F3: raises a VS Code notification when the permanent delete of a live draft fails', async () => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      const started = await startAndAddTextFeedback(provider, document, webview);
+      const showWarningMessage = vscode.window.showWarningMessage as jest.Mock;
+      showWarningMessage.mockReset();
+      showWarningMessage
+        .mockResolvedValueOnce('Discard draft')
+        .mockResolvedValueOnce('Delete permanently');
+      const deleteFromWorkspace = jest.fn(
+        async (uri: vscode.Uri, options: { recursive: boolean; useTrash: boolean }) => {
+          if (options.useTrash) throw TRASH_UNSUPPORTED(uri.fsPath);
+          throw Object.assign(new Error(`EACCES: permission denied, rmdir '${uri.fsPath}'`), {
+            code: 'EACCES',
+          });
+        }
+      );
+      (vscode.workspace as unknown as { fs: { delete: typeof deleteFromWorkspace } }).fs = {
+        delete: deleteFromWorkspace,
+      };
+
+      internals(provider).handleWebviewMessage(
+        { type: 'feedback.discard', requestId: 'discard-eacces', sessionId: started.sessionId },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+
+      const error = await waitForMessage(webview, 'feedback.error', 'discard-eacces');
+      expect(error.sessionId).toBe(started.sessionId);
+      expect(error.message).toMatch(/EACCES/);
+      expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(error.message);
+      expect(internals(provider).feedbackSessions.get(document.uri.toString())).toEqual(
+        expect.objectContaining({ phase: 'active' })
+      );
+    });
+
+    const STALE_SESSION = { sessionId: 'stale-session' };
+    const PNG_DATA_URL = `data:image/png;base64,${ONE_PIXEL_PNG_BASE64}`;
+    /**
+     * Every webview request type and whether its host failure also raises a VS
+     * Code notification. Keyed by the full union, so a new request type must be
+     * classified here. null marks acknowledgement and navigation messages that
+     * ignore stale input or report it before the shared catch.
+     */
+    const F3_FAILURE_NOTIFICATIONS: Record<
+      FeedbackWebviewMessage['type'],
+      { notified: boolean; fields: Record<string, unknown> } | null
+    > = {
+      'feedback.text.add': {
+        notified: true,
+        fields: { ...STALE_SESSION, startOrdinal: 1, endOrdinal: 1, focus: 'P.', feedback: 'N.' },
+      },
+      'feedback.item.edit': {
+        notified: true,
+        fields: { ...STALE_SESSION, id: 'F1', feedback: 'N.' },
+      },
+      'feedback.item.delete': { notified: true, fields: { ...STALE_SESSION, id: 'F1' } },
+      'feedback.item.restore': { notified: true, fields: { ...STALE_SESSION, id: 'F1' } },
+      'feedback.discard': { notified: true, fields: STALE_SESSION },
+      'feedback.reveal': { notified: true, fields: STALE_SESSION },
+      'feedback.revealInOS': { notified: true, fields: STALE_SESSION },
+      'feedback.copyDiagnostics': { notified: true, fields: STALE_SESSION },
+      // These have their own error surface in the webview.
+      'feedback.screenshot.add': {
+        notified: false,
+        fields: {
+          ...STALE_SESSION,
+          startOrdinal: 1,
+          endOrdinal: 1,
+          imageDataUrl: PNG_DATA_URL,
+          feedback: 'N.',
+        },
+      },
+      'feedback.screenshot.replace': {
+        notified: false,
+        fields: {
+          ...STALE_SESSION,
+          id: 'F1',
+          startOrdinal: 1,
+          endOrdinal: 1,
+          imageDataUrl: PNG_DATA_URL,
+          feedback: 'N.',
+        },
+      },
+      'feedback.capture.error': {
+        notified: false,
+        fields: { ...STALE_SESSION, code: 'MD4H-FB-CAPTURE-001' },
+      },
+      'feedback.finish': { notified: false, fields: STALE_SESSION },
+      'feedback.finish.preview': { notified: false, fields: STALE_SESSION },
+      'feedback.close.ready': { notified: false, fields: STALE_SESSION },
+      'feedback.close.applied': { notified: false, fields: { ...STALE_SESSION, revision: 1 } },
+      'feedback.close.released': { notified: false, fields: { ...STALE_SESSION, revision: 1 } },
+      'feedback.close.retry': { notified: false, fields: { ...STALE_SESSION, revision: 1 } },
+      'feedback.start': { notified: false, fields: {} },
+      'feedback.start.new': { notified: false, fields: {} },
+      'feedback.draft.resume': { notified: false, fields: { round: '20260101T000000Z-abcd' } },
+      'feedback.draft.reveal': { notified: false, fields: { round: '20260101T000000Z-abcd' } },
+      'feedback.draft.discard': { notified: false, fields: { round: '20260101T000000Z-abcd' } },
+      'feedback.transition.applied': {
+        notified: false,
+        fields: { lockId: 'stale-lock', revision: 1 },
+      },
+      'feedback.transition.retry': {
+        notified: false,
+        fields: { lockId: 'stale-lock', revision: 1 },
+      },
+      'feedback.peer.reveal': null,
+      'feedback.controller.ready': null,
+      'feedback.peer.lock.acquired': null,
+      'feedback.peer.released': null,
+      'feedback.session.transfer.ack': null,
+    };
+
+    it.each(
+      Object.entries(F3_FAILURE_NOTIFICATIONS).flatMap(([type, failure]) =>
+        failure ? [{ type, ...failure }] : []
+      )
+    )('F3: a failed $type request notifies: $notified', async ({ type, notified, fields }) => {
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, SOURCE_TEXT);
+      const webview = createWebview(provider, document);
+      // No workspace and no live session, so every request fails in the host.
+      (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue(undefined);
+      (
+        vscode.workspace as unknown as { workspaceFolders?: vscode.WorkspaceFolder[] }
+      ).workspaceFolders = undefined;
+      const showErrorMessage = vscode.window.showErrorMessage as jest.Mock;
+      showErrorMessage.mockClear();
+
+      internals(provider).handleWebviewMessage(
+        { type, requestId: 'failing-request', ...fields },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+
+      const error = await waitForMessage(webview, 'feedback.error', 'failing-request');
+      // A malformed request is also unrecoverable and never notifies.
+      expect(error.recoverable).toBe(true);
+      expect(showErrorMessage.mock.calls).toEqual(notified ? [[error.message]] : []);
+    });
+
+    it('F4: starts Feedback on a CRLF document whose pending flush edit arrives as LF', async () => {
+      const crlfSource = '# Guide\r\n\r\nParagraph.\r\n';
+      await writeFile(sourcePath, crlfSource);
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, crlfSource);
+      const webview = createWebview(provider, document, false);
+
+      sendStart(provider, document, webview, 'start-crlf-flush-edit');
+      const flush = await waitForMessage(webview, 'flushPendingEdit');
+      internals(provider).handleWebviewMessage(
+        { type: 'edit', content: '# Guide\n\nParagraph.\n', editReason: 'typing' },
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+      // VS Code normalizes the inserted LF text to the document's CRLF EOL.
+      expect(
+        internals(provider).handleFeedbackDocumentChange(
+          document.uri.toString(),
+          webview as unknown as vscode.Webview,
+          crlfSource
+        )
+      ).toBe(true);
+      expect(
+        internals(provider).feedbackTransitions.get(document.uri.toString())?.invalidated
+      ).toBe(false);
+      internals(provider).handleWebviewMessage(
+        createFlushAcknowledgement(flush, true),
+        document as unknown as vscode.TextDocument,
+        webview as unknown as vscode.Webview
+      );
+
+      await expect(
+        waitForMessage(webview, 'feedback.started', 'start-crlf-flush-edit')
+      ).resolves.toEqual(expect.objectContaining({ sourceSha256: expect.any(String) }));
+    });
+
+    it('F5: starts Feedback on the first try when a save participant edits the dirty document', async () => {
+      const dirtyText = '# Guide\n\nParagraph.   \n';
+      let documentContent = dirtyText;
+      const provider = createProvider(workspaceRoot);
+      const document = createDocument(sourcePath, dirtyText, {
+        dirty: true,
+        save: async () => {
+          // A trim-trailing-whitespace save participant edits the buffer
+          // before VS Code writes it, which bumps the document version.
+          documentContent = SOURCE_TEXT;
+          document.version += 1;
+          internals(provider).handleFeedbackDocumentChange(
+            document.uri.toString(),
+            webview as unknown as vscode.Webview,
+            documentContent
+          );
+          await writeFile(sourcePath, documentContent, 'utf8');
+          return true;
+        },
+      });
+      document.getText.mockImplementation(() => documentContent);
+      const webview = createWebview(provider, document);
+
+      sendStart(provider, document, webview, 'start-save-participant');
+
+      const started = await waitForMessage(webview, 'feedback.started', 'start-save-participant');
+      expect(started.sourceSha256).toBe(createHash('sha256').update(SOURCE_BYTES).digest('hex'));
+      expect(messagesOfType(webview, 'feedback.error')).toHaveLength(0);
+      expect(document.save).toHaveBeenCalledTimes(1);
     });
   });
 

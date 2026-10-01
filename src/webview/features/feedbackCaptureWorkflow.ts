@@ -50,6 +50,11 @@ export interface FeedbackCaptureWorkflowOptions {
    * cancellation while rasterization is still in flight.
    */
   setAnnotationsSuspended?: (suspended: boolean) => void;
+  /**
+   * Add retry identity carried across Retake (set by this workflow, not by
+   * callers). The host keeps one item per key and lets the newest attempt win.
+   */
+  addRetry?: { key: string; attempts: number };
 }
 
 type CaptureWorkflowKind = Extract<
@@ -67,6 +72,7 @@ interface ActiveCaptureWorkflow {
 
 const fallbackDraftSurfaceGates = new WeakMap<object, FeedbackDraftSurfaceGate>();
 const captureChromeOwners = new Set<symbol>();
+let annotationAddSequence = 0;
 const AREA_CAPTURE_READY_INSTRUCTION =
   'Capture area ready. Drag over the visible document area. Press Escape to cancel.';
 
@@ -206,26 +212,11 @@ function isolateAreaCaptureSurface(surface: HTMLElement): () => void {
  * Keeps Command Palette and toolbar invocations inside one capture lifecycle.
  * Visible surfaces are focused, while an in-flight rasterization is left alone
  * so annotation suspension remains balanced around exactly one pixel request.
+ * The review gate shows the only guidance on the owning surface; a second toast
+ * here would repeat it in different words.
  */
 function focusActiveCaptureWorkflow(review: FeedbackReviewController): boolean {
-  const gate = draftSurfaceGateFor(review);
-  const kind = gate.activeKind();
-  if (!kind) return false;
-  gate.focusActive();
-  const message =
-    kind === 'text-composer'
-      ? 'Finish or cancel this comment before capturing.'
-      : kind === 'text-block-selector'
-        ? 'Choose blocks or cancel this feedback action before capturing.'
-        : kind === 'finish-checkpoint'
-          ? 'Resume feedback or finish the current completion step before capturing.'
-          : kind === 'area-capture'
-            ? 'An area capture is already active. Drag to select an area or cancel it.'
-            : kind === 'capture-rasterizing'
-              ? 'A Feedback capture is already being prepared.'
-              : 'Finish or cancel the current capture before starting another.';
-  showCaptureError(message);
-  return true;
+  return draftSurfaceGateFor(review).focusActive();
 }
 
 function claimCaptureWorkflow(
@@ -308,6 +299,14 @@ function openAnnotation(
   returnFocus: HTMLElement | undefined
 ): void {
   let controller: ReturnType<typeof createFeedbackAnnotationModal> | null = null;
+  // One key per capture, kept across Retake, with a numbered attempt per Add
+  // click: an Add timed out after 15 s may still commit, and the host keeps
+  // one item per key holding the newest attempt, in either commit order.
+  if (!options.addRetry) annotationAddSequence += 1;
+  const retry = options.addRetry ?? {
+    key: `capture-${Date.now().toString(36)}-${annotationAddSequence.toString(36)}`,
+    attempts: 0,
+  };
   const handleFeedbackLifecycleEnd = (): void => releaseCaptureWorkflow(workflow);
   const workflow: ActiveCaptureWorkflow = {
     kind: 'capture-annotation',
@@ -331,19 +330,27 @@ function openAnnotation(
       fallbackFocus: options.editor.view.dom as HTMLElement,
       onAdd: async submission => {
         if (!isReviewWritable(options.review)) throw snapshotChangedError();
+        retry.attempts += 1;
         await options.review.addScreenshotFeedback({
           startOrdinal: capture.blockRange.firstBlock,
           endOrdinal: capture.blockRange.lastBlock,
           imageDataUrl: submission.pngDataUrl,
           feedback: submission.feedback,
-          ...(options.replaceId ? { replaceId: options.replaceId } : {}),
+          ...(options.replaceId
+            ? { replaceId: options.replaceId }
+            : { idempotencyKey: retry.key, attempt: retry.attempts }),
         });
         releaseCaptureWorkflow(workflow);
       },
       onRetake: feedback => {
         if (!isReviewWritable(options.review)) throw snapshotChangedError();
         releaseCaptureWorkflow(workflow);
-        startFeedbackAreaCapture({ ...options, initialFeedback: feedback, returnFocus });
+        startFeedbackAreaCapture({
+          ...options,
+          initialFeedback: feedback,
+          returnFocus,
+          addRetry: retry,
+        });
       },
       onCancel: () => releaseCaptureWorkflow(workflow),
       onError: error => {
@@ -584,14 +591,25 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
     }
     viewport = measured;
     viewportGeneration += 1;
+    const wasRasterizing = captureMachine.state.kind === 'Rasterizing';
     applyCaptureEvent({
       type: 'viewportMeasured',
       viewport: toMachineViewport(viewport, viewportGeneration),
     });
+    if (wasRasterizing && captureMachine.state.kind === 'Armed') {
+      // The reducer aborted the stale raster. Return to the armed overlay now
+      // rather than when that raster settles, so a slow abort cannot block a
+      // new drag and its finally block cannot restore a newer capture.
+      restoreCaptureAnnotations();
+      restoreArmedSurface();
+    }
     if (captureMachine.state.kind === 'Armed' && !captureMachine.state.selection) {
       start = null;
       end = null;
       selection.hidden = true;
+      // Retry has no crop left to replay, so only a new drag can recover.
+      if (document.activeElement === retry) overlay.focus();
+      retry.hidden = true;
       error.textContent = 'The viewport changed. Drag again using the current visible area.';
     }
   };
@@ -663,6 +681,16 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
       renderSelection();
     }
   };
+  const restoreArmedSurface = (): void => {
+    busy = false;
+    workflow.kind = 'area-capture';
+    updateCaptureWorkflowSurface(workflow);
+    overlay.classList.remove('rasterizing');
+    overlay.setAttribute('aria-busy', 'false');
+    instruction.textContent = AREA_CAPTURE_READY_INSTRUCTION;
+    document.body.setAttribute('data-feedback-capture-state', 'armed');
+    options.review.setCaptureState?.('armed');
+  };
   const pointerIdFor = (event: PointerEvent): number =>
     Number.isInteger(event.pointerId) && event.pointerId >= 0 ? event.pointerId : 1;
 
@@ -732,14 +760,7 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
           captureError instanceof FeedbackCaptureError ? captureError.code : 'MD4H-FB-CAPTURE-002',
       });
       reportCaptureError(options.review, captureError);
-      busy = false;
-      workflow.kind = 'area-capture';
-      updateCaptureWorkflowSurface(workflow);
-      overlay.classList.remove('rasterizing');
-      overlay.setAttribute('aria-busy', 'false');
-      instruction.textContent = AREA_CAPTURE_READY_INSTRUCTION;
-      document.body.setAttribute('data-feedback-capture-state', 'armed');
-      options.review.setCaptureState?.('armed');
+      restoreArmedSurface();
       const message =
         captureError instanceof Error
           ? captureError.message
@@ -747,8 +768,12 @@ export function startFeedbackAreaCapture(options: FeedbackCaptureWorkflowOptions
       error.textContent = message;
       retry.hidden = false;
     } finally {
-      if (activeRasterAbort === rasterAbort) activeRasterAbort = null;
-      restoreCaptureAnnotations();
+      // A viewport change already restored this attempt's annotations, and a
+      // newer attempt may own them now, so only the active attempt restores.
+      if (activeRasterAbort === rasterAbort) {
+        activeRasterAbort = null;
+        restoreCaptureAnnotations();
+      }
     }
   };
 
@@ -969,7 +994,9 @@ async function captureBlockRange(
     // The crop rectangle is fixed client coordinates captured before this async
     // rasterization. If the document scrolls/resizes while we rasterize, those
     // coordinates now cover different content, so abort rather than save a stale
-    // crop. (The area-capture path guards the same way via handleViewportMutation.)
+    // crop. (The area-capture path reaches the same outcome differently: its
+    // handleViewportMutation feeds a new viewport generation to the capture
+    // machine, which aborts the in-flight raster and re-arms the overlay.)
     const guardedOrdinal = Math.min(startOrdinal, endOrdinal);
     const guardedElement = topLevelBlockElements(root)[guardedOrdinal] ?? null;
     const guardedTop = guardedElement?.getBoundingClientRect().top ?? null;

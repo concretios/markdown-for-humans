@@ -852,6 +852,66 @@ describe('feedback protocol', () => {
     ).toBeNull();
   });
 
+  it('F2: carries an optional bounded idempotency key on screenshot additions only', () => {
+    const add = {
+      type: 'feedback.screenshot.add',
+      requestId: 'screenshot-keyed',
+      sessionId: 'session-1',
+      startOrdinal: 0,
+      endOrdinal: 0,
+      imageDataUrl: 'data:image/png;base64,AAAA',
+      feedback: 'Visual note.',
+    };
+
+    expect(
+      parseFeedbackWebviewMessage({ ...add, idempotencyKey: 'capture-1', attempt: 1 })
+    ).toEqual({
+      ...add,
+      idempotencyKey: 'capture-1',
+      attempt: 1,
+    });
+    expect(parseFeedbackWebviewMessage(add)).toEqual(add);
+    expect(parseFeedbackWebviewMessage({ ...add, idempotencyKey: '', attempt: 1 })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...add, idempotencyKey: 7, attempt: 1 })).toBeNull();
+    expect(
+      parseFeedbackWebviewMessage({ ...add, idempotencyKey: 'k'.repeat(10_000), attempt: 1 })
+    ).toBeNull();
+    expect(
+      parseFeedbackWebviewMessage({
+        ...add,
+        type: 'feedback.screenshot.replace',
+        id: 'F1',
+        idempotencyKey: 'capture-1',
+        attempt: 1,
+      })
+    ).toBeNull();
+  });
+
+  it('D7: requires a positive integer attempt with every screenshot idempotency key', () => {
+    const add = {
+      type: 'feedback.screenshot.add',
+      requestId: 'screenshot-attempt',
+      sessionId: 'session-1',
+      startOrdinal: 0,
+      endOrdinal: 0,
+      imageDataUrl: 'data:image/png;base64,AAAA',
+      feedback: 'Visual note.',
+    };
+
+    expect(
+      parseFeedbackWebviewMessage({ ...add, idempotencyKey: 'capture-1', attempt: 3 })
+    ).toEqual({ ...add, idempotencyKey: 'capture-1', attempt: 3 });
+    // The host orders a late write against its Retake by attempt, so neither
+    // field is meaningful alone.
+    expect(parseFeedbackWebviewMessage({ ...add, idempotencyKey: 'capture-1' })).toBeNull();
+    expect(parseFeedbackWebviewMessage({ ...add, attempt: 1 })).toBeNull();
+    for (const attempt of [0, -1, 1.5, '1', Number.MAX_SAFE_INTEGER + 1, null]) {
+      expect(
+        parseFeedbackWebviewMessage({ ...add, idempotencyKey: 'capture-1', attempt })
+      ).toBeNull();
+    }
+  });
+
   it('accepts a screenshot data URL at the derived boundary and rejects one byte over', () => {
     const atBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH);
     const overBoundary = PNG_DATA_URL_PREFIX + 'A'.repeat(MAX_ENCODED_LENGTH + 1);

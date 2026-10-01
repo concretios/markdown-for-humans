@@ -14,7 +14,12 @@ import {
   isFeedbackCellRectangleWithinExactLimit,
   type FeedbackRenderedRangeInputV1,
 } from '../../shared/feedbackProtocol';
-import { blockRelativeRangeFromPositions } from './feedbackRenderedRange';
+import {
+  blockRelativeRangeFromPositions,
+  boundedNodeText,
+  codePointLength,
+  codePointPrefix,
+} from './feedbackRenderedRange';
 
 export {
   FEEDBACK_MAX_EXACT_CELL_COUNT,
@@ -156,7 +161,8 @@ export type FeedbackCellTargetResolution =
 
 // Exact cell rectangles contain at most 256 cells. A 240-character per-cell
 // ceiling, including its sentinel, keeps every cell represented while leaving
-// the aggregate Focus safely below 64 KiB after row and column separators.
+// the aggregate Focus safely below 64 Ki characters after row and column
+// separators. Characters are Unicode code points, matching the host's limit.
 const FEEDBACK_SELECTED_CELL_FOCUS_MAX_LENGTH = 64 * 1024;
 const FEEDBACK_SELECTED_CELL_TEXT_MAX_LENGTH = 240;
 const FEEDBACK_TEXTUAL_EVIDENCE_MAX_UTF8_BYTES = 64 * 1024;
@@ -173,21 +179,20 @@ function textWithTruncationSentinel(
   maximumLength: number,
   sentinel: string
 ): string {
-  const boundedSentinel = sentinel.slice(0, maximumLength);
-  const prefixLength = Math.max(0, maximumLength - boundedSentinel.length);
-  return `${value.slice(0, prefixLength)}${boundedSentinel}`;
+  const boundedSentinel = codePointPrefix(sentinel, maximumLength);
+  const prefixLength = Math.max(0, maximumLength - codePointLength(boundedSentinel));
+  return `${codePointPrefix(value, prefixLength)}${boundedSentinel}`;
 }
 
+/** Bounds semantic node text to `maximumLength` code points, sentinel included. */
 function boundedSemanticText(
   node: ProseMirrorNode,
   maximumLength: number,
   sentinel: string
 ): string {
-  const traversalEnd = Math.min(node.content.size, maximumLength);
-  const value = node.textBetween(0, traversalEnd, '\n', '\n').replace(/\r\n/g, '\n');
-  return traversalEnd < node.content.size || value.length > maximumLength
-    ? textWithTruncationSentinel(value, maximumLength, sentinel)
-    : value;
+  const bounded = boundedNodeText(node, maximumLength);
+  const value = bounded.text.replace(/\r\n/g, '\n');
+  return bounded.truncated ? textWithTruncationSentinel(value, maximumLength, sentinel) : value;
 }
 
 function canonicalJson(value: unknown): string {
@@ -694,6 +699,7 @@ function selectedCellsAreMerged(context: CellSelectionContext): boolean {
 function selectedCellFocus(context: CellSelectionContext): string | null {
   const { map, rectangle, table } = context;
   let focus = '';
+  let focusCharacters = 0;
   for (let row = rectangle.top; row < rectangle.bottom; row += 1) {
     for (let column = rectangle.left; column < rectangle.right; column += 1) {
       const position = map.map[row * map.width + column];
@@ -701,7 +707,7 @@ function selectedCellFocus(context: CellSelectionContext): string | null {
       if (!cell) return null;
       const separator = column > rectangle.left ? '\t' : row > rectangle.top ? '\n' : '';
       const remainingLength =
-        FEEDBACK_SELECTED_CELL_FOCUS_MAX_LENGTH - focus.length - separator.length;
+        FEEDBACK_SELECTED_CELL_FOCUS_MAX_LENGTH - focusCharacters - separator.length;
       if (remainingLength <= FEEDBACK_SELECTED_CELL_AGGREGATE_TRUNCATION_SENTINEL.length) {
         return textWithTruncationSentinel(
           focus,
@@ -715,6 +721,7 @@ function selectedCellFocus(context: CellSelectionContext): string | null {
         FEEDBACK_SELECTED_CELL_TRUNCATION_SENTINEL
       );
       focus += separator + cellText;
+      focusCharacters += separator.length + codePointLength(cellText);
     }
   }
   return focus;
