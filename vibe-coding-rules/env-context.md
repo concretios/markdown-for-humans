@@ -161,6 +161,7 @@ Shared-runner gates do not prove physical Windows i5/16 GB p95 latency, memory u
 | Sync protocol               | `src/shared/documentSyncProtocol.ts`                                                             |
 | Renderer sync controller    | `src/webview/documentSyncController.ts`                                                          |
 | TipTap composition          | `src/webview/editor.ts`                                                                          |
+| Table Enter → hardBreak     | `src/webview/extensions/tableCellEnterHardBreak.ts`, `src/webview/extensions/htmlPreservingTable.ts` |
 | Code block node view        | `src/webview/extensions/codeBlockWithCopy.ts`, `src/webview/extensions/codeBlockCopyNodeView.ts` |
 | Highlight occurrence index  | `src/webview/highlighting/plugin.ts`                                                              |
 | Highlight worker and limits | `src/webview/highlighting/client.ts`, `src/webview/highlighting/worker.ts`, `src/webview/highlighting/types.ts` |
