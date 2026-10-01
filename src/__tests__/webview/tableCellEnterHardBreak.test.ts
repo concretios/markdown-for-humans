@@ -1,7 +1,7 @@
 /**
  * @jest-environment jsdom
  *
- * Enter inside table cells must insert a hardBreak (GFM `<br>` / HTML newline),
+ * Enter inside table cells must insert a hardBreak (GFM `<br>` / HTML `<br>`),
  * not a second paragraph. Multi-paragraph cells corrupt HTML-origin serialization
  * (collectText joins without separators) and leave pipe tables harder to round-trip.
  */
@@ -156,7 +156,7 @@ describe('TableCellEnterHardBreak', () => {
     }
   });
 
-  it('Enter mid-cell in an HTML-origin table serializes a newline via hardBreak', () => {
+  it('Enter mid-cell in an HTML-origin table serializes a visible <br> hardBreak', () => {
     const editor = createTableEditor();
     try {
       editor.commands.setContent(HTML_TABLE, { contentType: 'markdown' });
@@ -169,8 +169,17 @@ describe('TableCellEnterHardBreak', () => {
       expect(hasHardBreak(cell)).toBe(true);
 
       const markdown = editor.getMarkdown();
-      expect(markdown).toContain('<td>Val\nue 1</td>');
+      // Literal \n inside <td> is collapsible whitespace in HTML; <br> is the
+      // visible break and matches GFM cell hardBreak serialization.
+      expect(markdown).toContain('<td>Val<br>ue 1</td>');
+      expect(markdown).not.toContain('<td>Val\nue 1</td>');
       expect(markdown).toContain('<table class="sq-table">');
+
+      editor.commands.setContent(markdown, { contentType: 'markdown' });
+      const roundTripped = cellAt(editor.getJSON(), 1, 0);
+      expect(countParagraphs(roundTripped)).toBe(1);
+      expect(hasHardBreak(roundTripped)).toBe(true);
+      expect(editor.getMarkdown()).toContain('<td>Val<br>ue 1</td>');
     } finally {
       editor.destroy();
     }

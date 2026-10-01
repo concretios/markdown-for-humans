@@ -29,7 +29,7 @@ _None currently. All critical issues have been resolved._
 **Type:** Bug
 **Description:** Pressing Enter in table cells creates new paragraphs within the cell, which breaks markdown table formatting when serialized. Markdown tables require single-line cells or `<br>` tags for line breaks, not multiple paragraphs.
 **Status:** Fixed
-**Fix:** `TableCellEnterHardBreak` maps Enter inside `tableCell` / `tableHeader` to `setHardBreak` so GFM serializes `<br>` and HTML-origin tables keep a newline via `collectText`. Shift+Enter continues to insert a hard break. Tab / Shift-Tab row navigation is unchanged.
+**Fix:** `TableCellEnterHardBreak` maps Enter inside `tableCell` / `tableHeader` to `setHardBreak` so GFM serializes `<br>`. HTML-origin tables serialize hardBreaks as `<br>` inside `<td>`/`<th>` (not a literal newline, which HTML collapses). Shift+Enter continues to insert a hard break. Tab / Shift-Tab row navigation is unchanged.
 **Tests:** `src/__tests__/webview/tableCellEnterHardBreak.test.ts`
 
 ### Workspace File Drag-Drop in Cursor IDE

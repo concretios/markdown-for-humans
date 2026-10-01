@@ -936,7 +936,7 @@ function initializeEditor(initialContent: string) {
         TableRow,
         TableHeader,
         TableCell,
-        // Enter in cells → hardBreak (GFM <br> / HTML newline), not a second paragraph
+        // Enter in cells → hardBreak (GFM/HTML <br>), not a second paragraph
         TableCellEnterHardBreak,
         ListKit.configure({
           listItem: false,

@@ -11,8 +11,9 @@ import { Extension } from '@tiptap/core';
  *
  * WHY: TipTap's default Enter runs `splitBlock`, which creates a second paragraph
  * inside the cell. GFM pipe tables serialize multi-paragraph cells as `<br>`, but
- * HTML-origin tables flatten via `collectText` and silently drop the break.
- * Hard breaks stay in one paragraph and round-trip as `<br>` (GFM) or `\n` (HTML).
+ * HTML-origin tables flatten cell content and previously emitted a literal `\n`
+ * for hardBreak — collapsible whitespace in HTML. Hard breaks stay in one
+ * paragraph and round-trip as `<br>` for both GFM and HTML-origin tables.
  *
  * Tab / Shift-Tab row navigation remains owned by the Table extension.
  * Shift-Enter already inserts hardBreak via the HardBreak extension.
