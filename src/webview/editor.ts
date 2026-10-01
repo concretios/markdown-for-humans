@@ -32,6 +32,7 @@ import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { MarkdownListItem } from './extensions/markdownListItem';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
+import { TableCellEnterHardBreak } from './extensions/tableCellEnterHardBreak';
 import { DraggableBlocks } from './extensions/draggableBlocks';
 import { DocumentAuditExtension } from './features/auditDocument';
 import {
@@ -935,6 +936,8 @@ function initializeEditor(initialContent: string) {
         TableRow,
         TableHeader,
         TableCell,
+        // Enter in cells → hardBreak (GFM <br> / HTML newline), not a second paragraph
+        TableCellEnterHardBreak,
         ListKit.configure({
           listItem: false,
           orderedList: false,
