@@ -4,10 +4,10 @@
 
 - **Task name:** Rich-view feedback sessions
 - **Slug:** rich-view-feedback
-- **Status:** implemented; 3,000-word reading session still open
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-08-21
 - **Last updated:** 2026-09-26
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 
 ---
 

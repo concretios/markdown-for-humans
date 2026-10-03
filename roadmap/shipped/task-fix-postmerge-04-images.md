@@ -4,10 +4,10 @@
 
 - **Task name:** Fix image handling findings
 - **Slug:** fix-postmerge-04-images
-- **Status:** completed, ready for user review
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-30
-- **Last updated:** 2026-09-30
-- **Shipped:** 2026-09-30 (implementation verified; PR prepared for review, not released)
+- **Last updated:** 2026-10-01
+- **Shipped:** 2026-10-01 (0.4.0; merged #105)
 - **Base:** `origin/main` @ `1b8244b`
 - **Branch:** `feature/image-handling-fixes`
 - **Input:** User-provided post-merge findings. The referenced overview was not attached.

@@ -4,10 +4,10 @@
 
 - **Task name:** Semantic Feedback selection for sections and containers
 - **Slug:** semantic-feedback-selection
-- **Status:** implemented, awaiting desktop release gates
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-10
 - **Last updated:** 2026-09-10
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Planning baseline:** `2a75861` on `feature/feedback-native-selection`
 - **Related plans:** `task-rich-view-feedback.md`, `task-feedback-selection-evidence-v2.md`, `task-feedback-reliability-architecture.md` in this directory.
 - **Authorization:** User approved the interactive HTML mock and implementation on 2026-09-10.

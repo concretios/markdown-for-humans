@@ -4,7 +4,7 @@
 
 - **Task name:** Document Audit
 - **Slug:** document-audit
-- **Status:** completed
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-04-02
 - **Last updated:** 2026-04-07
 - **Shipped:** 2026-04-07

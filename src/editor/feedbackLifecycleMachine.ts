@@ -5,7 +5,7 @@
  * `applied`. Every operation uses a fresh epoch and monotonically increasing
  * stage revisions so delayed webview messages cannot mutate newer work.
  *
- * This reducer is specified in roadmap/pipeline/task-feedback-reliability-architecture.md's
+ * This reducer is specified in roadmap/shipped/task-feedback-reliability-architecture.md's
  * "Remaining architecture and acceptance gaps" section as the target authority for lifecycle
  * state. However, it is not yet wired into production as that authority; that work remains
  * tracked and intended.

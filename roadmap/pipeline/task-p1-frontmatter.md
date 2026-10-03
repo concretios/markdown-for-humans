@@ -4,20 +4,20 @@
 
 - **Task name:** Frontmatter Support
 - **Slug:** frontmatter
-- **Status:** planned
+- **Status:** backlog (basic wrap/unwrap + dirty-state fix already shipped; remaining = richer metadata UX)
 - **Created:** 2025-11-29
-- **Last updated:** 2025-11-29
-- **Shipped:** _(pending)_
+- **Last updated:** 2026-10-03
+- **Shipped:** _(partial — see `roadmap/shipped/task-frontmatter-dirty-state-fix.md`)_
 
 ---
 
 ## 2. Context & Problem
 
 **Current state:**
-- YAML frontmatter shows as plain text in WYSIWYG mode
-- No special parsing or rendering of metadata
-- Frontmatter not visually distinguished from content
-- Users from Jekyll, Hugo, Gatsby workflows see broken formatting
+- YAML frontmatter is wrapped as a fenced `yaml` code block for WYSIWYG (not raw plain text); save unwraps back to `---` delimiters
+- No special parsing or rendering of metadata fields (title/date/tags as structured UI)
+- Frontmatter is visually distinguished as a code block, but not as blog-style title/metadata chrome
+- Users from Jekyll, Hugo, Gatsby workflows get round-trip preservation, not rich frontmatter editing
 
 **Pain points:**
 - **Static site generator users:** Jekyll, Hugo, Gatsby, Docusaurus all use frontmatter

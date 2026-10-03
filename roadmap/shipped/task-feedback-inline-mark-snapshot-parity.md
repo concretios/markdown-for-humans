@@ -3,11 +3,11 @@
 ## 1. Task Metadata
 
 - **Slug:** feedback-inline-mark-snapshot-parity
-- **Status:** in-progress
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-17
 - **Base:** `8cd2214a5322e73a77b0e714c113f68ae61293da`
 - **Branch:** `feature/llm-feedback`
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 
 ## 2. Context & Problem
 

@@ -4,10 +4,10 @@
 
 - **Task name:** Fix PR #93 round-3 audit findings
 - **Slug:** fix-pr93-round3-findings
-- **Status:** in-progress
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-27
 - **Last updated:** 2026-09-27
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Base:** `feature/llm-feedback` @ `7d64c6c`
 - **Branch:** `cursor/fix-pr93-round3-findings-dc93`
 - **Authenticity:** Confirmed — `internal/pr-93-round3-authenticity.md`

@@ -20,7 +20,7 @@ If this passes, your build is good. If it fails, see below.
 ```bash
 # Clean and rebuild
 rm -rf dist/
-npm run build
+npm run build:debug
 npm run verify-build
 ```
 
@@ -171,7 +171,7 @@ ls -lh dist/
 
 1. Always test the actual .vsix file before publishing:
    ```bash
-   npm run package
+   npm run package:release
    code --install-extension markdown-for-humans-0.1.0.vsix
    ```
 
@@ -194,15 +194,14 @@ grep "myBrokenFeature" extension/dist/webview.js
 
 ```bash
 # Fix the issue in code
-# Rebuild with verification
-npm run build
-npm run verify-build
+# Rebuild with verification (verify-build runs as part of build:release)
+npm run build:release
 
 # Bump patch version
 npm version patch
 
 # Package and test locally
-npm run package
+npm run package:release
 code --install-extension markdown-for-humans-0.1.1.vsix
 
 # Test thoroughly, then publish
@@ -246,12 +245,12 @@ node -e "console.log(JSON.stringify(require('./meta.json'), null, 2))" | less
 
 ```bash
 # Before changes
-npm run build
+npm run build:debug
 cp dist/webview.js dist/webview.before.js
 
 # After changes
 # ... make changes ...
-npm run build
+npm run build:debug
 cp dist/webview.js dist/webview.after.js
 
 # Compare
@@ -282,7 +281,7 @@ If you're still stuck:
    git bisect start
    git bisect bad  # current broken version
    git bisect good v0.0.9  # last working version
-   # Test each commit with: npm run build && npm run verify-build
+   # Test each commit with: npm run build:release
    ```
 
 ## Reference: File Structure

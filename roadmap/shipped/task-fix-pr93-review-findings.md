@@ -4,10 +4,10 @@
 
 - **Task name:** Fix PR #93 review findings
 - **Slug:** fix-pr93-review-findings
-- **Status:** in-progress
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-26
 - **Last updated:** 2026-09-26
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Base:** `feature/llm-feedback` @ `79ddb23`
 - **Branch:** `cursor/fix-pr93-review-findings-dc93`
 - **Authenticity:** Confirmed real — see Project store `internal/pr-93-review-authenticity.md`

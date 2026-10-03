@@ -4,11 +4,11 @@
 
 - **Task name:** Scope-first Feedback evidence v2
 - **Slug:** feedback-selection-evidence-v2
-- **Status:** implementation complete; pending user review
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-08-31
 - **Last updated:** 2026-08-31
 - **Pipeline:** `roadmap/pipeline/task-feedback-selection-evidence-v2.md`
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 
 ---
 

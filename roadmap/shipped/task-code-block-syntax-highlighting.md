@@ -4,13 +4,13 @@
 
 - **Task name:** Correct, responsive code-block syntax highlighting
 - **Slug:** code-block-syntax-highlighting
-- **Status:** implementation complete for phases 1–4; release verification in progress
+- **Status:** shipped in 0.4.0
 - **Created / last updated:** 2026-09-30 / 2026-10-01
-- **Shipped:** pending
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Implementation baseline:** Started from freshly fetched main at `1b8244b220f8ba9f2e476a542c754e7ce4fca41a` on branch `feature/syntax-highlighting`. Merged latest main `6412d17` before final PR validation at `c961e438`. Full acceptance remains open.
 - **Planning provenance:** The earlier analysis used the same baseline. Raw benchmark outputs, QA reports and screenshots are local-only supporting evidence; the reviewable results and limits are summarized here.
 - **Initial estimate:** 5–8 engineering days including worker integration and verification, plus 2–3 days if viewport projection was required. That rendering branch is now implemented; remaining release gates are listed below.
-- **Implementation status:** Production integration, the full automated suite, lint, TypeScript, release packaging and both supported host integration runs pass. Native correctness and small-block measurements are recorded below. Phase 5 remains open for the long-block foreground budget, startup, memory, remaining interaction/readability checks and physical reference hardware. The plan remains in `roadmap/pipeline/`.
+- **Implementation status:** Production integration, the full automated suite, lint, TypeScript, release packaging and both supported host integration runs pass. Native correctness and small-block measurements are recorded below. Phase 5 remains open for the long-block foreground budget, startup, memory, remaining interaction/readability checks and physical reference hardware. The plan is in `roadmap/shipped/`.
 
 ## 2. Context & Problem
 

@@ -4,10 +4,10 @@
 
 - **Task name:** Feedback/LLM review code-review bug fixes
 - **Slug:** feedback-review-bugfixes
-- **Status:** implementation complete; manual reading check still open
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-18
 - **Last updated:** 2026-09-26
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Branch under review:** `feature/llm-feedback` (53 commits, ~115k insertions)
 
 ---

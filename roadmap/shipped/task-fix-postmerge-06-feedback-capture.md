@@ -4,10 +4,10 @@
 
 - **Task name:** Fix Feedback capture and selection findings
 - **Slug:** fix-postmerge-06-feedback-capture
-- **Status:** in-progress
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-30
 - **Last updated:** 2026-10-01
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Base:** `origin/main` @ `1b8244b`
 - **Overview:** `task-fix-postmerge-00-overview.md`
 

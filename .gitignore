@@ -45,7 +45,10 @@ CLAUDE.md
 .cursorrules
 .claude/
 .cursor/zoho-*.json
-.concret.io/findings/
+.cursor/plans/
+
+# Local Concretio / agent scratch (findings, handoffs, postmerge WIP backups)
+.concret.io/
 
 # Editor backup files
 *~

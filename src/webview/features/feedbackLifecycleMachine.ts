@@ -4,7 +4,7 @@
  * DOM setup and teardown belong to an effect layer. The reducer only accepts
  * correlated, monotonic commands and records a fixed recovery destination.
  *
- * This reducer is specified in roadmap/pipeline/task-feedback-reliability-architecture.md's
+ * This reducer is specified in roadmap/shipped/task-feedback-reliability-architecture.md's
  * "Remaining architecture and acceptance gaps" section as a target authority for lifecycle
  * state. However, it is not yet wired into production as that authority; that work remains
  * tracked and intended.

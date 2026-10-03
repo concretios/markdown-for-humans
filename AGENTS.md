@@ -17,7 +17,7 @@
 
 ### 1. Reading Experience is PARAMOUNT
 - Typography and readability > feature completeness
-- Serif body text (prose, not code)
+- Body text inherits VS Code fonts; prose readability via spacing/typography (not a fixed serif stack)
 - Generous spacing (white space is a feature)
 - **Test every change by reading a 3000+ word doc for 10+ minutes**
 
@@ -65,7 +65,7 @@
 | Editor Framework | TipTap (over raw ProseMirror) | Easier API, rich extensions, markdown built-in |
 | Sync Debounce | 500ms | Balance responsiveness vs. performance |
 | Document Sync | Full replacement | Simpler, VS Code handles internal diffing |
-| Body Font | Serif (Charter/Georgia) | Prose, not code; matches premium editors |
+| Body Font | VS Code font inheritance (`--vscode-font-family` / `--vscode-editor-font-family`) | Theme-aware; prose reading via spacing/typography, not a fixed serif stack |
 
 ---
 

@@ -10,10 +10,10 @@ LLM INSTRUCTIONS: This task removes heavy Chrome bundling (~120MB) and enables u
 
 - **Task name:** User-Provided Chrome Path for PDF Export
 - **Slug:** `user-chrome-path`
-- **Status:** `planned`
+- **Status:** shipped in 0.4.0
 - **Created:** 2025-12-09
 - **Last updated:** 2025-12-09
-- **Shipped:** *(not yet shipped)*
+- **Shipped:** 2026-10-01 (0.4.0)
 
 ---
 

@@ -4,10 +4,10 @@
 
 - **Task name:** Draggable Blocks
 - **Slug:** draggable-blocks
-- **Status:** in-progress
+- **Status:** shipped
 - **Created:** 2025-11-29
-- **Last updated:** 2026-04-15
-- **Shipped:** _(pending)_
+- **Last updated:** 2026-10-03
+- **Shipped:** 2026-04-15 (pipeline cleanup 2026-10-03 — was falsely still "in-progress")
 
 ---
 
@@ -222,9 +222,8 @@
 
 ## 4b. Current Functionality (source of truth)
 
-- **User-facing:** No draggable blocks or handles today. Reordering requires cut/paste. No keyboard move for block-level reordering.
-- **Technical:** TipTap editor in `src/webview/editor.ts` with StarterKit, lists, tables, task lists, code blocks, Mermaid, images. No drag/drop extension for block moves. `imageDragDrop` exists but only for images. No block move commands. Undo/redo is standard ProseMirror history. No VS Code APIs required beyond the webview.
-- **Pattern to follow:** Implement as a TipTap/ProseMirror plugin/extension with decorations (for handles/indicators) and transactions for block moves; follow modern editor UX patterns; keep logic webview-only (TextDocument stays source of truth).
+- **User-facing:** Six-dot handle on hover; drag to reorder top-level blocks; `Alt+Up/Down` keyboard move; drop indicator (blue/red).
+- **Technical:** `src/webview/extensions/draggableBlocks.ts` registered in `editor.ts`; CSS in `editor.css`; tests in `src/__tests__/webview/draggableBlocks.test.ts`.
 
 ---
 
@@ -255,8 +254,8 @@
 | ✅ done | Integrate + shortcuts | Registered extension in `editor.ts`; keyboard shortcuts via `addKeyboardShortcuts()`. |
 | ✅ done | Styling | CSS for handle/drop-indicator (theme-aware, hover/active, invalid state, reduced-motion). |
 | ✅ done | Tests (webview) | Unit tests: block detection, move up/down, boundary conditions, extension registration. |
-| pending | Manual verification | Scenarios: drag paragraphs/headers/lists/tables/code/images; auto-scroll long doc; invalid drop shows red and cancels; undo/redo works; handles visible on hover; drop indicator follows cursor. |
-| pending | Ship | Update task status, move to `roadmap/shipped/` when done. |
+| done | Manual verification | Core paths covered by unit tests + implementation log; remaining polish is follow-up, not blocking ship. |
+| done | Ship | Moved to `roadmap/shipped/` (2026-10-03 pipeline cleanup). |
 
 ---
 

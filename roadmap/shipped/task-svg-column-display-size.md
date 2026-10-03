@@ -7,7 +7,7 @@
 - **Status:** shipped
 - **Created:** 2026-10-01
 - **Last updated:** 2026-10-01
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 
 ---
 

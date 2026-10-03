@@ -4,20 +4,20 @@
 
 - **Task name:** Slash Command System
 - **Slug:** slash-commands
-- **Status:** planned
+- **Status:** backlog (math-only slash command exists; general `/` menu not built)
 - **Created:** 2025-11-29
-- **Last updated:** 2025-11-29
-- **Shipped:** _(pending)_
+- **Last updated:** 2026-10-03
+- **Shipped:** _(partial — `MathSlashCommand` only)_
 
 ---
 
 ## 2. Context & Problem
 
 **Current state:**
-- No quick insertion mechanism for markdown elements
-- Users manually type markdown syntax or use toolbar buttons
-- No discoverability mechanism for available features
-- Toolbar only shows limited formatting options
+- Math has a dedicated slash command (`src/webview/extensions/mathSlashCommand.ts`); no general `/` menu for other elements
+- Users mostly type markdown syntax or use toolbar buttons (Mermaid templates via toolbar dropdown already shipped)
+- No discoverability mechanism for the full feature set via keyboard
+- Toolbar shows common formatting options but not everything
 
 **Pain points:**
 - **Slow creation:** Typing ` ```mermaid ` is slower than `/mermaid`

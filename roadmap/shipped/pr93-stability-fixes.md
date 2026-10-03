@@ -4,10 +4,10 @@
 
 - **Task name:** Fix PR 93 entity, screenshot rollback, transfer retry, and focus defects
 - **Slug:** pr93-stability-fixes
-- **Status:** complete, pending user review
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-27
 - **Last updated:** 2026-09-27
-- **Shipped:** pending user review
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Branch:** `feature/pr93-stability-fixes`
 - **Base commit:** `0d5925fc2d453e1c5e471c17bd456eabd3a375a5`
 - **Checkout:** `/Users/abhinav/code/markdown-for-humans-public`

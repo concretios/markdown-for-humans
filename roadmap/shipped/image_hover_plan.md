@@ -1,5 +1,7 @@
 ## Plan: Implement User-Configurable Image Hover Overlay Toggle
 
+> Status: shipped in 0.4.0 / Shipped: 2026-10-01
+
 **TL;DR** - Add a new VS Code configuration setting `markdownForHumans.imagePreview.hover.enabled` (default: true) that allows users to disable the image hover overlay (shading + metadata display) to reduce visual distraction. Follow existing configuration patterns for seamless integration.
 
 **Steps**

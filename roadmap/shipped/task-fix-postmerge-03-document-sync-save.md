@@ -4,10 +4,10 @@
 
 - **Task name:** Fix document sync and save findings
 - **Slug:** fix-postmerge-03-document-sync-save
-- **Status:** in-progress (implemented and tested; awaiting user review, not committed)
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-30
 - **Last updated:** 2026-10-01
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Base:** `origin/main` @ `1b8244b` (review); implemented on `39dfe56` (includes #106)
 - **Branch:** `fix/postmerge-03-document-sync-save`
 - **Overview:** `task-fix-postmerge-00-overview.md`

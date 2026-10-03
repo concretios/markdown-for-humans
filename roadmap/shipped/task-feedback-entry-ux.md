@@ -8,7 +8,7 @@
 - **Branch:** feature/feedback-entry-ux
 - **PR base:** main (`15cc331`, merge of `feature/llm-feedback`)
 - **Shipped:** 2026-09-30, PR #100 (merge `355e037`)
-- **Follow-up:** post-merge fixes in `roadmap/pipeline/task-fix-postmerge-07-feedback-entry-ux.md`
+- **Follow-up:** post-merge fixes in `roadmap/shipped/task-fix-postmerge-07-feedback-entry-ux.md`
 
 ## 2. Context & Problem
 

@@ -4,10 +4,10 @@
 
 - **Task name:** Fix Feedback entry UX findings
 - **Slug:** fix-postmerge-07-feedback-entry-ux
-- **Status:** in-progress (all items fixed and verified by Jest and the Extension Host tests; manual VS Code checks pending)
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-09-30
 - **Last updated:** 2026-10-01
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Base:** `origin/main` @ `1b8244b` (findings); implemented on `origin/main` @ `39dfe56`
 - **Branch:** `fix/postmerge-07-feedback-entry-ux`
 - **Overview:** `task-fix-postmerge-00-overview.md`

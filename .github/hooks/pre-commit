@@ -5,7 +5,7 @@
 #
 # This hook runs automatically before every 'git commit'
 #
-# STATUS: DISABLED - Rename to pre-commit and run npm run install-hooks to enable
+# STATUS: ENABLED - Install with: npm run install-hooks
 #
 
 set -e

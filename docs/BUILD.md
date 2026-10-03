@@ -619,7 +619,7 @@ If you're still stuck:
    git bisect start
    git bisect bad  # current broken version
    git bisect good v0.0.9  # last working version
-   # Test each commit with: npm run build && npm run verify-build
+   # Test each commit with: npm run build:release
    ```
 
 ## Bundle Size Guidelines

@@ -4,10 +4,10 @@
 
 - **Task name:** Feedback reliability architecture, VS Code compatibility, and dependency modernization
 - **Slug:** `feedback-reliability-architecture`
-- **Status:** implemented; reading review and physical Windows gates still open
+- **Status:** shipped in 0.4.0
 - **Created:** 2026-08-26
 - **Last updated:** 2026-09-26
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-01 (0.4.0)
 - **Related plan:** `roadmap/pipeline/task-rich-view-feedback.md`
 - **Primary feedback source:** `Feedback for feature Log Feedback for LLM.docx`
 
