@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 
 - Saving no longer rewrites Markdown you did not edit. Soft line breaks, compact or aligned tables, `*` list markers and setext headings now keep their exact source; only the blocks you change are reformatted.
+- Inline code that contains a backtick no longer turns into broken code plus literal text on save (TipTap 3.31.4 chooses a longer backtick fence).
+
+### Changed
+
+- Upgraded the complete TipTap family from `3.30.5` to exact `3.31.4`. Also brings faster Markdown parsing (about 27% on a 9,400-line document), table cell pipe escaping, removal of a U+001F leak from multi-block table cells, and correct checked state when pressing Enter before a checked task item's text.
 
 ### Security
 

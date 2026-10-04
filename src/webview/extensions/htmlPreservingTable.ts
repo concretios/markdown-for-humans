@@ -122,15 +122,16 @@ export const HtmlPreservingTable = Table.extend({
   // GFM renderMarkdown. Arrow functions ignore .bind(), so this.parent would be
   // undefined and GFM tables would be silently dropped on serialization.
   renderMarkdown: function (
-    this: { parent: RenderMarkdownFn | null },
+    this: { parent?: RenderMarkdownFn | null },
     node: JSONContent,
     helpers: MarkdownRendererHelpers,
     context: RenderContext
   ): string {
     const htmlOrigin = Boolean(node.attrs?.htmlOrigin);
     if (!htmlOrigin) {
-      // TipTap 3.30.5 does not escape literal pipes returned by renderChildren,
-      // so its otherwise-canonical table output can create extra columns.
+      // TipTap 3.30.5 did not escape literal pipes returned by renderChildren,
+      // so its table output could create extra columns. 3.31.4 escapes them
+      // too and leaves already-escaped pipes alone, so this stays a safe guard.
       const pipeSafeHelpers: MarkdownRendererHelpers = {
         ...helpers,
         renderChildren: (children, separator) =>
