@@ -29,6 +29,9 @@ export const PRESERVED_MARKDOWN_LITERAL_TOKEN = 'preservedMarkdownLiteral';
 /** Token and node name for a comment-only HTML block. */
 export const HTML_COMMENT_TOKEN = 'htmlComment';
 
+/** Token and node name for a comment inside a line of text. */
+export const HTML_COMMENT_INLINE_TOKEN = 'htmlCommentInline';
+
 /**
  * Detect link/image inline tokens whose VISIBLE text is empty.
  *
@@ -280,6 +283,70 @@ function toHtmlCommentToken(token: RawToken): RawToken {
   return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
 }
 
+/** One whole comment, as marked's inline `html` rule emits it. */
+const INLINE_COMMENT = /^<!--[\s\S]*-->$/;
+
+/** Block tokens whose `tokens` hold the inline content of one line of text. */
+const INLINE_CONTAINER_TYPES = new Set(['paragraph', 'heading', 'text']);
+
+/**
+ * Turn each inline comment in a line of text into an `htmlCommentInline` token.
+ *
+ * Only direct children are rewritten. Inside a link or emphasis the comment
+ * would become a node the surrounding mark cannot cover, splitting the link or
+ * emphasis in two on save, so those comments stay `html` and are dropped.
+ */
+function toInlineCommentTokens(inlines: RawToken[] | undefined): void {
+  if (!Array.isArray(inlines)) return;
+  inlines.forEach((token, index) => {
+    const raw = tokenRawText(token);
+    if (token?.type === 'html' && token.block !== true && INLINE_COMMENT.test(raw)) {
+      inlines[index] = { type: HTML_COMMENT_INLINE_TOKEN, raw, text: raw } as RawToken;
+    }
+  });
+}
+
+/**
+ * Keep comments that sit below the top level or inside a line of text.
+ *
+ * TipTap parses list items and blockquotes from the child tokens marked's own
+ * lexer produced, so the top-level pass never sees a comment there, and
+ * @tiptap/markdown turns an inline comment into nothing. Either way the
+ * comment was deleted on save. Nested comment-only blocks become `htmlComment`
+ * tokens and inline comments become `htmlCommentInline` tokens. Top-level
+ * `html` blocks are left for mergeSplitHtmlBlocks and toHtmlCommentToken.
+ */
+function normalizeHtmlCommentsDeep(tokens: RawToken[] | undefined, nested: boolean): void {
+  if (!Array.isArray(tokens)) return;
+  tokens.forEach((token, index) => {
+    if (!token || typeof token.type !== 'string') return;
+    if (nested && token.type === 'html' && token.block === true) {
+      tokens[index] = toHtmlCommentToken(token);
+      return;
+    }
+    if (INLINE_CONTAINER_TYPES.has(token.type)) {
+      toInlineCommentTokens((token as { tokens?: RawToken[] }).tokens);
+      return;
+    }
+    if (token.type === 'taskItem') {
+      // TipTap's task list tokenizer keeps the item's own line inline in
+      // `tokens` and its child blocks in `nestedTokens`.
+      toInlineCommentTokens((token as { tokens?: RawToken[] }).tokens);
+      normalizeHtmlCommentsDeep((token as { nestedTokens?: RawToken[] }).nestedTokens, true);
+      return;
+    }
+    if (token.type === 'table') {
+      const { header, rows } = token as { header?: RawToken[]; rows?: RawToken[][] };
+      [header ?? [], ...(rows ?? [])].forEach(row =>
+        row.forEach(cell => toInlineCommentTokens((cell as { tokens?: RawToken[] }).tokens))
+      );
+      return;
+    }
+    normalizeHtmlCommentsDeep((token as { items?: RawToken[] }).items, true);
+    normalizeHtmlCommentsDeep((token as { tokens?: RawToken[] }).tokens, true);
+  });
+}
+
 /** A run made up only of closing tags can never contribute content. */
 const CLOSING_TAGS_ONLY = /^(?:\s*<\/[a-zA-Z][a-zA-Z0-9-]*\s*>\s*)+$/;
 
@@ -409,6 +476,7 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
   // paragraphs (`Even deeper.\n[]()`) carry the original markdown forward as
   // preserved text instead of letting the inline get stripped on parse.
   normalizeEmptyInlinesDeep(tokens);
+  normalizeHtmlCommentsDeep(tokens, false);
 
   // Re-join HTML blocks marked cut at a blank line before the greedy-newline
   // split runs, so a merged block still gets its own trailing space token.
@@ -455,6 +523,7 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
 export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
   interface LexerInstance {
     lex(src: string): RawToken[];
+    inlineTokens(src: string, tokens?: RawToken[]): RawToken[];
   }
   type LexerConstructor = new (options?: unknown) => LexerInstance;
 
@@ -471,8 +540,24 @@ export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
   if (typeof inst.Lexer === 'function') {
     const OriginalLexer = inst.Lexer;
     inst.Lexer = class NormalizingLexer extends OriginalLexer {
+      private inlineDepth = 0;
+
       lex(src: string): RawToken[] {
         return normalizeBlankLineGreedyTokens(super.lex(src));
+      }
+
+      // TipTap also lexes some lines on their own after `lex` has returned,
+      // such as a task item split out of a mixed list. Only the outermost call
+      // holds a line's direct children; deeper calls are link or emphasis text.
+      inlineTokens(src: string, tokens?: RawToken[]): RawToken[] {
+        this.inlineDepth++;
+        try {
+          const inlines = super.inlineTokens(src, tokens);
+          if (this.inlineDepth === 1) toInlineCommentTokens(inlines);
+          return inlines;
+        } finally {
+          this.inlineDepth--;
+        }
       }
     };
     installed = true;
