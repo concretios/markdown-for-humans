@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Inline code that contains a backtick no longer turns into broken code plus literal text on save (TipTap 3.31.4 chooses a longer backtick fence).
+
+### Changed
+
+- Upgraded the complete TipTap family from `3.30.5` to exact `3.31.4`. Also brings faster Markdown parsing (about 27% on a 9,400-line document), table cell pipe escaping, removal of a U+001F leak from multi-block table cells, and correct checked state when pressing Enter before a checked task item's text.
+
+### Performance
+
+- Large documents open faster: the task list Markdown tokenizer no longer rescans the rest of the document at every block (about 28% faster load on a 9,400-line document).
+
+### Security
+
+- Updated bundled `dompurify` (via mermaid) to 3.4.16, `markdown-it` to 14.3.2 (fixes a paste-time slowdown with linkify that could freeze the editor on large inputs) and `undici` (via cheerio) to 7.30.0. `npm audit --omit=dev` reports 0 vulnerabilities.
+
 ---
 
 ## [0.4.0] - 2026-10-01

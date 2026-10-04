@@ -35,7 +35,7 @@ const isAtLeast = (actual: string, minimum: string): boolean => {
 };
 
 describe('dependency security policy', () => {
-  const reviewedTiptapVersion = '3.30.5';
+  const reviewedTiptapVersion = '3.31.4';
   const manifest = readJson<PackageManifest>('package.json');
   const lock = readJson<PackageLock>('package-lock.json');
 

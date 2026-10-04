@@ -9,11 +9,11 @@
 | VS Code floor  | `^1.98.0`                                 |
 | Extension host | Node.js 20 target                         |
 | Webview        | Chromium 132 target                       |
-| Editor         | TipTap 3.30.5 on ProseMirror              |
+| Editor         | TipTap 3.31.4 on ProseMirror              |
 | Diagrams       | Mermaid 11.17.2 or compatible 11.x update |
 | Capture        | `modern-screenshot@4.7.0`                 |
 
-All direct `@tiptap/*` packages are pinned to exactly `3.30.5`. Upgrade them as one family, import ProseMirror through `@tiptap/pm/*`, and reject mixed TipTap or direct ProseMirror version families.
+All direct `@tiptap/*` packages are pinned to exactly `3.31.4`. Upgrade them as one family, import ProseMirror through `@tiptap/pm/*`, and reject mixed TipTap or direct ProseMirror version families.
 
 ## Architecture
 
@@ -166,7 +166,7 @@ Shared-runner gates do not prove physical Windows i5/16 GB p95 latency, memory u
 | Highlight occurrence index  | `src/webview/highlighting/plugin.ts`                                                              |
 | Highlight worker and limits | `src/webview/highlighting/client.ts`, `src/webview/highlighting/worker.ts`, `src/webview/highlighting/types.ts` |
 | Fence info and grammars     | `src/webview/highlighting/fenceInfo.ts`, `src/webview/highlighting/languageRegistry.ts`, `src/webview/highlighting/tokenize.ts` |
-| List Markdown compatibility | `src/webview/extensions/markdownListItem.ts`, `src/webview/extensions/orderedListMarkdownFix.ts` |
+| List Markdown compatibility | `src/webview/extensions/markdownListItem.ts`, `src/webview/extensions/orderedListMarkdownFix.ts`, `src/webview/extensions/markdownTaskList.ts` |
 | Sync serialization          | `src/webview/utils/markdownSerialization.ts`                                                     |
 | Hidden-view state           | `src/webview/utils/richViewState.ts`                                                             |
 | Feedback request contract   | `src/shared/feedbackProtocol.ts`                                                                 |
