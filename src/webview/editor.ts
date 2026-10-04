@@ -128,7 +128,7 @@ function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
 }
 import {
   handleImageResized,
-  showResizeModalAfterDownload,
+  handleLocalImageCopied,
   showImageResizeModal,
 } from './features/imageResizeModal';
 import {
@@ -1928,107 +1928,15 @@ window.addEventListener('message', async (event: MessageEvent) => {
       case 'localImageCopied': {
         // Local image copied to workspace - update TipTap node and show resize modal
         if (!editor) break;
-
-        const relativePath = message.relativePath as string;
-        const originalPath = message.originalPath as string;
-
-        // Find the image element in DOM first (more reliable than searching doc)
-        const images = document.querySelectorAll('.markdown-image');
-        let imgElement: HTMLImageElement | null = null;
-
-        for (const img of images) {
-          const element = img as HTMLImageElement;
-          const imgSrc =
-            element.getAttribute('data-markdown-src') || element.getAttribute('src') || '';
-          // Check if this matches the original path (could be relative or absolute)
-          if (
-            imgSrc === originalPath ||
-            imgSrc.includes(originalPath) ||
-            originalPath.includes(imgSrc)
-          ) {
-            imgElement = element;
-            break;
-          }
-        }
-
-        if (!imgElement) {
-          console.warn('[MD4H] Could not find image element for local image copy');
-          break;
-        }
-
-        // Get position from DOM element
-        const pos = editor.view.posAtDOM(imgElement, 0);
-
-        if (pos === undefined || pos === null) {
-          console.warn('[MD4H] Could not find position for image in editor');
-          break;
-        }
-
-        // Get the node at this position
-        const node = editor.state.doc.nodeAt(pos);
-
-        if (!node || node.type.name !== 'image') {
-          console.warn(`[MD4H] Node at position ${pos} is not an image: ${node?.type.name}`);
-          break;
-        }
-
-        // Update image node attributes using updateAttributes (safer than setNodeMarkup)
-        try {
-          editor
-            .chain()
-            .setNodeSelection(pos)
-            .updateAttributes('image', {
-              src: relativePath,
-              'markdown-src': relativePath,
-            })
-            .run();
-
-          // Update DOM attributes
-          imgElement.setAttribute('data-markdown-src', relativePath);
-          imgElement.setAttribute('src', relativePath);
-
-          // Clear pending copy flags
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          delete (imgElement as any)._pendingDownloadPlaceholderId;
-
-          // If this image was pending resize after copy, show resize modal now
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if ((imgElement as any)._pendingResizeAfterDownload) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            delete (imgElement as any)._pendingResizeAfterDownload;
-
-            // Wait for image to load, then show resize modal
-            const showModalAfterLoad = () => {
-              if (editor && imgElement) {
-                showResizeModalAfterDownload(imgElement, editor, vscode);
-              }
-            };
-
-            if (imgElement.complete) {
-              showModalAfterLoad();
-            } else {
-              imgElement.addEventListener('load', showModalAfterLoad, { once: true });
-
-              // Request resolution for the new local path
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              if ((window as any).resolveImagePath) {
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                (window as any).resolveImagePath(relativePath).then((webviewUri: string) => {
-                  if (imgElement) {
-                    imgElement.src = webviewUri;
-                    imgElement.setAttribute('data-markdown-src', relativePath);
-                  }
-                });
-              } else {
-                const newSrc = relativePath.startsWith('./') ? relativePath : `./${relativePath}`;
-                imgElement.src = newSrc;
-                imgElement.setAttribute('data-markdown-src', relativePath);
-              }
-            }
-          }
-        } catch (error) {
-          console.error('[MD4H] Failed to update image node after copy:', error);
-        }
+        handleLocalImageCopied(
+          editor,
+          {
+            placeholderId: message.placeholderId as string,
+            relativePath: message.relativePath as string,
+            originalPath: message.originalPath as string,
+          },
+          vscode
+        );
         break;
       }
       case 'localImageCopyError': {
