@@ -128,6 +128,20 @@ describe('HTML comment preservation', () => {
     });
   });
 
+  it.each([
+    ['block', '<!-- <img src=x onerror="window.__md4hXss=1"><style>body{color:red}</style> -->'],
+    ['inline', 'Text <!-- <img src=x onerror="window.__md4hXss=1"> --> more.'],
+  ])('renders %s comment markup as text, never as DOM', (_name, markdown) => {
+    withEditor(markdown, editor => {
+      const marker = editor.view.dom.querySelector('.md4h-html-comment');
+      expect(marker?.textContent).toContain('<img src=x onerror=');
+      expect(
+        editor.view.dom.querySelector('.md4h-html-comment img, .md4h-html-comment style')
+      ).toBeNull();
+      expect((window as unknown as { __md4hXss?: number }).__md4hXss).toBeUndefined();
+    });
+  });
+
   it('saves an unedited document byte-identical', () => {
     withEditor(MEDIUM_TABLE, editor => {
       expect(getEditorMarkdownForSync(editor)).toBe(MEDIUM_TABLE);
