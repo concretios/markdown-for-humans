@@ -1197,6 +1197,76 @@ export function showResizeModalAfterDownload(
   showResizeModalForLocalImage(img, editor, vscodeApi);
 }
 
+/**
+ * Handle the host's `localImageCopied` reply: point the image node at its new
+ * workspace path, then open the resize modal if the copy started from resize.
+ *
+ * The image is found by the placeholder ID stamped on it before the copy was
+ * requested. Matching by path failed for `./` and `../` sources, so the dialog
+ * closed and nothing happened.
+ */
+export function handleLocalImageCopied(
+  editor: Editor,
+  message: { placeholderId: string; relativePath: string; originalPath: string },
+  vscodeApi: VsCodeApi
+): void {
+  const { placeholderId, relativePath } = message;
+
+  const images = editor.view.dom.querySelectorAll<HTMLImageElement>('.markdown-image');
+  const imgElement = Array.from(images).find(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    img => (img as any)._pendingDownloadPlaceholderId === placeholderId
+  );
+  const wrapper = imgElement?.closest('.image-wrapper');
+  if (!imgElement || !wrapper) {
+    console.warn('[MD4H] Could not find image element for local image copy');
+    return;
+  }
+
+  // The wrapper is the node view's DOM; the inner <img> does not map to the node position.
+  const pos = editor.view.posAtDOM(wrapper, 0);
+  const node = editor.state.doc.nodeAt(pos);
+  if (!node || node.type.name !== 'image') {
+    console.warn(`[MD4H] Node at position ${pos} is not an image: ${node?.type.name}`);
+    return;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resizeAfterCopy = Boolean((imgElement as any)._pendingResizeAfterDownload);
+
+  try {
+    editor
+      .chain()
+      .setNodeSelection(pos)
+      .updateAttributes('image', {
+        src: relativePath,
+        'markdown-src': relativePath,
+      })
+      .run();
+  } catch (error) {
+    console.error('[MD4H] Failed to update image node after copy:', error);
+    return;
+  }
+
+  if (!resizeAfterCopy) return;
+
+  // The node view has no update(), so the attribute change rebuilt it. Bind the
+  // modal to the new <img>, once it has loaded the copy and knows its size.
+  const liveImage = (
+    editor.view.nodeDOM(pos) as HTMLElement | null
+  )?.querySelector<HTMLImageElement>('.markdown-image');
+  if (!liveImage) {
+    console.warn('[MD4H] Could not find the copied image to resize');
+    return;
+  }
+  const openModal = () => showResizeModalAfterDownload(liveImage, editor, vscodeApi);
+  if (liveImage.hasAttribute('data-loading')) {
+    liveImage.addEventListener('load', openModal, { once: true });
+  } else {
+    openModal();
+  }
+}
+
 // Removed setupImageResize function - image click handler removed
 // Only the resize icon should open the modal (handled in customImage.ts)
 
