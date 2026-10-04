@@ -10,7 +10,14 @@ import { PRESERVED_MARKDOWN_LITERAL_TOKEN } from './markedLexerNormalizer';
 
 type MarkdownManager = {
   serialize?: (json: JSONContent) => string;
+  createLexer?: () => { lex(markdown: string): MarkdownSourceToken[] };
+  parseTokens?: (tokens: MarkdownSourceToken[]) => JSONContent[];
 };
+
+interface MarkdownSourceToken {
+  readonly type?: string;
+  readonly raw?: string;
+}
 
 interface SerializedTopLevelBlock {
   readonly isEmptyParagraph: boolean;
@@ -29,11 +36,21 @@ interface ProseMirrorDocumentLike {
 
 interface ProseMirrorNodeLike {
   toJSON(): JSONContent;
+  eq?(other: ProseMirrorNodeLike): boolean;
+}
+
+interface RememberedSourceBlock {
+  readonly node: ProseMirrorNodeLike;
+  readonly block: SerializedTopLevelBlock;
 }
 
 interface EditorBlockSerializationCache {
   readonly serializer: (json: JSONContent) => string;
   readonly blocks: WeakMap<ProseMirrorNodeLike, SerializedTopLevelBlock>;
+  // Authored source of each top-level block as loaded, by document index. Lets
+  // an edited-then-reverted block (a new node with equal content) save its
+  // original bytes again instead of TipTap's canonical form.
+  sources: RememberedSourceBlock[];
 }
 
 // ProseMirror nodes are immutable and unchanged branches retain object identity
@@ -269,6 +286,7 @@ function getEditorBlockCache(
   const created: EditorBlockSerializationCache = {
     serializer,
     blocks: new WeakMap(),
+    sources: [],
   };
   editorBlockSerializationCaches.set(editor, created);
   return created;
@@ -361,6 +379,13 @@ function serializeProseMirrorBlocks(
       continue;
     }
 
+    const remembered = cache.sources[index];
+    if (remembered !== undefined && remembered.node.eq?.(node)) {
+      cache.blocks.set(node, remembered.block);
+      blocks.push(remembered.block);
+      continue;
+    }
+
     const json = node.toJSON();
     const isEmpty = isEmptyParagraph(json);
     const serialized = serializeBlockMarkdownResult(json, serialize);
@@ -416,6 +441,111 @@ function serializeBlockMarkdownResult(
     return { ...result, markdown: '#'.repeat(level) };
   }
   return result;
+}
+
+/**
+ * Load Markdown into the editor and remember each top-level block's authored
+ * source, so unedited blocks save byte-identical.
+ *
+ * The serializer rebuilds Markdown from the document tree, which rewrites any
+ * form outside TipTap's canonical output (soft breaks, compact tables, `*`
+ * lists, setext headings). The tokens from setContent's own lex are captured
+ * (lexing again would nearly double load time on large documents). Each token is
+ * parsed on its own; when it yields exactly one block that equals the live
+ * block, the token's raw source becomes that block's cached Markdown. Any
+ * mismatch leaves the block to the serializer.
+ *
+ * @param editor - Editor to load
+ * @param markdown - Markdown source
+ * @returns The result of `editor.commands.setContent`
+ */
+export function setMarkdownContentPreservingSource(editor: Editor, markdown: string): boolean {
+  const manager = getMarkdownManager(editor);
+  const createLexer = manager?.createLexer;
+  let tokens: MarkdownSourceToken[] | null = null;
+  const ownCreateLexer =
+    manager !== undefined && Object.prototype.hasOwnProperty.call(manager, 'createLexer');
+
+  if (manager && typeof createLexer === 'function') {
+    // Shadow the prototype method for this one parse only.
+    manager.createLexer = function captureLexer(this: MarkdownManager) {
+      const lexer = createLexer.call(this);
+      const lex = lexer.lex.bind(lexer);
+      lexer.lex = (source: string) => {
+        const lexed = lex(source);
+        if (tokens === null && source === markdown) tokens = lexed;
+        return lexed;
+      };
+      return lexer;
+    };
+  }
+
+  let result: boolean;
+  try {
+    result = editor.commands.setContent(markdown, { contentType: 'markdown' });
+  } finally {
+    if (manager && typeof createLexer === 'function') {
+      if (ownCreateLexer) manager.createLexer = createLexer;
+      else delete manager.createLexer;
+    }
+  }
+
+  if (result !== false) rememberSourceBlocks(editor, manager, tokens);
+  return result;
+}
+
+function rememberSourceBlocks(
+  editor: Editor,
+  manager: MarkdownManager | undefined,
+  tokens: MarkdownSourceToken[] | null
+): void {
+  const documentNode = getEditorDocument(editor);
+  if (!manager?.serialize || documentNode === null) return;
+
+  const cache = getEditorBlockCache(editor, manager.serialize);
+  cache.sources = [];
+  if (tokens === null || typeof manager.parseTokens !== 'function') return;
+
+  try {
+    const liveBlocks: { node: ProseMirrorNodeLike; index: number }[] = [];
+    for (let index = 0; index < documentNode.childCount; index++) {
+      const node = documentNode.child(index);
+      if (!isEmptyParagraph(node.toJSON())) liveBlocks.push({ node, index });
+    }
+
+    let cursor = 0;
+    for (const token of tokens) {
+      if (token.type === 'space' || typeof token.raw !== 'string') continue;
+      const parsed = manager.parseTokens([token]).filter(json => !isEmptyParagraph(json));
+      const live = liveBlocks.slice(cursor, cursor + parsed.length);
+      cursor += parsed.length;
+      if (parsed.length !== 1 || live.length !== 1) continue;
+
+      const { node, index } = live[0];
+      if (!node.eq?.(editor.schema.nodeFromJSON(parsed[0]) as ProseMirrorNodeLike)) continue;
+
+      const block: SerializedTopLevelBlock = {
+        isEmptyParagraph: false,
+        // Some tokenizers (task lists) absorb the separating blank lines into
+        // raw. Those belong to the block join, not the block.
+        markdown: token.raw.replace(/^(?:[ \t]*\n)+/, '').replace(/(?:\n[ \t]*)+$/, ''),
+      };
+      cache.blocks.set(node, block);
+      cache.sources[index] = { node, block };
+    }
+  } catch (error) {
+    // Losing source preservation only restores the canonical serializer output.
+    console.warn('[MD4H] Could not remember Markdown source blocks:', error);
+    cache.sources = [];
+  }
+}
+
+function getMarkdownManager(editor: Editor): MarkdownManager | undefined {
+  const editorUnknown = editor as unknown as {
+    markdown?: MarkdownManager;
+    storage?: { markdown?: MarkdownManager };
+  };
+  return editorUnknown.markdown || editorUnknown.storage?.markdown;
 }
 
 export function getEditorMarkdownForSync(
