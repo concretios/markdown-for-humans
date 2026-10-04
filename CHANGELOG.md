@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Performance
+
+- Large documents open faster: the task list Markdown tokenizer no longer rescans the rest of the document at every block (about 28% faster load on a 9,400-line document).
+
 ---
 
 ## [0.4.0] - 2026-10-01
