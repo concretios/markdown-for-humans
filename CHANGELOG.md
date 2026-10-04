@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Closing a tab right after an edit no longer loses that edit. Previously, closing within about half a second of a change closed the tab without a save prompt and the change never reached the file. The first change after a pause now reaches VS Code at once, so the tab shows as unsaved and VS Code asks to save.
+
 ---
 
 ## [0.4.1] - 2026-10-04

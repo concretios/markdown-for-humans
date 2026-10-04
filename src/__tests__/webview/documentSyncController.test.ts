@@ -38,18 +38,77 @@ describe('DocumentSyncController', () => {
       controller.markDirty();
     }
 
+    // Never serialize on the keystroke path itself.
     expect(serialize).not.toHaveBeenCalled();
     expect(jest.getTimerCount()).toBe(1);
 
-    jest.advanceTimersByTime(499);
-    expect(serialize).not.toHaveBeenCalled();
-
-    jest.advanceTimersByTime(1);
+    jest.advanceTimersByTime(0);
 
     expect(serialize).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenCalledWith('revision 20', 'typing');
     expect(controller.hasPendingSync()).toBe(false);
+
+    jest.advanceTimersByTime(1_000);
+    expect(serialize).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the first change after idle at once so a quick tab close sees a dirty document', () => {
+    // VS Code drops messages posted while a closing webview is torn down, and
+    // closes a clean custom text editor without prompting. The first change
+    // must therefore reach the host before the debounce would elapse.
+    const send = jest.fn();
+    const controller = createController({ send });
+
+    controller.markDirty();
+    jest.advanceTimersByTime(0);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith('markdown', 'typing');
+    expect(controller.hasPendingSync()).toBe(false);
+  });
+
+  it('debounces later changes in the same burst into one trailing send', () => {
+    let latestMarkdown = 'first';
+    const serialize = jest.fn(() => latestMarkdown);
+    const send = jest.fn();
+    const controller = createController({ serialize, send });
+
+    controller.markDirty();
+    jest.advanceTimersByTime(0);
+    expect(send).toHaveBeenCalledTimes(1);
+
+    jest.advanceTimersByTime(100);
+    latestMarkdown = 'second';
+    controller.markDirty();
+    jest.advanceTimersByTime(100);
+    latestMarkdown = 'third';
+    controller.markDirty();
+
+    jest.advanceTimersByTime(499);
+    expect(send).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(1);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenLastCalledWith('third', 'typing');
+
+    // A quiet period ends the burst, so the next change is again immediate.
+    latestMarkdown = 'fourth';
+    controller.markDirty();
+    jest.advanceTimersByTime(0);
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(send).toHaveBeenLastCalledWith('fourth', 'typing');
+  });
+
+  it('treats the first change after an explicit flush as a new burst', () => {
+    const send = jest.fn();
+    const controller = createController({ send });
+
+    controller.markDirty();
+    controller.flush();
+    controller.markDirty();
+    jest.advanceTimersByTime(0);
+
+    expect(send).toHaveBeenCalledTimes(2);
   });
 
   it('defers for pending image saves without retaining stale serialized Markdown', () => {
@@ -66,7 +125,7 @@ describe('DocumentSyncController', () => {
     });
 
     controller.markDirty();
-    jest.advanceTimersByTime(500);
+    jest.advanceTimersByTime(0);
 
     expect(onDeferred).toHaveBeenCalledTimes(1);
     expect(serialize).not.toHaveBeenCalled();

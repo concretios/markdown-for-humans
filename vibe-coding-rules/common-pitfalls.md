@@ -31,7 +31,7 @@ Never add an uncorrelated feedback-loop flag back to the provider or renderer.
 
 **Failure:** `onUpdate` runs on the typing path. Serializing a large document there makes keystroke cost proportional to document size, even if a later debounce drops the value.
 
-**Use instead:** Call `DocumentSyncController.markDirty()`. It stores a dirty bit and serializes the latest editor state only when the 500 ms timer drains or an explicit flush boundary runs.
+**Use instead:** Call `DocumentSyncController.markDirty()`. It stores a dirty bit and serializes the latest editor state only when its timer drains (zero delay for the first change after idle, 500 ms within a burst) or an explicit flush boundary runs.
 
 For repeated syncs, preserve immutable ProseMirror node identity so unchanged top-level block serialization can be reused. Never cache a failed serialization result as authoritative content.
 

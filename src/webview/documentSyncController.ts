@@ -5,7 +5,9 @@
  *              so delayed image saves cannot retain stale Markdown snapshots.
  *
  * Key responsibilities:
- * - Coalesce rapid dirty notifications into one serialization
+ * - Send the first change after idle at once, so the host document turns dirty
+ *   before VS Code can close a clean-looking tab
+ * - Coalesce the rest of a burst of dirty notifications into one serialization
  * - Read the latest editor state only at an actual send boundary
  * - Defer ordinary sync while prerequisite work is pending
  * - Cancel timers deterministically on flush, cancellation, and disposal
@@ -58,10 +60,16 @@ export interface DocumentSyncControllerOptions {
  *
  * The controller intentionally stores only a dirty bit, never serialized
  * Markdown. This ensures a delayed timer reads the newest TipTap document.
+ *
+ * The first change after idle is sent on a zero-delay timer instead of after
+ * the debounce: VS Code closes a custom text editor whose TextDocument is not
+ * dirty without prompting, and it drops messages the webview posts while it is
+ * being torn down. Later changes in the same burst use the ordinary debounce.
  */
 export class DocumentSyncController {
   private readonly _options: DocumentSyncControllerOptions;
   private _cancelScheduled: (() => void) | undefined;
+  private _leadingScheduled = false;
   private readonly _unacknowledgedEdits = new Map<string, number>();
   private _dirty = false;
   private _dirtyRevision = 0;
@@ -71,13 +79,27 @@ export class DocumentSyncController {
     this._options = options;
   }
 
-  /** Mark the editor dirty and restart its debounce period. */
+  /**
+   * Mark the editor dirty. The first change after idle is sent on the next
+   * task; later changes in the same burst restart the debounce period.
+   */
   markDirty(): void {
     if (this._disposed) return;
 
+    // Idle means no unsent revision, no in-flight edit and no open debounce
+    // window, which stays scheduled for one quiet period after a send.
+    const startsBurst =
+      !this._dirty && this._unacknowledgedEdits.size === 0 && !this._cancelScheduled;
     this._dirty = true;
     this._dirtyRevision += 1;
-    this._schedule();
+    // The pending leading send reads the newest state when it runs.
+    if (this._leadingScheduled) return;
+    if (startsBurst) {
+      this._schedule(0);
+      this._leadingScheduled = true;
+    } else {
+      this._schedule();
+    }
   }
 
   /** Whether unsent or sent-but-unacknowledged renderer work still exists. */
@@ -184,8 +206,15 @@ export class DocumentSyncController {
   private _schedule(delayMs = this._options.delayMs): void {
     this._clearTimer();
     this._cancelScheduled = this._options.schedule(() => {
+      const leading = this._leadingScheduled;
       this._cancelScheduled = undefined;
+      this._leadingScheduled = false;
       this._runScheduledSync();
+      // Keep the burst open for one quiet period so the next keystrokes are
+      // debounced rather than each sent as a new leading edit.
+      if (leading && !this._disposed && !this._dirty && !this._cancelScheduled) {
+        this._schedule();
+      }
     }, delayMs);
   }
 
@@ -246,6 +275,7 @@ export class DocumentSyncController {
   private _clearTimer(): void {
     const cancelScheduled = this._cancelScheduled;
     this._cancelScheduled = undefined;
+    this._leadingScheduled = false;
     cancelScheduled?.();
   }
 }
