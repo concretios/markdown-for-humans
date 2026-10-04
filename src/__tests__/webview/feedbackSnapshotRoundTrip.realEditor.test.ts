@@ -16,7 +16,7 @@ import { buildFeedbackAnchorMap } from '../../editor/feedbackAnchors';
 import { BlankLinePreservation } from '../../webview/extensions/blankLinePreservation';
 import { CustomImage } from '../../webview/extensions/customImage';
 import { GitHubAlerts } from '../../webview/extensions/githubAlerts';
-import { HtmlComment } from '../../webview/extensions/htmlComment';
+import { HtmlComment, HtmlCommentInline } from '../../webview/extensions/htmlComment';
 import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTable';
 import { IndentedImageCodeBlock } from '../../webview/extensions/indentedImageCodeBlock';
 import { MarkdownCode, MarkdownLink } from '../../webview/extensions/markdownCompatibilityMarks';
@@ -73,6 +73,7 @@ function createFeedbackSnapshotEditor(source: string): Editor {
       }),
       MarkdownParagraph,
       HtmlComment,
+      HtmlCommentInline,
       MarkdownCode,
       PreservedMarkdownLiteral,
       FeedbackSnapshotCodeBlock,
@@ -201,6 +202,43 @@ describe('Feedback snapshot renderer round-trip', () => {
     const editor = createFeedbackSnapshotEditor(source);
     try {
       const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+      expect(isMarkdownRendererEquivalent(serialized, source)).toBe(true);
+      expect(buildFeedbackAnchorMap(source, enumerateCanonicalFeedbackBlocks(editor))).toEqual(
+        expect.objectContaining({ ok: true })
+      );
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('keeps nested and inline HTML comments with exact source anchors', () => {
+    const source = [
+      '# Title <!-- heading note -->',
+      '',
+      'Text <!-- inline --> more.',
+      '',
+      '- item',
+      '  <!-- in list -->',
+      '- next <!-- trailing -->',
+      '',
+      'Tasks:',
+      '',
+      '- [ ] task <!-- task inline -->',
+      '  <!-- in task -->',
+      '',
+      '> quoted',
+      '>',
+      '> <!-- in quote -->',
+      '',
+      'After.',
+      '',
+    ].join('\n');
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+      expect(serialized).toContain('<!-- in list -->');
+      expect(serialized).toContain('<!-- in quote -->');
+      expect(serialized).toContain('Text <!-- inline --> more.');
       expect(isMarkdownRendererEquivalent(serialized, source)).toBe(true);
       expect(buildFeedbackAnchorMap(source, enumerateCanonicalFeedbackBlocks(editor))).toEqual(
         expect.objectContaining({ ok: true })

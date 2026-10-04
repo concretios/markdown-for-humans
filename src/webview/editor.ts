@@ -28,7 +28,7 @@ import { TabIndentation } from './extensions/tabIndentation';
 import { GitHubAlerts } from './extensions/githubAlerts';
 import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
-import { HtmlComment } from './extensions/htmlComment';
+import { HtmlComment, HtmlCommentInline } from './extensions/htmlComment';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { MarkdownTaskList } from './extensions/markdownTaskList';
@@ -915,6 +915,7 @@ function initializeEditor(initialContent: string) {
         }),
         MarkdownParagraph, // Custom paragraph with empty-paragraph filtering in renderMarkdown
         HtmlComment, // Keeps <!-- comments --> as muted blocks that save unchanged
+        HtmlCommentInline, // Same for a comment inside a line of text
         MarkdownCode,
         PreservedMarkdownLiteral,
         CodeBlockWithCopy.configure({

@@ -3401,6 +3401,12 @@ body.saving-feedback {
   -webkit-user-select: none;
 }
 
+/* An inline comment keeps the body-text marker size, even inside a heading. */
+span.md4h-html-comment {
+  font-size: calc(var(--md-base-size) * 0.75);
+  font-weight: normal;
+}
+
 .md4h-html-comment.ProseMirror-selectednode {
   opacity: 1;
   outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);

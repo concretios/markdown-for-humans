@@ -23,6 +23,75 @@ async function waitFor(predicate, description, timeoutMs = 30_000) {
   assert.fail(`Timed out waiting for ${description}`);
 }
 
+async function assertFeedbackStarts(fixtureName) {
+  await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  assert.ok(workspaceFolder, 'Expected integration fixture workspace');
+  const fixtureUri = vscode.Uri.joinPath(workspaceFolder.uri, fixtureName);
+  await vscode.workspace.fs.stat(fixtureUri);
+
+  const feedbackRoot = path.join(workspaceFolder.uri.fsPath, '.md4h', 'feedback');
+  fs.rmSync(feedbackRoot, { recursive: true, force: true });
+
+  const errors = [];
+  const warnings = [];
+  const originalError = vscode.window.showErrorMessage;
+  const originalWarning = vscode.window.showWarningMessage;
+  vscode.window.showErrorMessage = async (message, ...items) => {
+    errors.push(String(message));
+    return originalError.call(vscode.window, message, ...items);
+  };
+  vscode.window.showWarningMessage = async (message, ...items) => {
+    warnings.push(String(message));
+    return originalWarning.call(vscode.window, message, ...items);
+  };
+
+  try {
+    await vscode.commands.executeCommand('vscode.openWith', fixtureUri, CUSTOM_EDITOR_VIEW_TYPE, {
+      viewColumn: vscode.ViewColumn.One,
+      preview: false,
+    });
+
+    await waitFor(() => {
+      const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
+      return activeTab?.input instanceof vscode.TabInputCustom &&
+        activeTab.input.viewType === CUSTOM_EDITOR_VIEW_TYPE
+        ? activeTab
+        : undefined;
+    }, 'custom editor tab');
+
+    assert.equal(
+      await vscode.commands.executeCommand('markdownForHumans.feedback.start'),
+      true,
+      'Feedback command must reach the ready editor without a startup sleep'
+    );
+
+    const draftDir = await waitFor(() => {
+      if (!fs.existsSync(feedbackRoot)) return undefined;
+      const entries = fs.readdirSync(feedbackRoot);
+      return entries.length > 0 ? path.join(feedbackRoot, entries[0]) : undefined;
+    }, 'Feedback draft under .md4h/feedback');
+
+    assert.ok(fs.existsSync(draftDir), 'Expected a Feedback draft directory');
+    assert.equal(
+      errors.some(message => message.includes('rendered Markdown differs from the saved file')),
+      false,
+      `Feedback start raised parity error: ${errors.join(' | ') || '(none)'}`
+    );
+    assert.equal(
+      errors.length,
+      0,
+      `Unexpected Feedback errors: ${errors.join(' | ') || '(none)'}`
+    );
+  } finally {
+    vscode.window.showErrorMessage = originalError;
+    vscode.window.showWarningMessage = originalWarning;
+    fs.rmSync(feedbackRoot, { recursive: true, force: true });
+    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+  }
+}
+
 suite('Feedback snapshot parity (Ext Host)', () => {
   suiteSetup(async function () {
     this.timeout(60_000);
@@ -37,71 +106,11 @@ suite('Feedback snapshot parity (Ext Host)', () => {
 
   test('starts Feedback on a mark-inside-link + compact-table fixture', async function () {
     this.timeout(90_000);
-    await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    await assertFeedbackStarts('parity-mark-link.md');
+  });
 
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    assert.ok(workspaceFolder, 'Expected integration fixture workspace');
-    const fixtureUri = vscode.Uri.joinPath(workspaceFolder.uri, 'parity-mark-link.md');
-    await vscode.workspace.fs.stat(fixtureUri);
-
-    const feedbackRoot = path.join(workspaceFolder.uri.fsPath, '.md4h', 'feedback');
-    fs.rmSync(feedbackRoot, { recursive: true, force: true });
-
-    const errors = [];
-    const warnings = [];
-    const originalError = vscode.window.showErrorMessage;
-    const originalWarning = vscode.window.showWarningMessage;
-    vscode.window.showErrorMessage = async (message, ...items) => {
-      errors.push(String(message));
-      return originalError.call(vscode.window, message, ...items);
-    };
-    vscode.window.showWarningMessage = async (message, ...items) => {
-      warnings.push(String(message));
-      return originalWarning.call(vscode.window, message, ...items);
-    };
-
-    try {
-      await vscode.commands.executeCommand('vscode.openWith', fixtureUri, CUSTOM_EDITOR_VIEW_TYPE, {
-        viewColumn: vscode.ViewColumn.One,
-        preview: false,
-      });
-
-      await waitFor(() => {
-        const activeTab = vscode.window.tabGroups.activeTabGroup.activeTab;
-        return activeTab?.input instanceof vscode.TabInputCustom &&
-          activeTab.input.viewType === CUSTOM_EDITOR_VIEW_TYPE
-          ? activeTab
-          : undefined;
-      }, 'custom editor tab');
-
-      assert.equal(
-        await vscode.commands.executeCommand('markdownForHumans.feedback.start'),
-        true,
-        'Feedback command must reach the ready editor without a startup sleep'
-      );
-
-      const draftDir = await waitFor(() => {
-        if (!fs.existsSync(feedbackRoot)) return undefined;
-        const entries = fs.readdirSync(feedbackRoot);
-        return entries.length > 0 ? path.join(feedbackRoot, entries[0]) : undefined;
-      }, 'Feedback draft under .md4h/feedback');
-
-      assert.ok(fs.existsSync(draftDir), 'Expected a Feedback draft directory');
-      assert.equal(
-        errors.some(message => message.includes('rendered Markdown differs from the saved file')),
-        false,
-        `Feedback start raised parity error: ${errors.join(' | ') || '(none)'}`
-      );
-      assert.equal(
-        errors.length,
-        0,
-        `Unexpected Feedback errors: ${errors.join(' | ') || '(none)'}`
-      );
-    } finally {
-      vscode.window.showErrorMessage = originalError;
-      vscode.window.showWarningMessage = originalWarning;
-      fs.rmSync(feedbackRoot, { recursive: true, force: true });
-      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
-    }
+  test('starts Feedback on nested and inline HTML comments', async function () {
+    this.timeout(90_000);
+    await assertFeedbackStarts('html-comments.md');
   });
 });
