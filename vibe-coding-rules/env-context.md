@@ -41,6 +41,7 @@ Markdown entities are decoded only in inline text contexts. Authored entity spel
 
 - Protocol v2 envelopes use `editId`, renderer `viewGeneration`, `localRevision` and `baseDocumentVersion`.
 - A 500 ms controller debounce stores only a dirty bit. It serializes the latest TipTap state only at a timer drain or explicit flush boundary.
+- The first change after idle drains on a zero-delay timer, so the `TextDocument` turns dirty before VS Code can close a clean-looking tab without prompting. Later changes in that burst use the 500 ms debounce. Messages a webview posts while its tab is closing never reach the host, so teardown flushes cannot replace this.
 - Serialization reuses each unchanged top-level block's cached Markdown. Loads seed that cache with the block's authored source, so only edited blocks take TipTap's canonical form.
 - One emitted edit waits for its exact `document.edit.ack` before another derives from the accepted host version.
 - Explicit save drains accepted host edits, sends a correlated host-version flush barrier, requires any newly emitted edit to be accepted, drains again, then invokes VS Code save.

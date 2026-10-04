@@ -74,7 +74,7 @@ This separation is important. A queued `Webview.postMessage()` is not proof that
 - normalized Markdown content
 - an edit reason
 
-`DocumentSyncController` keeps serialization off the keystroke path. `markDirty()` records a dirty bit and owns at most one 500 ms timer. Markdown is serialized only when the timer drains or an explicit flush/save boundary runs. It does not retain an eager serialized snapshot while images or other prerequisites are pending.
+`DocumentSyncController` keeps serialization off the keystroke path. `markDirty()` records a dirty bit and owns at most one timer. The first change after idle uses a zero-delay timer so VS Code sees a dirty `TextDocument` before a quick tab close (a closing webview's messages never reach the host). Later changes in the same burst use the 500 ms debounce. Markdown is serialized only when the timer drains or an explicit flush/save boundary runs. It does not retain an eager serialized snapshot while images or other prerequisites are pending.
 
 Only one emitted renderer edit can remain unacknowledged at a time. The host returns `document.edit.ack` with the exact edit identity, acceptance result and resulting document version. A replayable ID is bound to an immutable hash of its generation, revisions, reason, predecessor, and content, so conflicting reuse is rejected instead of replaying an unrelated success. A rejection causes an authoritative host replay before later dirty work is sent.
 
@@ -253,7 +253,7 @@ Performance is controlled by work-count contracts first, then measured on target
 Implemented hot-path protections include:
 
 - zero Markdown serialization in the immediate typing transaction path
-- one debounce timer and one serialization/send when a burst drains
+- one timer per burst: one serialization/send for the burst's first change, then one when the burst drains
 - immutable ProseMirror top-level node caching, so an edit can reserialize only changed blocks after the initial pass
 - serialized host edits with compatible pending typing coalescing
 - minimal source ranges for documents of at least 32 KiB

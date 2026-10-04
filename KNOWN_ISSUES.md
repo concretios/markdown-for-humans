@@ -8,9 +8,6 @@ Living list of open limitations for **Markdown for Humans 0.4.1**. For release h
 
 ## Open issues
 
-### Closing a tab right after an edit can lose that edit
-If you close a Markdown for Humans tab within about half a second of your last change, VS Code can close it without asking to save, and that last change is lost. Pause briefly after editing before closing the tab. Present since 0.4.0; a fix is planned.
-
 ### Workspace file drag-drop in Cursor IDE
 Dragging images from the Cursor workspace explorer into the editor is often not detected. Works in VS Code / Windsurf. External drops (Finder/desktop) may still work.
 
