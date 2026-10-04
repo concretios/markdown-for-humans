@@ -167,7 +167,7 @@ Shared-runner gates do not prove physical Windows i5/16 GB p95 latency, memory u
 | Highlight occurrence index  | `src/webview/highlighting/plugin.ts`                                                              |
 | Highlight worker and limits | `src/webview/highlighting/client.ts`, `src/webview/highlighting/worker.ts`, `src/webview/highlighting/types.ts` |
 | Fence info and grammars     | `src/webview/highlighting/fenceInfo.ts`, `src/webview/highlighting/languageRegistry.ts`, `src/webview/highlighting/tokenize.ts` |
-| List Markdown compatibility | `src/webview/extensions/markdownListItem.ts`, `src/webview/extensions/orderedListMarkdownFix.ts` |
+| List Markdown compatibility | `src/webview/extensions/markdownListItem.ts`, `src/webview/extensions/orderedListMarkdownFix.ts`, `src/webview/extensions/markdownTaskList.ts` |
 | Sync serialization          | `src/webview/utils/markdownSerialization.ts`                                                     |
 | Hidden-view state           | `src/webview/utils/richViewState.ts`                                                             |
 | Feedback request contract   | `src/shared/feedbackProtocol.ts`                                                                 |

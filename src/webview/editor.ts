@@ -30,6 +30,7 @@ import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
+import { MarkdownTaskList } from './extensions/markdownTaskList';
 import { MarkdownListItem } from './extensions/markdownListItem';
 import { HtmlPreservingTable } from './extensions/htmlPreservingTable';
 import { TableCellEnterHardBreak } from './extensions/tableCellEnterHardBreak';
@@ -944,10 +945,12 @@ function initializeEditor(initialContent: string) {
         ListKit.configure({
           listItem: false,
           orderedList: false,
+          taskList: false, // MarkdownTaskList below avoids the stock O(n^2) tokenizer
           taskItem: {
             nested: true,
           },
         }),
+        MarkdownTaskList,
         MarkdownListItem,
         OrderedListMarkdownFix,
         TabIndentation, // Enable Tab/Shift+Tab for list indentation
