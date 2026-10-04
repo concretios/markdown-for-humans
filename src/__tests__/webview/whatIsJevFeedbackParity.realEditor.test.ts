@@ -4,7 +4,8 @@
  * Regression: Feedback snapshot parity for the "What Is Jev?" blog patterns.
  * Authored mark-inside-link labels (`[*text*](url)`) round-trip through TipTap
  * as mark-outside-link (`*[text](url)*`). Compact GFM tables also pad on
- * serialize. Feedback must still accept the renderer snapshot.
+ * serialize. Medium export comments sit directly above tables and must survive.
+ * Feedback must still accept the renderer snapshot.
  */
 
 import { Editor } from '@tiptap/core';
@@ -19,6 +20,7 @@ import { applyBlankLinePolicy } from '../../shared/blankLinePolicy';
 import { BlankLinePreservation } from '../../webview/extensions/blankLinePreservation';
 import { CustomImage } from '../../webview/extensions/customImage';
 import { GitHubAlerts } from '../../webview/extensions/githubAlerts';
+import { HtmlComment } from '../../webview/extensions/htmlComment';
 import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTable';
 import { IndentedImageCodeBlock } from '../../webview/extensions/indentedImageCodeBlock';
 import { MarkdownCode, MarkdownLink } from '../../webview/extensions/markdownCompatibilityMarks';
@@ -72,6 +74,7 @@ function createFeedbackSnapshotEditor(source: string): Editor {
         link: false,
       }),
       MarkdownParagraph,
+      HtmlComment,
       MarkdownCode,
       PreservedMarkdownLiteral,
       FeedbackSnapshotCodeBlock,
@@ -109,6 +112,7 @@ const JEV_PARITY_EXCERPT = `# What Is Jev?
 
 The psychologist Daniel Kahneman described two modes of human thinking in [*Thinking, Fast and Slow*](https://en.wikipedia.org/wiki/Thinking,_Fast_and_Slow):
 
+<!-- medium: export as image -->
 | | System 1 | System 2 |
 |---|---|---|
 | Speed | Instant | Slow |
@@ -137,6 +141,7 @@ describe('What Is Jev Feedback snapshot parity', () => {
       const normalizedSource = normalizeLikeHost(JEV_PARITY_EXCERPT);
       expect(normalizedRenderer === normalizedSource).toBe(false);
       expect(isMarkdownRendererEquivalent(normalizedRenderer, normalizedSource)).toBe(true);
+      expect(normalizedRenderer).toContain('<!-- medium: export as image -->\n| ');
     } finally {
       editor.destroy();
     }

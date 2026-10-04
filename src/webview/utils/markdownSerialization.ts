@@ -6,7 +6,7 @@
 
 import type { Editor, JSONContent } from '@tiptap/core';
 import type { BlankLineMode } from '../../shared/blankLinePolicy';
-import { PRESERVED_MARKDOWN_LITERAL_TOKEN } from './markedLexerNormalizer';
+import { HTML_COMMENT_TOKEN, PRESERVED_MARKDOWN_LITERAL_TOKEN } from './markedLexerNormalizer';
 
 type MarkdownManager = {
   serialize?: (json: JSONContent) => string;
@@ -22,6 +22,13 @@ interface MarkdownSourceToken {
 interface SerializedTopLevelBlock {
   readonly isEmptyParagraph: boolean;
   readonly markdown: string;
+  /** Join the next block with one newline instead of a blank line. */
+  readonly tightAfter?: boolean;
+}
+
+/** An HTML comment authored directly above the next block keeps that layout. */
+function isTightAfter(node: JSONContent): boolean {
+  return node.type === HTML_COMMENT_TOKEN && node.attrs?.tightAfter === true;
 }
 
 interface SerializedBlockResult {
@@ -312,6 +319,7 @@ function joinSerializedBlocks(
 
   let result = '';
   let pendingBlanks = 0;
+  let previousTightAfter = false;
 
   for (let index = startIndex; index < endIndex; index++) {
     const block = blocks[index];
@@ -332,13 +340,18 @@ function joinSerializedBlocks(
     }
 
     if (result !== '') {
-      result += '\n\n';
-      if (blankLineMode === 'preserve') {
-        result += '\n'.repeat(pendingBlanks);
+      if (previousTightAfter && pendingBlanks === 0) {
+        result += '\n';
+      } else {
+        result += '\n\n';
+        if (blankLineMode === 'preserve') {
+          result += '\n'.repeat(pendingBlanks);
+        }
       }
     }
     result += block.markdown;
     pendingBlanks = 0;
+    previousTightAfter = block.tightAfter === true;
   }
 
   return result;
@@ -355,6 +368,7 @@ function serializeJsonBlocks(
       return {
         isEmptyParagraph: isEmpty,
         markdown: isEmpty ? '' : serializeBlockMarkdown(node, serialize),
+        tightAfter: isTightAfter(node),
       };
     }),
     blankLineMode
@@ -392,6 +406,7 @@ function serializeProseMirrorBlocks(
     const block: SerializedTopLevelBlock = {
       isEmptyParagraph: isEmpty,
       markdown: isEmpty ? '' : serialized.markdown,
+      tightAfter: isTightAfter(json),
     };
     // An empty result for a non-empty node can mean a transient serializer
     // failure. Structural fallbacks produced after an exception must also be
@@ -529,6 +544,7 @@ function rememberSourceBlocks(
         // Some tokenizers (task lists) absorb the separating blank lines into
         // raw. Those belong to the block join, not the block.
         markdown: token.raw.replace(/^(?:[ \t]*\n)+/, '').replace(/(?:\n[ \t]*)+$/, ''),
+        tightAfter: isTightAfter(parsed[0]),
       };
       cache.blocks.set(node, block);
       cache.sources[index] = { node, block };

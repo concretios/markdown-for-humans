@@ -28,6 +28,11 @@ Since 0.4.1, blocks you do not edit keep their exact source on save. A block you
 ### Escaped Markdown characters
 In a block you edit, escaped characters such as `\*` may be saved without the backslash and turn into formatting. Unedited blocks keep the backslash.
 
+### Nested and inline HTML comments
+A comment on its own lines at the top level of the document is kept. A comment inside a list item or blockquote, or inside a line of text (`Text <!-- note --> more`), is still dropped when that file is saved from the editor.
+
+**Workaround:** Put comments on their own lines outside lists and quotes.
+
 ### Loose / ordered list markers
 In a list you edit, loose lists can round-trip as tight lists and `1)` markers may become `1.`. Unedited lists keep their source.
 
