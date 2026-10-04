@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Inline code that contains a backtick no longer turns into broken code plus literal text on save (TipTap 3.31.4 chooses a longer backtick fence).
 - Closing a tab right after an edit no longer loses that edit. Previously, closing within about half a second of a change closed the tab without a save prompt and the change never reached the file. The first change after a pause now reaches VS Code at once, so the tab shows as unsaved and VS Code asks to save.
 - Toolbar tooltips now appear reliably when you hover over a button icon, not only its edges (contributed by @goltmann).
+- **Copy to Workspace & Edit** for an image outside the workspace now works. The image was copied, but the dialog closed and nothing else happened; the image now points at the copy and the resize panel opens.
 
 ### Changed
 
