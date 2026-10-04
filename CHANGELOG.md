@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Closing a tab right after an edit no longer loses that edit. Previously, closing within about half a second of a change closed the tab without a save prompt and the change never reached the file. The first change after a pause now reaches VS Code at once, so the tab shows as unsaved and VS Code asks to save.
 - Toolbar tooltips now appear reliably when you hover over a button icon, not only its edges (contributed by @goltmann).
 - **Copy to Workspace & Edit** for an image outside the workspace now works. The image was copied, but the dialog closed and nothing else happened; the image now points at the copy and the resize panel opens.
-- HTML comments such as `<!-- medium: export as image -->` are no longer deleted. Since 0.3.0 the editor dropped them on load, so the next save removed them from the file and Feedback refused to start ("the rendered Markdown differs from the saved file"). They now show as a faint one-line marker and save exactly as written, including a comment placed directly above a table.
+- HTML comments such as `<!-- medium: export as image -->` are no longer deleted. Since 0.3.0 the editor dropped them on load, so the next save removed them from the file and Feedback refused to start ("the rendered Markdown differs from the saved file"). They now show as a faint marker and save exactly as written, including a comment placed directly above a table, inside a list item or blockquote, or inside a line of text.
 
 ### Changed
 
