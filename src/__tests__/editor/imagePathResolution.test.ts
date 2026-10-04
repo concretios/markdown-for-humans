@@ -6,6 +6,9 @@
  * resolve correctly in the WYSIWYG editor.
  */
 
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { MarkdownEditorProvider, normalizeImagePath } from '../../editor/MarkdownEditorProvider';
 import * as vscode from 'vscode';
 import { Uri } from 'vscode';
@@ -221,6 +224,98 @@ describe('normalizeImagePath', () => {
         extensionUri: Uri.file('/test/extension'),
       } as unknown as vscode.ExtensionContext);
 
+    it.each(['C#-logo.png', 'draft?review.png'])(
+      'resolves an existing raw delimiter filename %s',
+      filename => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'md4h-raw-path-'));
+        fs.writeFileSync(path.join(root, filename), 'image');
+        const provider = createProvider();
+        const document = {
+          ...createMockTextDocument(''),
+          uri: Uri.file(path.join(root, 'doc.md')),
+        };
+        const webview = createMockWebview();
+        try {
+          (
+            provider as unknown as {
+              handleResolveImageUri(
+                message: unknown,
+                doc: vscode.TextDocument,
+                view: vscode.Webview
+              ): void;
+            }
+          ).handleResolveImageUri(
+            { relativePath: filename, requestId: 'raw' },
+            document,
+            webview as unknown as vscode.Webview
+          );
+          expect(webview.asWebviewUri).toHaveBeenCalledWith(
+            expect.objectContaining({ fsPath: path.join(root, filename) })
+          );
+          expect(webview.postMessage).toHaveBeenCalledWith(
+            expect.objectContaining({ webviewUri: `webview:${path.join(root, filename)}` })
+          );
+        } finally {
+          provider.dispose();
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      }
+    );
+
+    it('renames CRLF image references without changing code examples or authored line endings', () => {
+      const provider = createProvider();
+      const internal = provider as unknown as {
+        replaceImageReferences(text: string, base: string, old: string, name: string): string;
+      };
+      const base = path.resolve('/workspace');
+      const lines = [
+        '# 图 🖼️',
+        '',
+        '![Image](assets/My Diagram.svg?rev=2#detail)',
+        '',
+        'Paragraph',
+        '',
+        '    ![Example](assets/My%20Diagram.svg)',
+        '    const value = 1;',
+        '',
+        '<img src="assets/My%20Diagram.svg?rev=2&amp;mode=1#detail" width="200">',
+        '',
+      ];
+      const expected = [...lines];
+      expected[2] = '![Image](assets/New%20Diagram.svg?rev=2#detail)';
+      expected[9] = '<img src="assets/New%20Diagram.svg?rev=2&amp;mode=1#detail" width="200">';
+      try {
+        expect(
+          internal.replaceImageReferences(
+            lines.join('\r\n'),
+            base,
+            path.join(base, 'assets/My Diagram.svg'),
+            'New Diagram.svg'
+          )
+        ).toBe(expected.join('\r\n'));
+      } finally {
+        provider.dispose();
+      }
+    });
+
+    it('renames raw delimiter references after the old file has moved, preserving HTML attributes', () => {
+      const provider = createProvider();
+      const internal = provider as unknown as {
+        replaceImageReferences(text: string, base: string, old: string, name: string): string;
+      };
+      const base = path.resolve('/workspace');
+      const source = '![C](assets#one/C#-logo.png)\n<img src="assets#one/C#-logo.png" width="200">';
+      expect(
+        internal.replaceImageReferences(
+          source,
+          base,
+          path.join(base, 'assets#one/C#-logo.png'),
+          'new?logo.png'
+        )
+      ).toBe('![C](assets#one/new%3Flogo.png)\n<img src="assets#one/new%3Flogo.png" width="200">');
+      provider.dispose();
+    });
+
     it('resolves and decodes workspace-relative image paths', () => {
       const provider = createProvider();
       const document = createMockTextDocument('');
@@ -294,6 +389,39 @@ describe('normalizeImagePath', () => {
           /webview:([A-Za-z]:)?[/\\]test[/\\]assets[/\\]My Diagram\.png$/
         ),
         relativePath: 'file:///test/assets/My%20Diagram.png',
+      });
+    });
+
+    it('rejects a local image path outside the document and workspace roots', () => {
+      const provider = createProvider();
+      const document = createMockTextDocument('');
+      const webview = createMockWebview();
+
+      (
+        provider as unknown as {
+          handleResolveImageUri: (
+            message: unknown,
+            doc: vscode.TextDocument,
+            webview: vscode.Webview
+          ) => void;
+        }
+      ).handleResolveImageUri(
+        {
+          type: 'resolveImageUri',
+          requestId: 'req-outside',
+          relativePath: 'file:///private/secrets/tracker.png',
+        },
+        document,
+        webview as unknown as vscode.Webview
+      );
+
+      expect(webview.asWebviewUri).not.toHaveBeenCalled();
+      expect(webview.postMessage).toHaveBeenCalledWith({
+        type: 'imageUriResolved',
+        requestId: 'req-outside',
+        webviewUri: '',
+        relativePath: 'file:///private/secrets/tracker.png',
+        error: expect.stringMatching(/outside|allowed/i),
       });
     });
   });

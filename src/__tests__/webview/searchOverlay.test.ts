@@ -53,6 +53,8 @@ jest.mock('@tiptap/pm/state', () => {
 });
 
 import type { Editor } from '@tiptap/core';
+import { readFileSync } from 'fs';
+import * as path from 'path';
 import {
   findMatches,
   showSearchOverlay,
@@ -177,6 +179,31 @@ function setWindowScrollPosition(x: number, y: number) {
 }
 
 describe('Search Overlay', () => {
+  it('allows clicks through the transparent wrapper while keeping the visible panel interactive', () => {
+    const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
+    const visibleRule = css.match(/\.search-overlay\.visible\s*\{([^}]+)\}/)?.[1];
+    const panelRule = css.match(/\.search-overlay-panel\s*\{([^}]+)\}/)?.[1];
+    expect(visibleRule).not.toMatch(/pointer-events:\s*auto/);
+    expect(panelRule).toMatch(/pointer-events:\s*auto/);
+  });
+
+  it('keeps Find below the live toolbar and moves a saved-draft banner below Find', () => {
+    const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
+    // Moving Find into the toolbar row covered live toolbar buttons in narrow splits.
+    expect(css).not.toMatch(/body:has\(\.feedback-draft-banner\)\s+\.search-overlay/);
+    const findTop = Number(
+      css.match(/\n\s*\.search-overlay\s*\{[^}]*padding-top:\s*(\d+)px/)?.[1] ?? Number.NaN
+    );
+    const bannerTop = Number(
+      css.match(
+        /body:has\(\.search-overlay\.visible\)\s+\.feedback-draft-banner\s*\{[^}]*top:\s*(\d+)px/
+      )?.[1] ?? Number.NaN
+    );
+    // The Find panel is 46 CSS px tall: 28 px controls, 8 px padding and a 1 px
+    // border on each side. The rendered geometry is a manual VS Code check.
+    expect(bannerTop).toBeGreaterThanOrEqual(findTop + 46);
+  });
+
   describe('findMatches', () => {
     it('should return empty array for empty query', () => {
       const editor = createMockEditor('Hello world');
@@ -494,6 +521,25 @@ describe('Search Overlay UI behaviors', () => {
 
     expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
     expect(editor.commands.focus).toHaveBeenCalledWith(undefined, { scrollIntoView: false });
+  });
+
+  it('closes for Feedback without restoring an old cursor or stealing toolbar focus', () => {
+    editor.state.selection = { from: 4, to: 4 };
+    editor.state.doc.textBetween.mockReturnValue('');
+    showSearchOverlay(editor as unknown as Editor);
+    const button = document.createElement('button');
+    document.body.append(button);
+    button.focus();
+    editor.commands.setTextSelection.mockClear();
+    editor.commands.focus.mockClear();
+
+    hideSearchOverlay(editor as unknown as Editor, false);
+
+    expect(isSearchVisible()).toBe(false);
+    expect(editor.commands.setTextSelection).not.toHaveBeenCalled();
+    expect(editor.commands.focus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(button);
+    expect(document.querySelector('.search-overlay.visible')).toBeNull();
   });
 });
 

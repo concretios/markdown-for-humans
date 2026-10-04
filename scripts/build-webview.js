@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Build Script for Webview Bundle
+ * Build Script for Webview and Highlighting Worker Bundles
  *
- * Uses esbuild programmatically to build the webview with custom plugins.
+ * Builds the editor and a self-contained classic worker with esbuild.
  * This allows us to selectively remove console.log/debug/info while keeping
  * console.error and console.warn in production builds.
  *
@@ -16,6 +16,7 @@
 const esbuild = require('esbuild');
 const fs = require('fs');
 const { consoleStripOptions } = require('./console-strip');
+const runtimeTargets = require('./runtime-targets');
 
 const args = process.argv.slice(2);
 const isProduction = args.includes('--prod') || process.env.NODE_ENV === 'production';
@@ -27,6 +28,7 @@ const buildOptions = {
   bundle: true,
   outfile: 'dist/webview.js',
   format: 'iife',
+  target: runtimeTargets.webview,
   sourcemap: !noSourcemap && !isProduction, // Disable for marketplace builds
   minify: isProduction,
   treeShaking: true,
@@ -47,25 +49,46 @@ const buildOptions = {
   plugins: [],
 };
 
+// VS Code workers load from Blob URLs, so dependencies must stay in this one
+// classic-script bundle. Code splitting and runtime imports are not allowed.
+const workerBuildOptions = {
+  ...buildOptions,
+  entryPoints: ['src/webview/highlighting/worker.ts'],
+  outfile: 'dist/highlighting-worker.js',
+};
+
 async function build() {
   if (isWatch) {
     // Watch mode - development build
-    const context = await esbuild.context({
-      ...buildOptions,
-      minify: false, // Never minify in watch mode
-      ...consoleStripOptions(false), // Keep all console output in watch mode
-      plugins: [],
-    });
+    const contexts = [];
+    try {
+      for (const options of [buildOptions, workerBuildOptions]) {
+        contexts.push(
+          await esbuild.context({
+            ...options,
+            minify: false,
+            ...consoleStripOptions(false),
+          })
+        );
+      }
+      await Promise.all(contexts.map(context => context.watch()));
+    } catch (error) {
+      await Promise.all(contexts.map(context => context.dispose()));
+      throw error;
+    }
 
-    await context.watch();
     console.log('👀 Watching for changes... (Press Ctrl+C to stop)');
   } else {
     // One-time build
     try {
-      await esbuild.build(buildOptions);
+      await Promise.all([esbuild.build(buildOptions), esbuild.build(workerBuildOptions)]);
       if (isProduction || noSourcemap) {
         // Ensure release builds don't leave stale sourcemaps in dist/
-        for (const mapFile of ['dist/webview.js.map', 'dist/webview.css.map']) {
+        for (const mapFile of [
+          'dist/webview.js.map',
+          'dist/webview.css.map',
+          'dist/highlighting-worker.js.map',
+        ]) {
           try {
             fs.unlinkSync(mapFile);
           } catch {
@@ -81,7 +104,7 @@ async function build() {
   }
 }
 
-build().catch((error) => {
+build().catch(error => {
   console.error('❌ Build failed:', error);
   process.exit(1);
 });

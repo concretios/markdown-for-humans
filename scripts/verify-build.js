@@ -4,7 +4,7 @@
  * Build Verification Script
  *
  * Verifies that critical CSS classes and JavaScript functions
- * are present in the bundled output files.
+ * are present in the bundled output files, including the self-contained worker.
  *
  * Usage: node scripts/verify-build.js
  */
@@ -46,9 +46,7 @@ function assertNoProdConsoleCalls(bundleName, content) {
     return true;
   }
 
-  console.error(
-    `   ❌ Production bundle contains ${matches.length} disallowed console call(s):`
-  );
+  console.error(`   ❌ Production bundle contains ${matches.length} disallowed console call(s):`);
   matches.slice(0, 10).forEach(({ method, line, snippet }) => {
     console.error(`      - console.${method}( at line ${line}`);
     console.error(`        …${snippet.replace(/\s+/g, ' ')}…`);
@@ -56,12 +54,8 @@ function assertNoProdConsoleCalls(bundleName, content) {
   if (matches.length > 10) {
     console.error(`      … and ${matches.length - 10} more`);
   }
-  console.error(
-    `   Fix: see scripts/console-strip.js - release builds must apply both 'pure'`
-  );
-  console.error(
-    `   and the 'define' + injected no-op, since 'pure' cannot remove calls whose`
-  );
+  console.error(`   Fix: see scripts/console-strip.js - release builds must apply both 'pure'`);
+  console.error(`   and the 'define' + injected no-op, since 'pure' cannot remove calls whose`);
   console.error(`   return value is used (e.g. \`(m) => console.log(m)\`).\n`);
   return false;
 }
@@ -70,10 +64,10 @@ function assertNoSourcemapsInDist() {
   const distPath = path.join(process.cwd(), 'dist');
   if (!fs.existsSync(distPath)) return true;
   const distFiles = fs.readdirSync(distPath);
-  const maps = distFiles.filter((f) => f.endsWith('.map'));
+  const maps = distFiles.filter(f => f.endsWith('.map'));
   if (maps.length > 0) {
     console.error(`   ❌ Release build left sourcemaps in dist/:`);
-    maps.forEach((f) => console.error(`      - dist/${f}`));
+    maps.forEach(f => console.error(`      - dist/${f}`));
     console.error(`   Fix: run release builds with --no-sourcemap and/or delete stale maps.\n`);
     return false;
   }
@@ -93,6 +87,10 @@ const CRITICAL_FEATURES = {
       'copyLocalImageToWorkspace', // Feature
     ],
   },
+  highlightingWorkerJs: {
+    file: 'dist/highlighting-worker.js',
+    required: ['md4h.highlight.request', 'md4h.highlight.result'],
+  },
   webviewCss: {
     file: 'dist/webview.css',
     required: [
@@ -105,11 +103,7 @@ const CRITICAL_FEATURES = {
   },
   extensionJs: {
     file: 'dist/extension.js',
-    required: [
-      'resizeImage',
-      'checkImageInWorkspace',
-      'copyLocalImageToWorkspace',
-    ],
+    required: ['resizeImage', 'checkImageInWorkspace', 'copyLocalImageToWorkspace'],
   },
 };
 
@@ -138,11 +132,23 @@ for (const [bundleName, config] of Object.entries(CRITICAL_FEATURES)) {
 
   // Sanity check: release/production bundles must not contain noisy console methods.
   // We keep console.warn/error for diagnostics, but log/debug/info should be stripped.
-  if (bundleName === 'webviewJs' || bundleName === 'extensionJs') {
+  if (config.file.endsWith('.js')) {
     if (!assertNoProdConsoleCalls(bundleName, content)) {
       hasErrors = true;
       continue;
     }
+  }
+
+  // This lexical guard complements the worker's bundled IIFE build format.
+  // The supported worker must not require CSP exceptions for dynamic code.
+  if (
+    bundleName === 'highlightingWorkerJs' &&
+    /\b(?:importScripts|import|eval)\s*\(|\bnew\s+Function\s*\(/.test(content)
+  ) {
+    console.error(
+      '   ❌ Highlighting worker must be self-contained without imports or dynamic code.\n'
+    );
+    hasErrors = true;
   }
 
   const missing = [];
@@ -178,6 +184,7 @@ for (const [bundleName, config] of Object.entries(CRITICAL_FEATURES)) {
 console.log('📊 Bundle sizes:');
 const sizeChecks = [
   { file: 'dist/webview.js', min: 100000, max: 15000000 },
+  { file: 'dist/highlighting-worker.js', min: 10000, max: 1000000 },
   { file: 'dist/webview.css', min: 10000, max: 500000 },
   { file: 'dist/extension.js', min: 100000, max: 10000000 },
 ];
@@ -199,6 +206,17 @@ for (const check of sizeChecks) {
       console.log(`   ✅ ${check.file}: ${sizeKB}KB`);
     }
   }
+}
+
+const webviewJavaScriptFiles = ['dist/webview.js', 'dist/highlighting-worker.js'];
+const totalWebviewJavaScriptBytes = webviewJavaScriptFiles.reduce((bytes, file) => {
+  const filePath = path.join(process.cwd(), file);
+  return bytes + (fs.existsSync(filePath) ? fs.statSync(filePath).size : 0);
+}, 0);
+console.log(`   Total webview JavaScript (editor + worker): ${totalWebviewJavaScriptBytes} bytes`);
+if (totalWebviewJavaScriptBytes > 15000000) {
+  console.warn('   ⚠️  Total webview JavaScript exceeds the 15 MB review threshold.');
+  hasWarnings = true;
 }
 
 console.log('');

@@ -6,43 +6,196 @@
 
 import type { Editor, JSONContent } from '@tiptap/core';
 import type { BlankLineMode } from '../../shared/blankLinePolicy';
+import { PRESERVED_MARKDOWN_LITERAL_TOKEN } from './markedLexerNormalizer';
 
 type MarkdownManager = {
   serialize?: (json: JSONContent) => string;
+  createLexer?: () => { lex(markdown: string): MarkdownSourceToken[] };
+  parseTokens?: (tokens: MarkdownSourceToken[]) => JSONContent[];
 };
 
+interface MarkdownSourceToken {
+  readonly type?: string;
+  readonly raw?: string;
+}
+
+interface SerializedTopLevelBlock {
+  readonly isEmptyParagraph: boolean;
+  readonly markdown: string;
+}
+
+interface SerializedBlockResult {
+  readonly markdown: string;
+  readonly serializerSucceeded: boolean;
+}
+
+interface ProseMirrorDocumentLike {
+  readonly childCount: number;
+  child(index: number): ProseMirrorNodeLike;
+}
+
+interface ProseMirrorNodeLike {
+  toJSON(): JSONContent;
+  eq?(other: ProseMirrorNodeLike): boolean;
+}
+
+interface RememberedSourceBlock {
+  readonly node: ProseMirrorNodeLike;
+  readonly block: SerializedTopLevelBlock;
+}
+
+interface EditorBlockSerializationCache {
+  readonly serializer: (json: JSONContent) => string;
+  readonly blocks: WeakMap<ProseMirrorNodeLike, SerializedTopLevelBlock>;
+  // Authored source of each top-level block as loaded, by document index. Lets
+  // an edited-then-reverted block (a new node with equal content) save its
+  // original bytes again instead of TipTap's canonical form.
+  sources: RememberedSourceBlock[];
+}
+
+// ProseMirror nodes are immutable and unchanged branches retain object identity
+// across transactions. Weak keys let later syncs reuse block Markdown without
+// retaining old document trees after ProseMirror releases them.
+const editorBlockSerializationCaches = new WeakMap<Editor, EditorBlockSerializationCache>();
+
+interface PatchableMarkdownManager {
+  encodeTextForMarkdown?: (text: string, node: JSONContent, parentNode?: JSONContent) => string;
+  escapeMarkdownSyntax?: (text: string) => string;
+  codeTypes?: Set<string>;
+  __md4hSerializationPatched?: boolean;
+}
+
+function isEncodedInsideCode(
+  manager: PatchableMarkdownManager,
+  node: JSONContent,
+  parentNode?: JSONContent
+): boolean {
+  const codeTypes = manager.codeTypes;
+  if (!codeTypes) return false;
+  if (parentNode?.type != null && codeTypes.has(parentNode.type)) return true;
+  return (node.marks || []).some(mark =>
+    codeTypes.has(typeof mark === 'string' ? mark : mark.type)
+  );
+}
+
 /**
- * Reorders each text node's `marks` array so `code` always comes first.
- *
- * Why this is needed: `@tiptap/markdown` opens/closes a text node's marks in
- * `marks` array order, with later marks ending up outermost. That array order
- * comes from the schema's mark rank (set when the doc is built via
- * `Node.fromJSON`/`Mark.setFrom`, which sorts by registration order in the
- * extensions list), not from how the marks were originally nested in the
- * source markdown. Every other inline mark here (bold/italic/strike/link) is
- * "transparent" - wrapping one in another still parses fine regardless of
- * order - but `code` is not: a markdown code span's content is always
- * literal, so if `code` ends up outermost, any mark nested inside it (e.g. a
- * link's `[text](url)`) gets swallowed as literal text instead of being
- * parsed. Moving `code` to the front keeps it innermost regardless of the
- * schema's rank order, matching how it was actually written in the source.
+ * TipTap 3.30.5 escapes every `\ * _ [ ] ~` in prose. That fights this editor's
+ * model: real emphasis/links are TipTap marks (serialized with their own
+ * delimiters), while marked's autolink tokenizer strips escapes back into URL
+ * text — so `Foo_bar` in a URL grows `\_` → `\\\_` → … on every save. Match
+ * main's TipTap 3.12 behavior: leave prose characters alone.
  */
-export function reorderMarksForSerialization(node: JSONContent): JSONContent {
-  if (node.type === 'text') {
-    if (!Array.isArray(node.marks) || node.marks.length < 2) return node;
-    const codeIndex = node.marks.findIndex(mark => mark.type === 'code');
-    if (codeIndex <= 0) return node;
-    const marks = [...node.marks];
-    const [codeMark] = marks.splice(codeIndex, 1);
-    marks.unshift(codeMark);
-    return { ...node, marks };
+function escapeMarkdownSyntaxForProse(text: string): string {
+  return text;
+}
+
+/**
+ * Return the inline text that precedes `node` on its current line inside
+ * `parentNode`, walking back through siblings to the nearest hard break or
+ * newline, or to a heading's own marker. Non-text inline content (images,
+ * math) counts as visible text, and so does a mark on `node`: code and literal
+ * marks never reach this check, so the mark is formatting whose opening
+ * delimiter (`**`, `*`, `~~`, `[`) is on this line before the text. A node
+ * that cannot be located is treated as starting its line, which keeps the
+ * conservative `&gt;` spelling.
+ */
+function lineTextBeforeNode(node: JSONContent, parentNode?: JSONContent): string {
+  const siblings = parentNode?.content;
+  const index = Array.isArray(siblings) ? siblings.indexOf(node) : -1;
+  if (index < 0) return '';
+  if (node.marks?.length) return '\uFFFC';
+  let prefix = '';
+  for (let siblingIndex = index - 1; siblingIndex >= 0; siblingIndex--) {
+    const sibling = siblings![siblingIndex];
+    if (sibling.type === 'hardBreak' || sibling.type === 'hard_break') return prefix;
+    if (sibling.type !== 'text') return `\uFFFC${prefix}`;
+    const text = typeof sibling.text === 'string' ? sibling.text : '';
+    const newline = text.lastIndexOf('\n');
+    if (newline >= 0) return text.slice(newline + 1) + prefix;
+    prefix = text + prefix;
+    if (!/^[ \t]*$/.test(prefix)) return prefix;
+  }
+  // The heading marker (`## `) precedes its first line, not text after a break.
+  return parentNode?.type === 'heading' ? `#${prefix}` : prefix;
+}
+
+/**
+ * Undo TipTap's HTML-entity over-encoding outside code, without turning
+ * authored `&lt;div&gt;`-style entity text into real HTML that marked later
+ * drops. Decode `&lt;` only when it cannot start an HTML tag (`a < b`); keep
+ * `&lt;` before `[A-Za-z/!?]` so generics and literal tag examples stay text.
+ *
+ * Upstream encoder: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Decode in
+ * reverse order; `&amp;` last. Authored entities are decoded by the inline
+ * entity tokenizer and retain their source spelling in mark attributes. An
+ * entity-shaped ampersand in ordinary editor text is therefore literal and
+ * must remain escaped, including after HTML paste or editing an entity.
+ *
+ * Do not decode `&gt;` at a CommonMark blockquote position (start of line,
+ * optional 0–3 spaces) — that turns literal greater-than prose into a quote (T04).
+ * The line start comes from the paragraph's inline content, not from the text
+ * node boundary: `**File** > **Save**` is mid-line although `>` starts a node (R1).
+ * A heading's first line is never a blockquote position; text after a hard
+ * break inside a heading is.
+ */
+function decodeNonTagHtmlEntities(
+  encoded: string,
+  node: JSONContent,
+  parentNode?: JSONContent
+): string {
+  return encoded
+    .replace(/&gt;/g, (match, offset, full: string) => {
+      const newline = full.lastIndexOf('\n', offset - 1);
+      let prefix = full.slice(newline + 1, offset);
+      if (newline < 0 && /^[ \t]{0,3}$/.test(prefix)) {
+        prefix = lineTextBeforeNode(node, parentNode) + prefix;
+      }
+      if (/^[ \t]{0,3}$/.test(prefix)) {
+        return match;
+      }
+      return '>';
+    })
+    .replace(/&lt;(?![A-Za-z/!?])/g, '<')
+    .replace(/&amp;(?!(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#[xX][\da-fA-F]+);)/g, '&');
+}
+
+/**
+ * Install TipTap MarkdownManager patches used by every serialize path (sync,
+ * Feedback snapshots, copy-as-markdown). Idempotent.
+ */
+export function patchMarkdownSerialization(manager: MarkdownManager): void {
+  const patchable = manager as unknown as PatchableMarkdownManager;
+  if (patchable.__md4hSerializationPatched) {
+    return;
   }
 
-  if (Array.isArray(node.content)) {
-    return { ...node, content: node.content.map(reorderMarksForSerialization) };
+  if (typeof patchable.escapeMarkdownSyntax === 'function') {
+    patchable.escapeMarkdownSyntax = escapeMarkdownSyntaxForProse;
   }
 
-  return node;
+  if (typeof patchable.encodeTextForMarkdown === 'function') {
+    const original = patchable.encodeTextForMarkdown.bind(manager);
+    patchable.encodeTextForMarkdown = (text, node, parentNode) => {
+      const entity = node.marks?.find(
+        mark =>
+          mark.type === PRESERVED_MARKDOWN_LITERAL_TOKEN &&
+          typeof mark.attrs?.entitySource === 'string' &&
+          typeof mark.attrs?.entityText === 'string'
+      );
+      if (entity) {
+        if (text === entity.attrs?.entityText) return entity.attrs.entitySource as string;
+        // An edit/formatting split can leave a fragment with the old mark.
+        // Serialize its real text, never resurrect the original entity. Numeric
+        // references keep any newly entered Markdown syntax literal as well.
+        return Array.from(text, character => `&#${character.codePointAt(0)};`).join('');
+      }
+      const encoded = original(text, node, parentNode);
+      if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
+      return decodeNonTagHtmlEntities(encoded, node, parentNode);
+    };
+  }
+
+  patchable.__md4hSerializationPatched = true;
 }
 
 function isMeaningfulInlineNode(node: JSONContent): boolean {
@@ -84,12 +237,172 @@ export function stripEmptyDocParagraphsFromJson(doc: JSONContent): JSONContent {
   };
 }
 
-function serializeSingleNode(node: JSONContent, serialize: (json: JSONContent) => string): string {
+function serializeSingleNode(
+  node: JSONContent,
+  serialize: (json: JSONContent) => string
+): SerializedBlockResult {
   try {
-    return serialize({ type: 'doc', content: [node] }).trim();
+    return {
+      // Indentation selects the image-only code-block parser. Removing it after
+      // SVG sizing turns the leading <img> into an HTML block and swallows the
+      // following images (SVG R1). Keep intentional image indentation only.
+      markdown:
+        node.type === 'paragraph' &&
+        node.content?.[0]?.type === 'image' &&
+        node.content[0].attrs?.['indent-prefix']
+          ? serialize({ type: 'doc', content: [node] }).trimEnd()
+          : serialize({ type: 'doc', content: [node] }).trim(),
+      serializerSucceeded: true,
+    };
   } catch {
+    return { markdown: '', serializerSucceeded: false };
+  }
+}
+
+function getEditorDocument(editor: Editor): ProseMirrorDocumentLike | null {
+  const candidate = (editor as unknown as { state?: { doc?: Partial<ProseMirrorDocumentLike> } })
+    .state?.doc;
+  if (
+    candidate === undefined ||
+    typeof candidate.childCount !== 'number' ||
+    !Number.isInteger(candidate.childCount) ||
+    candidate.childCount < 0 ||
+    typeof candidate.child !== 'function'
+  ) {
+    return null;
+  }
+  return candidate as ProseMirrorDocumentLike;
+}
+
+function getEditorBlockCache(
+  editor: Editor,
+  serializer: (json: JSONContent) => string
+): EditorBlockSerializationCache {
+  const existing = editorBlockSerializationCaches.get(editor);
+  if (existing?.serializer === serializer) {
+    return existing;
+  }
+
+  const created: EditorBlockSerializationCache = {
+    serializer,
+    blocks: new WeakMap(),
+    sources: [],
+  };
+  editorBlockSerializationCaches.set(editor, created);
+  return created;
+}
+
+function joinSerializedBlocks(
+  blocks: readonly SerializedTopLevelBlock[],
+  blankLineMode: BlankLineMode
+): string {
+  let endIndex = blocks.length;
+  while (endIndex > 0 && blocks[endIndex - 1].isEmptyParagraph) {
+    endIndex--;
+  }
+
+  let startIndex = 0;
+  while (startIndex < endIndex && blocks[startIndex].isEmptyParagraph) {
+    startIndex++;
+  }
+
+  if (startIndex >= endIndex) {
     return '';
   }
+
+  let result = '';
+  let pendingBlanks = 0;
+
+  for (let index = startIndex; index < endIndex; index++) {
+    const block = blocks[index];
+    if (block.isEmptyParagraph) {
+      if (blankLineMode === 'preserve') {
+        pendingBlanks++;
+      }
+      continue;
+    }
+
+    if (block.markdown === '') {
+      // Preserve the existing behavior for unsupported nodes whose renderer
+      // returns no Markdown: in preserve mode they occupy one blank line.
+      if (blankLineMode === 'preserve') {
+        pendingBlanks++;
+      }
+      continue;
+    }
+
+    if (result !== '') {
+      result += '\n\n';
+      if (blankLineMode === 'preserve') {
+        result += '\n'.repeat(pendingBlanks);
+      }
+    }
+    result += block.markdown;
+    pendingBlanks = 0;
+  }
+
+  return result;
+}
+
+function serializeJsonBlocks(
+  children: readonly JSONContent[],
+  serialize: (json: JSONContent) => string,
+  blankLineMode: BlankLineMode
+): string {
+  return joinSerializedBlocks(
+    children.map(node => {
+      const isEmpty = isEmptyParagraph(node);
+      return {
+        isEmptyParagraph: isEmpty,
+        markdown: isEmpty ? '' : serializeBlockMarkdown(node, serialize),
+      };
+    }),
+    blankLineMode
+  );
+}
+
+function serializeProseMirrorBlocks(
+  editor: Editor,
+  documentNode: ProseMirrorDocumentLike,
+  serializerIdentity: (json: JSONContent) => string,
+  serialize: (json: JSONContent) => string,
+  blankLineMode: BlankLineMode
+): string {
+  const cache = getEditorBlockCache(editor, serializerIdentity);
+  const blocks: SerializedTopLevelBlock[] = [];
+
+  for (let index = 0; index < documentNode.childCount; index++) {
+    const node = documentNode.child(index);
+    const cached = cache.blocks.get(node);
+    if (cached !== undefined) {
+      blocks.push(cached);
+      continue;
+    }
+
+    const remembered = cache.sources[index];
+    if (remembered !== undefined && remembered.node.eq?.(node)) {
+      cache.blocks.set(node, remembered.block);
+      blocks.push(remembered.block);
+      continue;
+    }
+
+    const json = node.toJSON();
+    const isEmpty = isEmptyParagraph(json);
+    const serialized = serializeBlockMarkdownResult(json, serialize);
+    const block: SerializedTopLevelBlock = {
+      isEmptyParagraph: isEmpty,
+      markdown: isEmpty ? '' : serialized.markdown,
+    };
+    // An empty result for a non-empty node can mean a transient serializer
+    // failure. Structural fallbacks produced after an exception must also be
+    // retried, even when the immutable ProseMirror node identity is unchanged.
+    if (isEmpty || (serialized.serializerSucceeded && block.markdown !== '')) {
+      cache.blocks.set(node, block);
+    }
+    blocks.push(block);
+  }
+
+  return joinSerializedBlocks(blocks, blankLineMode);
 }
 
 /**
@@ -113,14 +426,126 @@ export function serializeBlockMarkdown(
   node: JSONContent,
   serialize: (json: JSONContent) => string
 ): string {
-  const md = serializeSingleNode(node, serialize);
-  if (md !== '') return md;
+  return serializeBlockMarkdownResult(node, serialize).markdown;
+}
+
+function serializeBlockMarkdownResult(
+  node: JSONContent,
+  serialize: (json: JSONContent) => string
+): SerializedBlockResult {
+  const result = serializeSingleNode(node, serialize);
+  if (result.markdown !== '') return result;
   if (node && node.type === 'heading') {
     const rawLevel = node.attrs?.level;
     const level = typeof rawLevel === 'number' && rawLevel >= 1 && rawLevel <= 6 ? rawLevel : 1;
-    return '#'.repeat(level);
+    return { ...result, markdown: '#'.repeat(level) };
   }
-  return '';
+  return result;
+}
+
+/**
+ * Load Markdown into the editor and remember each top-level block's authored
+ * source, so unedited blocks save byte-identical.
+ *
+ * The serializer rebuilds Markdown from the document tree, which rewrites any
+ * form outside TipTap's canonical output (soft breaks, compact tables, `*`
+ * lists, setext headings). The tokens from setContent's own lex are captured
+ * (lexing again would nearly double load time on large documents). Each token is
+ * parsed on its own; when it yields exactly one block that equals the live
+ * block, the token's raw source becomes that block's cached Markdown. Any
+ * mismatch leaves the block to the serializer.
+ *
+ * @param editor - Editor to load
+ * @param markdown - Markdown source
+ * @returns The result of `editor.commands.setContent`
+ */
+export function setMarkdownContentPreservingSource(editor: Editor, markdown: string): boolean {
+  const manager = getMarkdownManager(editor);
+  const createLexer = manager?.createLexer;
+  let tokens: MarkdownSourceToken[] | null = null;
+  const ownCreateLexer =
+    manager !== undefined && Object.prototype.hasOwnProperty.call(manager, 'createLexer');
+
+  if (manager && typeof createLexer === 'function') {
+    // Shadow the prototype method for this one parse only.
+    manager.createLexer = function captureLexer(this: MarkdownManager) {
+      const lexer = createLexer.call(this);
+      const lex = lexer.lex.bind(lexer);
+      lexer.lex = (source: string) => {
+        const lexed = lex(source);
+        if (tokens === null && source === markdown) tokens = lexed;
+        return lexed;
+      };
+      return lexer;
+    };
+  }
+
+  let result: boolean;
+  try {
+    result = editor.commands.setContent(markdown, { contentType: 'markdown' });
+  } finally {
+    if (manager && typeof createLexer === 'function') {
+      if (ownCreateLexer) manager.createLexer = createLexer;
+      else delete manager.createLexer;
+    }
+  }
+
+  if (result !== false) rememberSourceBlocks(editor, manager, tokens);
+  return result;
+}
+
+function rememberSourceBlocks(
+  editor: Editor,
+  manager: MarkdownManager | undefined,
+  tokens: MarkdownSourceToken[] | null
+): void {
+  const documentNode = getEditorDocument(editor);
+  if (!manager?.serialize || documentNode === null) return;
+
+  const cache = getEditorBlockCache(editor, manager.serialize);
+  cache.sources = [];
+  if (tokens === null || typeof manager.parseTokens !== 'function') return;
+
+  try {
+    const liveBlocks: { node: ProseMirrorNodeLike; index: number }[] = [];
+    for (let index = 0; index < documentNode.childCount; index++) {
+      const node = documentNode.child(index);
+      if (!isEmptyParagraph(node.toJSON())) liveBlocks.push({ node, index });
+    }
+
+    let cursor = 0;
+    for (const token of tokens) {
+      if (token.type === 'space' || typeof token.raw !== 'string') continue;
+      const parsed = manager.parseTokens([token]).filter(json => !isEmptyParagraph(json));
+      const live = liveBlocks.slice(cursor, cursor + parsed.length);
+      cursor += parsed.length;
+      if (parsed.length !== 1 || live.length !== 1) continue;
+
+      const { node, index } = live[0];
+      if (!node.eq?.(editor.schema.nodeFromJSON(parsed[0]) as ProseMirrorNodeLike)) continue;
+
+      const block: SerializedTopLevelBlock = {
+        isEmptyParagraph: false,
+        // Some tokenizers (task lists) absorb the separating blank lines into
+        // raw. Those belong to the block join, not the block.
+        markdown: token.raw.replace(/^(?:[ \t]*\n)+/, '').replace(/(?:\n[ \t]*)+$/, ''),
+      };
+      cache.blocks.set(node, block);
+      cache.sources[index] = { node, block };
+    }
+  } catch (error) {
+    // Losing source preservation only restores the canonical serializer output.
+    console.warn('[MD4H] Could not remember Markdown source blocks:', error);
+    cache.sources = [];
+  }
+}
+
+function getMarkdownManager(editor: Editor): MarkdownManager | undefined {
+  const editorUnknown = editor as unknown as {
+    markdown?: MarkdownManager;
+    storage?: { markdown?: MarkdownManager };
+  };
+  return editorUnknown.markdown || editorUnknown.storage?.markdown;
 }
 
 export function getEditorMarkdownForSync(
@@ -136,6 +561,7 @@ export function getEditorMarkdownForSync(
   };
 
   const markdownManager = editorUnknown.markdown || editorUnknown.storage?.markdown;
+  if (markdownManager) patchMarkdownSerialization(markdownManager);
 
   const getFallbackMarkdown = (): string => {
     const getMarkdown = editorUnknown.getMarkdown;
@@ -149,69 +575,27 @@ export function getEditorMarkdownForSync(
     return getFallbackMarkdown();
   }
 
-  const rawSerialize = markdownManager.serialize.bind(markdownManager);
-  const serialize = (json: JSONContent): string => rawSerialize(reorderMarksForSerialization(json));
+  const serializerIdentity = markdownManager.serialize;
+  const serialize = serializerIdentity.bind(markdownManager);
 
   try {
+    const documentNode = getEditorDocument(editor);
+    if (documentNode !== null) {
+      return serializeProseMirrorBlocks(
+        editor,
+        documentNode,
+        serializerIdentity,
+        serialize,
+        blankLineMode
+      );
+    }
+
     const json = editor.getJSON();
     const children = json.content;
-
     if (!Array.isArray(children) || children.length === 0) {
       return '';
     }
-
-    // Strip trailing empty paragraphs (Tiptap always appends one for cursor positioning)
-    let endIdx = children.length;
-    while (endIdx > 0 && isEmptyParagraph(children[endIdx - 1])) {
-      endIdx--;
-    }
-
-    // Strip leading empty paragraphs
-    let startIdx = 0;
-    while (startIdx < endIdx && isEmptyParagraph(children[startIdx])) {
-      startIdx++;
-    }
-
-    if (startIdx >= endIdx) {
-      return '';
-    }
-
-    const trimmed = children.slice(startIdx, endIdx);
-
-    // Serialize each content node individually and rejoin, inserting one extra
-    // "\n" per intentional blank line (empty paragraph) between content blocks.
-    // The standard paragraph separator is "\n\n" (one blank line); each empty
-    // paragraph beyond that adds one more "\n" to the output.
-    let result = '';
-    let pendingBlanks = 0;
-
-    for (const node of trimmed) {
-      if (isEmptyParagraph(node)) {
-        if (blankLineMode === 'preserve') {
-          pendingBlanks++;
-        }
-      } else {
-        const nodeMarkdown = serializeBlockMarkdown(node, serialize);
-        if (nodeMarkdown === '') {
-          // Node serialized to nothing (unrecognised type, etc.) – treat it
-          // as if it were an empty paragraph so blank-line intent is kept.
-          if (blankLineMode === 'preserve') {
-            pendingBlanks++;
-          }
-          continue;
-        }
-        if (result !== '') {
-          result += '\n\n';
-          if (blankLineMode === 'preserve') {
-            result += '\n'.repeat(pendingBlanks);
-          }
-        }
-        result += nodeMarkdown;
-        pendingBlanks = 0;
-      }
-    }
-
-    return result;
+    return serializeJsonBlocks(children, serialize, blankLineMode);
   } catch {
     return getFallbackMarkdown();
   }

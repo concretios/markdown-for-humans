@@ -15,6 +15,7 @@
  */
 
 import { Editor } from '@tiptap/core';
+import { isSvgImageSource } from '../../shared/imageSource';
 import { showImageResizeWarning } from './imageResizeWarning';
 import { showLocalImageOutsideRepoDialog } from './localImageOutsideRepoDialog';
 import { getDefaultImagePath } from './imageConfirmation';
@@ -209,6 +210,14 @@ export async function showImageResizeModal(
   // Only check data-markdown-src (original markdown path), not the resolved src
   // The resolved src will be vscode-webview:// for local images, which is not external
   const imageSrc = img.getAttribute('data-markdown-src') || img.getAttribute('src') || '';
+
+  if (isSvgImageSource(imageSrc)) {
+    vscodeApi.postMessage({
+      type: 'showError',
+      message: 'Use Display size for SVG images. Raster resize would replace the vector file.',
+    });
+    return;
+  }
 
   // External = only HTTP/HTTPS URLs
   const isExternal = isExternalImage(imageSrc);

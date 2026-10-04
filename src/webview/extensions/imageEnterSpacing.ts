@@ -8,7 +8,7 @@ import { Extension } from '@tiptap/core';
 import { GapCursor } from '@tiptap/pm/gapcursor';
 import { NodeSelection, Plugin, PluginKey, TextSelection, EditorState } from '@tiptap/pm/state';
 import { Fragment, Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { Decoration, DecorationSet } from 'prosemirror-view';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 
 const IMAGE_ENTER_SPACING_PLUGIN = new PluginKey('imageEnterSpacing');
 
@@ -740,13 +740,26 @@ export const ImageEnterSpacing = Extension.create({
                 return insertParagraphAtDocPos(view, state, insertPos);
               }
 
-              // 2) Gap cursor beside an image – insert paragraph at document level
+              // 2) Gap cursor beside an image – insert paragraph at document level.
+              // Inline images live inside paragraphs, so selection.head is often not a
+              // valid block boundary. Map to before/after the top-level containing block.
               if (isGapCursorSelection(selection)) {
                 const imageBefore = selection.$from.nodeBefore?.type.name === imageType.name;
                 const imageAfter = selection.$from.nodeAfter?.type.name === imageType.name;
 
                 if (imageBefore || imageAfter) {
-                  const insertPos = selection.head;
+                  const $pos = selection.$from;
+                  let insertPos: number;
+
+                  if ($pos.depth === 0) {
+                    // Block-level gap: head is already a document boundary
+                    insertPos = selection.head;
+                  } else {
+                    // WHY: before(1)/after(1) target the top-level block so
+                    // canInsertParagraphAtDocPos (doc.childAfter) accepts the position.
+                    // imageAfter = cursor before image → new paragraph above the block.
+                    insertPos = imageAfter ? $pos.before(1) : $pos.after(1);
+                  }
 
                   if (!canInsertParagraphAtDocPos(state, insertPos)) {
                     return false;
@@ -755,16 +768,7 @@ export const ImageEnterSpacing = Extension.create({
                   event.preventDefault();
                   event.stopPropagation();
 
-                  console.log('[ImageEnterSpacing] Enter at gap cursor', {
-                    gapPos: selection.head,
-                    imageBefore,
-                    imageAfter,
-                    insertPos,
-                  });
-
-                  const inserted = insertParagraphAtDocPos(view, state, insertPos);
-                  console.log('[ImageEnterSpacing] Insert result:', inserted);
-                  return inserted;
+                  return insertParagraphAtDocPos(view, state, insertPos);
                 }
               }
 
@@ -874,15 +878,19 @@ export const ImageEnterSpacing = Extension.create({
                     }
                   }
 
-                  // Fallback: insert paragraph after the current paragraph block
-                  // Use $from.after($from.depth) to get position immediately after paragraph
-                  // (not after paragraph + subsequent blocks like GitHub alerts)
+                  // Fallback: insert a paragraph beside the containing block.
+                  // Direction-aware: caret before image (imageAfter) → insert ABOVE;
+                  // caret after image → insert BELOW. Always after() was the wrong-side bug
+                  // for ArrowLeft → Enter when GapCursor is unavailable for inline images.
                   const paragraphType = state.schema.nodes.paragraph;
                   const newParagraph = paragraphType.create();
-                  const insertAfterPos = $from.after($from.depth);
+                  const insertPos =
+                    imageAfter && !imageBefore
+                      ? $from.before($from.depth)
+                      : $from.after($from.depth);
 
-                  const tr = state.tr.insert(insertAfterPos, newParagraph);
-                  const cursorPos = insertAfterPos + 1; // Inside new paragraph
+                  const tr = state.tr.insert(insertPos, newParagraph);
+                  const cursorPos = insertPos + 1; // Inside new paragraph
                   try {
                     tr.setSelection(TextSelection.create(tr.doc, cursorPos));
                   } catch {

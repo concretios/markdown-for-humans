@@ -17,7 +17,7 @@
 
 ### 1. Reading Experience is PARAMOUNT
 - Typography and readability > feature completeness
-- Serif body text (prose, not code)
+- Body text inherits VS Code fonts; prose readability via spacing/typography (not a fixed serif stack)
 - Generous spacing (white space is a feature)
 - **Test every change by reading a 3000+ word doc for 10+ minutes**
 
@@ -42,6 +42,14 @@
 - Follow VS Code keyboard conventions
 - Inherit theme colors (no hard-coded values)
 
+#### Real VS Code testing (MANDATORY for all coding agents)
+
+- For editor, webview, styling, keyboard/clipboard, document-sync, performance, or VS Code integration changes, **make a concrete attempt to test in a real VS Code Extension Development Host before claiming verification**. Build the current worktree, launch or reload the host, and confirm it is loading that worktree's latest extension build.
+- **Use available computer-use tools to exercise the changed flow in the actual VS Code UI.** Cover relevant native behavior, such as typing, selection, copy/paste, save, undo/redo, source splits, themes, and close/reopen.
+- **A standalone browser page is never a reliable replica of the real VS Code environment.** Browser and JSDOM tests are supplementary checks for their narrower contracts, not substitutes for native UI, integration, or performance acceptance. A browser-only pass must never be reported as a VS Code pass.
+- If VS Code or computer-use tools are unavailable or fail, report what you attempted, the specific blocker, and which native checks remain unverified. Do not silently replace them with browser tests or claim those checks passed.
+- Record the VS Code version, tested worktree/build, exercised cases, and observed results or evidence. When agents collaborate, designate one native QA owner and share evidence instead of controlling the same host concurrently.
+
 ### 5. Git & File Rules
 - **Never commit or push** — User must review first
 - **Use `git mv`** for renaming/moving tracked files (preserves history)
@@ -57,7 +65,7 @@
 | Editor Framework | TipTap (over raw ProseMirror) | Easier API, rich extensions, markdown built-in |
 | Sync Debounce | 500ms | Balance responsiveness vs. performance |
 | Document Sync | Full replacement | Simpler, VS Code handles internal diffing |
-| Body Font | Serif (Charter/Georgia) | Prose, not code; matches premium editors |
+| Body Font | VS Code font inheritance (`--vscode-font-family` / `--vscode-editor-font-family`) | Theme-aware; prose reading via spacing/typography, not a fixed serif stack |
 
 ---
 
@@ -113,6 +121,7 @@
 - [ ] **Run `npm test`** - ALL tests pass (new + existing)
 - [ ] Cover positive, negative, edge cases
 - [ ] If bugs found: audit/debug, not quick fixes
+- [ ] **Real VS Code host** - Use available computer-use tools to test relevant flows against the current worktree's build; record native evidence or an explicit blocker. Browser-only results do not satisfy this gate.
 
 **Self-Review (Before Shipping):**
 - [ ] **Code quality** - TypeScript strict, meaningful names, no `any`
@@ -214,4 +223,4 @@ See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md
 
 ---
 
-**Last Updated:** 2025-12-13
+**Last Updated:** 2026-09-30

@@ -1,7 +1,7 @@
 # Changelog: Document Outline
 
 **Spec:** `../specs/doc-outline.md`
-**Status:** reopened — outline work is not yet shipped; task returned to pipeline (`../pipeline/task-p0-document-outline.md`).
+**Status:** shipped — see `./task-p0-document-outline.md`.
 
 ---
 
@@ -11,7 +11,7 @@
 - Added Document Outline toolbar button and VS Code command wiring.
 - Implemented TipTap outline plugin, CSS scoping fixes, and scroll-to-heading behavior with toolbar offset.
 - See detailed implementation log:
-  - `../pipeline/task-p0-document-outline.md`
+  - `./task-p0-document-outline.md`
 
 ---
 

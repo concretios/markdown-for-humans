@@ -11,6 +11,8 @@
  * offering to resize it to a suggested resolution before inserting.
  */
 
+import { isSvgImageSource } from '../../shared/imageSource';
+
 export interface HugeImageOptions {
   action: 'resize-suggested' | 'resize-custom' | 'use-original';
   customWidth?: number;
@@ -18,9 +20,11 @@ export interface HugeImageOptions {
 }
 
 /**
- * Check if image is huge (exceeds thresholds)
+ * Check if a raster image is large enough to consider file optimization.
+ * SVG display dimensions never justify rasterizing its original bytes.
  */
 export function isHugeImage(file: File): boolean {
+  if (isSvgImageSource(encodeURIComponent(file.name), file.type)) return false;
   // File size threshold: > 2MB
   if (file.size > 2 * 1024 * 1024) {
     return true;
@@ -82,7 +86,8 @@ function formatFileSize(bytes: number): string {
 
 /**
  * Show huge image dialog
- * Returns null if user cancels, otherwise returns resize options
+ * Returns null only for an explicit cancellation. Files that need no dialog
+ * (including SVGs and undecodable dimensions) return use-original.
  */
 export async function showHugeImageDialog(
   file: File,
@@ -91,20 +96,20 @@ export async function showHugeImageDialog(
   // Check file size first (quick check)
   const isHuge = isHugeImage(file);
   if (!isHuge) {
-    return null; // Not huge, no dialog needed
+    return { action: 'use-original' }; // No dialog needed.
   }
 
   // Get image dimensions
   const dimensions = await getImageDimensions(file);
   if (!dimensions) {
-    // Can't determine dimensions, proceed with original
-    return null;
+    // Can't determine dimensions, proceed with original.
+    return { action: 'use-original' };
   }
 
   // Check pixel threshold: > 2000px width OR > 2000px height
   const pixelThreshold = 2000;
   if (dimensions.width <= pixelThreshold && dimensions.height <= pixelThreshold) {
-    return null; // Not huge by pixel count
+    return { action: 'use-original' }; // Not huge by pixel count.
   }
 
   // Calculate suggested resolution
@@ -207,47 +212,33 @@ export async function showHugeImageDialog(
     const resizeSuggestedBtn = dialog.querySelector('#resize-suggested-btn') as HTMLButtonElement;
     const useOriginalBtn = dialog.querySelector('#use-original-btn') as HTMLButtonElement;
 
-    // Handle resize to suggested
-    const handleResizeSuggested = () => {
+    let settled = false;
+    const finish = (result: HugeImageOptions | null) => {
+      if (settled) return;
+      settled = true;
       URL.revokeObjectURL(thumbnailUrl);
-      document.body.removeChild(overlay);
-      resolve({
-        action: 'resize-suggested',
-        customWidth: suggested.width,
-        customHeight: suggested.height,
-      });
+      window.removeEventListener('keydown', handleEscape);
+      overlay.remove();
+      resolve(result);
     };
-
-    // Handle use original
-    const handleUseOriginal = () => {
-      URL.revokeObjectURL(thumbnailUrl);
-      document.body.removeChild(overlay);
-      resolve({
-        action: 'use-original',
-      });
-    };
-
-    // Event listeners
-    resizeSuggestedBtn.addEventListener('click', handleResizeSuggested);
-    useOriginalBtn.addEventListener('click', handleUseOriginal);
-    overlay.addEventListener('click', e => {
-      if (e.target === overlay) {
-        URL.revokeObjectURL(thumbnailUrl);
-        document.body.removeChild(overlay);
-        resolve(null);
-      }
-    });
-
-    // Escape to cancel
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
-        URL.revokeObjectURL(thumbnailUrl);
-        document.body.removeChild(overlay);
-        window.removeEventListener('keydown', handleEscape);
-        resolve(null);
+        finish(null);
       }
     };
+
+    resizeSuggestedBtn.addEventListener('click', () =>
+      finish({
+        action: 'resize-suggested',
+        customWidth: suggested.width,
+        customHeight: suggested.height,
+      })
+    );
+    useOriginalBtn.addEventListener('click', () => finish({ action: 'use-original' }));
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) finish(null);
+    });
     window.addEventListener('keydown', handleEscape);
 
     // Focus first button

@@ -26,17 +26,88 @@ import {
   getDefaultImagePath,
 } from './imageConfirmation';
 import { showHugeImageDialog, isHugeImage } from './hugeImageDialog';
+import { isSvgImageSource } from '../../shared/imageSource';
+import {
+  IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+  MAX_PENDING_IMAGE_SAVES,
+} from '../../shared/pendingImageProtocol';
+import {
+  createPendingImageCompletionClient,
+  type PendingImageCompletionClient,
+} from './pendingImageCompletionClient';
 
 /**
  * Track images currently being saved to prevent document sync race conditions
  */
 const pendingImageSaves = new Set<string>();
+const pendingImageSaveWaiters = new Set<() => void>();
+let pendingImageCapacityWarningShown = false;
+
+/** Reserve one bounded renderer slot before any image conversion begins. */
+export function tryReservePendingImageSave(placeholderId: string): boolean {
+  if (pendingImageSaves.has(placeholderId) || pendingImageSaves.size >= MAX_PENDING_IMAGE_SAVES) {
+    return false;
+  }
+  pendingImageSaves.add(placeholderId);
+  return true;
+}
+
+/** Release one renderer slot after completion or failed insertion. */
+export function releasePendingImageSave(placeholderId: string): void {
+  pendingImageSaves.delete(placeholderId);
+  if (pendingImageSaves.size === 0) {
+    for (const resolve of pendingImageSaveWaiters) resolve();
+    pendingImageSaveWaiters.clear();
+  }
+  if (pendingImageSaves.size < MAX_PENDING_IMAGE_SAVES) {
+    pendingImageCapacityWarningShown = false;
+  }
+}
+
+function showPendingImageCapacityWarning(vscodeApi: VsCodeApi): void {
+  if (pendingImageCapacityWarningShown) return;
+  pendingImageCapacityWarningShown = true;
+  try {
+    vscodeApi.postMessage({
+      type: 'showError',
+      message: `Up to ${MAX_PENDING_IMAGE_SAVES} images can be saved at once. Wait for current image saves to finish, then try again.`,
+    });
+  } catch (error) {
+    console.error('[MD4H] Failed to show pending image capacity warning:', error);
+  }
+}
 
 /**
  * Check if any images are currently being saved
  */
 export function hasPendingImageSaves(): boolean {
   return pendingImageSaves.size > 0;
+}
+
+/**
+ * Wait until every picker, paste, or drop image has reached a terminal host result.
+ *
+ * @param timeoutMs - Optional deadline. A host flush barrier gives up after its
+ *   own timeout, so the renderer must not resume that barrier much later.
+ * @returns true when no image save is pending, false when the deadline passed first
+ */
+export function waitForPendingImageSaves(timeoutMs?: number): Promise<boolean> {
+  if (!hasPendingImageSaves()) return Promise.resolve(true);
+  return new Promise(resolve => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      resolve(true);
+    };
+    pendingImageSaveWaiters.add(settle);
+    if (timeoutMs !== undefined) {
+      timeout = setTimeout(() => {
+        // Drop the waiter so a late completion cannot revive this barrier.
+        pendingImageSaveWaiters.delete(settle);
+        resolve(false);
+      }, timeoutMs);
+    }
+  });
 }
 
 type EditorForInsertPosition = {
@@ -85,6 +156,7 @@ export function getPendingImageCount(): number {
  * VS Code API type
  */
 interface VsCodeApi {
+  readonly viewGeneration?: string;
   postMessage: (message: unknown) => void;
 }
 
@@ -102,25 +174,65 @@ const SUPPORTED_IMAGE_TYPES = [
 const IMAGE_PATH_REGEX = /\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i;
 
 /**
- * Setup image drag & drop and paste handling for the editor
+ * Set up image imports, consulting the live editing lock before any event side effects.
  */
-export function setupImageDragDrop(editor: Editor, vscodeApi: VsCodeApi): void {
+export function setupImageDragDrop(
+  editor: Editor,
+  vscodeApi: VsCodeApi,
+  viewGeneration: string,
+  isEditingLocked: () => boolean = () => false
+): void {
   const editorElement = document.querySelector('.ProseMirror');
   if (!editorElement) {
     console.warn('[MD4H] Editor element not found for image drag-drop setup');
     return;
   }
 
+  const generationBoundApi: VsCodeApi = {
+    viewGeneration,
+    postMessage: message => vscodeApi.postMessage(message),
+  };
+
   // Drag over styling
   editorElement.addEventListener('dragover', handleDragOver);
   editorElement.addEventListener('dragleave', handleDragLeave);
-  editorElement.addEventListener('drop', e => handleDrop(e as DragEvent, editor, vscodeApi));
+  editorElement.addEventListener('drop', e => {
+    if (isEditingLocked()) return;
+    void handleDrop(e as DragEvent, editor, generationBoundApi);
+  });
 
   // Paste handling
-  editorElement.addEventListener('paste', e => handlePaste(e as ClipboardEvent, editor, vscodeApi));
+  // Claim supported image payloads before ProseMirror's bubble listener starts
+  // its native paste fallback (and delayed focus). Ordinary text still passes through.
+  const handleImagePaste = (event: Event) => {
+    // Feedback capture guards may be registered later on this same element.
+    if (isEditingLocked()) return;
+    void handlePaste(event as ClipboardEvent, editor, generationBoundApi);
+  };
+  editorElement.addEventListener('paste', handleImagePaste, true);
 
-  // Listen for image save confirmations from extension
-  window.addEventListener('message', event => handleImageMessage(event, editor));
+  const completionClient = createPendingImageCompletionClient({
+    viewGeneration,
+    isPending: placeholderId => pendingImageSaves.has(placeholderId),
+    applySaved: (placeholderId, newSrc) => {
+      if (!applySavedImageCompletion(editor, placeholderId, newSrc)) return false;
+      releasePendingImageSave(placeholderId);
+      return true;
+    },
+    applyError: (placeholderId, error) => {
+      console.error('[MD4H] Image save failed:', error);
+      if (!applyFailedImageCompletion(editor, placeholderId)) return false;
+      releasePendingImageSave(placeholderId);
+      return true;
+    },
+    postAcknowledgement: acknowledgement => vscodeApi.postMessage(acknowledgement),
+    maxRetainedCompletions: 128,
+  });
+  const handleWindowMessage = (event: MessageEvent): void =>
+    handleImageMessage(event, editor, completionClient);
+
+  // Listen for image save confirmations from extension.
+  window.addEventListener('message', handleWindowMessage);
 
   // Guard against VS Code opening a new window when dropping images outside the editor
   const blockWindowDrop = (e: DragEvent) => {
@@ -146,9 +258,12 @@ export function setupImageDragDrop(editor: Editor, vscodeApi: VsCodeApi): void {
 
   // Clean up window listeners when editor is destroyed to prevent memory leaks
   editor.on('destroy', () => {
+    editorElement.removeEventListener('paste', handleImagePaste, true);
     window.removeEventListener('dragover', blockWindowDrop);
     window.removeEventListener('drop', blockWindowDrop);
     window.removeEventListener('dragleave', handleWindowDragLeave as EventListener);
+    window.removeEventListener('message', handleWindowMessage);
+    completionClient.dispose();
   });
 }
 
@@ -462,8 +577,22 @@ async function handlePaste(e: ClipboardEvent, editor: Editor, vscodeApi: VsCodeA
 /**
  * Handle messages from extension (image save confirmations)
  */
-function handleImageMessage(event: MessageEvent, editor: Editor): void {
+function handleImageMessage(
+  event: MessageEvent,
+  editor: Editor,
+  completionClient: PendingImageCompletionClient
+): void {
   const message = event.data;
+
+  const completionDisposition = completionClient.handle(message);
+  if (
+    completionDisposition !== 'ignored' ||
+    (typeof message === 'object' &&
+      message !== null &&
+      ('completionId' in message || 'protocolVersion' in message))
+  ) {
+    return;
+  }
 
   // Only log our messages
   if (
@@ -480,18 +609,18 @@ function handleImageMessage(event: MessageEvent, editor: Editor): void {
       console.log(
         `[MD4H] Processing imageSaved: placeholderId=${message.placeholderId}, newSrc=${message.newSrc}`
       );
-      updateImageSrc(message.placeholderId, message.newSrc, editor);
+      applySavedImageCompletion(editor, message.placeholderId, message.newSrc);
       // Remove from pending saves
-      pendingImageSaves.delete(message.placeholderId);
+      releasePendingImageSave(message.placeholderId);
       console.log(`[MD4H] Removed from pending saves. Remaining: ${pendingImageSaves.size}`);
       break;
     }
     case 'imageError': {
       // Remove placeholder on error
       console.error('[MD4H] Image save failed:', message.error);
-      removeImagePlaceholder(message.placeholderId, editor);
+      applyFailedImageCompletion(editor, message.placeholderId);
       // Remove from pending saves
-      pendingImageSaves.delete(message.placeholderId);
+      releasePendingImageSave(message.placeholderId);
       console.log(
         `[MD4H] Removed from pending saves (error). Remaining: ${pendingImageSaves.size}`
       );
@@ -567,10 +696,77 @@ export function getImageFiles(dt: DataTransfer | null): File[] {
 }
 
 /**
- * Check if a file is a supported image type
+ * Recognize candidate image files synchronously for drag/paste event handling.
+ * SVG candidates with absent or generic MIME still require validateImageFile()
+ * before insertion; a filename alone never authorizes a file write.
  */
 export function isImageFile(file: File): boolean {
-  return SUPPORTED_IMAGE_TYPES.includes(file.type);
+  const mimeType = file.type.split(';', 1)[0].trim().toLowerCase();
+  // File.name is a literal filename: # and ? must not become URL suffixes.
+  if (isSvgImageSource(encodeURIComponent(file.name), mimeType)) {
+    return [
+      'image/svg+xml',
+      '',
+      'application/octet-stream',
+      'text/plain',
+      'text/xml',
+      'application/xml',
+    ].includes(mimeType);
+  }
+  return SUPPORTED_IMAGE_TYPES.includes(mimeType);
+}
+
+// Match the host's per-view image-byte ceiling before parsing XML or making a preview.
+const MAX_SVG_IMPORT_BYTES = 64 * 1024 * 1024;
+const validatedImageFiles = new WeakMap<File, Promise<boolean>>();
+
+/**
+ * Validate image candidates before saving. Raster types retain the existing MIME
+ * policy. SVG must be a bounded, well-formed XML document with an SVG root, even
+ * when its MIME is supplied. Parsing never attaches SVG markup to the live DOM.
+ * Read/parse failures return false so every caller can reject the file visibly.
+ */
+export function validateImageFile(file: File): Promise<boolean> {
+  if (!isImageFile(file)) return Promise.resolve(false);
+  if (!isSvgImageSource(encodeURIComponent(file.name), file.type)) return Promise.resolve(true);
+  if (file.size === 0 || file.size > MAX_SVG_IMPORT_BYTES) return Promise.resolve(false);
+  const cached = validatedImageFiles.get(file);
+  if (cached) return cached;
+
+  const validation = new Promise<boolean>(resolve => {
+    const reader = new FileReader();
+    reader.onerror = () => resolve(false);
+    reader.onabort = () => resolve(false);
+    reader.onload = () => {
+      try {
+        const content = String(reader.result);
+        // Entity declarations are unnecessary for self-contained image documents
+        // and must not expand into unbounded XML while validating an import.
+        if (/<!ENTITY\s/i.test(content)) {
+          resolve(false);
+          return;
+        }
+        const document = new DOMParser().parseFromString(content, 'image/svg+xml');
+        const root = document.documentElement;
+        resolve(
+          root.localName === 'svg' &&
+            root.namespaceURI === 'http://www.w3.org/2000/svg' &&
+            document.getElementsByTagName('parsererror').length === 0
+        );
+      } catch (error) {
+        console.error('[MD4H] Failed to validate SVG:', error);
+        resolve(false);
+      }
+    };
+    try {
+      reader.readAsText(file);
+    } catch (error) {
+      console.error('[MD4H] Failed to read SVG:', error);
+      resolve(false);
+    }
+  });
+  validatedImageFiles.set(file, validation);
+  return validation;
 }
 
 /**
@@ -625,7 +821,9 @@ async function resizeImage(file: File, targetWidth: number, targetHeight: number
 }
 
 /**
- * Insert an image into the editor
+ * Insert an image into the editor.
+ * SVG imports preserve original bytes and never use raster resize options.
+ * Invalid SVGs report a visible error and release their pending reservation.
  *
  * @param editor - TipTap editor instance
  * @param file - Image file to insert
@@ -633,7 +831,7 @@ async function resizeImage(file: File, targetWidth: number, targetHeight: number
  * @param targetFolder - Target folder for saving
  * @param source - How the image was added ('dropped' or 'pasted')
  * @param pos - Optional insertion position
- * @param resizeOptions - Optional resize dimensions (from huge image dialog)
+ * @param resizeOptions - Optional raster resize dimensions (from huge image dialog)
  */
 export async function insertImage(
   editor: Editor,
@@ -646,26 +844,74 @@ export async function insertImage(
 ): Promise<void> {
   // Generate unique placeholder ID
   const placeholderId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  if (!tryReservePendingImageSave(placeholderId)) {
+    showPendingImageCapacityWarning(vscodeApi);
+    return;
+  }
+  let placeholderInserted = false;
 
   try {
-    // Resize image if requested (from huge image dialog)
+    if (!(await validateImageFile(file))) {
+      releasePendingImageSave(placeholderId);
+      vscodeApi.postMessage({
+        type: 'showError',
+        message: `Cannot insert "${file.name}". Select a supported image or a valid SVG no larger than 64 MiB.`,
+      });
+      return;
+    }
+    const isSvg = isSvgImageSource(encodeURIComponent(file.name), file.type);
+    // Vector display size belongs to the document. Canvas output would replace
+    // SVG source bytes with PNG bytes while retaining a misleading SVG filename.
     let imageFile = file;
-    if (resizeOptions) {
+    if (resizeOptions && !isSvg) {
       imageFile = await resizeImage(file, resizeOptions.width, resizeOptions.height);
     }
 
-    // Extract dimensions from the FINAL image (after resize if applicable)
-    // This ensures the filename reflects the actual saved dimensions
-    const dimensions = await getImageDimensions(imageFile);
+    // SVG has no fixed pixel resolution. Do not decode it just to infer
+    // raster dimensions or accidentally encode those dimensions in its name.
+    const dimensions = isSvg ? null : await getImageDimensions(imageFile);
     const finalDimensions: ImageDimensions = dimensions || { width: 0, height: 0 };
 
     // Convert to base64 for immediate preview
-    const base64 = await fileToBase64(imageFile);
+    const base64 = await fileToBase64(imageFile, isSvg ? 'image/svg+xml' : undefined);
+    // Read the host payload before mutating TipTap. Once the placeholder is in
+    // the document there must be no async gap before saveImage is posted,
+    // otherwise a hidden non-retained webview can disappear with no host copy.
+    const buffer = await imageFile.arrayBuffer();
+    // Non-retained webviews may disappear while validating or reading a file.
+    // A destroyed editor can no longer publish the host-owned pending marker.
+    if (editor.isDestroyed) {
+      releasePendingImageSave(placeholderId);
+      return;
+    }
+
+    // Generate filename with source type and dimensions
+    const originalName =
+      isSvg && !/\.svg$/i.test(file.name) ? `${file.name.replace(/\.[^.]+$/, '')}.svg` : file.name;
+    const imageName = generateImageName(originalName, source, finalDimensions);
+
+    // Register the host-owned write before TipTap publishes the pending marker.
+    // TipTap's update listener sends document edits synchronously from run(), so
+    // reversing these calls can make the host see an unowned marker first.
+    console.log(
+      `[MD4H] Sending saveImage message: placeholderId=${placeholderId}, name=${imageName}, targetFolder=${targetFolder}`
+    );
+
+    vscodeApi.postMessage({
+      type: 'saveImage',
+      protocolVersion: IMAGE_SAVE_COMPLETION_PROTOCOL_VERSION,
+      viewGeneration: vscodeApi.viewGeneration,
+      placeholderId,
+      name: imageName,
+      data: new Uint8Array(buffer),
+      mimeType: isSvg ? 'image/svg+xml' : imageFile.type,
+      targetFolder, // User-selected folder
+    });
 
     const safePos = resolveImageInsertPosition(editor, pos);
 
-    // Insert image with base64 preview
-    editor
+    // Insert image with base64 preview only after the host owns its file write.
+    const inserted = editor
       .chain()
       .focus()
       .insertContentAt(safePos, {
@@ -677,114 +923,90 @@ export async function insertImage(
         },
       })
       .run();
+    if (!inserted) throw new Error('TipTap rejected the pending image placeholder.');
+    placeholderInserted = true;
 
-    // Add to pending saves to prevent document sync race condition
-    pendingImageSaves.add(placeholderId);
+    // The slot was reserved before conversion so concurrent multi-file loops
+    // cannot create more placeholders than the host can own.
     console.log(`[MD4H] Added to pending saves. Total pending: ${pendingImageSaves.size}`);
-
-    // Generate filename with source type and dimensions
-    const imageName = generateImageName(file.name, source, finalDimensions);
-
-    // Send to extension to save to workspace
-    const buffer = await imageFile.arrayBuffer();
-    console.log(
-      `[MD4H] Sending saveImage message: placeholderId=${placeholderId}, name=${imageName}, targetFolder=${targetFolder}`
-    );
-
-    vscodeApi.postMessage({
-      type: 'saveImage',
-      placeholderId,
-      name: imageName,
-      data: Array.from(new Uint8Array(buffer)),
-      mimeType: file.type,
-      targetFolder, // User-selected folder
-    });
   } catch (error) {
+    if (placeholderInserted) {
+      applyFailedImageCompletion(editor, placeholderId);
+    }
+    releasePendingImageSave(placeholderId);
     console.error('[MD4H] Failed to insert image:', error);
   }
 }
 
-/**
- * Update image src after save (replace base64 with file path)
- */
-function updateImageSrc(placeholderId: string, newSrc: string, editor: Editor): void {
-  console.log(`[MD4H] updateImageSrc called: looking for placeholder ${placeholderId}`);
+interface PendingImageNodeMatch {
+  readonly pos: number;
+  readonly node: ProseMirrorNode;
+}
 
-  const img = document.querySelector(
-    `img[data-placeholder-id="${placeholderId}"]`
-  ) as HTMLImageElement | null;
-
-  if (!img) {
-    console.warn(`[MD4H] Image with placeholder ${placeholderId} not found in DOM`);
-    // Try to find any images and log their attributes for debugging
-    const allImages = document.querySelectorAll('.markdown-image');
-    console.log(`[MD4H] Found ${allImages.length} images in document`);
-    allImages.forEach((imgEl, i) => {
-      console.log(
-        `[MD4H] Image ${i}: data-placeholder-id="${imgEl.getAttribute('data-placeholder-id')}"`
-      );
-    });
-    return;
-  }
-
-  console.log(`[MD4H] Found image element, updating src...`);
-
-  // Find the position of this image node in the editor
-  const pos = editor.view.posAtDOM(img, 0);
-  console.log(`[MD4H] Image position in editor: ${pos}`);
-
-  if (pos !== undefined && pos !== null) {
-    // Update the TipTap node's src attribute
-    const node = editor.state.doc.nodeAt(pos);
-    console.log(`[MD4H] Node at position: ${node?.type.name}`);
-
-    if (node && node.type.name === 'image') {
-      editor
-        .chain()
-        .setNodeSelection(pos)
-        .updateAttributes('image', {
-          src: newSrc, // Use relative path (markdown-friendly)
-          'data-placeholder-id': null, // Remove the placeholder attribute
-        })
-        .run();
-
-      console.log(`[MD4H] Successfully updated image src to: ${newSrc}`);
-    } else {
-      console.warn(`[MD4H] Node at position ${pos} is not an image: ${node?.type.name}`);
+function findPendingImageNodes(editor: Editor, placeholderId: string): PendingImageNodeMatch[] {
+  const matches: PendingImageNodeMatch[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'image' && node.attrs['data-placeholder-id'] === placeholderId) {
+      matches.push({ pos, node });
     }
-  } else {
-    console.warn(`[MD4H] Could not find position for image in editor`);
+  });
+  return matches;
+}
+
+/** Replace previews outside undo history so undo cannot resurrect transient data URLs. */
+export function applySavedImageCompletion(
+  editor: Editor,
+  placeholderId: string,
+  newSrc: string
+): boolean {
+  const matches = findPendingImageNodes(editor, placeholderId);
+  if (matches.length === 0) return true;
+
+  try {
+    let transaction = editor.state.tr.setMeta('addToHistory', false);
+    for (const { pos, node } of matches) {
+      transaction = transaction.setNodeMarkup(pos, undefined, {
+        ...node.attrs,
+        src: newSrc,
+        'data-placeholder-id': null,
+      });
+    }
+    editor.view.dispatch(transaction);
+    return findPendingImageNodes(editor, placeholderId).length === 0;
+  } catch (error) {
+    console.error('[MD4H] Failed applying saved image completion:', error);
+    return false;
+  }
+}
+
+/** Delete failed previews outside undo history and verify no placeholder remains. */
+export function applyFailedImageCompletion(editor: Editor, placeholderId: string): boolean {
+  const matches = findPendingImageNodes(editor, placeholderId);
+  if (matches.length === 0) return true;
+
+  try {
+    let transaction = editor.state.tr.setMeta('addToHistory', false);
+    for (const { pos, node } of [...matches].sort((left, right) => right.pos - left.pos)) {
+      transaction = transaction.delete(pos, pos + node.nodeSize);
+    }
+    editor.view.dispatch(transaction);
+    return findPendingImageNodes(editor, placeholderId).length === 0;
+  } catch (error) {
+    console.error('[MD4H] Failed applying image error completion:', error);
+    return false;
   }
 }
 
 /**
- * Remove image placeholder on error
+ * Convert original bytes to a data URL, optionally correcting the preview MIME
+ * for a validated SVG supplied with a missing or generic MIME type.
  */
-function removeImagePlaceholder(placeholderId: string, editor: Editor): void {
-  const img = document.querySelector(`img[data-placeholder-id="${placeholderId}"]`);
-
-  if (img) {
-    // Find the node position and delete it
-    const pos = editor.view.posAtDOM(img, 0);
-    if (pos !== undefined) {
-      editor
-        .chain()
-        .focus()
-        .deleteRange({ from: pos, to: pos + 1 })
-        .run();
-    }
-  }
-}
-
-/**
- * Convert file to base64 data URL for preview
- */
-export function fileToBase64(file: File): Promise<string> {
+export function fileToBase64(file: File, mimeType?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(mimeType ? new Blob([file], { type: mimeType }) : file);
   });
 }
 

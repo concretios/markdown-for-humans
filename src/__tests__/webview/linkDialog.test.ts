@@ -3,9 +3,13 @@
  */
 
 import { getMarkRange, Editor } from '@tiptap/core';
-import { hideLinkDialog, showLinkDialog } from '../../webview/features/linkDialog';
+import {
+  handleFileSearchResults,
+  hideLinkDialog,
+  showLinkDialog,
+} from '../../webview/features/linkDialog';
 
-jest.mock('prosemirror-state', () => ({
+jest.mock('@tiptap/pm/state', () => ({
   TextSelection: {
     create: jest.fn(() => ({})),
   },
@@ -222,5 +226,35 @@ describe('linkDialog', () => {
     cancelButton.click();
 
     expect(focusRun).toHaveBeenCalled();
+  });
+
+  it('keeps quotes in workspace file names inside the title attribute', () => {
+    jest.useFakeTimers();
+    const postMessage = jest.fn();
+    (window as unknown as { vscode: { postMessage: jest.Mock } }).vscode = { postMessage };
+    try {
+      showLinkDialog(createMockEditor() as unknown as Editor);
+      const modeFile = document.querySelector('#link-mode-file') as HTMLInputElement;
+      modeFile.checked = true;
+      modeFile.dispatchEvent(new Event('change'));
+      const urlInput = document.querySelector('#link-url-input') as HTMLInputElement;
+      urlInput.value = 'a';
+      urlInput.dispatchEvent(new Event('input'));
+      jest.advanceTimersByTime(300);
+      const requestId = postMessage.mock.calls.at(-1)?.[0].requestId;
+
+      const hostilePath = 'docs/a" data-injected="1.md';
+      handleFileSearchResults(
+        [{ filename: 'a" data-injected="1.md', path: hostilePath }],
+        requestId
+      );
+
+      expect(document.querySelector('[data-injected]')).toBeNull();
+      const pathElement = document.querySelector('.link-dialog-autocomplete-item-path');
+      expect(pathElement?.getAttribute('title')).toBe(hostilePath);
+    } finally {
+      delete (window as unknown as { vscode?: unknown }).vscode;
+      jest.useRealTimers();
+    }
   });
 });

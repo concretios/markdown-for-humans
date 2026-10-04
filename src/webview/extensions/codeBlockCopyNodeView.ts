@@ -6,6 +6,8 @@
 
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import type { NodeView } from '@tiptap/pm/view';
+import { parseFenceInfo } from '../highlighting/fenceInfo';
+import { resolveGrammar } from '../highlighting/languageRegistry';
 
 const COPY_FEEDBACK_MS = 1500;
 
@@ -85,7 +87,7 @@ export function createCodeBlockCopyNodeView(
 
   const code = document.createElement('code');
   const updateLanguageClass = (node: ProseMirrorNode): void => {
-    const language = typeof node.attrs.language === 'string' ? node.attrs.language : '';
+    const language = resolveGrammar(parseFenceInfo(node.attrs.language).language);
     code.className = language ? `${languageClassPrefix}${language}` : '';
   };
   updateLanguageClass(currentNode);
@@ -160,6 +162,24 @@ export function createCodeBlockCopyNodeView(
   wrapper.appendChild(tooltip);
   wrapper.appendChild(button);
 
+  const highlightStatus = document.createElement('span');
+  highlightStatus.className = 'code-block-highlight-status';
+  highlightStatus.contentEditable = 'false';
+  highlightStatus.setAttribute('role', 'status');
+  highlightStatus.setAttribute('aria-live', 'polite');
+  highlightStatus.hidden = true;
+  wrapper.appendChild(highlightStatus);
+
+  // Node decorations land on the wrapper. Keep the readable explanation out
+  // of contentDOM so it can never become copied or serialized code.
+  const updateHighlightStatus = (): void => {
+    const reason = wrapper.getAttribute('data-highlight-status') ?? '';
+    highlightStatus.textContent = reason;
+    highlightStatus.hidden = !reason;
+  };
+  const statusObserver = new MutationObserver(updateHighlightStatus);
+  statusObserver.observe(wrapper, { attributes: true, attributeFilter: ['data-highlight-status'] });
+
   return {
     dom: wrapper,
     contentDOM: code,
@@ -177,6 +197,7 @@ export function createCodeBlockCopyNodeView(
       tooltip.contains(event.target as globalThis.Node),
     ignoreMutation: mutation => !code.contains(mutation.target) && mutation.target !== code,
     destroy: () => {
+      statusObserver.disconnect();
       if (feedbackTimer !== null) {
         window.clearTimeout(feedbackTimer);
       }

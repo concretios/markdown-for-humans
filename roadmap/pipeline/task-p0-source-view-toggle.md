@@ -4,10 +4,10 @@
 
 - **Task name:** Source View Toggle
 - **Slug:** source-view-toggle
-- **Status:** planned
+- **Status:** backlog (toolbar split already shipped; remaining = scroll/cursor sync, command palette, status bar)
 - **Created:** 2025-11-29
-- **Last updated:** 2025-12-01
-- **Shipped:** *(pending)*
+- **Last updated:** 2026-10-03
+- **Shipped:** _(partial — `</>` opens native source beside WYSIWYG)_
 
 ---
 

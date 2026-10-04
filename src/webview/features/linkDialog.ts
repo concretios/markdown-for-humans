@@ -9,7 +9,7 @@
  * @description Provides a modal dialog for inserting and editing hyperlinks.
  */
 import { getMarkRange, Editor } from '@tiptap/core';
-import { TextSelection } from 'prosemirror-state';
+import { TextSelection } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { buildOutlineFromEditor } from '../utils/outline';
 
@@ -130,7 +130,8 @@ function closeAutocomplete(): void {
 function escapeHtml(text: string): string {
   const div = document.createElement('div');
   div.textContent = text;
-  return div.innerHTML;
+  // Text serialization leaves quotes raw; callers also interpolate into quoted attributes.
+  return div.innerHTML.replace(/"/g, '&quot;');
 }
 
 const getParentContext = (

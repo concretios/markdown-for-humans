@@ -75,7 +75,6 @@ export async function confirmImageDrop(
         <input
           type="text"
           id="image-folder-input"
-          value="${defaultFolder}"
           style="
             width: 100%;
             padding: 6px 8px;
@@ -127,6 +126,8 @@ export async function confirmImageDrop(
 
     // Get elements
     const folderInput = dialog.querySelector('#image-folder-input') as HTMLInputElement;
+    // Set as a property: the folder comes from workspace settings, not trusted markup.
+    folderInput.value = defaultFolder;
     const rememberCheckbox = dialog.querySelector('#remember-choice') as HTMLInputElement;
     const cancelBtn = dialog.querySelector('#cancel-btn') as HTMLButtonElement;
     const saveBtn = dialog.querySelector('#save-btn') as HTMLButtonElement;

@@ -22,30 +22,78 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
-function collectText(node: JSONContent): string {
+/**
+ * Flatten a cell to HTML text, emitting real `<br>` for hardBreaks.
+ *
+ * WHY: A literal `\n` inside `<td>` is collapsible whitespace in HTML/CSS, so
+ * Enter→hardBreak would silently lose the visible line break on save/reload.
+ * Escaping must apply only to text nodes — never to the `<br>` we insert.
+ */
+function renderCellInnerHtml(node: JSONContent): string {
   if (!node || typeof node !== 'object') {
     return '';
   }
 
   if (node.type === 'text') {
-    return typeof node.text === 'string' ? node.text : '';
+    return escapeHtml(typeof node.text === 'string' ? node.text : '');
   }
 
   if (node.type === 'hardBreak' || node.type === 'hard_break') {
-    return '\n';
+    return '<br>';
   }
 
   if (!Array.isArray(node.content)) {
     return '';
   }
 
-  return node.content.map(collectText).join('');
+  return node.content.map(renderCellInnerHtml).join('');
+}
+
+/** Keep literal cell pipes from becoming GFM column delimiters on the next parse. */
+function escapeUnescapedTablePipes(value: string): string {
+  let escaped = '';
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character !== '|') {
+      escaped += character;
+      continue;
+    }
+
+    let precedingBackslashes = 0;
+    for (
+      let precedingIndex = index - 1;
+      precedingIndex >= 0 && value[precedingIndex] === '\\';
+      precedingIndex -= 1
+    ) {
+      precedingBackslashes += 1;
+    }
+    escaped += precedingBackslashes % 2 === 0 ? '\\|' : '|';
+  }
+
+  return escaped;
+}
+
+function renderTableCellSpanAttributes(cell: JSONContent): string {
+  const attributes: string[] = [];
+  const colspan = cell.attrs?.colspan;
+  const rowspan = cell.attrs?.rowspan;
+
+  if (Number.isSafeInteger(colspan) && (colspan as number) > 1) {
+    attributes.push(`colspan="${colspan as number}"`);
+  }
+  if (Number.isSafeInteger(rowspan) && (rowspan as number) > 1) {
+    attributes.push(`rowspan="${rowspan as number}"`);
+  }
+
+  return attributes.length > 0 ? ` ${attributes.join(' ')}` : '';
 }
 
 function renderTableCell(cell: JSONContent, tagName: 'th' | 'td'): string {
-  const rawText = collectText(cell).trim();
-  const escapedText = escapeHtml(rawText);
-  return `<${tagName}>${escapedText}</${tagName}>`;
+  // Trim only leading/trailing spaces and tabs so edge hardBreaks (`<br>`) stay.
+  const innerHtml = renderCellInnerHtml(cell).replace(/^[ \t]+|[ \t]+$/g, '');
+  const spanAttributes = renderTableCellSpanAttributes(cell);
+  return `<${tagName}${spanAttributes}>${innerHtml}</${tagName}>`;
 }
 
 export const HtmlPreservingTable = Table.extend({
@@ -74,15 +122,22 @@ export const HtmlPreservingTable = Table.extend({
   // GFM renderMarkdown. Arrow functions ignore .bind(), so this.parent would be
   // undefined and GFM tables would be silently dropped on serialization.
   renderMarkdown: function (
-    this: { parent: RenderMarkdownFn | null },
+    this: { parent?: RenderMarkdownFn | null },
     node: JSONContent,
     helpers: MarkdownRendererHelpers,
     context: RenderContext
   ): string {
     const htmlOrigin = Boolean(node.attrs?.htmlOrigin);
     if (!htmlOrigin) {
-      // Fall back to the base Table extension's GFM table renderer.
-      return this.parent ? this.parent.call(this, node, helpers, context) : '';
+      // TipTap 3.30.5 did not escape literal pipes returned by renderChildren,
+      // so its table output could create extra columns. 3.31.4 escapes them
+      // too and leaves already-escaped pipes alone, so this stays a safe guard.
+      const pipeSafeHelpers: MarkdownRendererHelpers = {
+        ...helpers,
+        renderChildren: (children, separator) =>
+          escapeUnescapedTablePipes(helpers.renderChildren(children, separator)),
+      };
+      return this.parent ? this.parent.call(this, node, pipeSafeHelpers, context) : '';
     }
 
     const className =

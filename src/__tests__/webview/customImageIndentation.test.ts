@@ -208,4 +208,32 @@ describe('CustomImage indentation', () => {
 
     expect(wrapper.classList.contains('image-menu-active')).toBe(true);
   });
+
+  it('serializes a pending image as a compact host-resolvable marker', () => {
+    const renderMarkdown = (
+      CustomImage as unknown as {
+        config: {
+          renderMarkdown: (
+            node: { attrs: Record<string, unknown> },
+            helpers: Record<string, never>,
+            context: Record<string, never>
+          ) => string;
+        };
+      }
+    ).config.renderMarkdown;
+
+    expect(
+      renderMarkdown(
+        {
+          attrs: {
+            src: 'data:image/png;base64,bytes-must-not-cross-the-sync-boundary',
+            alt: 'Pending',
+            'data-placeholder-id': 'img-123',
+          },
+        },
+        {},
+        {}
+      )
+    ).toBe('![Pending](md4h-pending-image:img-123)');
+  });
 });
