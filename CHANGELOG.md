@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- Saving no longer rewrites Markdown you did not edit. Soft line breaks, compact or aligned tables, `*` list markers and setext headings now keep their exact source; only the blocks you change are reformatted.
 - Inline code that contains a backtick no longer turns into broken code plus literal text on save (TipTap 3.31.4 chooses a longer backtick fence).
 
 ### Changed

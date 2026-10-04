@@ -99,3 +99,6 @@ Saving rewrites user Markdown in ways the user did not ask for. This is the prod
 | R4 | | | |
 | R5 | | | |
 | Corpus | | | |
+| Source-preserving blocks | `sourcePreservingSave.realEditor.test.ts` | branch `fix/hard-break-source-forms` | Jest + VS Code 1.140.0 (2026-10-04) |
+
+**Source-preserving blocks (2026-10-03):** found on the fresh 0.4.0 build: toggling a task checkbox on and off then saving rewrote soft breaks, padded tables and changed list markers. Loads now go through `setMarkdownContentPreservingSource` (`src/webview/utils/markdownSerialization.ts`), which seeds the block cache with each top-level block's raw token source when its standalone parse equals the live block. Unedited blocks, and blocks edited then reverted to equal content, save byte-identical. Edited blocks still take TipTap's canonical form, so decision #3 (hard-break source forms inside edited paragraphs) remains open. Cost: about 21 ms on a 9,241-line document (jsdom), since setContent's own tokens are reused.

@@ -42,7 +42,10 @@ import {
   getFeedbackToolbarMenuHost,
   updateToolbarStates,
 } from './BubbleMenuView';
-import { getEditorMarkdownForSync } from './utils/markdownSerialization';
+import {
+  getEditorMarkdownForSync,
+  setMarkdownContentPreservingSource,
+} from './utils/markdownSerialization';
 import type { BlankLineMode } from '../shared/blankLinePolicy';
 import { installBlankLineLexerNormalizer } from './utils/markedLexerNormalizer';
 import {
@@ -1072,7 +1075,8 @@ function initializeEditor(initialContent: string) {
       // Prevent onUpdate from firing during initialization - this was causing
       // documents with frontmatter to be marked dirty even without user edits
       isUpdating = true;
-      editor.commands.setContent(initialContent, { contentType: 'markdown' });
+      // Unedited blocks save with their authored Markdown, not TipTap's canonical form.
+      setMarkdownContentPreservingSource(editor, initialContent);
       isUpdating = false;
     }
 
@@ -2391,7 +2395,7 @@ function updateEditorContent(markdown: string): boolean {
     console.log(`[MD4H] Saving cursor position: ${from}-${to}`);
 
     // Set content
-    const setContentResult = editor.commands.setContent(markdown, { contentType: 'markdown' });
+    const setContentResult = setMarkdownContentPreservingSource(editor, markdown);
     if (setContentResult === false) {
       console.error('[MD4H] Editor rejected host content replacement');
       hostContentDeferred = true;
