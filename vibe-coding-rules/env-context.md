@@ -9,11 +9,11 @@
 | VS Code floor  | `^1.98.0`                                 |
 | Extension host | Node.js 20 target                         |
 | Webview        | Chromium 132 target                       |
-| Editor         | TipTap 3.30.5 on ProseMirror              |
+| Editor         | TipTap 3.31.4 on ProseMirror              |
 | Diagrams       | Mermaid 11.17.2 or compatible 11.x update |
 | Capture        | `modern-screenshot@4.7.0`                 |
 
-All direct `@tiptap/*` packages are pinned to exactly `3.30.5`. Upgrade them as one family, import ProseMirror through `@tiptap/pm/*`, and reject mixed TipTap or direct ProseMirror version families.
+All direct `@tiptap/*` packages are pinned to exactly `3.31.4`. Upgrade them as one family, import ProseMirror through `@tiptap/pm/*`, and reject mixed TipTap or direct ProseMirror version families.
 
 ## Architecture
 

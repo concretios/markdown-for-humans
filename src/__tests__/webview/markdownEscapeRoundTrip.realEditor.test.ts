@@ -120,6 +120,26 @@ describe('markdown syntax escape round-trips (real editor)', () => {
     expect(roundTrip('Path is C:\\Users\\name.')).toBe('Path is C:\\Users\\name.');
   });
 
+  // TipTap 3.30.5 wrote `` a`b `` as `a`b`, which reopens as code "a" plus a
+  // literal "b`". 3.31.4 picks a longer fence when the code contains backticks.
+  it.each([
+    ['a backtick inside', '`` a`b ``'],
+    ['a leading backtick', '`` `a ``'],
+    ['a trailing backtick', '`` a` ``'],
+  ])('keeps inline code with %s as one code span across saves', (_name, markdown) => {
+    const once = roundTrip(markdown);
+    expect(roundTrip(once)).toBe(once);
+    const editor = createRealEditor(once);
+    try {
+      const code = (editor.getJSON().content?.[0]?.content ?? []) as JSONContent[];
+      expect(code).toHaveLength(1);
+      expect(code[0].marks?.map(mark => mark.type)).toEqual(['code']);
+      expect(code[0].text).toBe(markdown.slice(3, -3));
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('still serializes real emphasis marks', () => {
     expect(roundTrip('Say **bold** and *italic* words.')).toBe('Say **bold** and *italic* words.');
   });

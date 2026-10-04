@@ -26,7 +26,7 @@ VS Code desktop
 │        └─ WebviewPanel lifecycle                                  │
 │                         ⇅ validated messages                      │
 │ Webview, Chromium 132                                             │
-│   ├─ TipTap 3.30.5 on ProseMirror                                 │
+│   ├─ TipTap 3.31.4 on ProseMirror                                 │
 │   ├─ DocumentSyncController                                       │
 │   ├─ editing, tables, images, math and Mermaid                    │
 │   ├─ Feedback review and capture modules                          │
@@ -128,7 +128,7 @@ The state parser projects only the fields above. It must not persist document co
 
 ### TipTap and ProseMirror
 
-Every direct `@tiptap/*` runtime package is pinned to exactly `3.30.5`, including `@tiptap/core`, `@tiptap/markdown`, `@tiptap/pm`, `@tiptap/starter-kit` and the direct extensions. This is the one-family rule:
+Every direct `@tiptap/*` runtime package is pinned to exactly `3.31.4`, including `@tiptap/core`, `@tiptap/markdown`, `@tiptap/pm`, `@tiptap/starter-kit` and the direct extensions. This is the one-family rule:
 
 1. Upgrade all direct TipTap packages as one tested set.
 2. Import ProseMirror APIs through `@tiptap/pm/*`.
@@ -152,7 +152,7 @@ All webview runtime dependencies are bundled. The webview does not depend on a C
 
 ### Upgrade posture
 
-The TipTap family is on the reviewed 3.30.5 security patch. Other available major versions are deliberately separate migrations, not safe mechanical bumps:
+The TipTap family is on the reviewed 3.31.4 release. Other available major versions are deliberately separate migrations, not safe mechanical bumps:
 
 | Candidate       | Posture                       | Validation required before adoption                                                          |
 | --------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
