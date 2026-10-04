@@ -1,12 +1,15 @@
 # Known Issues
 
-Living list of open limitations for **Markdown for Humans 0.4.0**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
+Living list of open limitations for **Markdown for Humans 0.4.1**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
-**Status:** 0.4.0 (2026-10-01) · **Last updated:** 2026-10-03
+**Status:** 0.4.1 (2026-10-04) · **Last updated:** 2026-10-04
 
 ---
 
 ## Open issues
+
+### Closing a tab right after an edit can lose that edit
+If you close a Markdown for Humans tab within about half a second of your last change, VS Code can close it without asking to save, and that last change is lost. Pause briefly after editing before closing the tab. Present since 0.4.0; a fix is planned.
 
 ### Workspace file drag-drop in Cursor IDE
 Dragging images from the Cursor workspace explorer into the editor is often not detected. Works in VS Code / Windsurf. External drops (Finder/desktop) may still work.
@@ -22,11 +25,14 @@ Text after a line break inside a task item can disappear on reopen (e.g. `- [ ] 
 ### HTML `<img>` resize drops attributes
 Resizing a hand-written HTML `<img>` rewrites the tag without other attributes (`align`, `class`, `style`).
 
+### Edited blocks are saved in a standard Markdown form
+Since 0.4.1, blocks you do not edit keep their exact source on save. A block you do edit (a paragraph, list, table or heading) is re-written in a standard form: soft line breaks become two-space line breaks, tables are padded, `*` list markers become `-`, and setext headings become `#` headings. The rendered result is the same.
+
 ### Escaped Markdown characters
-Escaped characters such as `\*` may be saved without the backslash and turn into formatting.
+In a block you edit, escaped characters such as `\*` may be saved without the backslash and turn into formatting. Unedited blocks keep the backslash.
 
 ### Loose / ordered list markers
-Loose lists can round-trip as tight lists; `1)` markers may become `1.`.
+In a list you edit, loose lists can round-trip as tight lists and `1)` markers may become `1.`. Unedited lists keep their source.
 
 ---
 
