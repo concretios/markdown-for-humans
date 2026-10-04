@@ -26,6 +26,21 @@ import { Fragment } from '@tiptap/pm/model';
 
 export type AlertType = 'NOTE' | 'TIP' | 'IMPORTANT' | 'WARNING' | 'CAUTION';
 
+/**
+ * Render a quote's child blocks as `>`-prefixed lines.
+ *
+ * Blocks are separated by a blank quote line (`>`), as in source. Joining them
+ * with a single newline merged an edited quote's paragraphs into one.
+ */
+function renderQuoteBody(node: JSONContent, helpers: MarkdownRendererHelpers): string {
+  const body = helpers.renderChildren(node.content || [], '\n\n').trim();
+  if (!body) return '';
+  return body
+    .split('\n')
+    .map(line => (line === '' ? '>' : `> ${line}`))
+    .join('\n');
+}
+
 export const GitHubAlerts = Node.create({
   name: 'githubAlert',
 
@@ -212,26 +227,13 @@ export const GitHubAlerts = Node.create({
     // Handle githubAlert nodes
     if (node.type === 'githubAlert') {
       const alertType = (node.attrs?.alertType as string) || 'NOTE';
-      const body = helpers.renderChildren(node.content || [], '\n').trim();
-
-      if (body) {
-        const lines = body.split('\n');
-        const formattedLines = lines.map(line => `> ${line}`).join('\n');
-        return `> [!${alertType}]\n${formattedLines}`;
-      }
-
-      return `> [!${alertType}]\n> `;
+      const body = renderQuoteBody(node, helpers);
+      return body ? `> [!${alertType}]\n${body}` : `> [!${alertType}]\n> `;
     }
 
     // Handle regular blockquote nodes - delegate to default blockquote rendering
     if (node.type === 'blockquote') {
-      const body = helpers.renderChildren(node.content || [], '\n').trim();
-      if (body) {
-        const lines = body.split('\n');
-        const formattedLines = lines.map(line => `> ${line}`).join('\n');
-        return formattedLines;
-      }
-      return '> ';
+      return renderQuoteBody(node, helpers) || '> ';
     }
 
     // Return null for other node types to let other extensions handle them

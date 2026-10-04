@@ -230,14 +230,19 @@ describe('HTML comment preservation', () => {
     });
 
     it.each([
-      ['a nested block', '- [ ] item\n  <!-- nested -->\n- [ ] next'],
-      ['a line of text', '- [ ] item <!-- inline --> text\n- [ ] next'],
-      ['a nested blockquote', '- [ ] item\n  > quoted\n  > <!-- nested -->\n- [ ] next'],
-    ])('keeps a comment in a task list item with %s', (_name, markdown) => {
+      ['a nested block', '- [ ] item\n  <!-- nested -->\n- [ ] next', undefined],
+      ['a line of text', '- [ ] item <!-- inline --> text\n- [ ] next', undefined],
+      [
+        'a nested blockquote',
+        '- [ ] item\n  > quoted\n  > <!-- nested -->\n- [ ] next',
+        // A re-serialized quote separates its blocks with a blank `>` line.
+        '- [ ] item\n  > quoted\n  >\n  > <!-- nested -->\n- [ ] next',
+      ],
+    ])('keeps a comment in a task list item with %s', (_name, markdown, reserialized) => {
       withEditor(markdown, editor => {
         expect(editor.view.dom.querySelector('.md4h-html-comment')).not.toBeNull();
         editParagraph(editor, 'next');
-        expect(getEditorMarkdownForSync(editor)).toBe(`${markdown} Edited.`);
+        expect(getEditorMarkdownForSync(editor)).toBe(`${reserialized ?? markdown} Edited.`);
       });
     });
 
@@ -261,7 +266,10 @@ describe('HTML comment preservation', () => {
       const editor = createEditor();
       try {
         editor.commands.setContent(markdown, { contentType: 'markdown' });
-        expect(getEditorMarkdownForSync(editor)).toBe(markdown);
+        // A re-serialized quote separates its blocks with a blank `>` line.
+        expect(getEditorMarkdownForSync(editor)).toBe(
+          markdown.replace('> quoted\n> <!--', '> quoted\n>\n> <!--')
+        );
       } finally {
         editor.destroy();
       }
@@ -270,9 +278,8 @@ describe('HTML comment preservation', () => {
     it('keeps a quoted comment when the blockquote itself is edited', () => {
       withEditor('> quoted\n>\n> <!-- nested -->', editor => {
         editParagraph(editor, 'quoted');
-        // GitHubAlerts joins quoted blocks with one line; a comment may
-        // interrupt a paragraph, so the structure is unchanged.
-        expect(getEditorMarkdownForSync(editor)).toBe('> quoted Edited.\n> <!-- nested -->');
+        // The quoted paragraph and comment stay separate blocks, as in source.
+        expect(getEditorMarkdownForSync(editor)).toBe('> quoted Edited.\n>\n> <!-- nested -->');
       });
     });
   });
