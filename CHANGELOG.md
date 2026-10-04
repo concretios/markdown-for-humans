@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Saving no longer rewrites Markdown you did not edit. Soft line breaks, compact or aligned tables, `*` list markers and setext headings now keep their exact source; only the blocks you change are reformatted.
 
+### Security
+
+- Updated bundled `dompurify` (via mermaid) to 3.4.16, `markdown-it` to 14.3.2 (fixes a paste-time slowdown with linkify that could freeze the editor on large inputs) and `undici` (via cheerio) to 7.30.0. `npm audit --omit=dev` reports 0 vulnerabilities.
+
 ---
 
 ## [0.4.0] - 2026-10-01
