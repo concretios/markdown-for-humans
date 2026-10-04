@@ -623,6 +623,9 @@ function normalizeFeedbackBlockKind(kind: string): string {
       return 'table';
     case 'image':
       return 'image';
+    case 'htmlComment':
+      // The host's markdown-it source index classifies comments as html_block.
+      return 'html';
     default:
       return kind.toLowerCase();
   }

@@ -26,6 +26,9 @@ type RawToken = { type?: string; raw?: string } & Record<string, unknown>;
 
 export const PRESERVED_MARKDOWN_LITERAL_TOKEN = 'preservedMarkdownLiteral';
 
+/** Token and node name for a comment-only HTML block. */
+export const HTML_COMMENT_TOKEN = 'htmlComment';
+
 /**
  * Detect link/image inline tokens whose VISIBLE text is empty.
  *
@@ -263,6 +266,20 @@ function tokenRawText(token: RawToken): string {
 const STRUCTURAL_MARKUP =
   /<!--[\s\S]*?(?:-->|$)|<!doctype[^>]*>|<\/?(?:html|head|body)\b[^>]*>|<title\b[^>]*>[\s\S]*?<\/title\s*>|<(?:meta|link|base)\b[^>]*>/gi;
 
+/** One or more HTML comments with nothing else on their lines. */
+const COMMENTS_ONLY = /^\s*(?:<!--[\s\S]*?-->\s*)+$/;
+
+/**
+ * Turn a comment-only `html` block into an `htmlComment` token.
+ *
+ * Comments render nothing, but dropping them with the other scaffolding below
+ * deleted them from the file on the next save. The HtmlComment node keeps them.
+ */
+function toHtmlCommentToken(token: RawToken): RawToken {
+  if (token?.type !== 'html' || !COMMENTS_ONLY.test(tokenRawText(token))) return token;
+  return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
+}
+
 /** A run made up only of closing tags can never contribute content. */
 const CLOSING_TAGS_ONLY = /^(?:\s*<\/[a-zA-Z][a-zA-Z0-9-]*\s*>\s*)+$/;
 
@@ -272,9 +289,10 @@ const CLOSING_TAGS_ONLY = /^(?:\s*<\/[a-zA-Z][a-zA-Z0-9-]*\s*>\s*)+$/;
  * `@tiptap/markdown` runs each HTML token through `generateJSON`, and a
  * fragment with no renderable content still yields a doc holding one empty
  * paragraph — which lands in the document as a blank line. So `<!DOCTYPE html>`,
- * the `<html><head>…<body>` wrapper, `</body></html>`, an HTML comment, or a
- * stray `</p>` each inserted a visible gap. Dropping the token removes the gap
- * without disturbing the blocks either side, which keep their own separators.
+ * the `<html><head>…<body>` wrapper, `</body></html>`, or a stray `</p>` each
+ * inserted a visible gap. Dropping the token removes the gap without disturbing
+ * the blocks either side, which keep their own separators. Comment-only blocks
+ * never reach this check: toHtmlCommentToken keeps them first.
  */
 function isContentFreeHtmlToken(token: RawToken): boolean {
   if (token.type !== 'html') return false;
@@ -358,6 +376,7 @@ const GREEDY_BLOCK_TYPES = new Set([
   'list',
   'blockquote',
   'html',
+  HTML_COMMENT_TOKEN,
 ]);
 
 function splitTrailingNewlines(token: RawToken): RawToken[] {
@@ -393,9 +412,12 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
 
   // Re-join HTML blocks marked cut at a blank line before the greedy-newline
   // split runs, so a merged block still gets its own trailing space token.
-  // Then drop scaffolding-only fragments, which would each render as a blank
-  // line. Merging first means a fragment is only judged once it is whole.
-  const merged = mergeSplitHtmlBlocks(tokens).filter(token => !isContentFreeHtmlToken(token));
+  // Then keep comments as their own tokens and drop the remaining scaffolding,
+  // which would each render as a blank line. Merging first means a fragment is
+  // only judged once it is whole.
+  const merged = mergeSplitHtmlBlocks(tokens)
+    .map(toHtmlCommentToken)
+    .filter(token => !isContentFreeHtmlToken(token));
 
   const out: RawToken[] = [];
   for (const token of merged) {
@@ -405,6 +427,15 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
       out.push(token);
     }
   }
+
+  // A comment's block ends on its `-->` line, so the next block may follow with
+  // no blank line. Record that so saving keeps the authored layout.
+  out.forEach((token, index) => {
+    if (token?.type !== HTML_COMMENT_TOKEN) return;
+    const next = out[index + 1];
+    (token as RawToken & { tightAfter?: boolean }).tightAfter =
+      next !== undefined && next.type !== 'space';
+  });
 
   // Preserve the `links` side-channel that marked attaches to the tokens array.
   const links = (tokens as unknown as { links?: unknown }).links;

@@ -16,6 +16,7 @@ import { buildFeedbackAnchorMap } from '../../editor/feedbackAnchors';
 import { BlankLinePreservation } from '../../webview/extensions/blankLinePreservation';
 import { CustomImage } from '../../webview/extensions/customImage';
 import { GitHubAlerts } from '../../webview/extensions/githubAlerts';
+import { HtmlComment } from '../../webview/extensions/htmlComment';
 import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTable';
 import { IndentedImageCodeBlock } from '../../webview/extensions/indentedImageCodeBlock';
 import { MarkdownCode, MarkdownLink } from '../../webview/extensions/markdownCompatibilityMarks';
@@ -71,6 +72,7 @@ function createFeedbackSnapshotEditor(source: string): Editor {
         link: false,
       }),
       MarkdownParagraph,
+      HtmlComment,
       MarkdownCode,
       PreservedMarkdownLiteral,
       FeedbackSnapshotCodeBlock,
@@ -166,6 +168,36 @@ describe('Feedback snapshot renderer round-trip', () => {
 
   it('keeps the unchanged contribution guide equivalent with exact source anchors', () => {
     const source = readFileSync(resolve(__dirname, '../../../CONTRIBUTING.md'), 'utf8');
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+      expect(isMarkdownRendererEquivalent(serialized, source)).toBe(true);
+      expect(buildFeedbackAnchorMap(source, enumerateCanonicalFeedbackBlocks(editor))).toEqual(
+        expect.objectContaining({ ok: true })
+      );
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('keeps HTML comments with exact source anchors', () => {
+    const source = [
+      '# Comments',
+      '',
+      '<!-- medium: export as image -->',
+      '| A | B |',
+      '|---|---|',
+      '| 1 | 2 |',
+      '',
+      'Between.',
+      '',
+      '<!--',
+      'multi-line note',
+      '-->',
+      '',
+      'After.',
+      '',
+    ].join('\n');
     const editor = createFeedbackSnapshotEditor(source);
     try {
       const serialized = `${getEditorMarkdownForSync(editor, 'strip')}\n`;

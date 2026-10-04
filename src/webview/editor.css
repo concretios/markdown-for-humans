@@ -3387,6 +3387,26 @@ body.saving-feedback {
   outline-offset: 2px;
 }
 
+/* HTML comment: kept in the file, shown as a quiet one-line marker */
+.md4h-html-comment {
+  margin: 0.25em 0;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.75em;
+  line-height: 1.4;
+  color: var(--vscode-descriptionForeground);
+  opacity: 0.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.md4h-html-comment.ProseMirror-selectednode {
+  opacity: 1;
+  outline: 2px solid var(--vscode-editor-selectionBackground, #007acc);
+  outline-offset: 2px;
+}
+
 .md4h-math-block-render {
   display: flex;
   align-items: center;

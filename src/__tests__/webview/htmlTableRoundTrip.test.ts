@@ -23,6 +23,7 @@ import { TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { isMarkdownStructurallyEquivalent } from '../../editor/markdownAstEquivalence';
+import { HtmlComment } from '../../webview/extensions/htmlComment';
 import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTable';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
 import { BlankLinePreservation } from '../../webview/extensions/blankLinePreservation';
@@ -67,6 +68,7 @@ function createEditor(): Editor {
       StarterKit.configure({ paragraph: false } as never),
       MarkdownParagraph,
       BlankLinePreservation,
+      HtmlComment,
       Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
       HtmlPreservingTable.configure({ HTMLAttributes: { class: 'markdown-table' } }),
       TableRow,
@@ -370,21 +372,25 @@ describe('document scaffolding no longer leaves blank lines', () => {
    * `@tiptap/markdown` runs each HTML token through `generateJSON`, and a
    * fragment with no renderable content still yields a doc holding one empty
    * paragraph — which lands in the document as a blank line. So a bare
-   * doctype, the `<html>`/`<body>` wrapper, a comment, or a stray closing tag
-   * each inserted a visible gap. These assert that scaffolding is dropped
-   * instead.
+   * doctype, the `<html>`/`<body>` wrapper, or a stray closing tag each
+   * inserted a visible gap. These assert that scaffolding is dropped instead.
+   * Comments are part of the file, so they become an htmlComment block.
    */
   it.each([
     ['a doctype', '<!DOCTYPE html>'],
     ['closing wrapper tags', '</body>\n</html>'],
-    ['an HTML comment', '<!-- just a note -->'],
     ['a stray closing tag', '</p>'],
   ])('drops %s instead of emitting an empty paragraph', (_label, scaffolding) => {
     expect(load(scaffolding)).toEqual([]);
   });
 
+  it('keeps an HTML comment as a block instead of an empty paragraph', () => {
+    expect(load('<!-- just a note -->')).toEqual(['htmlComment']);
+    expect(load('# A\n\n<!-- note -->\n\n# B')).toEqual(['heading', 'htmlComment', 'heading']);
+  });
+
   it('does not insert a gap between blocks separated by scaffolding', () => {
-    expect(load('# A\n\n<!-- note -->\n\n# B')).toEqual(['heading', 'heading']);
+    expect(load('# A\n\n</p>\n\n# B')).toEqual(['heading', 'heading']);
     expect(load('# A\n\n# B')).toEqual(['heading', 'heading']);
   });
 
