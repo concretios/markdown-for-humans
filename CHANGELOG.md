@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 - Large documents open faster: the task list Markdown tokenizer no longer rescans the rest of the document at every block (about 28% faster load on a 9,400-line document).
 
+### Security
+
+- Updated bundled `dompurify` (via mermaid) to 3.4.16, `markdown-it` to 14.3.2 (fixes a paste-time slowdown with linkify that could freeze the editor on large inputs) and `undici` (via cheerio) to 7.30.0. `npm audit --omit=dev` reports 0 vulnerabilities.
+
 ---
 
 ## [0.4.0] - 2026-10-01
