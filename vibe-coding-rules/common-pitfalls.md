@@ -35,6 +35,8 @@ Never add an uncorrelated feedback-loop flag back to the provider or renderer.
 
 For repeated syncs, preserve immutable ProseMirror node identity so unchanged top-level block serialization can be reused. Never cache a failed serialization result as authoritative content.
 
+Load Markdown with `setMarkdownContentPreservingSource`, never a bare `setContent(markdown, { contentType: 'markdown' })`. It seeds that cache with each block's authored source, so unedited blocks save byte-identical instead of TipTap's canonical form (soft breaks, compact tables, `*` lists and setext headings would otherwise be rewritten on the first sync).
+
 ## 3. Applying Async `WorkspaceEdit`s Without Ordering
 
 **Failure:** Fire-and-forget edits can complete out of order. Waiting on a single "latest promise" can also report idle while an older edit still runs.

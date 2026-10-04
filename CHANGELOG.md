@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving no longer rewrites Markdown you did not edit. Soft line breaks, compact or aligned tables, `*` list markers and setext headings now keep their exact source; only the blocks you change are reformatted.
+
 ---
 
 ## [0.4.0] - 2026-10-01
