@@ -44,6 +44,12 @@ A list that contains both plain items and task items (`- note` and `- [ ] todo` 
 
 **Workaround:** Separate the plain items and the task items into two lists.
 
+### Files without a final newline get one
+The editor writes every file with exactly one trailing newline (markdownlint MD047). A file that ended without one gains a newline on the first edit, which shows as a one-line change in Git.
+
+### A new empty code fence is saved as `plaintext`
+Typing three backticks and then code writes ```` ```plaintext ```` rather than a bare fence. A bare fence that is already in the file stays bare, even after you edit its block.
+
 ---
 
 ## Design limitations

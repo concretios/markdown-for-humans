@@ -29,6 +29,7 @@ import { GitHubAlerts } from './extensions/githubAlerts';
 import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { HtmlComment, HtmlCommentInline } from './extensions/htmlComment';
+import { HtmlKbd, HtmlSub, HtmlSup } from './extensions/inlineHtmlMarks';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { MarkdownTaskList } from './extensions/markdownTaskList';
@@ -40,6 +41,7 @@ import { DocumentAuditExtension } from './features/auditDocument';
 import {
   createFormattingToolbar,
   createTableMenu,
+  selectTableCellAtTarget,
   getFeedbackToolbarMenuHost,
   updateToolbarStates,
 } from './BubbleMenuView';
@@ -916,6 +918,9 @@ function initializeEditor(initialContent: string) {
         MarkdownParagraph, // Custom paragraph with empty-paragraph filtering in renderMarkdown
         HtmlComment, // Keeps <!-- comments --> as muted blocks that save unchanged
         HtmlCommentInline, // Same for a comment inside a line of text
+        HtmlKbd, // <kbd>, <sub>, <sup> keep their tags when a paragraph is edited
+        HtmlSub,
+        HtmlSup,
         MarkdownCode,
         PreservedMarkdownLiteral,
         CodeBlockWithCopy.configure({
@@ -1079,7 +1084,8 @@ function initializeEditor(initialContent: string) {
       // documents with frontmatter to be marked dirty even without user edits
       isUpdating = true;
       // Unedited blocks save with their authored Markdown, not TipTap's canonical form.
-      setMarkdownContentPreservingSource(editor, initialContent);
+      // Opening the file is not an edit, so Undo must not be able to step back past it.
+      setMarkdownContentPreservingSource(editor, initialContent, { addToHistory: false });
       isUpdating = false;
     }
 
@@ -1167,10 +1173,9 @@ function initializeEditor(initialContent: string) {
       if (isEventInsideModalOverlay(e)) return;
       if (isFeedbackEditingLocked()) return;
       try {
-        const target = e.target as HTMLElement;
-        const tableCell = target.closest('td, th');
-
-        if (tableCell && editorInstance.isActive('table')) {
+        // The right-click has not moved the caret yet, so place it in the clicked
+        // cell first; asking isActive('table') beforehand hid the menu on the first click.
+        if (selectTableCellAtTarget(editorInstance, e.target as HTMLElement)) {
           e.preventDefault();
           tableMenu.style.display = 'block';
           tableMenu.style.position = 'fixed';

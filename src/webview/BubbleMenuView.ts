@@ -19,6 +19,7 @@ import { showImageInsertDialog } from './features/imageInsertDialog';
 import { parseFenceInfo, replaceFenceLanguage } from './highlighting/fenceInfo';
 import { resolveGrammar } from './highlighting/languageRegistry';
 import type { Editor } from '@tiptap/core';
+import { Selection } from '@tiptap/pm/state';
 import type { Transaction } from '@tiptap/pm/state';
 
 // Store reference to refresh function so it can be called externally
@@ -612,7 +613,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     {
       type: 'button',
       label: 'Link',
-      title: `Insert/edit link (${modKeyLabel}+K)`,
+      title: `Insert/edit link (${modKeyLabel}+K ${modKeyLabel}+L)`,
       icon: { name: 'link', fallback: '🔗' },
       action: () => showLinkDialog(editor),
       isActive: () => editor.isActive('link'),
@@ -1259,6 +1260,34 @@ export function positionBubbleMenu(menu: HTMLElement) {
   menu.style.left = `${rect.left + rect.width / 2}px`;
   menu.style.top = `${rect.top - 45}px`; // Position above selection
   menu.style.transform = 'translateX(-50%)'; // Center horizontally
+}
+
+/**
+ * Put the caret in the table cell that was right-clicked.
+ *
+ * The table menu acts on the current selection, so the selection has to be in the
+ * clicked cell before the menu opens. A text selection already inside that cell is
+ * left alone.
+ *
+ * @returns true when `target` is inside a cell of this editor's table
+ */
+export function selectTableCellAtTarget(editor: Editor, target: HTMLElement): boolean {
+  const cell = target.closest('td, th');
+  if (!cell || !editor.view.dom.contains(cell)) return false;
+
+  const { state, view } = editor;
+  const $inCell = state.doc.resolve(view.posAtDOM(cell, 0));
+  const cellStart = $inCell.before();
+  const cellEnd = $inCell.after();
+  // A multi-cell selection is a set of ranges, so test every range; from/to alone
+  // describes only one of them.
+  const selectionTouchesCell = state.selection.ranges.some(
+    range => range.$from.pos < cellEnd && range.$to.pos > cellStart
+  );
+  if (!selectionTouchesCell) {
+    view.dispatch(state.tr.setSelection(Selection.near($inCell)));
+  }
+  return editor.isActive('table');
 }
 
 /**

@@ -193,6 +193,8 @@ const MERGEABLE_CONTAINER_TAGS = new Set([
   'blockquote',
   'figure',
   'div',
+  'center',
+  'p',
 ]);
 
 /** Elements that never have a closing tag, so they must not open a scope. */
@@ -347,6 +349,70 @@ function normalizeHtmlCommentsDeep(tokens: RawToken[] | undefined, nested: boole
   });
 }
 
+/** A `<summary>` line is label text for its `<details>`, not content of the wrapper. */
+const SUMMARY_ELEMENT = /<summary\b[^>]*>[\s\S]*?<\/summary\s*>/gi;
+
+/**
+ * Keep the opening and closing tags of an HTML wrapper that has Markdown inside.
+ *
+ * Marked ends an HTML block at a blank line, so
+ *
+ *     <div align="center">
+ *
+ *     **bold**
+ *
+ *     </div>
+ *
+ * lexes as an `html` token, a paragraph, and an `html` token. Neither tag
+ * fragment parses to a block, so both vanished and the next save rewrote the file
+ * without its wrapper. Each fragment that is only wrapper tags becomes an
+ * `htmlComment` token, which shows a muted marker and saves its source unchanged.
+ *
+ * An opener is always kept. A closer is kept only when it closes an opener kept
+ * earlier, so a stray `</p>` from pasted HTML still falls through to
+ * `isContentFreeHtmlToken` and is dropped as before.
+ */
+function keepWrapperTags(tokens: RawToken[]): RawToken[] {
+  const open: string[] = [];
+
+  return tokens.map(token => {
+    if (token?.type !== 'html') return token;
+
+    const scannable = tokenRawText(token).replace(SUMMARY_ELEMENT, '');
+    // Anything left once the tags are gone is content, so this is not a bare fragment.
+    if (scannable.replace(TAG_PATTERN, '').trim() !== '') return token;
+
+    const trial = [...open];
+    let floor = open.length;
+    let closesEarlier = false;
+    let sawTag = false;
+
+    TAG_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = TAG_PATTERN.exec(scannable)) !== null) {
+      const tagName = match[2].toLowerCase();
+      if (!MERGEABLE_CONTAINER_TAGS.has(tagName) || match[3] === '/') return token;
+      sawTag = true;
+      if (match[1] === '/') {
+        if (trial.length <= floor) {
+          closesEarlier = true;
+          floor = trial.length - 1;
+        }
+        if (trial.pop() !== tagName) return token;
+      } else {
+        trial.push(tagName);
+      }
+    }
+    if (!sawTag) return token;
+    // A block that opens and closes its own tags is whole content, not a fragment.
+    if (trial.length === open.length && !closesEarlier) return token;
+
+    open.length = 0;
+    open.push(...trial);
+    return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
+  });
+}
+
 /** A run made up only of closing tags can never contribute content. */
 const CLOSING_TAGS_ONLY = /^(?:\s*<\/[a-zA-Z][a-zA-Z0-9-]*\s*>\s*)+$/;
 
@@ -483,7 +549,7 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
   // Then keep comments as their own tokens and drop the remaining scaffolding,
   // which would each render as a blank line. Merging first means a fragment is
   // only judged once it is whole.
-  const merged = mergeSplitHtmlBlocks(tokens)
+  const merged = keepWrapperTags(mergeSplitHtmlBlocks(tokens))
     .map(toHtmlCommentToken)
     .filter(token => !isContentFreeHtmlToken(token));
 

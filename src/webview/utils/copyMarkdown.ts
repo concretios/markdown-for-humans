@@ -11,6 +11,7 @@
  */
 
 import { Editor } from '@tiptap/core';
+import { Fragment } from '@tiptap/pm/model';
 import { patchMarkdownSerialization } from './markdownSerialization';
 
 /**
@@ -39,8 +40,15 @@ export function getSelectionAsMarkdown(editor: Editor): string | null {
     // Get the selected slice
     const slice = editor.state.doc.slice(from, to);
 
+    // A selection inside one textblock yields bare inline nodes. Under the doc node
+    // the serializer would write each styled run as its own block, so wrap them in
+    // a paragraph first. Selections that span blocks already hold block nodes.
+    const content = slice.content.firstChild?.isInline
+      ? Fragment.from(editor.schema.nodes.paragraph.create(null, slice.content))
+      : slice.content;
+
     // Create a temporary document with just the selection content
-    const tempDoc = editor.schema.topNodeType.create(null, slice.content);
+    const tempDoc = editor.schema.topNodeType.create(null, content);
 
     // Try to use the markdown manager from @tiptap/markdown
     // The official package exposes editor.markdown.serialize(json)

@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving after an edit elsewhere no longer deletes the tags of an HTML wrapper that has Markdown inside it. `<div align="center">`, `<center>`, `<p>` and `<details>` blocks with blank lines between the tags and their content lost their opening or closing tag on the next save. The tags now show as muted markers and save exactly as written.
+- Pressing Undo repeatedly no longer empties the file. The first load of a document was an undo step, so one Undo too many blanked the editor and synced an empty file to VS Code. Undo now stops at the document you opened.
+- Editing a paragraph no longer strips `<kbd>`, `<sub>` and `<sup>`. `Press <kbd>Ctrl</kbd>+<kbd>C</kbd>` became `Press Ctrl+C` once the paragraph was edited.
+- **Copy selection as Markdown** copies a partial selection as one line. A selection such as `with **bold**, *italic*` used to be split into separate paragraphs, and a plain-text selection could copy nothing.
+- Right-clicking a table cell opens the table menu on the first click, and acts on the cell you clicked. The first right-click from outside the table used to open only VS Code's own menu, and a caret in another cell made the menu act on that cell.
+- Editing a paragraph keeps `<https://…>` and `<name@host>` autolinks in angle form instead of rewriting them as `[url](url)`.
+- The link button tooltip now shows the working shortcut, Cmd/Ctrl+K then Cmd/Ctrl+L, instead of Cmd/Ctrl+K alone.
+
 ---
 
 ## [0.4.1] - 2026-10-04

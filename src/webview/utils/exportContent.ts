@@ -35,6 +35,9 @@ export async function collectExportContent(editor: Editor): Promise<ExportConten
   const editorElement = editor.view.dom as HTMLElement;
   const clonedContent = editorElement.cloneNode(true) as HTMLElement;
 
+  // Comment and wrapper-tag markers are source shown for editing, not document content.
+  clonedContent.querySelectorAll('.md4h-html-comment').forEach(marker => marker.remove());
+
   // Find all Mermaid diagrams
   const mermaidWrappers = clonedContent.querySelectorAll('.mermaid-wrapper');
   const mermaidImages: ExportContent['mermaidImages'] = [];

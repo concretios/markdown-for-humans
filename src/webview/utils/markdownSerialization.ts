@@ -472,9 +472,14 @@ function serializeBlockMarkdownResult(
  *
  * @param editor - Editor to load
  * @param markdown - Markdown source
+ * @param options.addToHistory - Set to `false` for the first load, so undo stops at the opened file
  * @returns The result of `editor.commands.setContent`
  */
-export function setMarkdownContentPreservingSource(editor: Editor, markdown: string): boolean {
+export function setMarkdownContentPreservingSource(
+  editor: Editor,
+  markdown: string,
+  options: { addToHistory?: boolean } = {}
+): boolean {
   const manager = getMarkdownManager(editor);
   const createLexer = manager?.createLexer;
   let tokens: MarkdownSourceToken[] | null = null;
@@ -497,7 +502,14 @@ export function setMarkdownContentPreservingSource(editor: Editor, markdown: str
 
   let result: boolean;
   try {
-    result = editor.commands.setContent(markdown, { contentType: 'markdown' });
+    result =
+      options.addToHistory === false
+        ? editor
+            .chain()
+            .setMeta('addToHistory', false)
+            .setContent(markdown, { contentType: 'markdown' })
+            .run()
+        : editor.commands.setContent(markdown, { contentType: 'markdown' });
   } finally {
     if (manager && typeof createLexer === 'function') {
       if (ownCreateLexer) manager.createLexer = createLexer;
