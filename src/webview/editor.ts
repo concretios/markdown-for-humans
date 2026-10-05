@@ -67,6 +67,7 @@ import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
+import { shouldOpenLinkFromClick } from './utils/linkClick';
 import {
   createFeedbackNodeViewInteractionGuards,
   createFeedbackReviewController,
@@ -1325,8 +1326,12 @@ function initializeEditor(initialContent: string) {
         return;
       }
 
+      // Always swallow the click so VS Code's own webview link handler never opens it.
       e.preventDefault();
       e.stopPropagation();
+
+      // A plain click only places the caret, so the link text stays editable.
+      if (!shouldOpenLinkFromClick(e)) return;
 
       // External URLs
       if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:')) {
@@ -2190,6 +2195,10 @@ window.addEventListener('message', async (event: MessageEvent) => {
         }
         break;
       }
+      case 'toggleTocOutlineView':
+        // Sent by the toggleTocOutlineView command; same path as the toolbar button.
+        window.dispatchEvent(new CustomEvent('toggleTocOutline'));
+        break;
       case 'navigateToHeading': {
         if (!editor) return;
         const pos = message.pos as number;

@@ -103,6 +103,11 @@ const WRAPPERS: Array<[string, string]> = [
     'a p with blank lines around an image',
     '<p align="center">\n\n<img src="a.png" width="100" alt="logo">\n\n</p>',
   ],
+  ['a div whose opening line has text', '<div>Intro text\n\n**bold**\n\n</div>'],
+  [
+    'a div with text after an inner wrapper',
+    '<div class="a">\n\n<div class="b">Inner text\n\nbody\n\n</div>\n\n</div>',
+  ],
   ['nested divs', '<div class="a">\n\n<div class="b">\n\ninner\n\n</div>\n\n</div>'],
 ];
 

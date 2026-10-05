@@ -24,6 +24,13 @@ interface SerializedTopLevelBlock {
   readonly markdown: string;
   /** Join the next block with one newline instead of a blank line. */
   readonly tightAfter?: boolean;
+  /**
+   * The authored block that directly followed this one, with no blank line between.
+   * The join stays tight only while that very block is still the next one, so an
+   * edited, moved or replaced neighbor falls back to a blank line instead of
+   * merging into the paragraph above it.
+   */
+  tightNext?: SerializedTopLevelBlock;
 }
 
 /** An HTML comment authored directly above the next block keeps that layout. */
@@ -320,6 +327,7 @@ function joinSerializedBlocks(
   let result = '';
   let pendingBlanks = 0;
   let previousTightAfter = false;
+  let previousBlock: SerializedTopLevelBlock | undefined;
 
   for (let index = startIndex; index < endIndex; index++) {
     const block = blocks[index];
@@ -340,7 +348,7 @@ function joinSerializedBlocks(
     }
 
     if (result !== '') {
-      if (previousTightAfter && pendingBlanks === 0) {
+      if ((previousTightAfter || previousBlock?.tightNext === block) && pendingBlanks === 0) {
         result += '\n';
       } else {
         result += '\n\n';
@@ -352,6 +360,7 @@ function joinSerializedBlocks(
     result += block.markdown;
     pendingBlanks = 0;
     previousTightAfter = block.tightAfter === true;
+    previousBlock = block;
   }
 
   return result;
@@ -521,6 +530,13 @@ export function setMarkdownContentPreservingSource(
   return result;
 }
 
+/** Newlines separating the content of two adjacent lexer tokens, wherever marked put them. */
+function newlinesBetween(first: string, second: string): number {
+  const tail = first.match(/(?:\n[ \t]*)*$/)?.[0] ?? '';
+  const head = second.match(/^(?:[ \t]*\n)*/)?.[0] ?? '';
+  return (tail.match(/\n/g)?.length ?? 0) + (head.match(/\n/g)?.length ?? 0);
+}
+
 function rememberSourceBlocks(
   editor: Editor,
   manager: MarkdownManager | undefined,
@@ -541,9 +557,16 @@ function rememberSourceBlocks(
     }
 
     let cursor = 0;
-    for (const token of tokens) {
+    let previous: {
+      token: MarkdownSourceToken;
+      block: SerializedTopLevelBlock;
+      end: number;
+    } | null = null;
+    for (let tokenIndex = 0; tokenIndex < tokens.length; tokenIndex++) {
+      const token = tokens[tokenIndex];
       if (token.type === 'space' || typeof token.raw !== 'string') continue;
       const parsed = manager.parseTokens([token]).filter(json => !isEmptyParagraph(json));
+      const start = cursor;
       const live = liveBlocks.slice(cursor, cursor + parsed.length);
       cursor += parsed.length;
       if (parsed.length !== 1 || live.length !== 1) continue;
@@ -560,6 +583,21 @@ function rememberSourceBlocks(
       };
       cache.blocks.set(node, block);
       cache.sources[index] = { node, block };
+
+      // No blank line between two authored blocks: remember that join, so saving
+      // writes it back instead of normalizing it to a blank line.
+      // Marked folds a single blank line into the raw text of a neighboring token
+      // instead of emitting a space token, so count the newlines between the two
+      // blocks' content: exactly one means no blank line separates them.
+      if (
+        previous !== null &&
+        tokens[tokenIndex - 1] === previous.token &&
+        previous.end === start &&
+        newlinesBetween(previous.token.raw ?? '', token.raw) === 1
+      ) {
+        previous.block.tightNext = block;
+      }
+      previous = { token, block, end: cursor };
     }
   } catch (error) {
     // Losing source preservation only restores the canonical serializer output.

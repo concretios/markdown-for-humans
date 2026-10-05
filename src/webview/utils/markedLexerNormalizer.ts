@@ -281,6 +281,10 @@ const COMMENTS_ONLY = /^\s*(?:<!--[\s\S]*?-->\s*)+$/;
  * deleted them from the file on the next save. The HtmlComment node keeps them.
  */
 function toHtmlCommentToken(token: RawToken): RawToken {
+  // A reference definition (`[0.2.1]: https://…`) renders nothing, so no block was
+  // made for it and saving deleted it while the text above still linked to it.
+  // The marked lexer has already resolved the links; only the source line is kept.
+  if (token?.type === 'def') return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
   if (token?.type !== 'html' || !COMMENTS_ONLY.test(tokenRawText(token))) return token;
   return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
 }
@@ -380,7 +384,11 @@ function keepWrapperTags(tokens: RawToken[]): RawToken[] {
 
     const scannable = tokenRawText(token).replace(SUMMARY_ELEMENT, '');
     // Anything left once the tags are gone is content, so this is not a bare fragment.
-    if (scannable.replace(TAG_PATTERN, '').trim() !== '') return token;
+    // It keeps its own rendering, but a wrapper it opens still needs its closer kept.
+    if (scannable.replace(TAG_PATTERN, '').trim() !== '') {
+      open.push(...trackOpenContainers(tokenRawText(token), []));
+      return token;
+    }
 
     const trial = [...open];
     let floor = open.length;
@@ -394,11 +402,14 @@ function keepWrapperTags(tokens: RawToken[]): RawToken[] {
       if (!MERGEABLE_CONTAINER_TAGS.has(tagName) || match[3] === '/') return token;
       sawTag = true;
       if (match[1] === '/') {
-        if (trial.length <= floor) {
+        // Close down to the matching opener; an unmatched closer is left alone.
+        const openIndex = trial.lastIndexOf(tagName);
+        if (openIndex === -1) return token;
+        if (openIndex < floor) {
           closesEarlier = true;
-          floor = trial.length - 1;
+          floor = openIndex;
         }
-        if (trial.pop() !== tagName) return token;
+        trial.length = openIndex;
       } else {
         trial.push(tagName);
       }

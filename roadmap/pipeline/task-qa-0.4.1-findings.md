@@ -2,7 +2,7 @@
 
 **Source:** real VS Code 1.140.0 Extension Host run on 2026-10-04, 207 cases, 192 pass, 15 fail. The 15 failures reduce to the 10 findings below plus 5 already in `KNOWN_ISSUES.md`.
 
-**Status:** hotfix branch `hotfix/qa-0.4.1-findings`, uncommitted. F1 to F6 and F9 are fixed with regression tests; F7 and F10 are documented in `KNOWN_ISSUES.md`; F8 needs a product decision; F11 is new and open. Ordered by severity. Each item has a repro, expected vs actual, where to look first (suspected, not verified), and the test that caught it.
+**Status:** hotfix branch `hotfix/qa-0.4.1-findings`. F1 to F6, F8, F9 and the later findings F12 to F15 are fixed with regression tests; F7 and F10 are documented in `KNOWN_ISSUES.md`; F11 was retracted (not reproducible). One open decision remains, host-driven undo (see the end). Ordered by severity. Each item has a repro, expected vs actual, where to look first (suspected, not verified), and the test that caught it.
 
 **Method note:** every finding was observed through real keystrokes and mouse events in the actual webview, then checked against the `TextDocument` and disk. Browser-only or JSDOM checks would not have caught F1 to F3, because rendering was correct and only the saved bytes were wrong.
 
@@ -19,10 +19,14 @@
 | F5 | Medium | First right-click on a table cell does not open the table menu | **Fixed**, verified in VS Code |
 | F6 | Low | Angle-bracket autolinks rewritten in an edited paragraph | **Fixed**, verified in VS Code |
 | F7 | Low | Trailing newline appended to a file that had none | By design (MD047); **documented** in KNOWN_ISSUES |
-| F8 | Low | Plain click on a link opens the browser (manual says it should not) | **Open, needs a decision** |
+| F8 | Low | Plain click on a link opens the browser (manual says it should not) | **Fixed**: Cmd/Ctrl+click opens, plain click places the caret. Wiki still says plain click |
 | F9 | Low | Link tooltip advertises Cmd+K, only Cmd+K then Cmd+L works | **Fixed** (tooltip). Wiki still says Cmd+K, see below |
 | F10 | Low | Typed bare fence is saved as `plaintext` | By design (`defaultLanguage`); **documented** in KNOWN_ISSUES |
-| F11 | Medium | Undoing back to the original text leaves the tab marked dirty | **New, open** |
+| F11 | Medium | Undoing back to the original text leaves the tab marked dirty | **Retracted**: not reproducible. The QA case reused a file the previous case had left dirty |
+| F12 | High | Saving inserts blank lines between blocks you did not edit (heading, label or text directly above a list, fence or text) | **Fixed**, found by the corpus run |
+| F13 | High | Link reference definitions (`[0.2.1]: https://...`) deleted on save | **Fixed**, found by the corpus run |
+| F14 | Low | `toggleTocOutlineView` command does nothing (message not handled) | **Fixed** |
+| F15 | Medium | Toolbar buttons clipped and unreachable when the editor is narrow | **Fixed**: the toolbar wraps onto a second row |
 
 ---
 
@@ -164,13 +168,30 @@ Typing three backticks then code writes a ```` ```plaintext ```` fence to the fi
 
 ---
 
-## F11 (Medium, new): tab stays dirty after undoing back to the original
+## F11 (retracted): tab stays dirty after undoing to the original
 
-Found when F2's QA case got further than before. After typing and pressing Cmd+Z, the text matches the original again but `TextDocument.isDirty` stays true, so VS Code still shows the unsaved dot and prompts on close. `docs/QA_MANUAL.md` section 5.1 says the indicator should clear when you undo back to the initial content.
+Not a product bug. With a clean file, Cmd+Z back to the original text leaves the tab clean, including six presses 80 ms apart (8 of 8 runs). The QA case that failed (`02.7`) reused `hello.md` right after `02.6` had typed into it, so the in-memory document was still dirty. The case now uses its own file and passes.
 
-**Likely cause:** the webview sends each state as a `WorkspaceEdit` that replaces the text, so VS Code sees two edits rather than one undone edit, and its saved-version marker never matches again.
-**Look first:** `MarkdownEditorProvider` edit application (around line 11380 of `src/editor/MarkdownEditorProvider.ts`). Clearing dirty needs either routing undo through VS Code's own undo stack or reverting the document when the text equals the saved bytes. The second option resets the webview, so it needs care.
-**Caught by:** `02.7` (fails at "dirty cleared by undo").
+## F12 (High, fixed): blank lines inserted between blocks you did not edit
+
+Found by editing only the first heading of each of this repository's 156 Markdown files in the real editor and diffing the rest. Only 54 came back byte-identical; 863 blank lines were inserted across 84 files. The documented entry covered text directly above a list (569 of them) but not a heading above a list (178), a heading above text (50), or a label above a code fence (49).
+
+**Cause:** an unedited block kept its own text but not its join to the next block, so every tight boundary was rewritten with a blank line.
+**Fix:** each remembered source block records the original block that followed it with no blank line (`tightNext`, in `markdownSerialization.ts`). The tight join is written back only while that same unedited block is still next. If either neighbor is edited, moved or turned into something else, a blank line is used so two blocks can never merge into one paragraph. Marked folds a single blank line into a neighboring token's raw text, so tightness is decided by counting the newlines between the two blocks' content.
+**Result:** 129 of 156 identical (from 54); inserted blank lines 863 to 8, all end-of-file cases that are documented design.
+
+## F13 (High, fixed): link reference definitions deleted on save
+
+Found by the same corpus run. `CHANGELOG.md` lost its 40 trailing `[version]: https://...` lines after a heading edit, while the unedited `## [0.2.1]` headings above still depended on them.
+**Fix:** a `def` token now becomes the same marker block as an HTML comment (`markedLexerNormalizer.ts`), so each definition shows as a muted line and saves exactly as written. Reference links in the text above still resolve.
+
+## F15 (Medium, fixed): toolbar clipped at normal editor widths
+
+At a 786 px editor (sidebar plus a chat panel open) the last three toolbar buttons, Export, Audit and Export settings, were cut off with no overflow control, so they could not be used. A split view is narrower still. `.formatting-toolbar` was `flex-wrap: nowrap`; it now wraps (`editor.css`), and a test guards the rule. Verified in the real host at 786 px: two rows, every button reachable.
+
+## F14 (Low, fixed): toggleTocOutlineView does nothing
+
+The command posted `{ type: 'toggleTocOutlineView' }` and the webview had no handler. It is not contributed in `package.json`, so only a custom keybinding reaches it. `editor.ts` now handles the message through the same path as the toolbar button.
 
 ---
 
@@ -193,15 +214,20 @@ Found when F2's QA case got further than before. After typing and pressing Cmd+Z
 
 | Check | Result |
 |---|---|
-| Jest | 200 suites, 3,778 tests pass (baseline 3,721, 57 new) |
+| Jest | 205 suites, 3,817 tests pass (baseline 3,721, 96 new) |
 | `eslint --max-warnings 0`, `tsc --noEmit` | clean |
-| Real VS Code re-run | 207 pass, 10 fail (was 192 / 15). Eight original failures resolved |
-| Still failing, expected | 02.3 lists and 02.3 code (documented standard-form behavior), 02.5 (F7, by design), 09.0 (asserts the old tooltip), 09.4 (F8), 02.7 (F11) |
-| Feedback suite flakiness | Fails intermittently on **untouched main** too (4 of 10 runs vs 6 of 10 on the branch, difference not significant). Case `21.11` flakes on both. Treat as harness timing, not a product signal |
+| Real VS Code, each suite in a fresh host | 15 of 16 suites fully green; `f03-f06-text` fails 1 to 6 toolbar-click cases per run, a different set each time, in code this branch does not touch |
+| Corpus (156 real docs, first-heading edit) | 129 byte-identical, up from 54 |
 
-Files changed: `markedLexerNormalizer.ts` (F1), `markdownSerialization.ts` and `editor.ts` (F2), new `inlineHtmlMarks.ts` (F3), `copyMarkdown.ts` (F4), `BubbleMenuView.ts` and `editor.ts` (F5, F9), `markdownCompatibilityMarks.ts` (F6), plus `CHANGELOG.md` and `KNOWN_ISSUES.md`. Six new test files under `src/__tests__/webview/`.
+Behavior changes to confirm:
 
-**Behavior change to confirm (F1):** wrapper tags such as `<div align="center">` now appear as muted one-line markers, the same style as HTML comments. Before, they were invisible and silently deleted on save. Showing them is what makes the save lossless.
+- **Wrapper tags (F1)** such as `<div align="center">` show as muted one-line markers, the same style as HTML comments. Before they were invisible and silently deleted on save. They are stripped from PDF and Word export.
+- **Link click (F8)** now needs Cmd/Ctrl. `wiki/Keyboard-Shortcuts.md` still says "Click link" (separate repo, not edited).
+- **Link definitions (F13)** appear as muted marker lines where they sit in the file.
+
+Still open, needs a decision: **host-driven undo.** Content the host pushes in (git checkout, a formatter) is still recorded in the editor's undo history, so Cmd+Z can revert such a change and write the old text back. Skipping history for every host update would also wipe undo after each format-on-save write, so this is a product call.
+
+Skipped on purpose: renaming the shared `htmlComment` node (it now also holds wrapper tags and link definitions) is a separate refactor.
 
 ## Reproducing and extending the tests
 
