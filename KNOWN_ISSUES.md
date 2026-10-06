@@ -36,13 +36,24 @@ Comments are kept on their own lines, inside lists and blockquotes, and inside a
 ### Loose / ordered list markers
 In a list you edit, loose lists can round-trip as tight lists and `1)` markers may become `1.`. Unedited lists keep their source.
 
-### Blank line added before a list that follows a line of text
-When a line of text is followed directly by a list with no blank line between them (for example a bold label above its list), saving after any edit inserts a blank line between the two. The same applies between the blocks of a blockquote you edit. The rendered result is the same; only the source layout changes.
+### Blank line added next to a block you edit
+Blocks you do not edit keep the exact layout they had, including a heading, label or paragraph that sits directly above a list, code fence or text with no blank line. When you edit one of two such neighbors, saving puts a blank line between them (for example after an edited bold label above its list, or after an edited heading above text). The rendered result is the same; only the source layout changes.
 
 ### Feedback refuses lists that mix plain and task items
-A list that contains both plain items and task items (`- note` and `- [ ] todo` in one list) stops **Log feedback for an LLM** from starting: the editor splits it into two lists, so Feedback cannot match its blocks to the saved file. The file itself is not changed.
+A list that contains both plain items and task items (`- note` and `- [ ] todo` in one list) stops **Log feedback for an LLM** from starting: the editor splits it into two lists, so Feedback cannot match its blocks to the saved file. A brief message says to split the list; the file itself is not changed.
 
 **Workaround:** Separate the plain items and the task items into two lists.
+
+### Undo can step back over a change made outside the editor
+If the file is changed while it is open in the editor (a Git checkout, another extension, a formatter), pressing Undo first steps back to the text from before that change, and that older text is written to the file. VS Code's own text editor behaves the same way for edits that other extensions apply.
+
+**Workaround:** Check **Source Control** before committing, or use **Git: Discard Changes** to return to the checked-out version.
+
+### Files without a final newline get one
+The editor writes every file with exactly one trailing newline (markdownlint MD047). A file that ended without one gains a newline on the first edit, which shows as a one-line change in Git.
+
+### A new empty code fence is saved as `plaintext`
+Typing three backticks and then code writes ```` ```plaintext ```` rather than a bare fence. A bare fence that is already in the file stays bare, even after you edit its block.
 
 ---
 

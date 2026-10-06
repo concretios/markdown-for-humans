@@ -8,6 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving after an edit elsewhere no longer deletes the tags of an HTML wrapper that has Markdown inside it. `<div align="center">`, `<center>`, `<p>` and `<details>` blocks with blank lines between the tags and their content lost their opening or closing tag on the next save. The tags now show as muted markers and save exactly as written.
+- Pressing Undo repeatedly no longer empties the file. The first load of a document was an undo step, so one Undo too many blanked the editor and synced an empty file to VS Code. Undo now stops at the document you opened.
+- Editing a paragraph no longer strips `<kbd>`, `<sub>` and `<sup>`. `Press <kbd>Ctrl</kbd>+<kbd>C</kbd>` became `Press Ctrl+C` once the paragraph was edited.
+- **Copy selection as Markdown** copies a partial selection as one line. A selection such as `with **bold**, *italic*` used to be split into separate paragraphs, and a plain-text selection could copy nothing.
+- Right-clicking a table cell opens the table menu on the first click, and acts on the cell you clicked. The first right-click from outside the table used to open only VS Code's own menu, and a caret in another cell made the menu act on that cell.
+- Editing a paragraph keeps `<https://…>` and `<name@host>` autolinks in angle form instead of rewriting them as `[url](url)`.
+- Saving no longer inserts blank lines between blocks you did not edit. A heading, label or paragraph written directly above a list, code fence or text (no blank line) kept its layout only until the first save, which added a blank line at every such boundary. In a check over this repository's own 156 Markdown files, editing one heading left 129 byte-identical, up from 54, and removed 855 of 863 inserted blank lines.
+- Link reference definitions (`[0.2.1]: https://…`) are no longer deleted on save. They showed nothing in the editor, so the next save removed them while the text above still used them as links. Each definition now shows as a muted marker line and saves exactly as written.
+- A wrapper whose opening line also has text (`<div>Intro`) keeps its closing tag, and unmatched closing tags no longer block later ones.
+- Cmd/Ctrl+click opens a link; a plain click only places the caret, so link text can be edited without launching the browser or VS Code opening the link itself.
+- The toolbar wraps onto a second row when the editor is narrow. Beside a sidebar or in a split view its last buttons (Export, Audit, Export settings) were cut off and could not be reached.
+- The editor's error log now names the message and location when the browser gives no error object, instead of printing an empty `Uncaught error:` line.
+- The `toggleTocOutlineView` command now toggles the outline overlay. It sent a message the editor did not handle.
+- The link button tooltip now shows the working shortcut, Cmd/Ctrl+K then Cmd/Ctrl+L, instead of Cmd/Ctrl+K alone.
+- When Feedback cannot start because a list mixes plain and task items, the message now says to split it into two lists instead of showing a technical block-shape error.
+
 ---
 
 ## [0.4.1] - 2026-10-04

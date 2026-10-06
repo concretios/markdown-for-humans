@@ -157,3 +157,15 @@ See `vibe-coding-rules/styling.md` for the complete styling contract.
 **Failure:** Hosted CI hardware does not represent the reference Windows i5/16 GB machine, and elapsed thresholds become noisy.
 
 **Use instead:** Gate deterministic work counts in Ubuntu and Windows CI, then collect p95 timings, memory snapshots, high-DPI capture and long-form reading evidence on the physical reference machine. Report these as separate automated and manual results.
+
+## 16. Inferring Blank Lines from Marked `space` Tokens
+
+**Failure:** Marked folds a single blank line into the raw text of a neighboring token instead of emitting a `space` token (for example a task list's raw starts with `\n\n`). Treating "no space token" as "no blank line" made the first source-preserving save remove blank lines, and treating it the other way inserted them at every tight boundary.
+
+**Use instead:** Count the newlines between the two blocks' content across both tokens' raw text (`newlinesBetween` in `markdownSerialization.ts`); exactly one means the blocks were written with no blank line. Reproduce a tight join only while the same unedited block is still next, so an edited or replaced neighbor never merges into the paragraph above it. `src/__tests__/webview/layoutFuzz.realEditor.test.ts` checks this with seeded random documents.
+
+## 17. Giving Renderless Source a Silent Home
+
+**Failure:** Markdown with no visible output (link reference definitions, wrapper tags such as `<div align="center">` around Markdown, HTML comments) produced no block, so saving deleted it while the text above still depended on it.
+
+**Use instead:** Keep it as a marker block (`htmlComment` token in `markedLexerNormalizer.ts`) that shows muted source and saves it unchanged, and strip `.md4h-html-comment` from exports.
