@@ -201,8 +201,8 @@ The command posted `{ type: 'toggleTocOutlineView' }` and the webview had no han
 
 | Observation | Note |
 |---|---|
-| Feedback refuses a mixed plain/task list with no visible message | KNOWN_ISSUES says Start is "stopped" but does not say it is silent. A toast would help. Case `21.9`. |
-| Empty `[MD4H] Uncaught error:` on one cold open of `images.md` (1 of 6) | `window` `error` handler at `src/webview/editor.ts:2983` logs `event.error`, which is empty for image load errors. Log `event.message` or filter resource errors. |
+| Feedback refuses a mixed plain/task list with no visible message | **Open follow-up, existing on main, not changed here.** Confirmed in the real editor: nothing appears on screen (no toast, no VS Code notification, no banner). `KNOWN_ISSUES.md` documents the refusal but not that it is silent. A visible message is the fix; it sits in the Feedback start path, which this PR does not touch. Case `21.9`. |
+| Empty `[MD4H] Uncaught error:` on one cold open of `images.md` (1 of 6) | **Fixed**: the global handler now logs the message and location when the event has no error object (`describeUncaughtError`). |
 | Typing latency 27.8 ms median on a 17,500-line document | Over the 16 ms typing budget in `AGENTS.md`, under the 50 ms interaction budget. Debug build only; measure the release bundle first. Case `23.3`. |
 | `` `` a`b `` `` becomes ``` ``a`b`` ``` in an edited paragraph | Equivalent render; covered by the standard-form note. |
 
@@ -251,3 +251,7 @@ The harness is not tracked: it lives in git-ignored `temp/qa/` on the machine th
 ## Not covered by this QA pass
 
 Feedback Next/Previous/Choose scope/Capture selected blocks/Reveal commands, block gutter action, table-cell feedback, Outline sidebar tree and filter, status-bar stats click, Redo after the F2 overshoot, Windows, Linux, Remote, Cursor, the release (minified) bundle. Computer-use control of VS Code was denied, so OS-level Cmd+C/Cmd+V, Finder drag-drop and native menus are unverified.
+
+## Native checks not verified
+
+Computer-use control of VS Code was declined, so the real editor was driven over the DevTools protocol with real keystrokes and mouse events. Not covered by that method and therefore not verified natively: OS-level Cmd+C and Cmd+V keystrokes (the clipboard API and `execCommand` were used instead), real Finder drag-and-drop (a synthetic `DataTransfer` drop was used), and native context-menu rendering. Windows and Linux editors were not driven; their extension-host smoke tests run in CI.

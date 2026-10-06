@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - A wrapper whose opening line also has text (`<div>Intro`) keeps its closing tag, and unmatched closing tags no longer block later ones.
 - Cmd/Ctrl+click opens a link; a plain click only places the caret, so link text can be edited without launching the browser or VS Code opening the link itself.
 - The toolbar wraps onto a second row when the editor is narrow. Beside a sidebar or in a split view its last buttons (Export, Audit, Export settings) were cut off and could not be reached.
+- The editor's error log now names the message and location when the browser gives no error object, instead of printing an empty `Uncaught error:` line.
 - The `toggleTocOutlineView` command now toggles the outline overlay. It sent a message the editor did not handle.
 - The link button tooltip now shows the working shortcut, Cmd/Ctrl+K then Cmd/Ctrl+L, instead of Cmd/Ctrl+K alone.
 

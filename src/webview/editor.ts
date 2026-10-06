@@ -68,6 +68,7 @@ import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
 import { shouldOpenLinkFromClick } from './utils/linkClick';
+import { describeUncaughtError } from './utils/describeUncaughtError';
 import {
   createFeedbackNodeViewInteractionGuards,
   createFeedbackReviewController,
@@ -2994,7 +2995,7 @@ document.addEventListener(
 
 // Global error handler
 window.addEventListener('error', event => {
-  console.error('[MD4H] Uncaught error:', event.error);
+  console.error('[MD4H] Uncaught error:', describeUncaughtError(event));
 });
 
 window.addEventListener('unhandledrejection', event => {
