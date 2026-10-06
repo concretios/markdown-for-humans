@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+---
+
+## [0.4.2] - 2026-10-06
+
+### Changed
+
+- **Links now open with Cmd/Ctrl+click.** A plain click only places the caret, so link text can be edited without launching the browser or VS Code opening the link itself.
+
 ### Fixed
 
 - Saving after an edit elsewhere no longer deletes the tags of an HTML wrapper that has Markdown inside it. `<div align="center">`, `<center>`, `<p>` and `<details>` blocks with blank lines between the tags and their content lost their opening or closing tag on the next save. The tags now show as muted markers and save exactly as written.
@@ -19,7 +27,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Saving no longer inserts blank lines between blocks you did not edit. A heading, label or paragraph written directly above a list, code fence or text (no blank line) kept its layout only until the first save, which added a blank line at every such boundary. In a check over this repository's own 156 Markdown files, editing one heading left 129 byte-identical, up from 54, and removed 855 of 863 inserted blank lines.
 - Link reference definitions (`[0.2.1]: https://…`) are no longer deleted on save. They showed nothing in the editor, so the next save removed them while the text above still used them as links. Each definition now shows as a muted marker line and saves exactly as written.
 - A wrapper whose opening line also has text (`<div>Intro`) keeps its closing tag, and unmatched closing tags no longer block later ones.
-- Cmd/Ctrl+click opens a link; a plain click only places the caret, so link text can be edited without launching the browser or VS Code opening the link itself.
 - The toolbar wraps onto a second row when the editor is narrow. Beside a sidebar or in a split view its last buttons (Export, Audit, Export settings) were cut off and could not be reached.
 - The editor's error log now names the message and location when the browser gives no error object, instead of printing an empty `Uncaught error:` line.
 - The `toggleTocOutlineView` command now toggles the outline overlay. It sent a message the editor did not handle.
