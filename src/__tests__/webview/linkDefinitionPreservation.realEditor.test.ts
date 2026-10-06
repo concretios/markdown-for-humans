@@ -12,9 +12,13 @@
 import { Editor } from '@tiptap/core';
 import { Markdown } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
+import { ListKit } from '@tiptap/extension-list';
 import { HtmlComment, HtmlCommentInline } from '../../webview/extensions/htmlComment';
 import { MarkdownLink } from '../../webview/extensions/markdownCompatibilityMarks';
+import { MarkdownListItem } from '../../webview/extensions/markdownListItem';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
+import { MarkdownTaskList } from '../../webview/extensions/markdownTaskList';
+import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMarkdownFix';
 import {
   getEditorMarkdownForSync,
   setMarkdownContentPreservingSource,
@@ -27,12 +31,23 @@ function createEditor(): Editor {
   const editor = new Editor({
     element,
     extensions: [
-      StarterKit.configure({ paragraph: false, link: false }),
+      StarterKit.configure({
+        paragraph: false,
+        link: false,
+        bulletList: false,
+        orderedList: false,
+        listItem: false,
+        listKeymap: false,
+      }),
       MarkdownParagraph,
       MarkdownLink,
       HtmlComment,
       HtmlCommentInline,
       Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
+      ListKit.configure({ listItem: false, orderedList: false, taskList: false }),
+      MarkdownTaskList,
+      MarkdownListItem,
+      OrderedListMarkdownFix,
     ],
     content: '',
     contentType: 'markdown',
@@ -98,6 +113,24 @@ describe('link reference definitions', () => {
       });
     });
     expect(hrefs).toEqual(expect.arrayContaining(['https://example.com/docs']));
+    editor.destroy();
+  });
+});
+
+describe('definitions in unusual places', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  it.each([
+    ['as the only content of a bullet item', '- [foo]: https://x.com\n- bar'],
+    ['as the only content of an ordered item', '1. [a]: https://x.com\n2. two'],
+    ['inside a blockquote', '> [a]: https://x.com\n> text'],
+    ['with an angle-bracket URL and a title', '[a]: <https://x.com/a> "Title"\n\nSee [a].'],
+    ['between paragraphs', 'text\n\n[a]: https://x.com\n\nmore [a]'],
+    ['after an ordered list', '1. one\n2. two\n\n[a]: https://x.com'],
+  ])('loads and saves a definition %s without losing it', (_name, markdown) => {
+    const editor = createEditor();
+    setMarkdownContentPreservingSource(editor, markdown);
+    expect(getEditorMarkdownForSync(editor, 'strip')).toBe(markdown);
     editor.destroy();
   });
 });

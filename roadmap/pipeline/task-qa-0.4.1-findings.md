@@ -225,7 +225,9 @@ Behavior changes to confirm:
 - **Link click (F8)** now needs Cmd/Ctrl. `wiki/Keyboard-Shortcuts.md` still says "Click link" (separate repo, not edited).
 - **Link definitions (F13)** appear as muted marker lines where they sit in the file.
 
-Still open, needs a decision: **host-driven undo.** Content the host pushes in (git checkout, a formatter) is still recorded in the editor's undo history, so Cmd+Z can revert such a change and write the old text back. Skipping history for every host update would also wipe undo after each format-on-save write, so this is a product call.
+Decided and documented: **host-driven undo.** Content the host pushes in (an extension edit, a Git change) is recorded in the editor's undo history, so Cmd+Z first steps back to the text from before that change. This was verified in the real editor and matches VS Code's own behavior for edits applied by other extensions. Skipping history for every host update would also wipe undo after each format-on-save write, so it is listed in `KNOWN_ISSUES.md` instead of changed.
+
+Follow-up, not in this PR: typing on a 17,500-line document measures about 30 ms median (budget 16 ms, interaction budget 50 ms). Untouched `main` measures the same, so it predates this branch.
 
 Skipped on purpose: renaming the shared `htmlComment` node (it now also holds wrapper tags and link definitions) is a separate refactor.
 

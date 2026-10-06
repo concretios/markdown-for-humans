@@ -44,6 +44,11 @@ A list that contains both plain items and task items (`- note` and `- [ ] todo` 
 
 **Workaround:** Separate the plain items and the task items into two lists.
 
+### Undo can step back over a change made outside the editor
+If the file is changed while it is open in the editor (a Git checkout, another extension, a formatter), pressing Undo first steps back to the text from before that change, and that older text is written to the file. VS Code's own text editor behaves the same way for edits that other extensions apply.
+
+**Workaround:** Check **Source Control** before committing, or use **Git: Discard Changes** to return to the checked-out version.
+
 ### Files without a final newline get one
 The editor writes every file with exactly one trailing newline (markdownlint MD047). A file that ended without one gains a newline on the first edit, which shows as a one-line change in Git.
 

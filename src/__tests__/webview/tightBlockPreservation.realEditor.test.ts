@@ -150,6 +150,16 @@ describe('tight block layout', () => {
     });
   });
 
+  it('keeps tight and loose joins in a CRLF document (marked normalizes line endings)', () => {
+    const lf = 'Label:\n- one\n- two\n\n## Rules\nText under rules.\n\nTail paragraph.';
+    withEditor(lf.replace(/\n/g, '\r\n'), editor => {
+      appendTo(editor, 'paragraph', 'Tail paragraph');
+      expect(getEditorMarkdownForSync(editor)).toBe(
+        lf.replace('Tail paragraph.', 'Tail paragraph. EDITED')
+      );
+    });
+  });
+
   it('keeps blank-line separated blocks separated', () => {
     const markdown = '# Title\n\nParagraph.\n\n- one\n- two\n\nTail paragraph.';
     withEditor(markdown, editor => {
