@@ -4,6 +4,8 @@
 
 **Status:** hotfix branch `hotfix/qa-0.4.1-findings`. F1 to F6, F8, F9 and the later findings F12 to F15 are fixed with regression tests; F7 and F10 are documented in `KNOWN_ISSUES.md`; F11 was retracted (not reproducible). One open decision remains, host-driven undo (see the end). Ordered by severity. Each item has a repro, expected vs actual, where to look first (suspected, not verified), and the test that caught it.
 
+**How to read this file:** it is a record of bugs found in **0.4.1** (the code on `main` before this PR). Wherever a section says what the editor "does" or "now does", it describes 0.4.1 behavior, before the fix. Each heading says whether this PR fixes it, and the regression test that proves it is named in the section. Nothing in this list is behavior introduced by this PR.
+
 **Method note:** every finding was observed through real keystrokes and mouse events in the actual webview, then checked against the `TextDocument` and disk. Browser-only or JSDOM checks would not have caught F1 to F3, because rendering was correct and only the saved bytes were wrong.
 
 ---
@@ -30,7 +32,7 @@
 
 ---
 
-## F1 (High): closing tags deleted from HTML wrapper blocks
+## F1 (High, fixed in this PR): closing tags deleted from HTML wrapper blocks
 
 **Repro** (file `a.md`):
 
@@ -63,7 +65,7 @@ Tail paragraph.
 
 ---
 
-## F2 (High): undo past the loaded state empties the document
+## F2 (High, fixed in this PR): undo past the loaded state empties the document
 
 **Repro:**
 1. Open `hello.md` (`# Hello`, one paragraph).
@@ -82,7 +84,7 @@ Tail paragraph.
 
 ---
 
-## F3 (Medium): inline raw HTML stripped from an edited paragraph
+## F3 (Medium, fixed in this PR): inline raw HTML stripped from an edited paragraph
 
 **Repro:**
 
@@ -105,7 +107,7 @@ Press <kbd>Ctrl</kbd>+<kbd>C</kbd> keys.
 
 ---
 
-## F4 (Medium): Copy as Markdown splits inline marks into paragraphs
+## F4 (Medium, fixed in this PR): Copy as Markdown splits inline marks into paragraphs
 
 **Repro:** in `Plain paragraph with **bold**, *italic*, ...` select from `with` to `italic` and click the toolbar **Copy selection as Markdown**.
 
@@ -120,7 +122,7 @@ Press <kbd>Ctrl</kbd>+<kbd>C</kbd> keys.
 
 ---
 
-## F5 (Medium): first right-click on a table cell shows no table menu
+## F5 (Medium, fixed in this PR): first right-click on a table cell shows no table menu
 
 **Repro:**
 1. Open `tables.md`, click in a paragraph outside the table.
@@ -136,19 +138,19 @@ README promises "Right-click to add rows", so a first-time user will hit this im
 
 ---
 
-## F6 (Low): autolinks rewritten in an edited paragraph
+## F6 (Low, fixed in this PR): autolinks rewritten in an edited paragraph
 
 `Autolink <https://example.com/a_b_c> and <me_x@example.com>.` becomes `[https://example.com/a_b_c](https://example.com/a_b_c) and [me_x@example.com](mailto:me_x@example.com).` after any edit in that paragraph. Underscores survive. Rendered result is the same; the source gets longer and noisier. Add the construct to KNOWN_ISSUES under standard-form re-serialization if it is left as is.
 
 **Caught by:** `02.2`, `13.3`.
 
-## F7 (Low): trailing newline appended
+## F7 (Low, existing behavior on main, documented not changed): trailing newline appended
 
 A file that ends without a final newline gets `\n` added to the document text on the first keystroke, before any save. Causes a diff on a one-word change. Related to the CRLF work in 0.4.1; CRLF itself was preserved.
 
 **Caught by:** `02.5`.
 
-## F8 (Low): plain click on a link opens the browser
+## F8 (Low, fixed in this PR): plain click on a link opens the browser
 
 `handleLinkClick` in `src/webview/editor.ts` (around line 1320) sends `openExternalLink` for any click on an `http(s)` or `mailto` link, and the caret also lands in the link. `docs/QA_MANUAL.md` section 5.6 says links must not open on click while editing. Decide which is right, then fix the code (Cmd/Ctrl+click is the usual convention) or the manual.
 
@@ -160,7 +162,7 @@ Toolbar tooltip reads `Insert/edit link (Cmd+K)`. Cmd+K alone does nothing becau
 
 **Caught by:** `09.0`, `09.1`.
 
-## F10 (Low): bare fence saved as `plaintext`
+## F10 (Low, existing behavior on main, documented not changed): bare fence saved as `plaintext`
 
 Typing three backticks then code writes a ```` ```plaintext ```` fence to the file. Bare fences that were already in the file are preserved. Cosmetic, but it changes what the user typed.
 
