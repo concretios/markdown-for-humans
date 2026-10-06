@@ -254,4 +254,14 @@ Feedback Next/Previous/Choose scope/Capture selected blocks/Reveal commands, blo
 
 ## Native checks not verified
 
-Computer-use control of VS Code was declined, so the real editor was driven over the DevTools protocol with real keystrokes and mouse events. Not covered by that method and therefore not verified natively: OS-level Cmd+C and Cmd+V keystrokes (the clipboard API and `execCommand` were used instead), real Finder drag-and-drop (a synthetic `DataTransfer` drop was used), and native context-menu rendering. Windows and Linux editors were not driven; their extension-host smoke tests run in CI.
+Computer-use control of VS Code was declined at the access prompt. Even if it had been granted, VS Code (like any IDE) is given click-level control only, with no typing or key presses, so OS-level keystroke checks cannot be done that way. The real editor was therefore driven over the DevTools protocol with real keystrokes and mouse events. Not covered by that method and therefore not verified natively: OS-level Cmd+C and Cmd+V keystrokes (the clipboard API and `execCommand` were used instead), real Finder drag-and-drop (a synthetic `DataTransfer` drop was used), and native context-menu rendering. Windows and Linux editors were not driven; their extension-host smoke tests run in CI.
+
+**A person should run this before releasing (about 10 minutes, on macOS and Windows):**
+
+1. Open a Markdown file in Markdown for Humans. Select text, press Cmd/Ctrl+C, click elsewhere, press Cmd/Ctrl+V. The text pastes with its formatting.
+2. Select part of a paragraph with bold and italic words and use the toolbar **Copy selection as Markdown**. Paste into a plain text editor and check it is one line.
+3. Drag an image from Finder or Explorer into the editor. It is saved next to the document and shown.
+4. Right-click a table cell you have not clicked yet. The table menu opens on the first click. Right-click inside a multi-cell selection and check the selection stays.
+5. Open a long document in a light and a dark theme, narrow the editor beside the sidebar, and check every toolbar button is reachable.
+6. Edit one heading of a document that has a list directly under another heading, save, and check **Source Control** shows only that one line changed.
+
