@@ -241,6 +241,29 @@ describe('FeedbackSnapshotService', () => {
     expect(result).toMatchObject({ ok: false, error: { reason: 'block-content-mismatch' } });
   });
 
+  it('tells the user how to recover when the editor splits a mixed plain/task list in two', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText = '- note\n- [ ] todo\n';
+    const source = requirePrepared(service, sourceText);
+    // The rich editor renders one source list as two lists, so the host sees two blocks for one.
+    const result = service.finalize({
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+      descriptors: {
+        revision: 3,
+        blocks: [block(0, 'bulletList', '- note'), block(1, 'taskList', '- [ ] todo')],
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { reason: 'block-map-mismatch' } });
+    if (result.ok) throw new Error('expected a block-map mismatch');
+    // A technical "block shape" message left users with no next step.
+    expect(result.error.detail).toMatch(/plain and task items/i);
+    expect(result.error.detail).toMatch(/two lists/i);
+  });
+
   it('rejects a source capture when the document version changed before preparation', () => {
     const service = new FeedbackSnapshotService();
     const result = service.prepareSource({

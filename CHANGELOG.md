@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - The editor's error log now names the message and location when the browser gives no error object, instead of printing an empty `Uncaught error:` line.
 - The `toggleTocOutlineView` command now toggles the outline overlay. It sent a message the editor did not handle.
 - The link button tooltip now shows the working shortcut, Cmd/Ctrl+K then Cmd/Ctrl+L, instead of Cmd/Ctrl+K alone.
+- When Feedback cannot start because a list mixes plain and task items, the message now says to split it into two lists instead of showing a technical block-shape error.
 
 ---
 

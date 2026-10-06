@@ -40,7 +40,7 @@ In a list you edit, loose lists can round-trip as tight lists and `1)` markers m
 Blocks you do not edit keep the exact layout they had, including a heading, label or paragraph that sits directly above a list, code fence or text with no blank line. When you edit one of two such neighbors, saving puts a blank line between them (for example after an edited bold label above its list, or after an edited heading above text). The rendered result is the same; only the source layout changes.
 
 ### Feedback refuses lists that mix plain and task items
-A list that contains both plain items and task items (`- note` and `- [ ] todo` in one list) stops **Log feedback for an LLM** from starting: the editor splits it into two lists, so Feedback cannot match its blocks to the saved file. The file itself is not changed.
+A list that contains both plain items and task items (`- note` and `- [ ] todo` in one list) stops **Log feedback for an LLM** from starting: the editor splits it into two lists, so Feedback cannot match its blocks to the saved file. A brief message says to split the list; the file itself is not changed.
 
 **Workaround:** Separate the plain items and the task items into two lists.
 

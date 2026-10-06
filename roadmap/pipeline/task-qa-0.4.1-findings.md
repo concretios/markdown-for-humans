@@ -201,7 +201,7 @@ The command posted `{ type: 'toggleTocOutlineView' }` and the webview had no han
 
 | Observation | Note |
 |---|---|
-| Feedback refuses a mixed plain/task list with no visible message | **Open follow-up, existing on main, not changed here.** Confirmed in the real editor: nothing appears on screen (no toast, no VS Code notification, no banner). `KNOWN_ISSUES.md` documents the refusal but not that it is silent. A visible message is the fix; it sits in the Feedback start path, which this PR does not touch. Case `21.9`. |
+| Feedback refuses a mixed plain/task list | **Fixed here (message only).** Existing on main. The refusal itself is by design and remains (workaround in `KNOWN_ISSUES.md`). The first QA read called it silent; that was wrong: a toast does appear but disappears in under 4 seconds, and an observer-based re-run in the real editor caught it. The text was a technical "Canonical block shape does not match the saved source snapshot." with no next step. It now says to split the list into two. Cases `21.9`, `21.9b`. |
 | Empty `[MD4H] Uncaught error:` on one cold open of `images.md` (1 of 6) | **Fixed**: the global handler now logs the message and location when the event has no error object (`describeUncaughtError`). |
 | Typing latency 27.8 ms median on a 17,500-line document | Over the 16 ms typing budget in `AGENTS.md`, under the 50 ms interaction budget. Debug build only; measure the release bundle first. Case `23.3`. |
 | `` `` a`b `` `` becomes ``` ``a`b`` ``` in an edited paragraph | Equivalent render; covered by the standard-form note. |
