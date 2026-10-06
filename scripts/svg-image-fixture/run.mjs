@@ -163,8 +163,24 @@ try {
   );
   const endpoint = await new Promise((resolveEndpoint, rejectEndpoint) => {
     let stderr = '';
-    const timeout = setTimeout(() => rejectEndpoint(new Error('Chrome launch timed out')), 15000);
+    // A cold shared CI runner can take well over 15s to print the DevTools line, so allow a full
+    // minute, and report Chrome's own stderr when it dies early instead of a bare timeout.
+    const timeout = setTimeout(
+      () =>
+        rejectEndpoint(
+          new Error(`Chrome launch timed out. stderr so far:\n${stderr.slice(-2000)}`)
+        ),
+      60000
+    );
     child.once('error', rejectEndpoint);
+    child.once('exit', code => {
+      clearTimeout(timeout);
+      rejectEndpoint(
+        new Error(
+          `Chrome exited with code ${code} before DevTools started. stderr:\n${stderr.slice(-2000)}`
+        )
+      );
+    });
     child.stderr.on('data', chunk => {
       stderr += chunk;
       const match = stderr.match(/DevTools listening on (ws:\/\/[^\s]+)/);
