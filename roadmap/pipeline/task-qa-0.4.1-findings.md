@@ -258,6 +258,8 @@ Feedback Next/Previous/Choose scope/Capture selected blocks/Reveal commands, blo
 
 Computer-use control of VS Code was declined at the access prompt. Even if it had been granted, VS Code (like any IDE) is given click-level control only, with no typing or key presses, so OS-level keystroke checks cannot be done that way. The real editor was therefore driven over the DevTools protocol with real keystrokes and mouse events. Not covered by that method and therefore not verified natively: OS-level Cmd+C and Cmd+V keystrokes (the clipboard API and `execCommand` were used instead), real Finder drag-and-drop (a synthetic `DataTransfer` drop was used), and native context-menu rendering. Windows and Linux editors were not driven; their extension-host smoke tests run in CI.
 
+**Attempt to run these natively (release prep):** VS Code was granted at click level only (no typing, right-click or drag), a second VS Code window started for the test was not reachable through the per-app tools, and the full-screen takeover prompt received no response, so no native step ran. Step 6 was run in a real Extension Host with the git CLI (case `98.6`: heading edited, saved, `git diff --numstat` shows 2 added, 1 removed: the heading and one blank line; no other line changed). Light and dark themes and toolbar reachability at the current width were already covered in a real host (cases `22.x`, `96.x`, `17.5`). Steps 1 to 4 remain for a person.
+
 **A person should run this before releasing (about 10 minutes, on macOS and Windows):**
 
 1. Open a Markdown file in Markdown for Humans. Select text, press Cmd/Ctrl+C, click elsewhere, press Cmd/Ctrl+V. The text pastes with its formatting.
@@ -265,5 +267,5 @@ Computer-use control of VS Code was declined at the access prompt. Even if it ha
 3. Drag an image from Finder or Explorer into the editor. It is saved next to the document and shown.
 4. Right-click a table cell you have not clicked yet. The table menu opens on the first click. Right-click inside a multi-cell selection and check the selection stays.
 5. Open a long document in a light and a dark theme, narrow the editor beside the sidebar, and check every toolbar button is reachable.
-6. Edit one heading of a document that has a list directly under another heading, save, and check **Source Control** shows only that one line changed.
+6. Edit one heading of a document that has a list directly under another heading, save, and check **Source Control** shows the edited heading plus at most one blank line beside it, and no other change. (A heading edited directly above a list or text gets one blank line after it; see KNOWN_ISSUES.)
 
