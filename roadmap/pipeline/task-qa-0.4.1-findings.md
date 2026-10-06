@@ -229,6 +229,8 @@ Behavior changes to confirm:
 
 Decided and documented: **host-driven undo.** Content the host pushes in (an extension edit, a Git change) is recorded in the editor's undo history, so Cmd+Z first steps back to the text from before that change. This was verified in the real editor and matches VS Code's own behavior for edits applied by other extensions. Skipping history for every host update would also wipe undo after each format-on-save write, so it is listed in `KNOWN_ISSUES.md` instead of changed.
 
+Feedback end to end with a real agent (case `21.5`, then Claude Code CLI `claude -p` on the copied bundle, scratch copy only): the copied handoff prompt led the agent to verify the source SHA-256, apply F1 and F2 to the right lines, report per ID and leave the bundle untouched. With one line appended to the source after sealing, the same prompt made it stop on the hash mismatch and change nothing.
+
 Follow-up, not in this PR: typing on a 17,500-line document measures about 30 ms median (budget 16 ms, interaction budget 50 ms). Untouched `main` measures the same, so it predates this branch.
 
 Skipped on purpose: renaming the shared `htmlComment` node (it now also holds wrapper tags and link definitions) is a separate refactor.
