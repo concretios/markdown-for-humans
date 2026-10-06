@@ -323,5 +323,15 @@ try {
     ]);
   }
   server.close();
-  if (process.env.MD4H_KEEP_FIXTURE !== '1') await rm(temporary, { recursive: true, force: true });
+  if (process.env.MD4H_KEEP_FIXTURE !== '1') {
+    try {
+      // Chrome helper processes can still be writing to the profile for a moment after the
+      // main process exits, so a single rm failed with ENOTEMPTY and failed CI after the
+      // checks had passed. Retry briefly instead.
+      await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 250 });
+    } catch (error) {
+      // Pass or fail was decided above; a leftover temp directory must not change that.
+      process.stderr.write(`Could not remove ${temporary}: ${error.message}\n`);
+    }
+  }
 }
