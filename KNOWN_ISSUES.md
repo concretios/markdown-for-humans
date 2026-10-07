@@ -2,7 +2,7 @@
 
 Living list of open limitations for **Markdown for Humans 0.4.1**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
-**Status:** 0.4.1 (2026-10-04) · **Last updated:** 2026-10-04
+**Status:** 0.4.1 (2026-10-07) · **Last updated:** 2026-10-07
 
 ---
 

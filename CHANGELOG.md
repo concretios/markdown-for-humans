@@ -8,8 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+---
+
+## [0.4.1] - 2026-10-07
+
 ### Fixed
 
+- Saving no longer rewrites Markdown you did not edit. Soft line breaks, compact or aligned tables, `*` list markers and setext headings now keep their exact source; only the blocks you change are reformatted.
+- Inline code that contains a backtick no longer turns into broken code plus literal text on save (TipTap 3.31.4 chooses a longer backtick fence).
+- Closing a tab right after an edit no longer loses that edit. Previously, closing within about half a second of a change closed the tab without a save prompt and the change never reached the file. The first change after a pause now reaches VS Code at once, so the tab shows as unsaved and VS Code asks to save.
+- Toolbar tooltips now appear reliably when you hover over a button icon, not only its edges (contributed by @goltmann).
+- **Copy to Workspace & Edit** for an image outside the workspace now works. The image was copied, but the dialog closed and nothing else happened; the image now points at the copy and the resize panel opens.
+- HTML comments such as `<!-- medium: export as image -->` are no longer deleted. Since 0.3.0 the editor dropped them on load, so the next save removed them from the file and Feedback refused to start ("the rendered Markdown differs from the saved file"). They now show as a faint marker and save exactly as written, including a comment placed directly above a table, inside a list item or blockquote, or inside a line of text.
+- Editing a blockquote or GitHub alert with several paragraphs no longer merges them into one on save. The paragraphs were written back without the blank `>` line between them, so GitHub showed them as a single paragraph.
 - Saving after an edit elsewhere no longer deletes the tags of an HTML wrapper that has Markdown inside it. `<div align="center">`, `<center>`, `<p>` and `<details>` blocks with blank lines between the tags and their content lost their opening or closing tag on the next save. The tags now show as muted markers and save exactly as written.
 - Pressing Undo repeatedly no longer empties the file. The first load of a document was an undo step, so one Undo too many blanked the editor and synced an empty file to VS Code. Undo now stops at the document you opened.
 - Editing a paragraph no longer strips `<kbd>`, `<sub>` and `<sup>`. `Press <kbd>Ctrl</kbd>+<kbd>C</kbd>` became `Press Ctrl+C` once the paragraph was edited.
@@ -25,20 +36,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - The `toggleTocOutlineView` command now toggles the outline overlay. It sent a message the editor did not handle.
 - The link button tooltip now shows the working shortcut, Cmd/Ctrl+K then Cmd/Ctrl+L, instead of Cmd/Ctrl+K alone.
 - When Feedback cannot start because a list mixes plain and task items, the message now says to split it into two lists instead of showing a technical block-shape error.
-
----
-
-## [0.4.1] - 2026-10-04
-
-### Fixed
-
-- Saving no longer rewrites Markdown you did not edit. Soft line breaks, compact or aligned tables, `*` list markers and setext headings now keep their exact source; only the blocks you change are reformatted.
-- Inline code that contains a backtick no longer turns into broken code plus literal text on save (TipTap 3.31.4 chooses a longer backtick fence).
-- Closing a tab right after an edit no longer loses that edit. Previously, closing within about half a second of a change closed the tab without a save prompt and the change never reached the file. The first change after a pause now reaches VS Code at once, so the tab shows as unsaved and VS Code asks to save.
-- Toolbar tooltips now appear reliably when you hover over a button icon, not only its edges (contributed by @goltmann).
-- **Copy to Workspace & Edit** for an image outside the workspace now works. The image was copied, but the dialog closed and nothing else happened; the image now points at the copy and the resize panel opens.
-- HTML comments such as `<!-- medium: export as image -->` are no longer deleted. Since 0.3.0 the editor dropped them on load, so the next save removed them from the file and Feedback refused to start ("the rendered Markdown differs from the saved file"). They now show as a faint marker and save exactly as written, including a comment placed directly above a table, inside a list item or blockquote, or inside a line of text.
-- Editing a blockquote or GitHub alert with several paragraphs no longer merges them into one on save. The paragraphs were written back without the blank `>` line between them, so GitHub showed them as a single paragraph.
 
 ### Changed
 
