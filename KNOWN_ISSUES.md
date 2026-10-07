@@ -54,6 +54,11 @@ A list that contains both plain items and task items (`- note` and `- [ ] todo` 
 
 **Workaround:** Separate the plain items and the task items into two lists.
 
+### Feedback refuses indented code blocks
+A code block written with four spaces of indentation, instead of a ` ``` ` fence, stops **Log feedback for an LLM** from starting. The message that appears suggests splitting a list that mixes plain and task items; that advice does not apply here, and the indented code block is the cause. The file itself is not changed.
+
+**Workaround:** Write the code block as a fenced block (` ``` ` before and after the code) before you start Feedback.
+
 ### Undo can step back over a change made outside the editor
 If the file is changed while it is open in the editor (a Git checkout, another extension, a formatter), pressing Undo first steps back to the text from before that change, and that older text is written to the file. VS Code's own text editor behaves the same way for edits that other extensions apply.
 
