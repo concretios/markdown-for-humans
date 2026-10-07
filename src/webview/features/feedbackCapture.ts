@@ -1270,8 +1270,16 @@ export function createFeedbackAnnotationModal(
     overlay.removeEventListener('pointercancel', handlePointerCancel);
     window.removeEventListener('feedbackInvalidated', handleFeedbackLifecycleEnd);
     window.removeEventListener(FEEDBACK_SESSION_ENDED_EVENT, handleFeedbackLifecycleEnd);
+    const selection = window.getSelection();
+    const selectionInDialog = Boolean(
+      (selection?.anchorNode && dialog.contains(selection.anchorNode)) ||
+      (selection?.focusNode && dialog.contains(selection.focusNode))
+    );
     dialog.remove();
     if (shouldRestoreFocus) restoreFocus();
+    // Chrome keeps the selection beside the focused feedback textarea. Removing the dialog moves it
+    // outside the editor, which kept block actions hidden until the next click in the document.
+    if (selectionInDialog) window.getSelection()?.removeAllRanges();
   }
 
   function handleFeedbackLifecycleEnd(): void {

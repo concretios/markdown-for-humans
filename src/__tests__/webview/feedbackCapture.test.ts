@@ -833,6 +833,30 @@ describe('feedback annotation modal', () => {
     );
   });
 
+  it('drops a selection left inside the dialog when it closes', () => {
+    const outside = document.createElement('p');
+    outside.textContent = 'Document';
+    document.body.appendChild(outside);
+    const controller = createFeedbackAnnotationModal({
+      image: { dataUrl: 'data:image/png;base64,base', width: 800, height: 600 },
+      onAdd: jest.fn(),
+      onRetake: jest.fn(),
+      onCancel: jest.fn(),
+    });
+    const field = controller.element.querySelector('textarea');
+    if (!field?.parentElement) throw new Error('Missing annotation feedback field');
+    // Chrome anchors the document selection beside the focused textarea, inside the dialog.
+    // Removing the dialog would otherwise strand it outside the editor and hide block actions.
+    window.getSelection()?.collapse(field.parentElement, 0);
+
+    controller.element
+      .querySelector<HTMLButtonElement>('[aria-label="Cancel screenshot feedback"]')
+      ?.click();
+
+    expect(controller.element.isConnected).toBe(false);
+    expect(window.getSelection()?.rangeCount).toBe(0);
+  });
+
   it('changes tools without installing document-level shortcuts', () => {
     const documentListener = jest.spyOn(document, 'addEventListener');
     const controller = createFeedbackAnnotationModal({
