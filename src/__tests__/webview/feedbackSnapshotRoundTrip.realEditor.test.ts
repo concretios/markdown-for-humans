@@ -731,6 +731,50 @@ describe('Indented code block save', () => {
   });
 });
 
+describe('Linked image', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  // TipTap applies a link mark to text only, so an image inside a link lost the
+  // link when its paragraph was edited and saved.
+  it.each([
+    ['plain', '[![Icon](icon.png)](https://example.com)'],
+    ['with a link title', '[![Icon](icon.png)](https://example.com "Home page")'],
+    ['with an image title', '[![Icon](icon.png "Logo")](https://example.com)'],
+  ])('keeps the link on an edited paragraph (%s)', (_label, linkedImage) => {
+    const editor = createFeedbackSnapshotEditor(`Intro ${linkedImage} tail.\n`);
+    try {
+      editor.chain().insertContentAt(1, 'X').run();
+
+      expect(getEditorMarkdownForSync(editor, 'strip')).toBe(`XIntro ${linkedImage} tail.`);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('lets Feedback match a paragraph that holds a linked image', () => {
+    const source = 'Intro.\n\n[![Icon](icon.png)](https://example.com)\n';
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      const blocks = enumerateCanonicalFeedbackBlocks(editor);
+      expect(buildFeedbackAnchorMap(source, blocks)).toEqual(expect.objectContaining({ ok: true }));
+      expect(blocks[1].markdown).toBe('[![Icon](icon.png)](https://example.com)');
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('leaves an unlinked image without link syntax', () => {
+    const editor = createFeedbackSnapshotEditor('Intro ![Icon](icon.png) tail.\n');
+    try {
+      editor.chain().insertContentAt(1, 'X').run();
+
+      expect(getEditorMarkdownForSync(editor, 'strip')).toBe('XIntro ![Icon](icon.png) tail.');
+    } finally {
+      editor.destroy();
+    }
+  });
+});
+
 function readManualFeatureTourCodeSection(): string {
   const tour = readFileSync(resolve(__dirname, '../../../test/manual/feature-tour.md'), 'utf8');
   const start = tour.indexOf('## 6. Code blocks');

@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Log feedback for an LLM** starts on documents with a code block indented with four spaces. The same lost indentation made Feedback refuse to start.
 - When Feedback cannot match a document to the saved file, the message no longer tells you to split a mixed plain and task list unless the document has one.
 - Exported PDFs no longer print a date header and a temporary file path footer on every page.
+- Editing a paragraph that contains a linked image (`[![Logo](logo.png)](https://example.com)`) no longer removes the link on save. **Log feedback for an LLM** also starts on documents with linked images.
 
 ---
 
