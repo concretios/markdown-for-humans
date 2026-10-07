@@ -144,8 +144,8 @@ describe('dependency security policy', () => {
     ['fast-uri', { 3: '3.1.5' }],
     ['js-yaml', { 3: '3.15.1', 4: '4.3.1' }],
   ] as const)('keeps every %s branch above its patched floor', (packageName, minimumByMajor) => {
+    // Transitive packages may leave the tree entirely (vsce 4 dropped fast-uri); absent is safe.
     const versions = allLockedVersions(packageName);
-    expect(versions.length).toBeGreaterThan(0);
     for (const version of versions) {
       const minimum = minimumByMajor[parseVersion(version)[0] as keyof typeof minimumByMajor];
       expect(minimum).toBeDefined();
