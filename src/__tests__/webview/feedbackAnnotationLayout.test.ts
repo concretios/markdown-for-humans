@@ -361,14 +361,19 @@ describe('layoutFeedbackAnnotations', () => {
     const items = Array.from({ length: 200 }, (_, index) =>
       item(`F${index + 1}`, index, index * 7)
     );
-    layout(items);
-
-    const startedAt = performance.now();
-    const result = layout(items);
-    const elapsed = performance.now() - startedAt;
+    // Assert on the fastest of several warm runs. One garbage-collection pause
+    // or runner stall inflated a single timed run to 17 ms on Node 22 CI while
+    // the layout itself takes about 1 ms; a real regression slows every run.
+    let result = layout(items);
+    let fastest = Infinity;
+    for (let run = 0; run < 5; run += 1) {
+      const startedAt = performance.now();
+      result = layout(items);
+      fastest = Math.min(fastest, performance.now() - startedAt);
+    }
 
     expect(result.placements).toHaveLength(200);
-    expect(elapsed).toBeLessThan(16);
+    expect(fastest).toBeLessThan(16);
   });
 
   it('keeps a 5,000-comment stress layout within a loose non-quadratic ceiling', () => {
