@@ -2,7 +2,7 @@
 
 Living list of open limitations for **Markdown for Humans 0.4.2**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
-**Status:** 0.4.2 (2026-10-06) · **Last updated:** 2026-10-06
+**Status:** 0.4.2 (2026-10-06) · **Last updated:** 2026-10-07
 
 ---
 
@@ -15,6 +15,16 @@ Dragging images from the Cursor workspace explorer into the editor is often not 
 
 ### Word export omits embedded images
 Word (DOCX) export does not embed images. PDF export is not affected by this specific gap. Both formats also omit images the editor itself cannot show (paths outside the document/workspace roots, `http:` URLs). Keep images next to the document or inside the workspace; prefer relative paths. Remote HTTPS may embed in PDF; Word skips remote HTTP/HTTPS.
+
+### SVG images
+Raw inline `<svg>` markup and Marp's `w:1000` alt-text directive are not interpreted. An unsized SVG fills the reading column, the same way the built-in preview does. Word export does not include SVG images (see above).
+
+**Workaround:** Reference SVGs as image files, and use **Image options > Display size** when one occurrence needs a different width.
+
+### PDF export cannot use your browser sign-in
+PDF export runs in a temporary incognito Chrome session, so remote images that need your browser's sign-in cookies do not appear. Local images, including SVGs at their display sizes, export normally.
+
+**Workaround:** Keep images next to the document or inside the workspace.
 
 ### Task-item line breaks can lose text
 Text after a line break inside a task item can disappear on reopen (e.g. `- [ ] task\` with a backslash break). Avoid line breaks inside task items until fixed.

@@ -64,15 +64,15 @@
     "formatting",
     "syntax-highlighting",
     "live-preview",
-    "full-screen",
+    "ai",
     "distraction-free",
-    "cover-images",
+    "agent",
     "image-resizing",
     "export",
-    "html",
+    "review",
     "pdf",
     "docx",
-    "human-friendly"
+    "cursor"
   ],
   "main": "./dist/extension.js",
   "contributes": {
