@@ -52,6 +52,41 @@ function initializeMermaid() {
 // Initialize on load
 initializeMermaid();
 
+/**
+ * Re-render callbacks of mounted diagrams. Mermaid bakes the theme into the
+ * SVG, so a VS Code theme switch leaves old colors until each diagram renders
+ * again.
+ */
+const themeRerenderers = new Set<() => void>();
+let themeObserver: MutationObserver | null = null;
+let lastDarkMode = false;
+
+/**
+ * Watch the body class, which VS Code's webview host rewrites together with
+ * the --vscode-* variables on a theme switch. Re-render only when the
+ * light/dark result flips: Feedback and save also toggle body classes.
+ */
+function registerThemeRerender(rerender: () => void): () => void {
+  themeRerenderers.add(rerender);
+  if (!themeObserver) {
+    lastDarkMode = isDarkMode();
+    themeObserver = new MutationObserver(() => {
+      const dark = isDarkMode();
+      if (dark === lastDarkMode) return;
+      lastDarkMode = dark;
+      themeRerenderers.forEach(callback => callback());
+    });
+    themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  }
+  return () => {
+    themeRerenderers.delete(rerender);
+    if (themeRerenderers.size === 0) {
+      themeObserver?.disconnect();
+      themeObserver = null;
+    }
+  };
+}
+
 export const Mermaid = Node.create({
   name: 'mermaid',
 
@@ -188,8 +223,9 @@ export const Mermaid = Node.create({
             securityLevel: 'strict',
             fontFamily: 'inherit',
           });
-          // Clear previous content to prevent duplicates
-          renderElement.innerHTML = '';
+          // Keep the previous SVG until the new one is ready; innerHTML below
+          // replaces it. Clearing first collapsed the diagram mid-render and
+          // shifted the page, most visibly when a theme switch re-renders all.
 
           // Use timestamp to ensure truly unique IDs and prevent caching
           const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -215,6 +251,7 @@ export const Mermaid = Node.create({
       };
 
       renderDiagram();
+      const unregisterThemeRerender = registerThemeRerender(() => void renderDiagram());
 
       // Create tooltip element
       const tooltip = document.createElement('div');
@@ -327,6 +364,7 @@ export const Mermaid = Node.create({
         destroy: () => {
           destroyed = true;
           renderGeneration += 1;
+          unregisterThemeRerender();
           // Clean up document listener to prevent memory leaks
           document.removeEventListener('click', handleDocumentClick);
         },

@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Mermaid diagrams follow a theme switch. Changing VS Code between a light and a dark theme left open diagrams in the old theme's colors until the file was reopened; they now redraw in place, and each diagram stays on screen until its redrawn version is ready, so the page does not jump.
+
 ---
 
 ## [0.4.2] - 2026-10-06
