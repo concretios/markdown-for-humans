@@ -1099,6 +1099,70 @@ describe('Feedback review-only lifecycle with a real editor', () => {
     }
   );
 
+  it.each([{ closeWith: 'Cancel' as const }, { closeWith: 'a saved comment' as const }])(
+    'shows the block action on the next hover after the composer closes with $closeWith',
+    async ({ closeWith }) => {
+      // Earlier tests can leave the shared jsdom selection on a connected node outside this editor.
+      window.getSelection()?.removeAllRanges();
+      const editor = createLifecycleEditor('<p>Alpha beta</p><p>Gamma delta</p>');
+      setVisibleReviewGeometry(editor);
+      const postMessage = jest.fn();
+      const controller = createFeedbackReviewController({ editor, host: { postMessage } });
+
+      try {
+        controller.activate({
+          sessionId: 'session-reopen-action',
+          source: 'docs/guide.md',
+          sourceSha256: 'a'.repeat(64),
+          round: '20260822T093000Z-k4p9',
+          anchors: [
+            { ordinal: 0, startLine: 1, endLine: 1 },
+            { ordinal: 1, startLine: 3, endLine: 3 },
+          ],
+          items: [],
+        });
+        dispatchFeedbackBlockHover(editor.view.dom.children[0]);
+        await waitForFeedbackFrame();
+        document.querySelector<HTMLButtonElement>('[data-feedback-block-action]')?.click();
+
+        const composer = document.querySelector<HTMLFormElement>('.feedback-composer');
+        const field = composer?.querySelector<HTMLTextAreaElement>('[data-feedback-input]');
+        if (!composer || !field?.parentElement) throw new Error('Missing Feedback composer');
+        // Chrome anchors the document selection beside the focused textarea, inside the composer.
+        // Removing the composer then leaves that selection outside the editor.
+        window.getSelection()?.collapse(field.parentElement, 1);
+
+        if (closeWith === 'Cancel') {
+          composer.querySelector<HTMLButtonElement>('[aria-label="Cancel feedback"]')?.click();
+        } else {
+          field.value = 'Name the owner.';
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+          composer.querySelector<HTMLButtonElement>('[data-feedback-submit]')?.click();
+          const add = postMessage.mock.calls
+            .map(([candidate]) => candidate)
+            .find(candidate => candidate.type === 'feedback.text.add');
+          controller.handleHostMessage({
+            type: 'feedback.updated',
+            requestId: add.requestId,
+            sessionId: 'session-reopen-action',
+            items: [],
+          });
+        }
+        expect(document.querySelector('.feedback-composer')).toBeNull();
+
+        dispatchFeedbackBlockHover(editor.view.dom.children[1]);
+        await waitForFeedbackFrame();
+
+        const action = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]');
+        expect(action?.hidden).toBe(false);
+        expect(action?.getAttribute('aria-label')).toBe('Add feedback to this block');
+      } finally {
+        controller.deactivate();
+        editor.destroy();
+      }
+    }
+  );
+
   it('keeps mapped ordinals stable across a direct-child GapCursor widget', async () => {
     const editor = createLifecycleEditor('<p>Alpha</p><p>Beta</p><p>Gamma</p>');
     const gapPosition = editor.state.doc.child(0).nodeSize;
