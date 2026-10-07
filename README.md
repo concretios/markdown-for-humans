@@ -74,7 +74,7 @@ The document is locked while you review, so your comments always point at the so
 
 ![Hover for image details, then rename the file from the editor](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/image-rename.gif)
 
-Local SVG images render as vectors. Use **Image options > Display size** to set an SVG's width, which is saved as an HTML `<img width="…">`. PDF export keeps SVGs and their sizes.
+Local SVG images render as vectors, and importing one keeps the original file untouched. Use **Image options > Display size** to set the width of one occurrence, with normal undo; explicit sizes are saved as an HTML `<img width="…">`, and unsized images stay ordinary Markdown. Rename and hover details work for SVGs too, and PDF export keeps them at their sizes. See [Known Issues](./KNOWN_ISSUES.md#svg-images) for SVG limits.
 
 ---
 
