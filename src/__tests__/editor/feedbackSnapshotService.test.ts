@@ -281,6 +281,8 @@ describe('FeedbackSnapshotService', () => {
     if (result.ok) throw new Error('expected a block-map mismatch');
     expect(result.error.detail).toMatch(/could not match this document/i);
     expect(result.error.detail).not.toMatch(/task items|two lists/i);
+    // Give a next step: the known-issues list names the content Feedback cannot review yet.
+    expect(result.error.detail).toMatch(/known issues/i);
   });
 
   it('rejects a source capture when the document version changed before preparation', () => {
