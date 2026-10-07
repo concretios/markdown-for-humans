@@ -524,11 +524,17 @@ export class FeedbackSnapshotService {
 
     const anchorResult = buildFeedbackAnchorMap(input.source.sourceText, input.descriptors.blocks);
     if (!anchorResult.ok) {
+      // A list mixing plain and task items renders as two lists, so the block
+      // counts differ. Give that recovery step only for that shape: as a
+      // catch-all it sent users hunting for a mixed list that was not there.
+      const listSplit =
+        anchorResult.error.reason === 'block-count-mismatch' &&
+        input.descriptors.blocks.some(block => /task/i.test(block.kind));
       return failure(
         'block-map-mismatch',
-        // The usual cause is a list mixing plain and task items, which the rich editor renders as
-        // two lists. Say what to do about it; the raw "block shape" wording gave no next step.
-        'Feedback could not match this document to the saved file. If a list mixes plain and task items, split it into two lists and try again.'
+        listSplit
+          ? 'Feedback could not match this document to the saved file. If a list mixes plain and task items, split it into two lists and try again.'
+          : 'Feedback could not match this document to the saved file, so it did not start. The file was not changed.'
       );
     }
 
