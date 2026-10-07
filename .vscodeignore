@@ -82,6 +82,7 @@ images/**
 .agent/**
 .chetana/**
 .concret.io/**
+.ai-review.yml
 
 # Include only essential files for marketplace
 !README.md
