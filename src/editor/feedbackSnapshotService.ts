@@ -534,7 +534,7 @@ export class FeedbackSnapshotService {
         'block-map-mismatch',
         listSplit
           ? 'Feedback could not match this document to the saved file. If a list mixes plain and task items, split it into two lists and try again.'
-          : 'Feedback could not match this document to the saved file, so it did not start. The file was not changed.'
+          : 'Feedback could not match this document to the saved file, so it did not start. The file was not changed. The known issues list on GitHub names the content Feedback cannot review yet.'
       );
     }
 
