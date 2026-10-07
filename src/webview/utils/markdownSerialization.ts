@@ -251,6 +251,16 @@ export function stripEmptyDocParagraphsFromJson(doc: JSONContent): JSONContent {
   };
 }
 
+/** Blocks whose leading indentation is Markdown syntax, not layout. */
+function hasSignificantIndent(node: JSONContent): boolean {
+  if (node.type === 'codeBlock') return Boolean(node.attrs?.['indent-prefix']);
+  return (
+    node.type === 'paragraph' &&
+    node.content?.[0]?.type === 'image' &&
+    Boolean(node.content[0].attrs?.['indent-prefix'])
+  );
+}
+
 function serializeSingleNode(
   node: JSONContent,
   serialize: (json: JSONContent) => string
@@ -259,13 +269,11 @@ function serializeSingleNode(
     return {
       // Indentation selects the image-only code-block parser. Removing it after
       // SVG sizing turns the leading <img> into an HTML block and swallows the
-      // following images (SVG R1). Keep intentional image indentation only.
-      markdown:
-        node.type === 'paragraph' &&
-        node.content?.[0]?.type === 'image' &&
-        node.content[0].attrs?.['indent-prefix']
-          ? serialize({ type: 'doc', content: [node] }).trimEnd()
-          : serialize({ type: 'doc', content: [node] }).trim(),
+      // following images (SVG R1). An indented code block is the same case: a
+      // trimmed first line saves as a paragraph and Feedback cannot anchor it.
+      markdown: hasSignificantIndent(node)
+        ? serialize({ type: 'doc', content: [node] }).trimEnd()
+        : serialize({ type: 'doc', content: [node] }).trim(),
       serializerSucceeded: true,
     };
   } catch {

@@ -687,4 +687,53 @@ describe('Feedback snapshot renderer round-trip', () => {
     expect(serialized).toContain('[support](mailto:support@concret.io)');
     editor.destroy();
   });
+
+  // A four-space indented code block stopped Feedback from starting, with a
+  // message that blamed mixed task lists.
+  it.each([
+    ['alone', '    code line one\n    code line two\n'],
+    ['after a paragraph', 'Para.\n\n    code line\n'],
+    ['after a fenced block', '```\nfenced\n```\n\n    indented\n'],
+    ['inside the feature tour', readManualFeatureTourCodeSection()],
+  ])('anchors an indented code block %s', (_label, source) => {
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      expect(buildFeedbackAnchorMap(source, enumerateCanonicalFeedbackBlocks(editor))).toEqual(
+        expect.objectContaining({ ok: true })
+      );
+    } finally {
+      editor.destroy();
+    }
+  });
 });
+
+describe('Indented code block save', () => {
+  afterEach(() => document.body.replaceChildren());
+
+  // The per-block serializer trimmed leading whitespace, so the first line lost
+  // its four-space indent and the edited code block saved as a paragraph.
+  it('keeps an edited indented code block indented on save', () => {
+    const editor = createFeedbackSnapshotEditor('Para.\n\n    code line\n    second\n');
+    try {
+      let codePosition = -1;
+      editor.state.doc.descendants((node, position) => {
+        if (codePosition < 0 && node.type.name === 'codeBlock') codePosition = position;
+      });
+      editor
+        .chain()
+        .insertContentAt(codePosition + 1, 'X')
+        .run();
+
+      expect(getEditorMarkdownForSync(editor, 'strip')).toBe('Para.\n\n    Xcode line\n    second');
+    } finally {
+      editor.destroy();
+    }
+  });
+});
+
+function readManualFeatureTourCodeSection(): string {
+  const tour = readFileSync(resolve(__dirname, '../../../test/manual/feature-tour.md'), 'utf8');
+  const start = tour.indexOf('## 6. Code blocks');
+  const end = tour.indexOf('## 7. Diagrams');
+  return tour.slice(start, end);
+}

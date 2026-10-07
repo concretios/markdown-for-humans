@@ -54,10 +54,15 @@ A list that contains both plain items and task items (`- note` and `- [ ] todo` 
 
 **Workaround:** Separate the plain items and the task items into two lists.
 
-### Feedback refuses indented code blocks
-A code block written with four spaces of indentation, instead of a ` ``` ` fence, stops **Log feedback for an LLM** from starting. The message that appears suggests splitting a list that mixes plain and task items; that advice does not apply here, and the indented code block is the cause. The file itself is not changed.
+### Editing next to a linked image removes its link
+An image wrapped in a link (`[![Logo](logo.png)](https://example.com)`) shows as a plain image in the editor. A paragraph you do not edit keeps its link on save, but editing the paragraph that holds the image saves it as `![Logo](logo.png)`, dropping the link. **Log feedback for an LLM** also refuses to start on a document with a linked image, because the shown image does not match the saved file.
 
-**Workaround:** Write the code block as a fenced block (` ``` ` before and after the code) before you start Feedback.
+**Workaround:** Edit that paragraph in the source view (Source split on the toolbar), or put the linked image on its own line and leave it unedited.
+
+### Feedback refuses escaped `*` and `_`
+A backslash-escaped asterisk or underscore (`\*not italic\*`, `\_not italic\_`) stops **Log feedback for an LLM** from starting with "Canonical block content does not match the saved source snapshot." The text shows and saves correctly; only Feedback is affected. Escaped brackets (`\[`) are fine.
+
+**Workaround:** Wrap the literal characters in inline code (`` `*not italic*` ``) while you review with Feedback.
 
 ### Undo can step back over a change made outside the editor
 If the file is changed while it is open in the editor (a Git checkout, another extension, a formatter), pressing Undo first steps back to the text from before that change, and that older text is written to the file. VS Code's own text editor behaves the same way for edits that other extensions apply.
