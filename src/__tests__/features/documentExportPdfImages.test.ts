@@ -78,6 +78,17 @@ describe('PDF local SVG image preparation', () => {
     );
   });
 
+  it('prints without the browser header and footer, which show a timestamp and the temp file path', async () => {
+    await preparedHtml('<p>Body</p>');
+    const printCall = (childProcess.spawn as jest.Mock).mock.calls.find(([, args]) =>
+      args.some((argument: string) => argument.startsWith('--print-to-pdf='))
+    );
+    // Current Chrome reads the first flag; older builds only know the second.
+    expect(printCall?.[1]).toEqual(
+      expect.arrayContaining(['--no-pdf-header-footer', '--print-to-pdf-no-header'])
+    );
+  });
+
   it('waits for the print process exit before reporting success, not only its stdio close', async () => {
     let printProcess: EventEmitter | undefined;
     (childProcess.spawn as jest.Mock).mockImplementation((_executable, args: string[]) => {

@@ -1442,6 +1442,11 @@ async function exportToPDF(
       '--disable-software-rasterizer',
       '--disable-dev-shm-usage',
       '--print-to-pdf=' + outputPath,
+      // Chrome's default print header and footer stamp every page with the
+      // date and the temporary export.html path. Older Chrome only knows the
+      // second flag name; each build ignores the one it does not recognise.
+      '--no-pdf-header-footer',
+      '--print-to-pdf-no-header',
       pathToFileURL(tempHtmlPath).href,
     ];
 
