@@ -1,6 +1,6 @@
 ---
 title: Markdown for Humans feature tour
-version: 0.4.1
+version: 0.4.2
 tags: [manual-test, release]
 ---
 
@@ -127,7 +127,7 @@ interface Release {
   date: Date;
 }
 
-const current: Release = { version: "0.4.1", date: new Date("2026-10-04") };
+const current: Release = { version: "0.4.2", date: new Date("2026-10-04") };
 console.log(`Shipping ${current.version}`);
 ```
 
@@ -142,7 +142,7 @@ print(word_count("Write markdown naturally"))
 ```json
 {
   "name": "markdown-for-humans",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "engines": { "vscode": "^1.98.0" }
 }
 ```
