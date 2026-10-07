@@ -39,22 +39,18 @@
 
 ## Review AI-Written Markdown
 
-Plans, specs and `CLAUDE.md` files are easier to review rendered. Feedback mode freezes the file, lets you point at exactly what you mean, and seals the result for your agent.
+Plans, specs and `CLAUDE.md` files are easier to review rendered. Start a review, comment on as many places as you need, then hand the whole set to your agent in one sealed file.
 
-**Select any text and say what should change.**
+**Comment on anything in one pass:** selected text, a nested list item, a table row, or part of a code block. Hover a block for the comment button in the left rail; **Change scope** widens or narrows the target.
 
-![Select text, write feedback, then Finish & copy a sealed handoff for your agent](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/feedback-select-text.gif)
+![Review a plan from Claude: comment on selected text, a nested list item, a table row and a code selection](https://raw.githubusercontent.com/concretios/markdown-for-humans/1c4c33dcac719ec396ab820c46f0ff5a2d904aee/marketplace-assets/gifs/v2/feedback-review-comments.gif)
 
-**Target a whole paragraph, a heading's section, or table cells, rows and columns.** Hover a block and use the comment button in the left rail; **Change scope** widens or narrows the target.
+**Mark up a screenshot, see every comment in the side rail, then submit.** Capture an area when words are not enough, edit any saved comment from its card, and click **Finish & copy**.
 
-![Comment on a paragraph, a heading section, and one table column](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/feedback-scopes.gif)
-
-**Capture an area and mark it up** when words are not enough: diagrams, math, or layout.
-
-![Capture a diagram, circle a node, and describe the change](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/feedback-capture.gif)
+![Capture and circle part of a diagram, comment on a section, edit a saved comment in the side rail, then Finish & copy](https://raw.githubusercontent.com/concretios/markdown-for-humans/1c4c33dcac719ec396ab820c46f0ff5a2d904aee/marketplace-assets/gifs/v2/feedback-review-rail-finish.gif)
 
 1. Open a saved Markdown file in a workspace and click the first toolbar button, **Log feedback for an LLM**.
-2. Add feedback on text, blocks, table cells, or captured areas.
+2. Add as many comments as you need: on text, blocks, list items, table cells, or captured areas.
 3. Click **Finish & copy**. The bundle is sealed under `.md4h/feedback/` and a handoff prompt is on your clipboard.
 4. Paste the prompt into Claude Code, Codex, or any workspace-aware agent.
 
