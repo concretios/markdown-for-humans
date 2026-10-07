@@ -1032,6 +1032,8 @@ export function createFeedbackReviewController(options: {
   let blockTargetResolver: FeedbackBlockActionTargetResolver | null = null;
   let hoveredBlockTarget: FeedbackBlockElementTarget | null = null;
   let visibleBlockOrdinal: number | null = null;
+  /** The element the visible block action targets (a nested item for structural scopes). */
+  let visibleActionElement: HTMLElement | null = null;
   let structureIndex: ReturnType<typeof createFeedbackStructureIndex> | null = null;
   let hoveredScopePosition: number | null = null;
   let pendingBlockHoverNode: Node | null = null;
@@ -1678,6 +1680,7 @@ export function createFeedbackReviewController(options: {
   const hideBlockAction = (clearHover = false): void => {
     if (clearHover) hoveredBlockTarget = null;
     visibleBlockOrdinal = null;
+    visibleActionElement = null;
     blockActionView?.hide();
   };
 
@@ -1694,6 +1697,7 @@ export function createFeedbackReviewController(options: {
     pendingBlockHoverNode = null;
     hoveredBlockTarget = null;
     visibleBlockOrdinal = null;
+    visibleActionElement = null;
     blockPointerSelecting = false;
     blockActionPointerInside = false;
     blockActionView?.destroy();
@@ -1852,11 +1856,12 @@ export function createFeedbackReviewController(options: {
       return;
     }
     visibleBlockOrdinal = block.ordinal;
+    visibleActionElement = target.structuralScope
+      ? ((editor.view.nodeDOM(target.structuralScope.from) as HTMLElement) ?? block.element)
+      : block.element;
     blockActionView.show({
       target: { ...target, scopePosition: position },
-      element: target.structuralScope
-        ? ((editor.view.nodeDOM(target.structuralScope.from) as HTMLElement) ?? block.element)
-        : block.element,
+      element: visibleActionElement,
       isTable: node.type.name === 'table',
       endElement: target.structuralScope
         ? (() => {
@@ -1906,8 +1911,26 @@ export function createFeedbackReviewController(options: {
     if (blockHoverFrame === -1) blockHoverFrame = frame;
   };
 
+  /**
+   * True while the pointer is left of the visible target and level with it. A nested item's action
+   * sits in its parent's indent, so the path to it crosses the parent list; re-targeting there moved
+   * the action to the parent item before it could be clicked.
+   */
+  const pointerInVisibleActionGutter = (event: PointerEvent): boolean => {
+    if (!visibleActionElement?.isConnected || blockActionView?.element.hidden !== false)
+      return false;
+    // Hovers inside the visible target keep it anyway; skip layout reads on that hot path.
+    if (event.target instanceof Node && visibleActionElement.contains(event.target)) return false;
+    const target = visibleActionElement.getBoundingClientRect();
+    const action = blockActionView.element.getBoundingClientRect();
+    const top = action.height > 0 ? Math.min(target.top, action.top) : target.top;
+    const bottom = action.height > 0 ? Math.max(target.bottom, action.bottom) : target.bottom;
+    return event.clientX < target.left && event.clientY >= top && event.clientY <= bottom;
+  };
+
   const handleBlockPointerOver = (event: PointerEvent): void => {
     clearBlockLeaveTimer();
+    if (pointerInVisibleActionGutter(event)) return;
     scheduleBlockHover(event.target instanceof Node ? event.target : null);
   };
 

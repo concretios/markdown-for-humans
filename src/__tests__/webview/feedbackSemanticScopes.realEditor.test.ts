@@ -243,6 +243,71 @@ describe('Semantic Feedback scopes with a real editor', () => {
       document.body.replaceChildren();
     }
   });
+  it('keeps a nested item targeted while the pointer crosses its indent toward the rail action', async () => {
+    document.body.innerHTML = '<main><div id="editor"></div></main>';
+    const editor = new Editor({
+      element: document.querySelector('#editor') as HTMLElement,
+      extensions: [StarterKit],
+      content: '<ul><li><p>Parent</p><ul><li><p>Child</p></li></ul></li></ul>',
+    });
+    const host = { postMessage: jest.fn() };
+    const controller = createFeedbackReviewController({ editor, host });
+    const box = (left: number, top: number, bottom: number) =>
+      ({ left, top, bottom, right: 700, width: 700 - left, height: bottom - top }) as DOMRect;
+    const [outerList, parentItem, parentText, nestedList, childItem, childText] = [
+      'ul',
+      'ul > li',
+      'ul > li > p',
+      'li > ul',
+      'li > ul > li',
+      'li > ul > li > p',
+    ].map(selector => editor.view.dom.querySelector<HTMLElement>(selector)!);
+    // The nested list's indent (x 104 to 128) lies inside the parent item, beside the child row.
+    outerList.getBoundingClientRect = () => box(80, 100, 180);
+    parentItem.getBoundingClientRect = () => box(104, 100, 180);
+    parentText.getBoundingClientRect = () => box(104, 100, 130);
+    nestedList.getBoundingClientRect = () => box(104, 140, 180);
+    childItem.getBoundingClientRect = () => box(128, 140, 170);
+    childText.getBoundingClientRect = () => box(128, 140, 170);
+    const frames = () =>
+      new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const pointerOver = (element: Element, clientX: number, clientY: number) =>
+      element.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, clientX, clientY }));
+    try {
+      controller.activate({
+        sessionId: 'nested-gutter',
+        source: 'test.md',
+        sourceSha256: 'a'.repeat(64),
+        round: 'round-1',
+        evidenceVersion: 2,
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 2 }],
+        items: [],
+      });
+      pointerOver(childText, 160, 155);
+      await frames();
+      pointerOver(nestedList, 112, 155);
+      await frames();
+
+      const rail = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]')!;
+      expect(rail.hidden).toBe(false);
+      rail.click();
+      const form = document.querySelector<HTMLFormElement>('.feedback-composer')!;
+      const field = form.querySelector<HTMLTextAreaElement>('textarea')!;
+      field.value = 'Split this task';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'feedback.text.add',
+          evidence: { kind: 'rendered-text', text: 'Child', complete: true },
+        })
+      );
+    } finally {
+      controller.deactivate();
+      editor.destroy();
+      document.body.replaceChildren();
+    }
+  });
   it('chooses a full row from the command without changing native selection', () => {
     document.body.innerHTML = '<main><div id="editor"></div></main>';
     const editor = new Editor({

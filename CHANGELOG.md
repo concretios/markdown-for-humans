@@ -29,6 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - A wrapper whose opening line also has text (`<div>Intro`) keeps its closing tag, and unmatched closing tags no longer block later ones.
 - The toolbar wraps onto a second row when the editor is narrow. Beside a sidebar or in a split view its last buttons (Export, Audit, Export settings) were cut off and could not be reached.
 - In Feedback mode, the comment button beside a block appears again on hover after you add or cancel a comment or a screenshot. Closing the comment box or screenshot dialog left the browser selection outside the document, so the button stayed hidden for every block until you clicked back into the text.
+- In Feedback mode, the comment button beside a nested list item can be reached with the mouse. Moving toward it crossed the parent list, which moved the button to the parent item, so a nested item could only be targeted from the keyboard.
 - The editor's error log now names the message and location when the browser gives no error object, instead of printing an empty `Uncaught error:` line.
 - The `toggleTocOutlineView` command now toggles the outline overlay. It sent a message the editor did not handle.
 - The link button tooltip now shows the working shortcut, Cmd/Ctrl+K then Cmd/Ctrl+L, instead of Cmd/Ctrl+K alone.
