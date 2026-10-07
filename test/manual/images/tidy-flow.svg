@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" font-family="Helvetica, Arial, sans-serif">
+  <rect width="760" height="200" rx="12" fill="#ffffff"/>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2d3748"/>
+    </marker>
+  </defs>
+  <text x="380" y="32" font-size="18" font-weight="bold" text-anchor="middle" fill="#1a202c">How tidy cleans up branches</text>
+  <g font-size="15" text-anchor="middle">
+    <rect x="40" y="70" width="180" height="64" rx="10" fill="#ebf4ff" stroke="#3182ce" stroke-width="2"/>
+    <text x="130" y="107" fill="#2a4365">List all branches</text>
+    <rect x="290" y="70" width="180" height="64" rx="10" fill="#ebf4ff" stroke="#3182ce" stroke-width="2"/>
+    <text x="380" y="107" fill="#2a4365">Find merged ones</text>
+    <rect x="540" y="70" width="180" height="64" rx="10" fill="#fff5f5" stroke="#c53030" stroke-width="2"/>
+    <text x="630" y="107" fill="#742a2a">Delete them</text>
+  </g>
+  <g stroke="#2d3748" stroke-width="2" marker-end="url(#a)">
+    <line x1="220" y1="102" x2="288" y2="102"/><line x1="470" y1="102" x2="538" y2="102"/>
+  </g>
+  <text x="380" y="176" font-size="13" text-anchor="middle" fill="#718096">Runs in seconds on any repository</text>
+</svg>
