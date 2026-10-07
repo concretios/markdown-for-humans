@@ -37,7 +37,17 @@ export const MarkdownLink = Link.extend({
     if (!isExplicitLinkSyntax) {
       return helpers.parseInline(token.tokens || []);
     }
-    return helpers.applyMark('link', helpers.parseInline(token.tokens || []), {
+    // applyMark marks text nodes only, so a linked image would lose its link.
+    // Record the link on the image node; CustomImage writes it back.
+    const content = helpers.parseInline(token.tokens || []).map(node =>
+      node.type === 'image'
+        ? {
+            ...node,
+            attrs: { ...node.attrs, 'link-href': token.href, 'link-title': token.title || null },
+          }
+        : node
+    );
+    return helpers.applyMark('link', content, {
       href: token.href,
       title: token.title || null,
       autolink: raw.startsWith('<'),

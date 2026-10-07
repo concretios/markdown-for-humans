@@ -54,10 +54,10 @@ A list that contains both plain items and task items (`- note` and `- [ ] todo` 
 
 **Workaround:** Separate the plain items and the task items into two lists.
 
-### Editing next to a linked image removes its link
-An image wrapped in a link (`[![Logo](logo.png)](https://example.com)`) shows as a plain image in the editor. A paragraph you do not edit keeps its link on save, but editing the paragraph that holds the image saves it as `![Logo](logo.png)`, dropping the link. **Log feedback for an LLM** also refuses to start on a document with a linked image, because the shown image does not match the saved file.
+### A link around both text and an image is split when edited
+A single link that wraps text and an image together (`[see ![Logo](logo.png) here](https://example.com)`) is saved as separate links with the same address once you edit its paragraph: `[see](https://example.com) [![Logo](logo.png)](https://example.com) [here](https://example.com)`. Every part still links to the same place. **Log feedback for an LLM** refuses to start on such a paragraph. A link around only an image (`[![Logo](logo.png)](https://example.com)`) is not affected.
 
-**Workaround:** Edit that paragraph in the source view (Source split on the toolbar), or put the linked image on its own line and leave it unedited.
+**Workaround:** Use separate links for the text and the image.
 
 ### Feedback refuses escaped `*` and `_`
 A backslash-escaped asterisk or underscore (`\*not italic\*`, `\_not italic\_`) stops **Log feedback for an LLM** from starting with "Canonical block content does not match the saved source snapshot." The text shows and saves correctly; only Feedback is affected. Escaped brackets (`\[`) are fine.

@@ -258,6 +258,10 @@ export const CustomImage = Image.extend({
       'indent-prefix': {
         default: null,
       },
+      // The link around a linked image (`[![alt](src)](href)`). TipTap applies
+      // link marks to text only, so the image keeps its link here instead.
+      'link-href': { default: null, rendered: false },
+      'link-title': { default: null, rendered: false },
     };
   },
 
@@ -507,42 +511,64 @@ export const CustomImage = Image.extend({
     _helpers: MarkdownRendererHelpers,
     _context: RenderContext
   ) => {
-    const placeholderId = node.attrs?.['data-placeholder-id'];
-    const src =
-      typeof placeholderId === 'string' && placeholderId.length > 0
-        ? createPendingImageDestination(placeholderId)
-        : node.attrs?.['markdown-src'] || node.attrs?.src || '';
-    const alt = node.attrs?.alt || '';
-    const indentPrefix =
-      typeof node.attrs?.['indent-prefix'] === 'string' ? node.attrs['indent-prefix'] : '';
-    const destination = typeof src === 'string' ? src : '';
-    const attrs = node.attrs || {};
-    const width = imageDimension(attrs.width);
-    const height = imageDimension(attrs.height);
-    const sourcePrefix =
-      typeof attrs['html-source-prefix'] === 'string' ? attrs['html-source-prefix'] : '';
-    if (!placeholderId && (width || height || attrs['html-source'])) {
-      if (attrs['html-source'] && attrs['html-source-key'] === imageSourceKey(attrs)) {
-        return sourcePrefix + attrs['html-source'];
-      }
-      const title =
-        typeof attrs.title === 'string' && attrs.title
-          ? ` title="${escapeImageAttribute(attrs.title)}"`
-          : '';
-      return `${sourcePrefix}${indentPrefix}<img src="${escapeImageAttribute(destination)}" alt="${escapeImageAttribute(alt)}"${title}${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''} />`;
-    }
-    const formattedDestination = /\s/.test(destination) ? `<${destination}>` : destination;
-
-    // Use markdown-src if available (preserves original path with dimensions after resize)
-    // Fall back to src if markdown-src is not set
+    const image = renderImageMarkdown(node);
+    const href = node.attrs?.['link-href'];
+    if (typeof href !== 'string' || href.length === 0) return image.markdown;
+    const linkTitle = node.attrs?.['link-title'];
     const title =
-      typeof attrs.title === 'string' && attrs.title
-        ? ` "${attrs.title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+      typeof linkTitle === 'string' && linkTitle
+        ? ` "${linkTitle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
         : '';
-    return `${indentPrefix}![${alt}](${formattedDestination}${title})`;
+    return `${image.prefix}[${image.markdown.slice(image.prefix.length)}](${href}${title})`;
   }) as unknown as (
     node: JSONContent,
     _helpers: MarkdownRendererHelpers,
     ctx: RenderContext
   ) => string,
 });
+
+/**
+ * Markdown for the image itself, without any surrounding link. `prefix` is
+ * the leading indentation or HTML prefix, which belongs outside a link.
+ */
+function renderImageMarkdown(node: JSONContent): { markdown: string; prefix: string } {
+  const placeholderId = node.attrs?.['data-placeholder-id'];
+  const src =
+    typeof placeholderId === 'string' && placeholderId.length > 0
+      ? createPendingImageDestination(placeholderId)
+      : node.attrs?.['markdown-src'] || node.attrs?.src || '';
+  const alt = node.attrs?.alt || '';
+  const indentPrefix =
+    typeof node.attrs?.['indent-prefix'] === 'string' ? node.attrs['indent-prefix'] : '';
+  const destination = typeof src === 'string' ? src : '';
+  const attrs = node.attrs || {};
+  const width = imageDimension(attrs.width);
+  const height = imageDimension(attrs.height);
+  const sourcePrefix =
+    typeof attrs['html-source-prefix'] === 'string' ? attrs['html-source-prefix'] : '';
+  if (!placeholderId && (width || height || attrs['html-source'])) {
+    if (attrs['html-source'] && attrs['html-source-key'] === imageSourceKey(attrs)) {
+      return { markdown: sourcePrefix + attrs['html-source'], prefix: sourcePrefix };
+    }
+    const title =
+      typeof attrs.title === 'string' && attrs.title
+        ? ` title="${escapeImageAttribute(attrs.title)}"`
+        : '';
+    return {
+      markdown: `${sourcePrefix}${indentPrefix}<img src="${escapeImageAttribute(destination)}" alt="${escapeImageAttribute(alt)}"${title}${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''} />`,
+      prefix: sourcePrefix + indentPrefix,
+    };
+  }
+  const formattedDestination = /\s/.test(destination) ? `<${destination}>` : destination;
+
+  // Use markdown-src if available (preserves original path with dimensions after resize)
+  // Fall back to src if markdown-src is not set
+  const title =
+    typeof attrs.title === 'string' && attrs.title
+      ? ` "${attrs.title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+      : '';
+  return {
+    markdown: `${indentPrefix}![${alt}](${formattedDestination}${title})`,
+    prefix: indentPrefix,
+  };
+}
