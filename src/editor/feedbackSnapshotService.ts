@@ -526,7 +526,9 @@ export class FeedbackSnapshotService {
     if (!anchorResult.ok) {
       return failure(
         'block-map-mismatch',
-        'Canonical block shape does not match the saved source snapshot.'
+        // The usual cause is a list mixing plain and task items, which the rich editor renders as
+        // two lists. Say what to do about it; the raw "block shape" wording gave no next step.
+        'Feedback could not match this document to the saved file. If a list mixes plain and task items, split it into two lists and try again.'
       );
     }
 

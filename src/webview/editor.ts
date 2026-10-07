@@ -29,6 +29,7 @@ import { GitHubAlerts } from './extensions/githubAlerts';
 import { ImageEnterSpacing } from './extensions/imageEnterSpacing';
 import { MarkdownParagraph } from './extensions/markdownParagraph';
 import { HtmlComment, HtmlCommentInline } from './extensions/htmlComment';
+import { HtmlKbd, HtmlSub, HtmlSup } from './extensions/inlineHtmlMarks';
 import { BlankLinePreservation } from './extensions/blankLinePreservation';
 import { OrderedListMarkdownFix } from './extensions/orderedListMarkdownFix';
 import { MarkdownTaskList } from './extensions/markdownTaskList';
@@ -40,6 +41,7 @@ import { DocumentAuditExtension } from './features/auditDocument';
 import {
   createFormattingToolbar,
   createTableMenu,
+  selectTableCellAtTarget,
   getFeedbackToolbarMenuHost,
   updateToolbarStates,
 } from './BubbleMenuView';
@@ -65,6 +67,8 @@ import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
+import { shouldOpenLinkFromClick } from './utils/linkClick';
+import { describeUncaughtError } from './utils/describeUncaughtError';
 import {
   createFeedbackNodeViewInteractionGuards,
   createFeedbackReviewController,
@@ -916,6 +920,9 @@ function initializeEditor(initialContent: string) {
         MarkdownParagraph, // Custom paragraph with empty-paragraph filtering in renderMarkdown
         HtmlComment, // Keeps <!-- comments --> as muted blocks that save unchanged
         HtmlCommentInline, // Same for a comment inside a line of text
+        HtmlKbd, // <kbd>, <sub>, <sup> keep their tags when a paragraph is edited
+        HtmlSub,
+        HtmlSup,
         MarkdownCode,
         PreservedMarkdownLiteral,
         CodeBlockWithCopy.configure({
@@ -1079,7 +1086,8 @@ function initializeEditor(initialContent: string) {
       // documents with frontmatter to be marked dirty even without user edits
       isUpdating = true;
       // Unedited blocks save with their authored Markdown, not TipTap's canonical form.
-      setMarkdownContentPreservingSource(editor, initialContent);
+      // Opening the file is not an edit, so Undo must not be able to step back past it.
+      setMarkdownContentPreservingSource(editor, initialContent, { addToHistory: false });
       isUpdating = false;
     }
 
@@ -1167,10 +1175,9 @@ function initializeEditor(initialContent: string) {
       if (isEventInsideModalOverlay(e)) return;
       if (isFeedbackEditingLocked()) return;
       try {
-        const target = e.target as HTMLElement;
-        const tableCell = target.closest('td, th');
-
-        if (tableCell && editorInstance.isActive('table')) {
+        // The right-click has not moved the caret yet, so place it in the clicked
+        // cell first; asking isActive('table') beforehand hid the menu on the first click.
+        if (selectTableCellAtTarget(editorInstance, e.target as HTMLElement)) {
           e.preventDefault();
           tableMenu.style.display = 'block';
           tableMenu.style.position = 'fixed';
@@ -1320,8 +1327,12 @@ function initializeEditor(initialContent: string) {
         return;
       }
 
+      // Always swallow the click so VS Code's own webview link handler never opens it.
       e.preventDefault();
       e.stopPropagation();
+
+      // A plain click only places the caret, so the link text stays editable.
+      if (!shouldOpenLinkFromClick(e)) return;
 
       // External URLs
       if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:')) {
@@ -2185,6 +2196,10 @@ window.addEventListener('message', async (event: MessageEvent) => {
         }
         break;
       }
+      case 'toggleTocOutlineView':
+        // Sent by the toggleTocOutlineView command; same path as the toolbar button.
+        window.dispatchEvent(new CustomEvent('toggleTocOutline'));
+        break;
       case 'navigateToHeading': {
         if (!editor) return;
         const pos = message.pos as number;
@@ -2980,7 +2995,7 @@ document.addEventListener(
 
 // Global error handler
 window.addEventListener('error', event => {
-  console.error('[MD4H] Uncaught error:', event.error);
+  console.error('[MD4H] Uncaught error:', describeUncaughtError(event));
 });
 
 window.addEventListener('unhandledrejection', event => {

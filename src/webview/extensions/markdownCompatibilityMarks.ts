@@ -40,7 +40,16 @@ export const MarkdownLink = Link.extend({
     return helpers.applyMark('link', helpers.parseInline(token.tokens || []), {
       href: token.href,
       title: token.title || null,
+      autolink: raw.startsWith('<'),
     });
+  },
+
+  /** Remembers `<https://…>` syntax so an edited paragraph writes it back unchanged. */
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      autolink: { default: false, rendered: false },
+    };
   },
 
   /**
@@ -48,12 +57,23 @@ export const MarkdownLink = Link.extend({
    * Titles that contain `"` (or come from single-quoted source) must round-trip
    * as valid Markdown or the hyperlink is destroyed on the next open (R07).
    */
-  renderMarkdown: (node, helpers) => {
+  renderMarkdown: (node, helpers, ctx) => {
     const href =
       typeof node.attrs?.href === 'string' ? node.attrs.href : ((node.attrs?.href as string) ?? '');
     const title =
       typeof node.attrs?.title === 'string' && node.attrs.title.length > 0 ? node.attrs.title : '';
     const text = helpers.renderChildren(node);
+    // An autolink stays an autolink only while its text is still the address. The
+    // children render as a placeholder, so compare the span's real text instead.
+    const spanText: unknown = ctx?.meta?.markText;
+    if (
+      node.attrs?.autolink === true &&
+      !title &&
+      typeof spanText === 'string' &&
+      (spanText === href || `mailto:${spanText}` === href)
+    ) {
+      return `<${text}>`;
+    }
     if (!title) {
       return `[${text}](${href})`;
     }
