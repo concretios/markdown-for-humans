@@ -2653,6 +2653,12 @@ export function createFeedbackReviewController(options: {
     composerDraftSurface?.release();
     composerDraftSurface = null;
     resizeComposerInputForViewport = null;
+    const nativeSelection = window.getSelection();
+    const selectionInComposer = Boolean(
+      composer &&
+      ((nativeSelection?.anchorNode && composer.contains(nativeSelection.anchorNode)) ||
+        (nativeSelection?.focusNode && composer.contains(nativeSelection.focusNode)))
+    );
     composer?.remove();
     composer = null;
     composerTarget = null;
@@ -2664,6 +2670,10 @@ export function createFeedbackReviewController(options: {
       restoreFocusTo.focus({ preventScroll: true });
     }
     restoreFocusTo = null;
+    // Chrome keeps the selection beside the focused composer textarea. Removing the composer moves
+    // that selection to the composer's old position, outside the editor, which kept the block action
+    // hidden until the next click in the document. The selection belonged to the composer; drop it.
+    if (selectionInComposer) window.getSelection()?.removeAllRanges();
     refreshBlockAction();
   };
 
