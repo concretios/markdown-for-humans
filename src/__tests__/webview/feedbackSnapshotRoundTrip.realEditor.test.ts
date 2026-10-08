@@ -167,6 +167,35 @@ const inlineSizingCases = [
 describe('Feedback snapshot renderer round-trip', () => {
   afterEach(() => document.body.replaceChildren());
 
+  // A blank line between checklist items made the rich view show two task
+  // lists while the saved source parsed as one loose list, so Feedback refused
+  // to start with "could not match this document to the saved file".
+  it.each([
+    ['one gap', '# Manual Test Checklist\n\n- [ ] one\n- [x] two\n\n- [ ] three\n- [ ] four\n'],
+    ['gap after every item', '- [ ] one\n\n- [x] two\n\n- [ ] three\n\nAfter the list.\n'],
+    ['double gap', '- [ ] one\n\n\n- [ ] two\n'],
+  ])('anchors a task list with %s between items', (_name, source) => {
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      // Feedback anchors the saved file, which is the serializer's output.
+      const saved = `${getEditorMarkdownForSync(editor, 'strip')}\n`;
+      expect(isMarkdownRendererEquivalent(saved, source)).toBe(true);
+      const blocks = enumerateCanonicalFeedbackBlocks(editor);
+      expect(blocks.length).toBeGreaterThan(1);
+      const result = buildFeedbackAnchorMap(saved, blocks);
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      if (!result.ok) return;
+
+      const lines = saved.split('\n');
+      result.map.blocks.forEach((anchor, index) => {
+        const sourceBlock = lines.slice(anchor.startLine - 1, anchor.endLine).join('\n');
+        expect(isMarkdownRendererEquivalent(sourceBlock, blocks[index].markdown)).toBe(true);
+      });
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('keeps the unchanged contribution guide equivalent with exact source anchors', () => {
     const source = readFileSync(resolve(__dirname, '../../../CONTRIBUTING.md'), 'utf8');
     const editor = createFeedbackSnapshotEditor(source);

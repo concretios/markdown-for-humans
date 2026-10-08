@@ -11,7 +11,7 @@
  *
  * Key responsibilities:
  * - Parse canonical and source Markdown into comparable top-level block kinds
- * - Honor the rich parser's ordered-list and standalone HTML image boundaries
+ * - Honor the rich parser's ordered-list, task-list and standalone HTML image boundaries
  * - Preserve exact raw line spans across source-only formatting differences
  * - Treat leading YAML or explicitly identified JSON frontmatter as one block
  * - Fail closed when block order or structure cannot be proven equivalent
@@ -124,6 +124,8 @@ interface OrderedListSpan {
 
 const ORDERED_LIST_ITEM_PATTERN = /^(\s*)(\d+)\.\s+(.*)$/;
 const INDENTED_LINE_PATTERN = /^\s/;
+/** The item pattern of `@tiptap/extension-list`'s task-list Markdown tokenizer. */
+const TASK_ITEM_PATTERN = /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/;
 const THREE_SPACE_ORDERED_LIST_ROOT_PATTERN = /^ {3}\d+\.\s+/;
 
 function findAnchorLineIndex(
@@ -312,6 +314,73 @@ function kindForToken(token: MarkdownToken): FeedbackAnchorKind | null {
   }
 }
 
+function leadingWhitespaceLength(line: string): number {
+  return line.match(/^\s*/)?.[0].length ?? 0;
+}
+
+/**
+ * Split one CommonMark bullet list into the task lists the rich editor renders.
+ *
+ * TipTap's task-list tokenizer (`parseIndentedBlocks` in `@tiptap/core`) ends a
+ * task list at a blank line unless the next non-blank line is indented deeper
+ * than the current item. The rest is lexed again, so `- [ ] a\n\n- [ ] b` is two
+ * task lists in the editor but one loose list to markdown-it. This mirrors that
+ * rule line for line.
+ *
+ * Returns null, keeping markdown-it's single block, unless every run starts
+ * with a task item and stays inside the list: a run that starts with a plain
+ * item belongs to a mixed list, which remains a known unsupported shape.
+ *
+ * @param lines - Source lines of the whole parsed Markdown
+ * @param start - First line of the list (0-based)
+ * @param end - Line after the list's last content line (0-based, exclusive)
+ * @returns Line spans `[start, end)` of each rendered task list, or null
+ */
+function tipTapTaskListRuns(
+  lines: readonly string[],
+  start: number,
+  end: number
+): Array<[number, number]> | null {
+  const runs: Array<[number, number]> = [];
+  let line = start;
+
+  while (line < end) {
+    while (line < end && (lines[line] ?? '').trim() === '') line += 1;
+    if (line >= end) break;
+    if (!TASK_ITEM_PATTERN.test(lines[line] ?? '')) return null;
+
+    const runStart = line;
+    let item = (lines[line] ?? '').match(TASK_ITEM_PATTERN);
+    while (item) {
+      const indent = item[1].length;
+      line += 1;
+      while (line < lines.length) {
+        const next = lines[line] ?? '';
+        if (next.trim() === '') {
+          let nonBlank = line + 1;
+          while (nonBlank < lines.length && (lines[nonBlank] ?? '').trim() === '') nonBlank += 1;
+          if (nonBlank >= lines.length) break;
+          if (leadingWhitespaceLength(lines[nonBlank] ?? '') <= indent) break;
+          line += 1;
+          continue;
+        }
+        if (leadingWhitespaceLength(next) <= indent) break;
+        line += 1;
+      }
+      item = (lines[line] ?? '').match(TASK_ITEM_PATTERN);
+    }
+
+    let runEnd = line;
+    while (runEnd > runStart + 1 && (lines[runEnd - 1] ?? '').trim() === '') runEnd -= 1;
+    // TipTap claimed content markdown-it placed after the list: the dialects
+    // disagree on more than run boundaries, so keep the strict single block.
+    if (runEnd > end) return null;
+    runs.push([runStart, runEnd]);
+  }
+
+  return runs.length > 0 ? runs : null;
+}
+
 function parseMarkdownItTopLevelBlocks(
   markdown: string,
   lineOffset: number
@@ -355,11 +424,18 @@ function parseMarkdownItTopLevelBlocks(
     ) {
       endLineExclusive -= 1;
     }
-    blocks.push({
-      kind,
-      startLine: startLine + lineOffset + 1,
-      endLine: endLineExclusive + lineOffset,
-    });
+
+    const taskRuns =
+      token.type === 'bullet_list_open'
+        ? tipTapTaskListRuns(sourceLines, startLine, endLineExclusive)
+        : null;
+    for (const [runStart, runEnd] of taskRuns ?? [[startLine, endLineExclusive]]) {
+      blocks.push({
+        kind,
+        startLine: runStart + lineOffset + 1,
+        endLine: runEnd + lineOffset,
+      });
+    }
   }
 
   return blocks;

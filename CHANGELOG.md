@@ -10,6 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- **Log feedback for an LLM** starts on documents with a blank line between checklist items. The editor shows each run of items as its own checklist, while the saved file reads as one list, so Feedback could not match them.
+- Pasting a copied checklist keeps it a checklist. Checkboxes and their checked state came back as a bullet list with literal `[x]` text.
+- Ctrl+Z no longer shows "This file changed outside the rich editor". VS Code undid the file a second time on top of the editor's own undo; the editor now keeps undo and redo to itself.
 - Mermaid diagrams follow a theme switch. Changing VS Code between a light and a dark theme left open diagrams in the old theme's colors until the file was reopened; they now redraw in place, and each diagram stays on screen until its redrawn version is ready, so the page does not jump.
 - Editing a code block indented with four spaces no longer turns it into a paragraph on save. The first line lost its indentation when the block was saved, so the code became plain text.
 - **Log feedback for an LLM** starts on documents with a code block indented with four spaces. The same lost indentation made Feedback refuse to start.
