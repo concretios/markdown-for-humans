@@ -63,6 +63,7 @@ import { hideSearchOverlay, isSearchVisible, showSearchOverlay } from './feature
 import { showLinkDialog } from './features/linkDialog';
 import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
+import { isUndoRedoShortcut } from './utils/undoRedoShortcut';
 import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
@@ -1216,6 +1217,18 @@ function initializeEditor(initialContent: string) {
       }
 
       const isMod = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows/Linux
+
+      // Undo/redo inside the document: ProseMirror's own history handles it
+      // (it runs before this bubble-phase listener). Left to propagate, VS Code's
+      // webview host forwards the chord and the workbench undoes the TextDocument
+      // a second time, which rewrites the file under the renderer and raises the
+      // "file changed outside the rich editor" warning on every Ctrl+Z.
+      // preventDefault stops the browser's native contenteditable undo too.
+      if (isUndoRedoShortcut(e) && editor?.view.dom.contains(e.target as Node | null)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
 
       // Save shortcut - immediate save
       // Save shortcut - immediate save

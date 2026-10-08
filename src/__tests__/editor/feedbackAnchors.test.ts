@@ -314,6 +314,89 @@ describe('buildFeedbackAnchorMap', () => {
     ]);
   });
 
+  // TipTap's task-list tokenizer ends a task list at a blank line, so a loose
+  // task list renders as one task list per run. CommonMark reads one loose list.
+  it('maps a task list with blank lines between items to one block per rendered run', () => {
+    const rawMarkdown = [
+      '# Checklist',
+      '',
+      '- [ ] one',
+      '- [ ] two',
+      '',
+      '- [x] three',
+      '',
+      '',
+      '- [ ] four',
+      '- [ ] five',
+      '',
+      'After.',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'heading', '# Checklist'),
+      block(1, 'taskList', '- [ ] one\n- [ ] two'),
+      block(2, 'taskList', '- [x] three'),
+      block(3, 'taskList', '- [ ] four\n- [ ] five'),
+      block(4, 'paragraph', 'After.'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'heading', startLine: 1, endLine: 1 },
+      { ordinal: 1, kind: 'list', startLine: 3, endLine: 4 },
+      { ordinal: 2, kind: 'list', startLine: 6, endLine: 6 },
+      { ordinal: 3, kind: 'list', startLine: 9, endLine: 10 },
+      { ordinal: 4, kind: 'paragraph', startLine: 12, endLine: 12 },
+    ]);
+  });
+
+  it('keeps a blank line inside a task item when deeper content follows it', () => {
+    const rawMarkdown = [
+      '- [ ] parent',
+      '',
+      '  continued paragraph',
+      '  - [ ] child',
+      '',
+      '- [x] next run',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'taskList', '- [ ] parent\n\n  continued paragraph\n  - [ ] child'),
+      block(1, 'taskList', '- [x] next run'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'list', startLine: 1, endLine: 4 },
+      { ordinal: 1, kind: 'list', startLine: 6, endLine: 6 },
+    ]);
+  });
+
+  it('maps CRLF task lists with gaps to the same lines', () => {
+    const rawMarkdown = '- [ ] one\r\n\r\n- [ ] two\r\n';
+    const canonicalBlocks = [block(0, 'taskList', '- [ ] one'), block(1, 'taskList', '- [ ] two')];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'list', startLine: 1, endLine: 1 },
+      { ordinal: 1, kind: 'list', startLine: 3, endLine: 3 },
+    ]);
+  });
+
+  it('leaves tight task lists and loose plain bullet lists as one block', () => {
+    expect(
+      expectAnchorMap('- [ ] one\n- [x] two', [block(0, 'taskList', '- [ ] one\n- [x] two')]).blocks
+    ).toEqual([{ ordinal: 0, kind: 'list', startLine: 1, endLine: 2 }]);
+    expect(
+      expectAnchorMap('- one\n\n- two', [block(0, 'bulletList', '- one\n- two')]).blocks
+    ).toEqual([{ ordinal: 0, kind: 'list', startLine: 1, endLine: 3 }]);
+  });
+
+  it('still fails closed for a list that mixes plain and task items', () => {
+    const result = buildFeedbackAnchorMap('- [ ] todo\n\n- note', [
+      block(0, 'taskList', '- [ ] todo'),
+      block(1, 'bulletList', '- note'),
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.reason).toBe('block-count-mismatch');
+  });
+
   it('rejects one canonical block that serializes as unrelated top-level blocks', () => {
     const result = buildFeedbackAnchorMap('# Heading\n\nBody', [
       block(0, 'heading', '# Heading\n\nBody'),

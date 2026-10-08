@@ -149,6 +149,56 @@ export const MARKDOWN_TABLE_MARKER = 'data-markdown-table';
 
 md.renderer.rules.table_open = () => `<table ${MARKDOWN_TABLE_MARKER}="true">\n`;
 
+/** `[ ]` / `[x]` at the start of a list item, as GitHub Flavored Markdown reads it. */
+const TASK_MARKER = /^\[([ xX])\](?:\s+|$)/;
+
+/**
+ * Render `- [ ] item` lists as the HTML TipTap's TaskList/TaskItem parse.
+ *
+ * markdown-it ships no task-list support, so a copied checklist went
+ * checklist -> Markdown -> HTML and arrived as a bullet list whose items began
+ * with the literal text `[x] `. The list is marked only when every item is a
+ * task: TipTap's TaskList holds nothing but task items, and a half-converted
+ * list would drop or reshape the plain ones. Mixed lists stay bullet lists.
+ *
+ * Runs after `text_join` so the marker sits in one text token.
+ */
+md.core.ruler.push('task_list_items', state => {
+  const tokens = state.tokens;
+  const lists: Array<{ open: number; items: number[]; plain: boolean }> = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.type === 'bullet_list_open' || token.type === 'ordered_list_open') {
+      lists.push({ open: i, items: [], plain: token.type === 'ordered_list_open' });
+    } else if (token.type === 'list_item_open') {
+      const list = lists[lists.length - 1];
+      if (!list) continue;
+      const inline = tokens[i + 1]?.type === 'paragraph_open' ? tokens[i + 2] : undefined;
+      if (inline?.type === 'inline' && TASK_MARKER.test(inline.content)) {
+        list.items.push(i);
+      } else {
+        list.plain = true;
+      }
+    } else if (token.type === 'bullet_list_close' || token.type === 'ordered_list_close') {
+      const list = lists.pop();
+      if (!list || list.plain || list.items.length === 0) continue;
+
+      tokens[list.open].attrSet('data-type', 'taskList');
+      for (const itemIndex of list.items) {
+        const inline = tokens[itemIndex + 2];
+        const checked = /^\[[xX]\]/.test(inline.content);
+        tokens[itemIndex].attrSet('data-type', 'taskItem');
+        tokens[itemIndex].attrSet('data-checked', String(checked));
+        inline.content = inline.content.replace(TASK_MARKER, '');
+        const first = inline.children?.[0];
+        if (first?.type === 'text') first.content = first.content.replace(TASK_MARKER, '');
+      }
+    }
+  }
+  return true;
+});
+
 /**
  * Check if text looks like markdown (has syntax that needs parsing)
  *
