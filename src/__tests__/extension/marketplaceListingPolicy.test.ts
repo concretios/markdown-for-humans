@@ -42,8 +42,11 @@ describe('marketplace listing policy', () => {
     ]);
   });
 
+  test('names the custom editor by type, since VS Code prefixes the extension name in the editor picker', () => {
+    expect(manifest.contributes.customEditors[0].displayName).toBe('Visual Editor');
+  });
+
   test('labels every contributed surface with the product name', () => {
-    expect(manifest.contributes.customEditors[0].displayName).toBe(PRODUCT_NAME);
     expect(manifest.contributes.configuration.title).toBe(PRODUCT_NAME);
 
     const openCommand = manifest.contributes.commands.find(

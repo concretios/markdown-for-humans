@@ -161,7 +161,7 @@
     "customEditors": [
       {
         "viewType": "markdownForHumans.editor",
-        "displayName": "Markdown Editor for Humans",
+        "displayName": "Visual Editor",
         "selector": [
           {
             "filenamePattern": "*.md",
