@@ -46,6 +46,7 @@
 - README (the listing page), CHANGELOG entry, docs, issue templates, legal documents (product name only), pipeline plans that quote UI labels, test fixtures and comments.
 - Wiki submodule pages (local edit; the wiki repo needs its own commit and push).
 - A manifest policy test that guards the listing metadata.
+- New extension icon (`icon.png`, `marketplace-assets/icon/icon.png`, the feature tour fixture copy).
 
 **Out of scope:**
 - Extension ID or publisher change (would orphan installs and ratings).
@@ -135,6 +136,11 @@ Open VSX: `curl -s 'https://open-vsx.org/api/-/search?query=markdown%20editor&si
 - **Verification:** `npm test` 211 suites, 4,380 tests pass; lint clean; debug build; Extension Development Host suite 8 passing on VS Code 1.141.0; `vsce package` succeeds.
 - **Left as is:** `roadmap/shipped/*`, past CHANGELOG entries, and the sample frontmatter title in `task-p1-frontmatter.md` (example document content inside an ASCII box).
 - **Open:** manual check of labels in a real VS Code window; wiki commit and push in the submodule repo.
+
+### 2026-10-09: New icon
+
+- **What:** Owner supplied a 2750 px logo. Cropped to the circle (the source canvas had 164 px left and 55 px right margins), padded 3% evenly, exported at 256 px (57 KB). The old icon had an opaque white square that showed on dark themes; the new one has transparent corners.
+- **Known weaknesses (designer follow-up):** the M mark sits 97 px (3.8%) right of the circle center in the source art, and white on the pastel gradient measures 1.4:1 to 1.84:1 contrast, so the mark looks faint at 24 to 42 px on the white Marketplace page.
 
 ---
 
