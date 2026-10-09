@@ -105,7 +105,8 @@
   - [x] `npm test`, `npm run lint`, `npm run build:debug`
   - [x] `npm run test:integration` (Extension Development Host)
   - [x] `vsce package` accepts the manifest; packaged tags are the 30 keywords plus the automatic `keybindings`
-  - [ ] Manual: Open With picker, Command Palette, Outline view and Settings search show the new name in a real VS Code window
+  - [x] Native render pass in VS Code 1.141.0 (see log)
+  - [ ] Manual: Open With picker, Command Palette and Settings search (need clicks)
 - [ ] **Post release measurement**: sample ranks daily for 5 days on both registries
 
 **Rank sampling command** (same request the Marketplace search page sends):
@@ -141,6 +142,13 @@ Open VSX: `curl -s 'https://open-vsx.org/api/-/search?query=markdown%20editor&si
 
 - **What:** Owner supplied a 2750 px logo. Cropped to the circle (the source canvas had 164 px left and 55 px right margins), padded 3% evenly, exported at 256 px (57 KB). The old icon had an opaque white square that showed on dark themes; the new one has transparent corners.
 - **Known weaknesses (designer follow-up):** the M mark sits 97 px (3.8%) right of the circle center in the source art, and white on the pastel gradient measures 1.4:1 to 1.84:1 contrast, so the mark looks faint at 24 to 42 px on the white Marketplace page.
+
+### 2026-10-09: Native render pass
+
+- **Setup:** packaged VSIX (release build) installed into an isolated profile in VS Code 1.141.0, `*.md` associated with `markdownForHumans.editor`, feature tour split into one file per section, each opened through the `code` CLI and captured from the test window only (`screencapture -l <window id>`). No clicks were available, so editing, the Open With picker, the Command Palette and Settings search were not exercised.
+- **Light theme, all pass:** frontmatter, headings, inline formatting, blockquotes and the five alert types, nested bullet and ordered lists, task lists, both tables with column alignment, seven code blocks with highlighting and copy buttons, Mermaid flowchart and sequence diagram, inline and display KaTeX, PNG screenshot and the new 128 px icon inline, horizontal rule, footnotes and raw HTML shown as source (as documented).
+- **Dark theme, all pass:** alerts, tables, code, math, images; Mermaid redrew in dark colors after a live theme switch without reopening the file.
+- **Rename visible natively:** editor switcher reads "Markdown Editor for Humans"; the Explorer shows the Outline view as "Markdown Editor For Humans: Outline" (VS Code capitalizes view titles; the manifest keeps lowercase "for").
 
 ---
 
