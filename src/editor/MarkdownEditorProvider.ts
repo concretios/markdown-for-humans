@@ -11642,7 +11642,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
                        img-src ${webview.cspSource} https: data: blob:;">
         
         <link href="${styleUri}" rel="stylesheet">
-        <title>Markdown for Humans</title>
+        <title>Markdown Editor for Humans</title>
       </head>
       <body data-highlighting-worker-uri="${highlightingWorkerUri}">
         <div id="editor"></div>

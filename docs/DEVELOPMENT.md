@@ -1,4 +1,4 @@
-# Markdown for Humans - Development Guide
+# Markdown Editor for Humans - Development Guide
 
 **Design principles, contribution philosophy, and how work is planned**
 

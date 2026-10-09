@@ -36,7 +36,7 @@
 
 - [ ] **Scroll sync** - When scrolling in WYSIWYG, scroll source view to same line (and vice versa)
 - [ ] **Cursor sync** - When clicking in WYSIWYG, move source cursor to corresponding line
-- [ ] **Command palette entry** - `Markdown for Humans: Open Source View` for discoverability
+- [ ] **Command palette entry** - `Markdown Editor for Humans: Open Source View` for discoverability
 - [ ] **Status bar indicator** - Show "Split View Active" when source is open
 - [ ] Toolbar `</>` button continues to work (already implemented)
 - [ ] Source view uses VS Code's native markdown editor (already implemented)
@@ -63,7 +63,7 @@
   - Location: [BubbleMenuView.ts:243-249](src/webview/BubbleMenuView.ts#L243-L249)
 
 **To add:**
-- 🔲 **Command Palette** - `Markdown for Humans: Open Source View`
+- 🔲 **Command Palette** - `Markdown Editor for Humans: Open Source View`
   - Same behavior as toolbar button (open split view)
   - Purpose: Discoverability, keyboard-first users, searchable
   - Why: VS Code users expect features in command palette (searchable, namespaced)
@@ -208,7 +208,7 @@ vscode.commands.registerCommand('markdown-for-humans.openSourceView', () => {
   {
     "command": "markdown-for-humans.openSourceView",
     "title": "Open Source View",
-    "category": "Markdown for Humans"
+    "category": "Markdown Editor for Humans"
   }
 ]
 ```

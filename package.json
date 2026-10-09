@@ -1,7 +1,7 @@
 {
   "name": "markdown-for-humans",
-  "displayName": "Markdown for Humans: WYSIWYG Editor",
-  "description": "A full-featured WYSIWYG Markdown editor with visual table editing, drag-and-drop images, Mermaid diagrams, and distraction-free writing—all inside VS Code.",
+  "displayName": "Markdown Editor for Humans",
+  "description": "WYSIWYG Markdown editor and viewer with visual tables, Mermaid diagrams and image resizing. Saves plain Markdown.",
   "version": "0.4.2",
   "publisher": "concretio",
   "author": {
@@ -31,7 +31,7 @@
   "capabilities": {
     "virtualWorkspaces": {
       "supported": false,
-      "description": "Markdown for Humans currently requires a disk-backed workspace for document-adjacent images, exports, and Feedback drafts."
+      "description": "Markdown Editor for Humans currently requires a disk-backed workspace for document-adjacent images, exports, and Feedback drafts."
     },
     "untrustedWorkspaces": {
       "supported": false,
@@ -44,42 +44,42 @@
   ],
   "keywords": [
     "markdown",
-    "editor",
-    "wysiwyg",
-    "preview",
-    "visual",
     "md",
+    "editor",
+    "markdown-editor",
+    "wysiwyg",
+    "viewer",
+    "markdown-viewer",
+    "reader",
+    "preview",
+    "markdown-preview",
     "table",
-    "tables",
+    "table-editor",
     "mermaid",
     "diagram",
-    "image",
-    "drag-drop",
-    "github-flavored-markdown",
-    "gfm",
+    "katex",
+    "math",
+    "typora",
+    "obsidian",
+    "notion",
     "notion-like",
-    "writing",
-    "documentation",
+    "rich-text",
+    "gfm",
     "readme",
-    "formatting",
-    "syntax-highlighting",
-    "live-preview",
-    "ai",
-    "distraction-free",
-    "agent",
-    "image-resizing",
-    "export",
-    "review",
+    "documentation",
+    "writing",
     "pdf",
     "docx",
-    "cursor"
+    "image",
+    "image-resizing",
+    "ai"
   ],
   "main": "./dist/extension.js",
   "contributes": {
     "colors": [
       {
         "id": "markdownForHumans.codeKeyword",
-        "description": "Keyword color in Markdown for Humans code blocks.",
+        "description": "Keyword color in Markdown Editor for Humans code blocks.",
         "defaults": {
           "light": "#a31545",
           "dark": "#c586c0",
@@ -89,7 +89,7 @@
       },
       {
         "id": "markdownForHumans.codeString",
-        "description": "String and regular expression color in Markdown for Humans code blocks.",
+        "description": "String and regular expression color in Markdown Editor for Humans code blocks.",
         "defaults": {
           "light": "#a31515",
           "dark": "#ce9178",
@@ -99,7 +99,7 @@
       },
       {
         "id": "markdownForHumans.codeValue",
-        "description": "Number, attribute, and variable color in Markdown for Humans code blocks.",
+        "description": "Number, attribute, and variable color in Markdown Editor for Humans code blocks.",
         "defaults": {
           "light": "#0451a5",
           "dark": "#b5cea8",
@@ -109,7 +109,7 @@
       },
       {
         "id": "markdownForHumans.codeFunction",
-        "description": "Function and declaration color in Markdown for Humans code blocks.",
+        "description": "Function and declaration color in Markdown Editor for Humans code blocks.",
         "defaults": {
           "light": "#6f42c1",
           "dark": "#dcdcaa",
@@ -119,7 +119,7 @@
       },
       {
         "id": "markdownForHumans.codeType",
-        "description": "Type, built-in, and tag name color in Markdown for Humans code blocks.",
+        "description": "Type, built-in, and tag name color in Markdown Editor for Humans code blocks.",
         "defaults": {
           "light": "#00695c",
           "dark": "#4ec9b0",
@@ -129,7 +129,7 @@
       },
       {
         "id": "markdownForHumans.codeComment",
-        "description": "Comment color in Markdown for Humans code blocks.",
+        "description": "Comment color in Markdown Editor for Humans code blocks.",
         "defaults": {
           "light": "#57606a",
           "dark": "#a3a3a3",
@@ -139,7 +139,7 @@
       },
       {
         "id": "markdownForHumans.codeAddition",
-        "description": "Added-line color in Markdown for Humans diff code blocks.",
+        "description": "Added-line color in Markdown Editor for Humans diff code blocks.",
         "defaults": {
           "light": "#116329",
           "dark": "#7ee787",
@@ -149,7 +149,7 @@
       },
       {
         "id": "markdownForHumans.codeDeletion",
-        "description": "Deleted-line color in Markdown for Humans diff code blocks.",
+        "description": "Deleted-line color in Markdown Editor for Humans diff code blocks.",
         "defaults": {
           "light": "#a40e26",
           "dark": "#ffa198",
@@ -161,7 +161,7 @@
     "customEditors": [
       {
         "viewType": "markdownForHumans.editor",
-        "displayName": "Markdown for Humans",
+        "displayName": "Markdown Editor for Humans",
         "selector": [
           {
             "filenamePattern": "*.md",
@@ -186,7 +186,7 @@
     "commands": [
       {
         "command": "markdownForHumans.openFile",
-        "title": "Open with Markdown for Humans"
+        "title": "Open with Markdown Editor for Humans"
       },
       {
         "command": "markdownForHumans.outline.revealCurrent",
@@ -205,51 +205,51 @@
       },
       {
         "command": "markdownForHumans.toggleFormattingShortcuts",
-        "title": "Markdown for Humans: Toggle Formatting Shortcuts (Cmd/Ctrl+B/I/U)"
+        "title": "Markdown Editor for Humans: Toggle Formatting Shortcuts (Cmd/Ctrl+B/I/U)"
       },
       {
         "command": "markdownForHumans.feedback.start",
-        "title": "Markdown for Humans: Start Feedback"
+        "title": "Markdown Editor for Humans: Start Feedback"
       },
       {
         "command": "markdownForHumans.feedback.commentSelection",
-        "title": "Markdown for Humans: Add Feedback to Selection"
+        "title": "Markdown Editor for Humans: Add Feedback to Selection"
       },
       {
         "command": "markdownForHumans.feedback.chooseScope",
-        "title": "Markdown for Humans: Choose Feedback Scope"
+        "title": "Markdown Editor for Humans: Choose Feedback Scope"
       },
       {
         "command": "markdownForHumans.feedback.captureArea",
-        "title": "Markdown for Humans: Capture Feedback Area"
+        "title": "Markdown Editor for Humans: Capture Feedback Area"
       },
       {
         "command": "markdownForHumans.feedback.captureSelectedBlocks",
-        "title": "Markdown for Humans: Capture Selected Blocks"
+        "title": "Markdown Editor for Humans: Capture Selected Blocks"
       },
       {
         "command": "markdownForHumans.feedback.toggleComments",
-        "title": "Markdown for Humans: Toggle Feedback Comments"
+        "title": "Markdown Editor for Humans: Toggle Feedback Comments"
       },
       {
         "command": "markdownForHumans.feedback.next",
-        "title": "Markdown for Humans: Next Feedback"
+        "title": "Markdown Editor for Humans: Next Feedback"
       },
       {
         "command": "markdownForHumans.feedback.previous",
-        "title": "Markdown for Humans: Previous Feedback"
+        "title": "Markdown Editor for Humans: Previous Feedback"
       },
       {
         "command": "markdownForHumans.feedback.finish",
-        "title": "Markdown for Humans: Finish Feedback and Copy Prompt"
+        "title": "Markdown Editor for Humans: Finish Feedback and Copy Prompt"
       },
       {
         "command": "markdownForHumans.feedback.reveal",
-        "title": "Markdown for Humans: Reveal Feedback File"
+        "title": "Markdown Editor for Humans: Reveal Feedback File"
       },
       {
         "command": "markdownForHumans.feedback.discard",
-        "title": "Markdown for Humans: Discard Feedback Draft"
+        "title": "Markdown Editor for Humans: Discard Feedback Draft"
       }
     ],
     "keybindings": [
@@ -264,7 +264,7 @@
       "explorer": [
         {
           "id": "markdownForHumansOutline",
-          "name": "Markdown for Humans: Outline",
+          "name": "Markdown Editor for Humans: Outline",
           "when": "markdownForHumans.isActive"
         }
       ]
@@ -303,7 +303,7 @@
       ]
     },
     "configuration": {
-      "title": "Markdown for Humans",
+      "title": "Markdown Editor for Humans",
       "properties": {
         "markdownForHumans.imagePath": {
           "type": "string",

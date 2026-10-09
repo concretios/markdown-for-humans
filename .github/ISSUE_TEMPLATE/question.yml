@@ -1,5 +1,5 @@
 name: Question
-description: Ask a question about using or contributing to Markdown for Humans
+description: Ask a question about using or contributing to Markdown Editor for Humans
 title: "[Question]: "
 labels: ["question", "triage"]
 body:

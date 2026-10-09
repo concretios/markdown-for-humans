@@ -1,12 +1,16 @@
 # Changelog
 
-All notable changes to Markdown for Humans will be documented in this file.
+All notable changes to Markdown Editor for Humans will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Note:** This is the ONLY changelog file. Use this content for GitHub releases (copy and polish as needed with emojis and user-friendly sections).
 
 ## [Unreleased]
+
+### Changed
+
+- **The extension is now named Markdown Editor for Humans.** Commands, the **Open With...** entry, the Outline view and the Settings section use the new name. The extension ID (`concretio.markdown-for-humans`), your settings and your keybindings are unchanged.
 
 ### Fixed
 

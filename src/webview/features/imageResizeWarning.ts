@@ -58,7 +58,7 @@ export async function showImageResizeWarning(): Promise<ImageResizeWarningOption
       </h3>
 
       <p style="margin: 0 0 20px 0; color: var(--vscode-foreground); line-height: 1.5;">
-        Markdown for Humans will reduce the resolution of this image to fit the size. This action cannot be undone, but a backup will be created.
+        Markdown Editor for Humans will reduce the resolution of this image to fit the size. This action cannot be undone, but a backup will be created.
       </p>
 
       <div style="margin-bottom: 20px;">

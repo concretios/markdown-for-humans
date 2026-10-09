@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-This document lists the third-party open source software components used in Markdown for Humans and their respective licenses.
+This document lists the third-party open source software components used in Markdown Editor for Humans and their respective licenses.
 
 ## Dependencies
 

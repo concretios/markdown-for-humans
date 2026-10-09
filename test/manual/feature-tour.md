@@ -1,12 +1,12 @@
 ---
-title: Markdown for Humans feature tour
+title: Markdown Editor for Humans feature tour
 version: 0.4.2
 tags: [manual-test, release]
 ---
 
-# Markdown for Humans feature tour
+# Markdown Editor for Humans feature tour
 
-This file exercises every major feature in one place. Open it with **Reopen Editor With → Markdown for Humans**, work through the sections, then use the checklist at the end.
+This file exercises every major feature in one place. Open it with **Reopen Editor With → Markdown Editor for Humans**, work through the sections, then use the checklist at the end.
 
 > [!TIP]
 > Before you start, copy this file somewhere safe or commit it. Several checks compare the saved file against the original.
@@ -42,7 +42,7 @@ Setext heading level one
 Setext heading level two
 ------------------------
 
-*Try:* open the **Markdown For Humans: Outline** panel and click a heading to jump to it.
+*Try:* open the **Markdown Editor for Humans: Outline** panel and click a heading to jump to it.
 
 ## 3. Quotes and alerts
 
@@ -212,7 +212,7 @@ A PNG screenshot:
 
 ![Product screenshot](images/product-screenshot.png)
 
-A small PNG icon with a title: ![App icon](images/app-icon.png "Markdown for Humans icon")
+A small PNG icon with a title: ![App icon](images/app-icon.png "Markdown Editor for Humans icon")
 
 An SVG with no fixed size. It should scale to the reading column:
 
