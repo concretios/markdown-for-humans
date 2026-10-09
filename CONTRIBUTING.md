@@ -88,7 +88,7 @@ npm run watch:debug
 
 ### 4. View Logs and Debug
 
-- **Extension logs**: Help → Toggle Developer Tools → Console
+- **Extension errors**: Help → Toggle Developer Tools → Console
 - **Webview DevTools**: In the Extension Development Host, run command `Developer: Open Webview Developer Tools`
 - **Breakpoints**: Set breakpoints in `src/` files; they work in both extension and webview code
 

@@ -137,10 +137,10 @@ body:
       label: Logs
       description: |
         Please include relevant logs. You can find them in:
-        - Extension logs: Help → Toggle Developer Tools → Console
+        - Extension errors: Help → Toggle Developer Tools → Console
         - Webview logs: Developer → Open Webview Developer Tools → Console (look for [MD4H] messages)
       placeholder: |
-        [Extension Output]
+        [Developer Tools Console]
         ...
         
         [Webview Console]

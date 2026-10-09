@@ -82,10 +82,10 @@
 | markdown, md, editor, wysiwyg, preview, table, mermaid, diagram, gfm, readme, documentation, writing, pdf, docx, image, image-resizing, notion-like, ai | markdown-editor, markdown-viewer, viewer, reader, markdown-preview, table-editor, katex, math, typora, obsidian, notion, rich-text | tables, drag-drop, syntax-highlighting, live-preview, formatting, export, visual, distraction-free, github-flavored-markdown, agent, cursor, review |
 
 **Key changes:**
-- `src/__tests__/extension/marketplaceListingPolicy.test.ts` – new policy test (written first).
-- `package.json` – metadata above; contributed labels already renamed.
-- `README.md`, `CHANGELOG.md`, `docs/*`, `.github/ISSUE_TEMPLATE/*`, `EULA.md`, `TERMS_OF_USE.md`, `PRIVACY_POLICY.md`, `THIRD_PARTY_LICENSES.md`, `CONTRIBUTING.md`, `KNOWN_ISSUES.md`, `roadmap/pipeline/*`, `test/**`, `scripts/highlighting-fixture/README.md`, `wiki/*.md` – product name.
-- `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/bug_report.yml` – replace the nonexistent "Output → Markdown for Humans" channel with **Help > Toggle Developer Tools > Console** (the extension never calls `createOutputChannel`).
+- `src/__tests__/extension/marketplaceListingPolicy.test.ts`: new policy test (written first).
+- `package.json`: metadata above; contributed labels already renamed.
+- `README.md`, `CHANGELOG.md`, `docs/*`, `.github/ISSUE_TEMPLATE/*`, `EULA.md`, `TERMS_OF_USE.md`, `PRIVACY_POLICY.md`, `THIRD_PARTY_LICENSES.md`, `CONTRIBUTING.md`, `KNOWN_ISSUES.md`, `roadmap/pipeline/*`, `test/**`, `scripts/highlighting-fixture/README.md`, `wiki/*.md`: product name.
+- `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/bug_report.yml`: replace the nonexistent "Output → Markdown for Humans" channel with **Help > Toggle Developer Tools > Console** (the extension never calls `createOutputChannel`).
 
 **Performance considerations:**
 - None. Metadata and strings only.
@@ -94,18 +94,18 @@
 
 ## 6. Work Breakdown
 
-- [x] **Phase 1: Rename user facing surfaces** – display name, Open With, commands, Outline view, Settings, messages
+- [x] **Phase 1: Rename user facing surfaces**: display name, Open With, commands, Outline view, Settings, messages
   - [x] Update `feedbackNavigationCommands.test.ts` first (RED), then `package.json` (GREEN)
-- [x] **Phase 2: Listing metadata** – description and keywords
+- [x] **Phase 2: Listing metadata**: description and keywords
   - [x] Write `marketplaceListingPolicy.test.ts` (RED: description and keyword tests failed)
   - [x] Update `package.json` (GREEN)
-- [x] **Phase 3: Documentation** – every remaining mention outside the historical record, wiki included
+- [x] **Phase 3: Documentation**: every remaining mention outside the historical record, wiki included
 - [ ] **Testing**
   - [x] `npm test`, `npm run lint`, `npm run build:debug`
   - [x] `npm run test:integration` (Extension Development Host)
   - [x] `vsce package` accepts the manifest; packaged tags are the 30 keywords plus the automatic `keybindings`
   - [ ] Manual: Open With picker, Command Palette, Outline view and Settings search show the new name in a real VS Code window
-- [ ] **Post release measurement** – sample ranks daily for 5 days on both registries
+- [ ] **Post release measurement**: sample ranks daily for 5 days on both registries
 
 **Rank sampling command** (same request the Marketplace search page sends):
 
@@ -123,13 +123,13 @@ Open VSX: `curl -s 'https://open-vsx.org/api/-/search?query=markdown%20editor&si
 
 ## 7. Implementation Log
 
-### 2026-10-09 – Research and rename
+### 2026-10-09: Research and rename
 
 - **What:** Measured ranking on both registries, settled the name with the owner, renamed every VS Code surface.
 - **Files:** `package.json`, `src/extension.ts`, `src/editor/MarkdownEditorProvider.ts`, `src/webview/features/imageResizeWarning.ts`, `src/__tests__/extension/feedbackNavigationCommands.test.ts`, `README.md`, `KNOWN_ISSUES.md`, `CONTRIBUTING.md`, `docs/QA_MANUAL.md`, `test/manual/feature-tour.md`, `CHANGELOG.md`
 - **Notes:** `npm test` (210 suites), lint, debug build and the Extension Development Host suite (8 tests) pass. KNOWN_ISSUES pointed at a nonexistent "Open File" command; corrected to the real `Open with` title.
 
-### 2026-10-09 – Listing metadata and documentation
+### 2026-10-09: Listing metadata and documentation
 
 - **What:** New description and 30 keywords guarded by `marketplaceListingPolicy.test.ts` (written first, 2 tests failed, then passed). Renamed the product across docs, issue templates, legal documents, pipeline plans, fixtures, comments and the wiki submodule. Replaced the nonexistent "Output → Markdown for Humans" log channel in CONTRIBUTING and the bug template with Help → Toggle Developer Tools → Console. Corrected 5 wiki references to a nonexistent "Open File" command.
 - **Verification:** `npm test` 211 suites, 4,380 tests pass; lint clean; debug build; Extension Development Host suite 8 passing on VS Code 1.141.0; `vsce package` succeeds.

@@ -59,6 +59,26 @@ describe('marketplace listing policy', () => {
     expect(manifestText).not.toContain('Markdown for Humans');
   });
 
+  test('keeps the previous product name out of shipped source', () => {
+    const sourceDir = path.join(rootDir, 'src');
+    const offenders: string[] = [];
+    const visit = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          // Tests and mocks do not ship, and this file names the old product on purpose.
+          if (entry.name !== '__tests__' && entry.name !== '__mocks__') visit(entryPath);
+        } else if (/\.(ts|css|html)$/.test(entry.name)) {
+          if (fs.readFileSync(entryPath, 'utf8').includes('Markdown for Humans')) {
+            offenders.push(path.relative(rootDir, entryPath));
+          }
+        }
+      }
+    };
+    visit(sourceDir);
+    expect(offenders).toEqual([]);
+  });
+
   test('keeps a short description that leads with the WYSIWYG editor and viewer phrases', () => {
     expect(manifest.description.startsWith('WYSIWYG Markdown editor and viewer')).toBe(true);
     // Search cards show about three lines; ranking listings use 30 to 110 characters.

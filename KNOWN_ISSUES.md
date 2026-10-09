@@ -1,6 +1,6 @@
 # Known Issues
 
-Living list of open limitations for **Markdown Editor for Humans 0.4.2**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
+Living list of open limitations for **Markdown for Humans 0.4.2**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
 **Status:** 0.4.2 (2026-10-06) · **Last updated:** 2026-10-07
 
@@ -94,7 +94,7 @@ Diagrams that fail conversion in the webview may not appear correctly in PDF/Wor
 
 | Symptom | Workaround |
 |---------|------------|
-| “Open with Markdown Editor for Humans” fails | Command Palette → **Open with Markdown Editor for Humans** |
+| “Open with Markdown Editor for Humans” fails | Right-click the editor tab → **Reopen Editor With...** → **Markdown Editor for Humans** |
 | Theme colors look wrong | Reload Window; check VS Code theme settings |
 
 ---

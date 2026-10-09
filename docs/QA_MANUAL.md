@@ -1,4 +1,4 @@
-# Manual QA + Usage Guide — Markdown Editor for Humans (VS Code)
+# Manual QA + Usage Guide: Markdown Editor for Humans (VS Code)
 
 This document is for **manual QA engineers** and also doubles as a **user-facing usage guide** for the extension.
 
