@@ -1,6 +1,6 @@
 # Markdown Editor for Humans
 
-**Edit Markdown like a document. Commit it like code.** A rich, readable Markdown editor inside VS Code, Cursor and Windsurf that keeps your file as plain Markdown.
+**Edit Markdown like a document. Commit it like code.** A rich, readable Markdown editor inside VS Code, Cursor and Devin Desktop (formerly Windsurf) that keeps your file as plain Markdown.
 
 ![Open VSX](https://img.shields.io/open-vsx/v/concretio/markdown-for-humans?label=Open%20VSX&logo=eclipse) ![Open VSX downloads](https://img.shields.io/open-vsx/dt/concretio/markdown-for-humans?label=downloads) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
@@ -11,10 +11,10 @@
 ## Install
 
 - **VS Code:** [Marketplace](https://marketplace.visualstudio.com/items?itemName=concretio.markdown-for-humans), or search `concretio.markdown-for-humans` in Extensions.
-- **Cursor, Windsurf, VSCodium and other Open VSX IDEs:** [Open VSX Registry](https://open-vsx.org/extension/concretio/markdown-for-humans), or search the same ID in Extensions.
+- **Cursor, Devin Desktop (formerly Windsurf), VSCodium and other Open VSX IDEs:** [Open VSX Registry](https://open-vsx.org/extension/concretio/markdown-for-humans), or search the same ID in Extensions.
 - **Open a file:** right-click any `.md` file and choose **Open with Markdown Editor for Humans**. In **Open With...** it is listed as **Visual Editor**.
 
-> **📌 100% free. No trials. No limits. No paywalls, ever.**
+> **📌 100% free and open source (MIT). No account, no telemetry, no paywalls, ever.**
 
 ## Why Markdown Editor for Humans
 
@@ -74,7 +74,7 @@ The document is locked while you review, so your comments always point at the so
 
 ![Hover for image details, then rename the file from the editor](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/image-rename.gif)
 
-Local SVG images render as vectors, and importing one keeps the original file untouched. Use **Image options > Display size** to set the width of one occurrence, with normal undo; explicit sizes are saved as an HTML `<img width="…">`, and unsized images stay ordinary Markdown. Rename and hover details work for SVGs too, and PDF export keeps them at their sizes. See [Known Issues](./KNOWN_ISSUES.md#svg-images) for SVG limits.
+- **SVG:** local SVG files render as vectors and are never rewritten. **Image options > Display size** sets the width of one occurrence, saved as an HTML `<img width="…">`; unsized images stay ordinary Markdown. See [Known Issues](./KNOWN_ISSUES.md#svg-images) for SVG limits.
 
 ---
 
@@ -85,7 +85,7 @@ Local SVG images render as vectors, and importing one keeps the original file un
 - **Mermaid diagrams:** edit the source beside the rendered view and the diagram updates as you type; 15 templates; double-click a diagram to edit it in place
 - **Math:** LaTeX equations rendered with KaTeX
 - **GitHub alerts:** Note, Tip, Important, Warning and Caution callouts
-- **Code blocks:** syntax highlighting for 11+ languages, with a copy button
+- **Code blocks:** syntax highlighting for 12 languages, with a copy button
 
 ---
 
@@ -95,7 +95,7 @@ Local SVG images render as vectors, and importing one keeps the original file un
 
 - **Document outline** to jump between headings in long documents
 - **In-document search** with match highlighting
-- **Export** to PDF or Word for people outside your repo
+- **Export** to PDF or Word for people outside your repo. PDF export uses Chrome or Chromium on your machine; Word export has limits listed in [Known Issues](./KNOWN_ISSUES.md)
 - **Word count and reading time** in the status bar
 - **Theme aware:** follows your VS Code theme, fonts and font size
 
@@ -104,7 +104,7 @@ Local SVG images render as vectors, and importing one keeps the original file un
 ## FAQ
 
 **VS Code now has a built-in Markdown editor. Why use this?**
-VS Code 1.131 added an experimental hybrid Markdown editor, aimed at the Agents window. Markdown Editor for Humans works in every VS Code window and in Open VSX IDEs such as Cursor and Windsurf. It adds visual table editing, image resize and rename, Mermaid editing, PDF and Word export, and a sealed feedback handoff for any agent.
+The two work side by side: both appear in the editor picker, and you choose per file. Markdown Editor for Humans is built for long documents and review. It gives you visual table editing, image resize and rename, Mermaid editing beside the rendered view, PDF and Word export, and a sealed feedback handoff for any AI agent. It also runs in Open VSX IDEs such as Cursor and Devin Desktop, where VS Code's built-in editor may not be available.
 
 **Will it change my file?**
 Only the blocks you edit. Unedited blocks keep their exact source on save. Edited blocks use a standard Markdown form, listed in [Known Issues](./KNOWN_ISSUES.md).
@@ -120,9 +120,9 @@ Click the **Source** button in the toolbar to open the source beside the rendere
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-Open Settings (`Ctrl+,` / `Cmd+,`) and search for "Markdown Editor for Humans".
+Click the gear in the editor toolbar, or open Settings (`Ctrl+,` / `Cmd+,`) and search for `markdownForHumans`. The most used settings:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -146,18 +146,15 @@ Requires VS Code 1.98.0 or newer in a trusted, disk-backed workspace. Compatible
 - [Known Issues](./KNOWN_ISSUES.md) - Known issues and workarounds
 - [Report Issues](https://github.com/concretios/markdown-for-humans/issues)
 
-### For Developers
+### For Contributors
 
-- [Contributing](./CONTRIBUTING.md) - Developer setup and guidelines
-- [Architecture](./docs/ARCHITECTURE.md) - Technical deep dive
-- [Development Guide](./docs/DEVELOPMENT.md) - Philosophy and roadmap
-- [Build Guide](./docs/BUILD.md) - Build and packaging
-- [Troubleshooting](./docs/TROUBLESHOOTING.md) - Technical troubleshooting
+- [Contributing](./CONTRIBUTING.md), [Architecture](./docs/ARCHITECTURE.md), [Development Guide](./docs/DEVELOPMENT.md), [Build Guide](./docs/BUILD.md) and [Troubleshooting](./docs/TROUBLESHOOTING.md)
 
-### For Maintainers
+---
 
-- [Release Checklist](./docs/RELEASE_CHECKLIST.md) - Release process
-- [QA Manual](./docs/QA_MANUAL.md) - Testing procedures
+## Like It? Rate It
+
+Ratings are how other people find this editor. If it saves you time, leave a rating on the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=concretio.markdown-for-humans&ssr=false#review-details) or on [Open VSX](https://open-vsx.org/extension/concretio/markdown-for-humans/reviews). Found a problem? [Open an issue](https://github.com/concretios/markdown-for-humans/issues) and we will look at it.
 
 ---
 
