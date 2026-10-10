@@ -18,3 +18,4 @@ Agents: boot from this allowlist. Shipped mega-docs live under `roadmap/shipped/
 - `task-p1-frontmatter.md` — richer metadata UX (wrap/unwrap already shipped)
 - `task-p1-wikilinks.md`
 - `task-pdf-advanced-export.md`
+- `task-soft-breaks.md`: TODO, CommonMark soft breaks (#69); prior work on branch `cursor/soft-breaks-retest-ad7a`
