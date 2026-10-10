@@ -9,7 +9,7 @@ Living list of open limitations for **Markdown Editor for Humans 0.4.3**. For re
 ## Open issues
 
 ### Workspace file drag-drop in Cursor IDE
-Dragging images from the Cursor workspace explorer into the editor is often not detected. Works in VS Code / Windsurf. External drops (Finder/desktop) may still work.
+Dragging images from the Cursor workspace explorer into the editor is often not detected. Works in VS Code and Devin Desktop (formerly Windsurf). External drops (Finder/desktop) may still work.
 
 **Workaround:** Image insert dialog, source view, or drop from Finder/desktop.
 
