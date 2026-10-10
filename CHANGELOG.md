@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+---
+
+## [0.4.3] - 2026-10-10
+
 ### Changed
 
 - **The extension is now named Markdown Editor for Humans.** Commands, the Outline view and the Settings section use the new name. In **Open With...** and the editor picker the editor is listed as **Visual Editor**, with Markdown Editor for Humans beside it. The extension ID (`concretio.markdown-for-humans`), your settings and your keybindings are unchanged.
