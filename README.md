@@ -185,15 +185,15 @@ Ways to contribute:
 
 ---
 
-## Vibe Coded its way
+## Vibe Coded, Seriously Tested
 
-This extension was built through AI / **vibe coding**, with minimal human effort focused on fixes and stability. The basic functional model came together in minutes, but what took days and hours was **testing each feature** to ensure everything works smoothly in real-world use. 
+This extension is written with AI coding agents. The first working version took minutes. What makes it safe to trust with your files is the testing, and that is where the time goes:
 
-It's the classic 80:20 rule in action: that final 20% of polish, edge cases, and real-world testing takes 80% of the time, and that's where the real value lives.
+- **Automated tests on every change.** More than 4,000 tests run on each pull request, including tests inside a real VS Code Extension Host on Windows and Linux, on the oldest supported VS Code and the current one. Performance budgets are checked on every change too.
+- **AI agents that use the editor like a person.** Before a release, an agent installs the packaged extension into a real VS Code window and drives it with computer use: it opens files, edits, saves, and compares the saved file with the original.
+- **Human testers.** People run a manual QA pass before major releases, following the [QA Manual](./docs/QA_MANUAL.md).
 
-We're open-sourcing this because in AI era, **code has limited value**, the real work was in the creativity in planning, design, and relentless testing. 
-
-Countless hours went into vibe-coded wireframes, user experience design, and polish to create something that feels natural and intuitive.
+We open-source all of it because in the AI era the code is the cheap part. The value is in the planning, the design and the relentless testing.
 
 ---
 
