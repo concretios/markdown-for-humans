@@ -15,9 +15,9 @@ Each issue was read in full and checked against the current code, `CHANGELOG.md`
 | Feature request | 14 | #11, #15, #16, #19, #29, #46, #55, #58, #61, #62, #72, #77, #86, #140 |
 | Out of scope | 1 | #60 |
 
-The three most likely to cost a bad review if left alone:
+The three that most need attention:
 
-1. **Blank editor (#127, and a second user on closed #12).** Two people on 0.3.0 report an editor that opens blank. It did not reproduce with 0.3.0 or 0.4.3 on macOS, and the Linux Extension Host tests pass, so the cause is unknown. Both reports are unanswered.
+1. **Blank editor (#127, and a second user on closed #12).** Two people on 0.3.0 report an editor that opens blank. It did not reproduce with 0.3.0 or 0.4.3 on macOS, including a multi-folder workspace like the reporter's, and the Linux Extension Host tests pass. The cause is unknown, and no change in 0.4.x is known to address it.
 2. **Hard-wrapped paragraphs render as broken lines (#69).** Confirmed natively on 0.4.3. Two community PRs were closed on 2026-10-01 with the note that it was "being fixed in the serializer"; the rendering has not changed.
 3. **Release notes describe a feature that does not exist (#84).** The 0.3.0 changelog and GitHub release announce an editor theme override that was reverted before the release. The contributor who wrote it found the gap himself.
 
@@ -48,7 +48,7 @@ The three most likely to cost a bad review if left alone:
 | 81 | laicasaane | Defect | S | The toolbar code block dropdown lists 13 languages and C# is not one of them. Typing ```` ```csharp ```` works. Code only. |
 | 84 | jprisant | Defect (docs) | S | `CHANGELOG.md` [0.3.0] and the v0.3.0 GitHub release announce `markdownForHumans.display.editorTheme` and a toolbar toggle. PR #54 was reverted on 2026-06-19 (`decf0c6`); neither exists in the code. |
 | 86 | davidjdixon | Feature | M | Font family, weight, size and line height for readability (accessibility). The reporter calls it the blocker to making this the default editor. The owner's question from 2026-09-27 is unanswered. Same as #15. |
-| 127 | lesh59 | Needs info | unknown | Blank editor on 0.3.0, VS Code 1.140, Linux. Not reproduced: 0.3.0 and 0.4.3 both render on macOS 1.141 (native), and the Linux Extension Host tests start Feedback on rendered documents. The "local-network-access" console line is a VS Code warning. 0.4.x was published the day after the report. |
+| 127 | lesh59 | Needs info | unknown | Blank editor on 0.3.0, VS Code 1.140, Linux. Not reproduced: 0.3.0 and 0.4.3 both render on macOS 1.141 (native), and the Linux Extension Host tests start Feedback on rendered documents. Whether the "local-network-access" console line is related is not established. 0.4.x was published the day after the report; no change in it is known to address this. |
 | 140 | bperunx | Feature (question) | S/M | Copy AI Context Reference (`@file#L10-14`, Alt+C) was removed on purpose in 0.4.0 (PR #90). The old code is kept at tag `archive/copy-ai-context-line-numbers`. Second request for the same thing after #61. |
 
 Size: S is under a day with tests, M is one to three days, L is a week or more.
@@ -76,78 +76,12 @@ Not in 0.4.4:
 
 | # | Reporter | State | Note |
 |---|---|---|---|
-| 12 | osawereao | Closed as fixed 2026-05-19 | A different user (@orionseye, 2026-08-24, on 0.3.0) says it is not fixed: files open blank until retried. Same symptom as #127. Do not ask anyone on this thread for a rating; reply and fold it into #127. |
+| 12 | osawereao | Closed as fixed 2026-05-19 | A different user (@orionseye, 2026-08-24, on 0.3.0) says it is not fixed: files open blank until retried. Same symptom as #127. Treat it as open and track it with #127. |
 | 27 | dlivxpr | Closed 2026-05-11 | The last comment asks for a smaller default text size. `markdownForHumans.zoom` now covers that; a short answer is owed. |
-
-Reporters whose issue was fixed and closed, in the order I would ask for a rating: @marchy (#14, already replied "Amazing"), @ZashIn (#20), @unSerori (#18), @epmsmid (#28), @SiweiCui (#52), @zhirafovod (#37, #39), @dlivxpr (#27, after the zoom answer). Fix versions below are inferred from close dates, not verified per issue.
-
-## Draft replies
-
-None of these has been posted.
-
-### Already fixed
-
-**#56** (close)
-> Thanks for the precise report. This was fixed after 0.2.1: inline code inside link text now round-trips, and there are regression tests for exactly this case. I reran your example, `` [`foo()`](./bar.ts:10) ``, against 0.4.3 and it saves unchanged. Please update to 0.4.3 and reopen if you still see it.
-
-**#80** (close)
-> Fixed. The 0.4 series replaced the highlighter, and it now covers 36 languages including C#. I opened your attached file in 0.3.0 (no colors, as you reported) and in 0.4.3 (highlighted). Please update to 0.4.3.
-
-### Already available
-
-**#25** (close)
-> The Explorer sidebar has a view called "Markdown Editor for Humans: Outline". It lists the document's headings, follows the cursor, and jumps to a heading when you click it. It appears while the editor is active; if you do not see it, right-click the Explorer title and enable it. It is our own view, not VS Code's OUTLINE panel.
-
-**#64** (close)
-> Both exist. Run **Open with Markdown Editor for Humans** from the Command Palette on the active Markdown file, and bind it under Keyboard Shortcuts (command ID `markdownForHumans.openFile`). To open every Markdown file with it, right-click a `.md` file, choose **Open With...**, then **Configure default editor for '*.md'...** and pick **Visual Editor** (Markdown Editor for Humans).
-
-### Needs information
-
-**#127**
-> Sorry for the slow reply. Version 0.4.3 is now on the Marketplace; 0.3.0 was the last published version when you reported this, and a lot of the loading path changed in between. Could you update and try again? If it is still blank, three things would help: the list of other Markdown extensions you have enabled, whether it happens with all other extensions disabled (Extensions: Disable All Installed Extensions, then enable only this one), and any red errors in Help > Toggle Developer Tools > Console. The "local-network-access" line is a VS Code warning and not the cause.
-
-**#12** (comment for @orionseye; consider reopening)
-> @orionseye this should not have stayed closed without an answer to you. 0.4.3 is out and changed how the editor loads. If files still open blank after updating, please add your VS Code version, OS and enabled Markdown extensions to #127, where we are tracking it. The tab that closes when you open the next file is VS Code's preview tab behavior: double-click a file, or set `workbench.editor.enablePreview` to false, to keep tabs open.
-
-### Defects, acknowledged
-
-**#23**
-> Confirmed, and you are right that it should follow your default editor. Links to other files are opened with the plain text editor today, whatever your default is. Fix planned for the next release.
-
-**#81**
-> Confirmed: the dropdown has 13 languages and C# is not among them, although C# highlighting itself works since 0.4 (type ```` ```csharp ````). We will add it, with the other languages the highlighter supports.
-
-**#84**
-> You are right, and thank you for tracing it. PR #54 was merged, then reverted before 0.3.0 was tagged, and the changelog and release notes kept the entry. That is our mistake. We are removing the entry from both. Your contribution is still credited in the notes, marked as not shipped.
-
-**#69**
-> An honest status: the single-newline rendering is unchanged in 0.4.3. A hard-wrapped paragraph still shows one line per source line. What did change is the save path: since 0.4.1, blocks you do not edit are written back byte for byte, which removes most of the reflow churn that sank #70 and #99. We are planning the rendering change as its own piece of work for the next minor release and will post the plan here.
-
-**#13**
-> It depends on how the image is added. Dragging it from the VS Code Explorer links the existing file in place (hold Shift if the drop does nothing). Choosing it with "browse" in the insert dialog, or dropping it from Finder or File Explorer, always saves a copy, because the editor only receives the image's contents and not its path. We agree it should reuse the existing file and have it on the list.
-
-### Questions and requests
-
-**#46**
-> It is on purpose for now. The editor reads and writes files, renders their content, and can launch Chrome for PDF export from a setting, so it declares that it needs a trusted workspace. Enabling it for an untrusted folder through settings is as safe as trusting the Markdown files in that folder: a document cannot run code in the editor, but export and image handling do touch the disk. A limited mode for untrusted folders is a reasonable request and we will track it here.
-
-**#140**
-> It was removed on purpose in 0.4.0 when the feedback workflow came in, and you are the second person to ask for it back. A plain "copy reference" command with no extra UI is a fair request. We are deciding whether to restore it as a Command Palette command you can bind to a key, including inside tables.
-
-**#86 / #15**
-> Font control is on the shortlist for the next release: family, weight and line height for body text, falling back to your VS Code font. Text size already has `markdownForHumans.zoom`. If there is a specific font you rely on, tell us and we will test with it.
-
-**#27** (closed; answer the follow-up)
-> For the text size: `markdownForHumans.zoom` sets the editor's size as a percentage, and the editor follows your VS Code font otherwise.
-
-### Thank-you for closed, fixed issues
-
-For @marchy (#14), @ZashIn (#20), @unSerori (#18), @epmsmid (#28), @SiweiCui (#52), @zhirafovod (#37, #39):
-
-> Thanks again for reporting this. The fix has shipped, and the extension is now called Markdown Editor for Humans (0.4.3). If it has been useful, a rating helps other people find it: [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=concretio.markdown-for-humans&ssr=false#review-details), or [Open VSX](https://open-vsx.org/extension/concretio/markdown-for-humans/reviews) if you use Cursor or Devin Desktop.
 
 ## Decisions for the owner
 
-1. **Post the replies?** They would go out from the owner's GitHub account. Closing #56, #80, #25 and #64 takes the open count from 25 to 21.
-2. **#140:** restore the copy reference command, or keep it retired.
-3. **#69:** commit to the soft-break rendering change for 0.5.0, or tell the reporters it will stay as is.
+1. **#140:** restore the copy reference command, or keep it retired.
+2. **#69:** logged as a planned task in `task-soft-breaks.md`, to be done on its own branch.
+
+Replies to reporters are not part of this document. Nothing is posted on an issue until the analysis behind it has been tested and reviewed.
