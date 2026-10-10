@@ -6,7 +6,7 @@ tags: [manual-test, release]
 
 # Markdown Editor for Humans feature tour
 
-This file exercises every major feature in one place. Open it with **Reopen Editor With → Markdown Editor for Humans**, work through the sections, then use the checklist at the end.
+This file exercises every major feature in one place. Open it with **Reopen Editor With → Visual Editor**, work through the sections, then use the checklist at the end.
 
 > [!TIP]
 > Before you start, copy this file somewhere safe or commit it. Several checks compare the saved file against the original.

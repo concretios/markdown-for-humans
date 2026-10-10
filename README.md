@@ -12,7 +12,7 @@
 
 - **VS Code:** [Marketplace](https://marketplace.visualstudio.com/items?itemName=concretio.markdown-for-humans), or search `concretio.markdown-for-humans` in Extensions.
 - **Cursor, Windsurf, VSCodium and other Open VSX IDEs:** [Open VSX Registry](https://open-vsx.org/extension/concretio/markdown-for-humans), or search the same ID in Extensions.
-- **Open a file:** right-click any `.md` file and choose **Open With... > Markdown Editor for Humans**.
+- **Open a file:** right-click any `.md` file and choose **Open with Markdown Editor for Humans**. In **Open With...** it is listed as **Visual Editor**.
 
 > **📌 100% free. No trials. No limits. No paywalls, ever.**
 
@@ -110,7 +110,7 @@ VS Code 1.131 added an experimental hybrid Markdown editor, aimed at the Agents 
 Only the blocks you edit. Unedited blocks keep their exact source on save. Edited blocks use a standard Markdown form, listed in [Known Issues](./KNOWN_ISSUES.md).
 
 **How do I make it my default Markdown editor?**
-Right-click a `.md` file, choose **Open With...**, then **Configure default editor for '*.md'...** and pick Markdown Editor for Humans.
+Right-click a `.md` file, choose **Open With...**, then **Configure default editor for '*.md'...** and pick **Visual Editor** (Markdown Editor for Humans).
 
 **Dropping an image does nothing.**
 Hold **Shift** while you drop: VS Code requires it for drops into an editor. In Cursor, drags from the workspace explorer are often not detected; use the image insert dialog or drop from Finder.

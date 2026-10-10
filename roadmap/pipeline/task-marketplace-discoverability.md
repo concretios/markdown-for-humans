@@ -60,7 +60,7 @@
 ## 4. UX & Behavior
 
 **Entry points that change label:**
-- Explorer and editor tab right click: **Open With... > Markdown Editor for Humans**
+- Explorer and editor tab right click: **Open With...** lists the editor as **Visual Editor**, with Markdown Editor for Humans as its detail line (see section 8)
 - Command Palette: `Markdown Editor for Humans: Start Feedback` and the other Feedback commands, `Open with Markdown Editor for Humans`
 - Explorer view: `Markdown Editor for Humans: Outline`
 - Settings: section title `Markdown Editor for Humans`
@@ -101,12 +101,12 @@
   - [x] Write `marketplaceListingPolicy.test.ts` (RED: description and keyword tests failed)
   - [x] Update `package.json` (GREEN)
 - [x] **Phase 3: Documentation**: every remaining mention outside the historical record, wiki included
-- [ ] **Testing**
+- [x] **Testing**
   - [x] `npm test`, `npm run lint`, `npm run build:debug`
   - [x] `npm run test:integration` (Extension Development Host)
   - [x] `vsce package` accepts the manifest; packaged tags are the 30 keywords plus the automatic `keybindings`
   - [x] Native render pass in VS Code 1.141.0 (see log)
-  - [ ] Manual: Open With picker, Command Palette and Settings search (need clicks)
+  - [x] Native click pass: editor picker, contributed labels, Settings, editing, save, Feedback, audit (see log). Typing, the Command Palette search and the Explorer right click menu were not exercised: computer use gets click only access to VS Code.
 - [ ] **Post release measurement**: sample ranks daily for 5 days on both registries
 
 **Rank sampling command** (same request the Marketplace search page sends):
@@ -150,6 +150,17 @@ Open VSX: `curl -s 'https://open-vsx.org/api/-/search?query=markdown%20editor&si
 - **Dark theme, all pass:** alerts, tables, code, math, images; Mermaid redrew in dark colors after a live theme switch without reopening the file.
 - **Rename visible natively:** editor switcher reads "Markdown Editor for Humans"; the Explorer shows the Outline view as "Markdown Editor For Humans: Outline" (VS Code capitalizes view titles; the manifest keeps lowercase "for").
 
+### 2026-10-10: Native click pass on the PR head
+
+- **Build:** `376f694`, clean release build, VSIX installed into a fresh isolated profile, VS Code 1.141.0 on macOS, driven with computer use (left clicks only). Same commit: lint clean, Jest 211 suites and 4,382 tests pass, Extension Development Host suite 8 passing on macOS.
+- **Labels, all pass:** editor picker reads `Visual Editor - Markdown Editor for Humans` (the name no longer appears twice). The extension page's Features tab lists every command as `Markdown Editor for Humans: ...` and the view as `Markdown Editor for Humans: Outline`. The toolbar gear opens Settings filtered to the extension under the new section title. The image resize warning reads "Markdown Editor for Humans will reduce the resolution of this image...".
+- **Editing and save, all pass:** ticked a task, bolded a word from the toolbar, added a table row from the toolbar table menu, resized an image 128 to 125 px (backup written to `.md4h/image-backups/`), closed the tab and chose Save. The saved file differs from the original only in those edits; the compact table and the image Markdown are byte identical.
+- **Other features, all pass:** Outline view jumps to a heading; source split opens and closes; Feedback starts, shows the finish dialog with Finish & copy disabled at zero comments, and discards; audit reports a healthy document; the export menu offers PDF and Word and reaches the Word save panel; the full feature tour renders in dark and light themes, with Mermaid redrawn after a live theme switch.
+- **Expected, not regressions:** Feedback refuses `feature-tour.md` with "Canonical block content does not match the saved source snapshot" (the escaped `\*` and `\_` case in `KNOWN_ISSUES.md`). The extension page header still shows the old name, icon and description: VS Code overlays the live Marketplace listing for the same ID and version until the new version is published.
+- **Not exercised:** typing, keyboard shortcuts, the Command Palette search, the Explorer right click menu, drag resize, Feedback comments with Finish & copy, PDF export, and writing the Word file (the tool could not confirm the save panel's target).
+- **Docs corrected after this pass:** `README.md`, `KNOWN_ISSUES.md`, `CHANGELOG.md` and `test/manual/feature-tour.md` told users to pick "Markdown Editor for Humans" in **Open With...**; the entry there is now **Visual Editor**.
+- **Rank baseline, 2026-10-10, before release:** VS Marketplace #76 "markdown editor", #125 "markdown", #2 "wysiwyg", #8 "wysiwyg markdown", outside the top 200 for "markdown preview" and "markdown viewer". Open VSX #25 "markdown editor", #6 "wysiwyg". 11,783 installs, 7 ratings.
+
 ---
 
 ## 8. Decisions & Tradeoffs
@@ -158,6 +169,8 @@ Open VSX: `curl -s 'https://open-vsx.org/api/-/search?query=markdown%20editor&si
 - **Keyword count stays at 30:** tags give eligibility for rare terms (we rank #1 for `image-resizing`, #3 for `notion-like` from tags alone) and count 3x on Open VSX. They rarely lift rank on contested terms, so slots go to alternative terms people search.
 - **Keyword stuffing rejected:** listings with 200 character keyword names rank #47 to #102; long names lose position inside a tier.
 - **Historical docs untouched:** shipped plans and past CHANGELOG entries describe releases under the old name.
+- **Custom editor named `Visual Editor`:** VS Code prints the custom editor name and the extension name side by side in the editor picker and **Open With...**. With both set to the product name the picker read it twice. The custom editor name is a contribution label, not listing metadata (display name, description, tags), so no ranking cost is expected; not measured.
+- **Setting keys kept:** Settings shows each setting as `Markdown For Humans: ...` because VS Code builds that label from the `markdownForHumans.*` key. Renaming the keys would drop every user's saved settings.
 
 **Evidence:** VS Code gallery `extensionquery` captured from the Marketplace search page and replayed for 11 queries (54 to 162 results each); Open VSX source (`ElasticSearchService.java`, `RelevanceService.java`); vsce `src/package.ts` (`TagsProcessor`); vscode-docs `extension-manifest.md` ("limited to 30 keywords"); DataForSEO US search volume.
 
@@ -169,4 +182,6 @@ Open VSX: `curl -s 'https://open-vsx.org/api/-/search?query=markdown%20editor&si
 - Use the `category` field for command titles so a future rename touches one string.
 - Re-record marketplace GIFs that show the old name, if any.
 - Update the GitHub repository description to match.
+- README badges: the two `visual-studio-marketplace` shields.io badges render as "retired badge" on the listing page (same on `main`). Remove or replace them.
+- An edited table saves its delimiter row one or two dashes wider than its columns (valid Markdown, misaligned source). Seen in the native pass; not caused by the rename.
 - Outreach to listicles that ChatGPT cites for "best WYSIWYG markdown editor for VS Code" (we have zero ChatGPT mentions today).

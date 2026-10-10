@@ -94,7 +94,7 @@ Diagrams that fail conversion in the webview may not appear correctly in PDF/Wor
 
 | Symptom | Workaround |
 |---------|------------|
-| “Open with Markdown Editor for Humans” fails | Right-click the editor tab → **Reopen Editor With...** → **Markdown Editor for Humans** |
+| “Open with Markdown Editor for Humans” fails | Right-click the editor tab → **Reopen Editor With...** → **Visual Editor** (Markdown Editor for Humans) |
 | Theme colors look wrong | Reload Window; check VS Code theme settings |
 
 ---
