@@ -61,7 +61,7 @@
 - **Split view activation:**
   - Click diagram → shows split view (code left, render right)
   - OR: New toolbar button "Split Diagram View" when cursor is in Mermaid block
-  - OR: Command palette: "Markdown for Humans: Toggle Diagram Split View"
+  - OR: Command palette: "Markdown Editor for Humans: Toggle Diagram Split View"
   - OR: Keyboard shortcut: `Ctrl+Shift+D` (diagram split)
 
 **User flows:**

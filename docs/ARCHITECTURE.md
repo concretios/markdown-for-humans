@@ -1,4 +1,4 @@
-# Markdown for Humans Technical Architecture
+# Markdown Editor for Humans Technical Architecture
 
 This document describes the implementation that exists in the repository. Code and tests remain the source of truth.
 

@@ -1,4 +1,4 @@
-# Manual QA + Usage Guide — Markdown for Humans (VS Code)
+# Manual QA + Usage Guide: Markdown Editor for Humans (VS Code)
 
 This document is for **manual QA engineers** and also doubles as a **user-facing usage guide** for the extension.
 
@@ -33,15 +33,15 @@ Why this matters for QA:
 
 Pick one:
 
-- Marketplace: install “Markdown for Humans”.
+- Marketplace: install “Markdown Editor for Humans”.
 - VSIX: in VS Code, run `Extensions: Install from VSIX...` and choose the `.vsix`.
 
 ### Open a file in the editor
 
 Pick one:
 
-- Right click a `.md` file → **Open with Markdown for Humans**
-- Command Palette → **Open with Markdown for Humans**
+- Right click a `.md` file → **Open with Markdown Editor for Humans**
+- Command Palette → **Open with Markdown Editor for Humans**
 - If you want it to be default: click the file tab’s “Open With…” UI and choose this editor.
 
 ---
@@ -55,7 +55,7 @@ Pick one:
 
 ### VS Code integration surfaces
 
-- **Explorer View:** “Markdown for Humans: Outline” (heading tree)
+- **Explorer View:** “Markdown Editor for Humans: Outline” (heading tree)
 - **Status bar:** word count (click shows detailed stats)
 - **Command Palette:** outline commands (reveal/filter/clear)
 
@@ -63,7 +63,7 @@ Pick one:
 
 ## 4) Quick smoke test (15–20 minutes)
 
-1. Open `docs/DEVELOPMENT.md` (long doc) in Markdown for Humans and scroll for ~2 minutes.
+1. Open `docs/DEVELOPMENT.md` (long doc) in Markdown Editor for Humans and scroll for ~2 minutes.
 2. Type a sentence, apply **Bold** and **Italic**, then `Cmd/Ctrl+S` to save.
 3. Insert a heading (H2), confirm the **Outline view** updates and clicking it navigates.
 4. `Cmd/Ctrl+F` search for a word, jump next/previous, press `Esc` to close search.
@@ -213,7 +213,7 @@ Pick one:
 
 **Surfaces**
 
-- Explorer view: “Markdown for Humans: Outline”
+- Explorer view: “Markdown Editor for Humans: Outline”
 - Toolbar button: “Outline” (overlay)
 
 **What to do**
@@ -409,7 +409,7 @@ This is **intentional, non-configurable behavior** — the editor's paste handli
 Open settings via:
 
 - Toolbar → “Export settings” (gear) or
-- VS Code Settings search for “Markdown for Humans”
+- VS Code Settings search for “Markdown Editor for Humans”
 
 **Settings to verify**
 

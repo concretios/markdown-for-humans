@@ -45,7 +45,7 @@ async function replaceDocumentText(document, content) {
   assert.equal(await document.save(), true);
 }
 
-suite('Markdown for Humans Extension Development Host', () => {
+suite('Markdown Editor for Humans Extension Development Host', () => {
   let extension;
 
   suiteSetup(async function () {

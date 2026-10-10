@@ -1,8 +1,8 @@
-# Markdown for Humans: WYSIWYG Editor
+# Markdown Editor for Humans
 
 **Edit Markdown like a document. Commit it like code.** A rich, readable Markdown editor inside VS Code, Cursor and Windsurf that keeps your file as plain Markdown.
 
-![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/concretio.markdown-for-humans?label=VS%20Code%20Marketplace&logo=visual-studio-code) ![Installs](https://img.shields.io/visual-studio-marketplace/i/concretio.markdown-for-humans?label=installs) ![Open VSX](https://img.shields.io/open-vsx/v/concretio/markdown-for-humans?label=Open%20VSX&logo=eclipse) ![Open VSX downloads](https://img.shields.io/open-vsx/dt/concretio/markdown-for-humans?label=downloads) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
+![Open VSX](https://img.shields.io/open-vsx/v/concretio/markdown-for-humans?label=Open%20VSX&logo=eclipse) ![Open VSX downloads](https://img.shields.io/open-vsx/dt/concretio/markdown-for-humans?label=downloads) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
 ![Open a Markdown file and write in the rendered view](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/hero.gif)
 
@@ -12,11 +12,11 @@
 
 - **VS Code:** [Marketplace](https://marketplace.visualstudio.com/items?itemName=concretio.markdown-for-humans), or search `concretio.markdown-for-humans` in Extensions.
 - **Cursor, Windsurf, VSCodium and other Open VSX IDEs:** [Open VSX Registry](https://open-vsx.org/extension/concretio/markdown-for-humans), or search the same ID in Extensions.
-- **Open a file:** right-click any `.md` file and choose **Open With... > Markdown for Humans**.
+- **Open a file:** right-click any `.md` file and choose **Open with Markdown Editor for Humans**. In **Open With...** it is listed as **Visual Editor**.
 
 > **📌 100% free. No trials. No limits. No paywalls, ever.**
 
-## Why Markdown for Humans
+## Why Markdown Editor for Humans
 
 - **Your file stays your file.** Blocks you do not edit keep their exact source on save, so Git diffs show only what you changed.
 - **Tables and images without syntax.** Edit tables visually; resize and rename images from the editor.
@@ -104,13 +104,13 @@ Local SVG images render as vectors, and importing one keeps the original file un
 ## FAQ
 
 **VS Code now has a built-in Markdown editor. Why use this?**
-VS Code 1.131 added an experimental hybrid Markdown editor, aimed at the Agents window. Markdown for Humans works in every VS Code window and in Open VSX IDEs such as Cursor and Windsurf. It adds visual table editing, image resize and rename, Mermaid editing, PDF and Word export, and a sealed feedback handoff for any agent.
+VS Code 1.131 added an experimental hybrid Markdown editor, aimed at the Agents window. Markdown Editor for Humans works in every VS Code window and in Open VSX IDEs such as Cursor and Windsurf. It adds visual table editing, image resize and rename, Mermaid editing, PDF and Word export, and a sealed feedback handoff for any agent.
 
 **Will it change my file?**
 Only the blocks you edit. Unedited blocks keep their exact source on save. Edited blocks use a standard Markdown form, listed in [Known Issues](./KNOWN_ISSUES.md).
 
 **How do I make it my default Markdown editor?**
-Right-click a `.md` file, choose **Open With...**, then **Configure default editor for '*.md'...** and pick Markdown for Humans.
+Right-click a `.md` file, choose **Open With...**, then **Configure default editor for '*.md'...** and pick **Visual Editor** (Markdown Editor for Humans).
 
 **Dropping an image does nothing.**
 Hold **Shift** while you drop: VS Code requires it for drops into an editor. In Cursor, drags from the workspace explorer are often not detected; use the image insert dialog or drop from Finder.
@@ -122,7 +122,7 @@ Click the **Source** button in the toolbar to open the source beside the rendere
 
 ## ⚙️ Configuration
 
-Open Settings (`Ctrl+,` / `Cmd+,`) and search for "Markdown for Humans".
+Open Settings (`Ctrl+,` / `Cmd+,`) and search for "Markdown Editor for Humans".
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -167,14 +167,14 @@ Requires VS Code 1.98.0 or newer in a trusted, disk-backed workspace. Compatible
 
 Existing markdown editors force writers to choose between split-pane previews that waste screen space, plain text editing that requires memorizing syntax, standalone apps that don't integrate with your workflow, or command-heavy interfaces that bury actions in overloaded palettes.
 
-We built Markdown for Humans to solve the **real pain points**, tables and images, that make markdown editing frustrating, while keeping the underlying file as plain markdown so Git diffs, tooling, and other editors still work.
+We built Markdown Editor for Humans to solve the **real pain points**, tables and images, that make markdown editing frustrating, while keeping the underlying file as plain markdown so Git diffs, tooling, and other editors still work.
 
 ---
 
 ## Contributing
 
 > **⚡ Built on open source, for the community.**  
-> Markdown for Humans exists because open source software empowers everyone. We believe that the best tools should be built, improved, and maintained by the whole community, not limited by a few. By embracing collaboration and transparency, we keep innovation moving forward for everyone.
+> Markdown Editor for Humans exists because open source software empowers everyone. We believe that the best tools should be built, improved, and maintained by the whole community, not limited by a few. By embracing collaboration and transparency, we keep innovation moving forward for everyone.
 
 We welcome contributions! See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 

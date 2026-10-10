@@ -1,6 +1,6 @@
 # Build & Release Guide
 
-This document describes the stable, verified build process for the Markdown for Humans VS Code extension.
+This document describes the stable, verified build process for the Markdown Editor for Humans VS Code extension.
 
 ## Prerequisites
 

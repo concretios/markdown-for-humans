@@ -6,7 +6,7 @@ Run `npm run build:release`, then:
 node scripts/highlighting-fixture/prepare.mjs --source /absolute/path/to/read-only.md
 ```
 
-`--source` and `--serve` are optional. The runner creates a new temporary directory, copies the source and referenced sibling images, and verifies the source hash without writing it. It generates language, 1,000-block and 10,000-line single-block documents. The printed JSON contains a real Extension Development Host launch argument list and an optional local browser URL. Open a copied Markdown file using **Open with Markdown for Humans**. Only operate on the disposable copies.
+`--source` and `--serve` are optional. The runner creates a new temporary directory, copies the source and referenced sibling images, and verifies the source hash without writing it. It generates language, 1,000-block and 10,000-line single-block documents. The printed JSON contains a real Extension Development Host launch argument list and an optional local browser URL. Open a copied Markdown file using **Open with Markdown Editor for Humans**. Only operate on the disposable copies.
 
 The native fixture retains the release extension backend, packaged worker and CSS. Build overrides wrap the production client for measurement and append a QA panel to the generated editor bundle. The default fixture uses the production highlighting implementation with no production diagnostic global. The browser variant uses a simulated host bridge and cannot prove host sync, CSP or native theme behavior. Test those in the real Extension Development Host.
 

@@ -41,45 +41,53 @@ jest.mock('../../activeWebview', () => ({
 type RegisteredCommand = () => void;
 
 const FEEDBACK_COMMANDS = [
-  ['markdownForHumans.feedback.start', 'start', 'Markdown for Humans: Start Feedback'],
+  ['markdownForHumans.feedback.start', 'start', 'Markdown Editor for Humans: Start Feedback'],
   [
     'markdownForHumans.feedback.commentSelection',
     'commentSelection',
-    'Markdown for Humans: Add Feedback to Selection',
+    'Markdown Editor for Humans: Add Feedback to Selection',
   ],
   [
     'markdownForHumans.feedback.chooseScope',
     'chooseScope',
-    'Markdown for Humans: Choose Feedback Scope',
+    'Markdown Editor for Humans: Choose Feedback Scope',
   ],
   [
     'markdownForHumans.feedback.captureArea',
     'captureArea',
-    'Markdown for Humans: Capture Feedback Area',
+    'Markdown Editor for Humans: Capture Feedback Area',
   ],
   [
     'markdownForHumans.feedback.captureSelectedBlocks',
     'captureSelectedBlocks',
-    'Markdown for Humans: Capture Selected Blocks',
+    'Markdown Editor for Humans: Capture Selected Blocks',
   ],
   [
     'markdownForHumans.feedback.toggleComments',
     'toggleComments',
-    'Markdown for Humans: Toggle Feedback Comments',
+    'Markdown Editor for Humans: Toggle Feedback Comments',
   ],
-  ['markdownForHumans.feedback.next', 'nextFeedback', 'Markdown for Humans: Next Feedback'],
+  ['markdownForHumans.feedback.next', 'nextFeedback', 'Markdown Editor for Humans: Next Feedback'],
   [
     'markdownForHumans.feedback.previous',
     'previousFeedback',
-    'Markdown for Humans: Previous Feedback',
+    'Markdown Editor for Humans: Previous Feedback',
   ],
   [
     'markdownForHumans.feedback.finish',
     'finish',
-    'Markdown for Humans: Finish Feedback and Copy Prompt',
+    'Markdown Editor for Humans: Finish Feedback and Copy Prompt',
   ],
-  ['markdownForHumans.feedback.reveal', 'reveal', 'Markdown for Humans: Reveal Feedback File'],
-  ['markdownForHumans.feedback.discard', 'discard', 'Markdown for Humans: Discard Feedback Draft'],
+  [
+    'markdownForHumans.feedback.reveal',
+    'reveal',
+    'Markdown Editor for Humans: Reveal Feedback File',
+  ],
+  [
+    'markdownForHumans.feedback.discard',
+    'discard',
+    'Markdown Editor for Humans: Discard Feedback Draft',
+  ],
 ] as const;
 
 describe('Feedback public commands', () => {

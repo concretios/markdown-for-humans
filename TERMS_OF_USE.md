@@ -4,11 +4,11 @@
 
 ## Acceptance of Terms
 
-Welcome to Markdown for Humans. By accessing, downloading, installing, or using the Markdown for Humans extension ("Extension") for Visual Studio Code, you agree to be bound by these Terms of Use ("Terms"). If you do not agree to these Terms, do not use the Extension.
+Welcome to Markdown Editor for Humans. By accessing, downloading, installing, or using the Markdown Editor for Humans extension ("Extension") for Visual Studio Code, you agree to be bound by these Terms of Use ("Terms"). If you do not agree to these Terms, do not use the Extension.
 
 ## Description of Service
 
-Markdown for Humans is a free, open-source Visual Studio Code extension that provides WYSIWYG (What You See Is What You Get) markdown editing capabilities. The Extension is provided "as is" without any warranties or guarantees.
+Markdown Editor for Humans is a free, open-source Visual Studio Code extension that provides WYSIWYG (What You See Is What You Get) markdown editing capabilities. The Extension is provided "as is" without any warranties or guarantees.
 
 ## Use License
 

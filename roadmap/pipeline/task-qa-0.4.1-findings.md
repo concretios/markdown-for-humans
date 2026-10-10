@@ -48,7 +48,7 @@
 Tail paragraph.
 ````
 
-1. Open in Markdown for Humans.
+1. Open in Markdown Editor for Humans.
 2. Click the heading, type `X`, save.
 
 **Expected:** only the heading line changes (0.4.1 promise: unedited blocks keep exact source).
@@ -262,7 +262,7 @@ Computer-use control of VS Code was declined at the access prompt. Even if it ha
 
 **A person should run this before releasing (about 10 minutes, on macOS and Windows):**
 
-1. Open a Markdown file in Markdown for Humans. Select text, press Cmd/Ctrl+C, click elsewhere, press Cmd/Ctrl+V. The text pastes with its formatting.
+1. Open a Markdown file in Markdown Editor for Humans. Select text, press Cmd/Ctrl+C, click elsewhere, press Cmd/Ctrl+V. The text pastes with its formatting.
 2. Select part of a paragraph with bold and italic words and use the toolbar **Copy selection as Markdown**. Paste into a plain text editor and check it is one line.
 3. Drag an image from Finder or Explorer into the editor. It is saved next to the document and shown.
 4. Right-click a table cell you have not clicked yet. The table menu opens on the first click. Right-click inside a multi-cell selection and check the selection stays.

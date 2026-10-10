@@ -1,4 +1,4 @@
-# Contributing to Markdown for Humans
+# Contributing to Markdown Editor for Humans
 
 Welcome! This guide will help you set up the project, understand its architecture, and start contributing.
 
@@ -84,11 +84,11 @@ npm run watch:debug
 2. Press **F5** (or Run → Start Debugging)
 3. A new VS Code window opens with the extension loaded
 4. Open any `.md` file
-5. Right-click → **"Open with Markdown for Humans"**
+5. Right-click → **"Open with Markdown Editor for Humans"**
 
 ### 4. View Logs and Debug
 
-- **Extension logs**: View → Output → select "Markdown for Humans"
+- **Extension errors**: Help → Toggle Developer Tools → Console
 - **Webview DevTools**: In the Extension Development Host, run command `Developer: Open Webview Developer Tools`
 - **Breakpoints**: Set breakpoints in `src/` files; they work in both extension and webview code
 
