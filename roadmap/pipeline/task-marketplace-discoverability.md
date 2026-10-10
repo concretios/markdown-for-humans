@@ -182,6 +182,5 @@ Open VSX: `curl -s 'https://open-vsx.org/api/-/search?query=markdown%20editor&si
 - Use the `category` field for command titles so a future rename touches one string.
 - Re-record marketplace GIFs that show the old name, if any.
 - Update the GitHub repository description to match.
-- README badges: the two `visual-studio-marketplace` shields.io badges render as "retired badge" on the listing page (same on `main`). Remove or replace them.
 - An edited table saves its delimiter row one or two dashes wider than its columns (valid Markdown, misaligned source). Seen in the native pass; not caused by the rename.
 - Outreach to listicles that ChatGPT cites for "best WYSIWYG markdown editor for VS Code" (we have zero ChatGPT mentions today).

@@ -2,7 +2,7 @@
 
 **Edit Markdown like a document. Commit it like code.** A rich, readable Markdown editor inside VS Code, Cursor and Windsurf that keeps your file as plain Markdown.
 
-![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/concretio.markdown-for-humans?label=VS%20Code%20Marketplace&logo=visual-studio-code) ![Installs](https://img.shields.io/visual-studio-marketplace/i/concretio.markdown-for-humans?label=installs) ![Open VSX](https://img.shields.io/open-vsx/v/concretio/markdown-for-humans?label=Open%20VSX&logo=eclipse) ![Open VSX downloads](https://img.shields.io/open-vsx/dt/concretio/markdown-for-humans?label=downloads) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
+![Open VSX](https://img.shields.io/open-vsx/v/concretio/markdown-for-humans?label=Open%20VSX&logo=eclipse) ![Open VSX downloads](https://img.shields.io/open-vsx/dt/concretio/markdown-for-humans?label=downloads) ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)
 
 ![Open a Markdown file and write in the rendered view](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/hero.gif)
 
