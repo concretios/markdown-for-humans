@@ -2,7 +2,7 @@
   "name": "markdown-for-humans",
   "displayName": "Markdown Editor for Humans",
   "description": "WYSIWYG Markdown editor and viewer with visual tables, Mermaid diagrams and image resizing. Saves plain Markdown.",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "publisher": "concretio",
   "author": {
     "name": "Abhinav",
