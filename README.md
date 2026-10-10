@@ -85,7 +85,7 @@ The document is locked while you review, so your comments always point at the so
 - **Mermaid diagrams:** edit the source beside the rendered view and the diagram updates as you type; 15 templates; double-click a diagram to edit it in place
 - **Math:** LaTeX equations rendered with KaTeX
 - **GitHub alerts:** Note, Tip, Important, Warning and Caution callouts
-- **Code blocks:** syntax highlighting for 12 languages, with a copy button
+- **Code blocks:** syntax highlighting for 36 languages, with a copy button
 
 ---
 
