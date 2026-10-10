@@ -178,10 +178,6 @@ New opt-in `markdownForHumans.autoSave.enabled` setting saves the document a sho
 
 Cmd/Ctrl+B/I/U were previously hardcoded to stay inside the editor, which could permanently shadow a VS Code keybinding bound to the same chord. New `markdownForHumans.formattingShortcuts.enabled` setting (default on) lets you opt out, with a matching command and keybinding (Cmd/Ctrl+Alt+B) to toggle it without opening settings.
 
-#### Editor Theme Override
-
-New `markdownForHumans.display.editorTheme` setting (Follow VS Code theme / Always light / Always dark) plus a toolbar toggle next to the gear icon, so the editor's color mode no longer has to follow your OS/VS Code theme.
-
 #### Toolbar & Paste Improvements
 
 - Copy button added to code blocks
