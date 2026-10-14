@@ -146,29 +146,25 @@ code --install-extension markdown-for-humans-0.3.0.vsix
 
 ### Publish to VS Code Marketplace
 
-**Recommended approach (auto-bumps version):**
+**Recommended approach (publish the exact vsix you tested):**
+
+Full steps and failure checks: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). Publishing uses Microsoft Entra, not a PAT.
 
 ```bash
-# Login to marketplace (one-time per session)
-vsce login concretio
+# Sign in with Microsoft Entra (one-time per session; the account must be a publisher member)
+az login --tenant concret.io --allow-no-subscriptions
 
-# Choose version type and publish
-vsce publish patch  # Bug fixes: 0.1.0 → 0.1.1
-vsce publish minor  # New features: 0.1.1 → 0.2.0
-vsce publish major  # Breaking changes: 0.2.0 → 1.0.0
+# Bump the version on a release branch first (npm version <x.y.z> --no-git-tag-version), merge, then from main:
+npx vsce package
+npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
 ```
 
-**Manual version control:**
+**Do not use `vsce publish patch|minor|major`.** It bumps the version at publish time, so the published build is not the vsix you tested.
+
+**npm script (rebuilds, so it is not the tested vsix):**
 
 ```bash
-# Update version in package.json manually, then
-vsce publish
-```
-
-**Using npm script:**
-
-```bash
-npm run publish:release  # Runs: vsce publish (current version)
+npm run publish:release  # Runs: vsce publish --azure-credential (current version)
 ```
 
 ### Publish to Open VSX Registry (For Cursor, Devin Desktop, VSCodium & More)
@@ -703,11 +699,11 @@ Test these features manually:
 ### 4. Publish
 
 ```bash
-# Login to marketplace
-vsce login concretio
+# Sign in with Microsoft Entra (publisher member account)
+az login --tenant concret.io --allow-no-subscriptions
 
-# Publish with automatic version bump (recommended)
-vsce publish patch  # or minor/major
+# Publish the vsix you just tested (see RELEASE_CHECKLIST.md)
+npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
 
 # AFTER publishing, create git tag
 git tag v$(node -p "require('./package.json').version")
@@ -756,8 +752,9 @@ npm run test:coverage      # With coverage
 npm run package:release    # Release package (via vscode:prepublish hook)
 
 # Publishing
-vsce publish patch         # Publish to VS Code Marketplace (auto-bumps version)
-npm run publish:release    # Or use: npm run publish:release (runs vsce publish)
+az login --tenant concret.io --allow-no-subscriptions  # Entra sign-in, once per session
+npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix  # Publish to VS Code Marketplace
+npm run publish:release    # Alternative: rebuilds and publishes current version (runs vsce publish --azure-credential)
 npm run publish:ovsx:release  # Publish to Open VSX (for Cursor & Devin Desktop)
                            # First time: ovsx create-namespace concretio -p <token>
 ```

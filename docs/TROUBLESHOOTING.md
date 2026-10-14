@@ -204,8 +204,8 @@ npm version patch
 npm run package:release
 code --install-extension markdown-for-humans-0.1.1.vsix
 
-# Test thoroughly, then publish
-vsce publish patch  # Auto-bumps version and publishes
+# Test thoroughly, then publish that same vsix (see RELEASE_CHECKLIST.md; sign in first with az login)
+npx vsce publish --azure-credential --packagePath markdown-for-humans-0.1.1.vsix
 ```
 
 ### Step 3: Post-mortem

@@ -91,6 +91,8 @@
 | [localization.md](vibe-coding-rules/localization.md) | Any UI text: labels, tooltips, messages, manifest strings | For any change that adds or edits UI text |
 | [performance.md](vibe-coding-rules/performance.md) | Bundle size, startup, memory optimization | Reference if concerns arise |
 
+**Releasing:** follow [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). VS Code Marketplace publishing uses Microsoft Entra (`az login`, then `vsce publish --azure-credential`), never a PAT. Do not publish without the user's explicit go.
+
 **Usage:** Proactively load guides when starting relevant work. The guides contain detailed patterns and examples.
 
 ---

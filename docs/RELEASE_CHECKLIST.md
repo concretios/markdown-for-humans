@@ -28,7 +28,8 @@ npm version <x.y.z> --no-git-tag-version
 
 # 5. From merged main, build ONE vsix and publish that same file everywhere
 npx vsce package
-npx vsce publish --packagePath markdown-for-humans-<x.y.z>.vsix   # VS Code Marketplace
+az login --tenant concret.io --allow-no-subscriptions             # Entra sign-in, once per session (needs publisher membership)
+npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix   # VS Code Marketplace
 npx ovsx publish markdown-for-humans-<x.y.z>.vsix                 # Open VSX (needs OVSX_PAT or -p <token>)
 # NEVER use `vsce publish patch|minor|major`: it bumps the version at publish time
 
@@ -91,18 +92,35 @@ Set the version with `npm version <x.y.z> --no-git-tag-version`, never at publis
 
 ## Publication
 
-### Marketplace Account
-- [ ] Publisher account verified: https://marketplace.visualstudio.com/manage
-- [ ] 2FA enabled on publishing account
-- [ ] Personal Access Token created (scope: "Marketplace (Manage)")
+### Marketplace Account (Microsoft Entra, no PAT)
+
+Marketplace publishing uses Microsoft Entra sign-in. Do NOT create, paste or use an Azure DevOps PAT for `vsce`.
+`vsce publish --azure-credential` borrows the identity that `az login` left on this machine.
+
+- [ ] Publisher `concretio` lists your Entra user as Owner or Contributor: https://marketplace.visualstudio.com/manage/publishers/concretio (Members tab)
+- [ ] Azure CLI installed (`az --version`)
+- [ ] Signed in as that Entra user, not the personal md-human@concret.io account (personal Microsoft accounts cannot use `az login`):
+  ```bash
+  az login --tenant concret.io --allow-no-subscriptions
+  az account show --query user.name -o tsv     # must print your Entra UPN
+  az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query expiresOn -o tsv   # prints an expiry, never the token
+  ```
+- If the CLI crashes in the tenant picker (seen on Azure CLI 2.91.0): `az config set core.login_experience_v2=off`
 
 ### Publish to VS Code Marketplace
 
 **Recommended: publish the exact vsix you tested**
 - [ ] Merge the release PR, then from main: `npx vsce package`
-- [ ] Publish: `npx vsce publish --packagePath markdown-for-humans-<x.y.z>.vsix`
+- [ ] Confirm Entra sign-in (see Marketplace Account above)
+- [ ] Publish: `npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix`
 - [ ] Do not use `vsce publish patch|minor|major`; it changes the version at publish time
 - [ ] The Marketplace takes about 15 minutes to validate before the new version shows
+
+**If publish fails with 401 or 403, check in this order. Never fall back to a PAT silently.**
+1. Wrong `az` account or tenant: `az account show` must show your Entra UPN and tenant `9620b1de-bb79-421a-9a24-2d5e7a184d10`
+2. Your Entra user is not on the publisher Members page
+3. A personal Microsoft account was used (it cannot mint Entra tokens)
+4. Token expired: run `az login --tenant concret.io --allow-no-subscriptions` again
 
 **Alternative: Web upload**
 - [ ] Upload the `.vsix` at https://marketplace.visualstudio.com/manage
@@ -163,7 +181,7 @@ npm run lint && npm test && npm run build:release
 
 # After merge, from main
 npx vsce package
-npx vsce publish --packagePath markdown-for-humans-<x.y.z>.vsix
+npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
 npx ovsx publish markdown-for-humans-<x.y.z>.vsix
 
 # After both stores show the version

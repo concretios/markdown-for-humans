@@ -178,8 +178,8 @@ We follow [Semantic Versioning](https://semver.org/):
 ```bash
 npm run build:release
 npm run package:release
-# Install the .vsix locally, then publish when ready:
-vsce publish patch   # or minor / major
+# Install the .vsix locally, then publish that same file (see RELEASE_CHECKLIST.md; sign in first with az login):
+npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
 ```
 
 **Post-release:** GitHub release notes, watch issues.

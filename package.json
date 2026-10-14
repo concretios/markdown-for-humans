@@ -483,7 +483,7 @@
     "precommit": "npm run lint && npm run test",
     "validate": "npm run lint && npm run test && npm run build:debug",
     "package:release": "vsce package",
-    "publish:release": "vsce publish",
+    "publish:release": "vsce publish --azure-credential",
     "publish:ovsx:release": "npm run build:release && ovsx publish",
     "install-hooks": "bash ./scripts/install-git-hooks.sh"
   },
