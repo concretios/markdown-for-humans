@@ -186,13 +186,15 @@ function escapeMetadataText(value: string): string {
 
 /**
  * Get image metadata from extension
+ * @param refresh - Ask the extension even when cached (the file changed on disk)
  */
 export function getImageMetadata(
   imagePath: string,
-  vscodeApi: VsCodeApi
+  vscodeApi: VsCodeApi,
+  refresh = false
 ): Promise<ImageMetadata | null> {
   // Check cache first
-  if (metadataCache.has(imagePath)) {
+  if (!refresh && metadataCache.has(imagePath)) {
     return Promise.resolve(metadataCache.get(imagePath)!);
   }
 
@@ -390,6 +392,24 @@ export function showImageMetadataFooter(
     const metadata = metadataCache.get(imagePath)!;
     const newFooter = createMetadataFooter(img, metadata);
     footer.replaceWith(newFooter);
+  }
+}
+
+/**
+ * Re-fetch metadata after the image file changed (e.g. resize) and redraw the
+ * footer if it is showing. Dimensions already cached from the resize are kept.
+ */
+export async function refreshImageMetadata(
+  img: HTMLImageElement,
+  vscodeApi: VsCodeApi
+): Promise<void> {
+  const imagePath = img.getAttribute('data-markdown-src') || img.getAttribute('src') || '';
+  const metadata = await getImageMetadata(imagePath, vscodeApi, true);
+  const footer = img
+    .closest('.image-wrapper')
+    ?.querySelector<HTMLElement>('.image-metadata-footer');
+  if (metadata && footer && footer.style.display !== 'none') {
+    footer.replaceWith(createMetadataFooter(img, metadata));
   }
 }
 

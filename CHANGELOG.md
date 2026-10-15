@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Image details after a resize.** The details shown when you hover an image now update as soon as a resize finishes: new width and height, new file size and modified date. Before, the box kept the old values while the pointer stayed on the image, and the file size and date stayed stale even after hovering again.
+
 ---
 
 ## [0.4.5] - 2026-10-14
