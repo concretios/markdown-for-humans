@@ -148,6 +148,7 @@ import {
   clearImageMetadataCache,
   updateImageMetadataDimensions,
   getCachedImageMetadata,
+  refreshImageMetadata,
 } from './features/imageMetadata';
 // Import rename dialog to register global function
 import './features/imageRenameDialog';
@@ -1824,6 +1825,10 @@ window.addEventListener('message', async (event: MessageEvent) => {
                 // Already has timestamp, replace it
                 imgElement.src = currentSrc.replace(/[?&]t=\d+/, `?t=${timestamp}`);
               }
+
+              // The file changed on disk: fetch its new size and date, and redraw a
+              // footer that is already showing (the pointer may still be on the image)
+              void refreshImageMetadata(imgElement, vscode);
               break;
             }
           }
