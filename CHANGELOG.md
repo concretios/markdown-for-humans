@@ -10,7 +10,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
-- Links to headings with non-English letters or punctuation now jump to the heading. `[Über uns](#über-uns)` and `[Setup](#setup--config)` did nothing on Cmd/Ctrl+click and were reported as broken by **Audit**, because the editor used a different anchor than GitHub does. Percent-encoded links and links in a different case also work, and links the editor wrote in its older form (`#ber-uns`) keep working. The link dialog now writes the same anchor GitHub uses.
+- Links to headings with non-English letters or punctuation now jump to the heading. `[Über uns](#über-uns)` and `[Setup](#setup--config)` did nothing on Cmd/Ctrl+click and **Document Audit** reported them as broken, because the editor worked out a different anchor from GitHub's. Percent-encoded links and links in a different case also work.
+- The link dialog writes the anchor GitHub generates, and no longer offers a heading with no letters or digits, because that heading has no anchor.
+- Links in the older form (`#ber-uns`) keep working. The exception is when another heading now has that exact anchor: the link then goes to that heading, as it does on GitHub.
 
 ---
 

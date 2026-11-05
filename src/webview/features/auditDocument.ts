@@ -245,7 +245,7 @@ export async function runAudit(editor: Editor): Promise<AuditIssue[]> {
   const anchors = buildHeadingAnchors(headingTexts);
   headingLinks.forEach(link => {
     if (resolveHeadingAnchor(anchors, link.slug) === undefined) {
-      const suggestions = findBestMatches(link.slug, Array.from(existingSlugs));
+      const suggestions = findBestMatches(link.slug, Array.from(existingSlugs).filter(Boolean));
       issues.push({
         type: 'heading',
         message: l10n.t('Heading anchor not found: #{0}', link.slug),

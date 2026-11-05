@@ -604,11 +604,14 @@ function handleHeadingExtraction(editor: Editor, query: string, urlInput: HTMLIn
   try {
     const outline = buildOutlineFromEditor(editor);
     const existingSlugs = new Set<string>();
-    const headingResults: HeadingResult[] = outline.map(entry => ({
-      text: entry.text,
-      level: entry.level,
-      slug: generateHeadingSlug(entry.text, existingSlugs),
-    }));
+    const headingResults: HeadingResult[] = outline
+      .map(entry => ({
+        text: entry.text,
+        level: entry.level,
+        slug: generateHeadingSlug(entry.text, existingSlugs),
+      }))
+      // A heading with no letters or digits has no anchor, so a link to it could not work.
+      .filter(heading => heading.slug);
 
     const filtered = query.trim()
       ? headingResults.filter(

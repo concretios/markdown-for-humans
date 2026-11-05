@@ -160,6 +160,33 @@ describe('Audit Document Feature', () => {
     expect(results[0].suggestions).toEqual(['setup--config']);
   });
 
+  it.each([
+    ['# 日本語　見出し', '#日本語見出し'],
+    ['# ΟΔΟΣ', '#οδοσ'],
+    ['# Area in m²', '#area-in-m'],
+    ['# My Project ![CI](b.svg)', '#my-project-'],
+  ])('should not report the GitHub anchor of %s', async (heading, anchor) => {
+    editor.commands.setContent(`${heading}\n\n[link](${anchor})`, { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results.filter(issue => issue.type === 'heading')).toHaveLength(0);
+  });
+
+  it('should still accept a bare # written for a heading with no ASCII letters', async () => {
+    editor.commands.setContent('# 日本語\n\n[link](#)', { contentType: 'markdown' });
+
+    expect(await runAudit(editor)).toHaveLength(0);
+  });
+
+  it('should not offer a heading with no anchor as a suggestion', async () => {
+    editor.commands.setContent('# 🚀\n\n[link](#ab)', { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].suggestions).toBeUndefined();
+  });
+
   it('should not report issues for valid heading anchor', async () => {
     editor.commands.setContent('# Existing Heading\n\n[link](#existing-heading)', {
       contentType: 'markdown',

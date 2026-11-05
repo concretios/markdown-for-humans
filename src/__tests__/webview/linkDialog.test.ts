@@ -97,6 +97,77 @@ const createMockEditor = (overrides: Record<string, unknown> = {}) => {
 };
 
 describe('linkDialog', () => {
+  describe('heading list', () => {
+    const openHeadingList = (headingTexts: string[]) => {
+      const descendants = (visit: (node: unknown, pos: number) => void) => {
+        headingTexts.forEach((textContent, pos) => {
+          visit({ type: { name: 'heading' }, attrs: { level: 1 }, textContent, nodeSize: 1 }, pos);
+        });
+      };
+      const create = jest.fn(attrs => ({ attrs }));
+      const tr = {
+        removeMark: jest.fn(),
+        insertText: jest.fn(),
+        addMark: jest.fn(),
+        setSelection: jest.fn(),
+      };
+      const chain: { focus: jest.Mock; run: jest.Mock } = {
+        focus: jest.fn(() => chain),
+        run: jest.fn(),
+      };
+      const editor = createMockEditor({
+        state: {
+          selection: { from: 0, to: 0, empty: true, $from: {} as unknown },
+          schema: { marks: { link: { create } } },
+          tr,
+          doc: {
+            descendants,
+            content: { size: headingTexts.length },
+            textBetween: jest.fn(() => ''),
+            resolve: () => ({ depth: 0, parent: { textContent: 'go' }, start: () => 0 }),
+          },
+        } as unknown,
+        chain: jest.fn(() => chain),
+      });
+      mockGetMarkRange.mockReturnValue(null);
+      showLinkDialog(editor);
+
+      const radio = document.querySelector('#link-mode-headings') as HTMLInputElement;
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change'));
+      (document.querySelector('#link-url-input') as HTMLInputElement).dispatchEvent(
+        new Event('focus')
+      );
+
+      return {
+        create,
+        items: () =>
+          Array.from(
+            document.querySelectorAll<HTMLElement>('.link-dialog-autocomplete-item-heading')
+          ),
+      };
+    };
+
+    it('does not offer a heading that has no anchor', () => {
+      const { items } = openHeadingList(['🚀', 'Über uns', '🚀']);
+
+      expect(items().map(item => item.textContent?.split(':')[0].trim())).toEqual([
+        'Über uns',
+        '🚀',
+      ]);
+    });
+
+    it('writes the GitHub anchor of the heading picked', () => {
+      const { items, create } = openHeadingList(['Über uns']);
+
+      items()[0].click();
+      (document.querySelector('#link-text-input') as HTMLInputElement).value = 'go';
+      (document.querySelector('#link-ok-btn') as HTMLButtonElement).click();
+
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ href: '#über-uns' }));
+    });
+  });
+
   it('prefills full link text and URL when cursor is inside a link mark', () => {
     const doc = { textBetween: jest.fn(() => 'product') };
     const selection = { from: 0, to: 0, empty: true, $from: {} as unknown };

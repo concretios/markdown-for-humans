@@ -25,6 +25,20 @@ describe('generateHeadingSlug', () => {
     ['C++ & C#', 'c--c'],
     ['Trailing dash -', 'trailing-dash--'],
     ['a.b/c:d', 'abcd'],
+    ['Version 2', 'version2'],
+    ['日本語　見出し', '日本語見出し'],
+    ['Foo\tBar', 'foobar'],
+    ['می‌خواهم', 'می‌خواهم'],
+    ['👨‍👩‍👧 Family', '‍‍-family'],
+    ['Area in m²', 'area-in-m'],
+    ['① First step', '-first-step'],
+    ['½ cup', '-cup'],
+    ['Ⓐ Option', 'ⓐ-option'],
+    ['ΟΔΟΣ', 'οδοσ'],
+    ['Über uns'.normalize('NFD'), 'über uns'.normalize('NFD').replace(' ', '-')],
+    // The text a heading has when an inline image or comment leaves a space at its edge.
+    ['My Project ', 'my-project-'],
+    [' My Project', '-my-project'],
   ])('%s -> %s', (text, slug) => {
     expect(generateHeadingSlug(text, new Set())).toBe(slug);
   });
@@ -82,8 +96,39 @@ describe('resolveHeadingAnchor', () => {
     expect(resolveHeadingAnchor(clash, 'setup--config')).toBe(0);
   });
 
-  it('does not let a heading with no ASCII letters claim the empty fragment', () => {
-    expect(resolveHeadingAnchor(buildHeadingAnchors(['日本語']), '')).toBeUndefined();
+  it('still finds a bare # the link dialog wrote for a heading with no ASCII letters', () => {
+    expect(resolveHeadingAnchor(buildHeadingAnchors(['Intro', '日本語']), '')).toBe(1);
+  });
+
+  it('finds the GitHub anchor of a heading once a heading before it has no anchor', () => {
+    const noAnchor = buildHeadingAnchors(['🚀', '🚀', 'Foo']);
+    expect(resolveHeadingAnchor(noAnchor, '-1')).toBe(1);
+    expect(resolveHeadingAnchor(noAnchor, 'foo')).toBe(2);
+  });
+
+  it.each<[string, string[], string, number | undefined]>([
+    ['a badge in the title', ['Project ', 'Project'], 'project', 1],
+    ['a badge in the title, its own anchor', ['Project ', 'Project'], 'project-', 0],
+    ['a repeat after a badge', ['Foo', 'Foo ', 'Foo'], 'foo-1', 2],
+    ['a superscript', ['Area in m²', 'Area in m'], 'area-in-m', 0],
+    ['a non-breaking space', ['Version\u00A02', 'Version 2'], 'version-2', 1],
+    [
+      'an ideographic space',
+      ['日本語\u3000見出し', '日本語 見出し', '日本語見出し'],
+      '日本語見出し',
+      0,
+    ],
+    [
+      'an ideographic space',
+      ['日本語\u3000見出し', '日本語 見出し', '日本語見出し'],
+      '日本語-見出し',
+      1,
+    ],
+    ['a final sigma', ['ΟΔΟΣ'], 'οδοσ', 0],
+    ['a final sigma in capitals', ['ΟΔΟΣ'], 'ΟΔΟΣ', 0],
+    ['a decomposed heading', ['Über uns'.normalize('NFD')], 'über-uns', 0],
+  ])('goes where GitHub goes with %s', (_name, headingTexts, fragment, index) => {
+    expect(resolveHeadingAnchor(buildHeadingAnchors(headingTexts), fragment)).toBe(index);
   });
 
   it.each(['no-such-heading', '%E0%A4%A', ''])('returns undefined for #%s', fragment => {
