@@ -11,6 +11,7 @@
 import { getMarkRange, Editor } from '@tiptap/core';
 import { TextSelection } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+import { generateHeadingSlug } from '../utils/headingSlug';
 import { buildOutlineFromEditor } from '../utils/outline';
 import * as l10n from '../l10n';
 
@@ -58,29 +59,6 @@ let fileSearchRequestId = 0;
 let actualLinkPath: string | null = null; // Store actual path separately from displayed value
 
 const isWhitespace = (char: string) => /\s/.test(char);
-
-/**
- * Generate GFM-style slug from heading text with duplicate handling
- */
-function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
-  const slug = text
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  let finalSlug = slug;
-  let counter = 1;
-  while (existingSlugs.has(finalSlug)) {
-    finalSlug = `${slug}-${counter}`;
-    counter++;
-  }
-
-  existingSlugs.add(finalSlug);
-  return finalSlug;
-}
 
 /**
  * Load filter state from localStorage

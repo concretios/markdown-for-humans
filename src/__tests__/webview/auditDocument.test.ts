@@ -141,6 +141,25 @@ describe('Audit Document Feature', () => {
     });
   });
 
+  it.each(['#über-uns', '#%C3%BCber-uns', '#ber-uns', '#ÜBER-UNS'])(
+    'should not report a link to a heading with an umlaut written as %s',
+    async anchor => {
+      editor.commands.setContent(`# Über uns\n\n[link](${anchor})`, { contentType: 'markdown' });
+
+      expect(await runAudit(editor)).toHaveLength(0);
+    }
+  );
+
+  it('should suggest the GitHub form of a heading anchor', async () => {
+    editor.commands.setContent('# Setup & Config\n\n[link](#setup-configs)', {
+      contentType: 'markdown',
+    });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].suggestions).toEqual(['setup--config']);
+  });
+
   it('should not report issues for valid heading anchor', async () => {
     editor.commands.setContent('# Existing Heading\n\n[link](#existing-heading)', {
       contentType: 'markdown',

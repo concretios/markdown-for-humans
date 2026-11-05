@@ -2,6 +2,11 @@ import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { getLevenshteinDistance } from './levenshtein';
+import {
+  buildHeadingAnchors,
+  generateHeadingSlug,
+  resolveHeadingAnchor,
+} from '../utils/headingSlug';
 import * as l10n from '../l10n';
 
 export type AuditIssueType = 'link' | 'image' | 'heading';
@@ -83,6 +88,7 @@ export async function runAudit(editor: Editor): Promise<AuditIssue[]> {
   const { doc } = editor.state;
 
   const existingSlugs = new Set<string>();
+  const headingTexts: string[] = [];
   const fileChecks: Promise<void>[] = [];
   const headingLinks: { slug: string; pos: number; nodeSize: number }[] = [];
 
@@ -90,6 +96,7 @@ export async function runAudit(editor: Editor): Promise<AuditIssue[]> {
     if (node.type.name === 'heading') {
       const text = node.textContent;
       generateHeadingSlug(text, existingSlugs);
+      headingTexts.push(text);
     }
 
     // Truly-empty image syntax `![]()` is rewritten to literal text by the
@@ -235,8 +242,9 @@ export async function runAudit(editor: Editor): Promise<AuditIssue[]> {
 
   await Promise.all(fileChecks);
 
+  const anchors = buildHeadingAnchors(headingTexts);
   headingLinks.forEach(link => {
-    if (!existingSlugs.has(link.slug)) {
+    if (resolveHeadingAnchor(anchors, link.slug) === undefined) {
       const suggestions = findBestMatches(link.slug, Array.from(existingSlugs));
       issues.push({
         type: 'heading',
@@ -390,26 +398,6 @@ function checkUrlStatus(url: string): Promise<UrlCheckResult> {
       url,
     });
   });
-}
-
-function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
-  const slug = text
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  let finalSlug = slug;
-  let counter = 1;
-  while (existingSlugs.has(finalSlug)) {
-    finalSlug = `${slug}-${counter}`;
-    counter++;
-  }
-
-  existingSlugs.add(finalSlug);
-  return finalSlug;
 }
 
 export const auditPluginKey = new PluginKey('auditDocument');
