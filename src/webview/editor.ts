@@ -68,8 +68,7 @@ import { insertPlainText, readsAsMarkdown } from './utils/plainTextPaste';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
 import { isUndoRedoShortcut } from './utils/undoRedoShortcut';
 import { shouldAutoLink } from './utils/linkValidation';
-import { buildOutlineFromEditor } from './utils/outline';
-import { buildHeadingAnchors, resolveHeadingAnchor } from './utils/headingSlug';
+import { buildOutlineFromEditor, findHeadingPos } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
 import { shouldOpenLinkFromClick } from './utils/linkClick';
@@ -1378,12 +1377,8 @@ function initializeEditor(initialContent: string) {
         console.log('[MD4H Webview] Handling anchor link:', href);
         const slug = href.slice(1);
         if (editorInstance) {
-          // Find heading by slug
-          const outline = buildOutlineFromEditor(editorInstance);
-          const anchors = buildHeadingAnchors(outline.map(entry => entry.text));
-          const headingIndex = resolveHeadingAnchor(anchors, slug);
-          if (headingIndex !== undefined) {
-            const headingPos = outline[headingIndex].pos;
+          const headingPos = findHeadingPos(editorInstance, slug);
+          if (headingPos !== undefined) {
             console.log('[MD4H Webview] Scrolling to heading at position:', headingPos);
             scrollToHeading(editorInstance, headingPos);
           } else {

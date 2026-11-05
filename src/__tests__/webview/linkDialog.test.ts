@@ -101,7 +101,18 @@ describe('linkDialog', () => {
     const openHeadingList = (headingTexts: string[]) => {
       const descendants = (visit: (node: unknown, pos: number) => void) => {
         headingTexts.forEach((textContent, pos) => {
-          visit({ type: { name: 'heading' }, attrs: { level: 1 }, textContent, nodeSize: 1 }, pos);
+          visit(
+            {
+              type: { name: 'heading' },
+              attrs: { level: 1 },
+              textContent,
+              nodeSize: 1,
+              childCount: 1,
+              forEach: (each: (child: unknown, offset: number, index: number) => void) =>
+                each({ type: { name: 'text' }, isText: true, marks: [], text: textContent }, 0, 0),
+            },
+            pos
+          );
         });
       };
       const create = jest.fn(attrs => ({ attrs }));
@@ -361,7 +372,7 @@ describe('linkDialog localization', () => {
     'Start typing to search files...': '开始输入以搜索文件...',
     'Select a heading from the list below': '从下方列表选择标题',
     'No files found': '未找到文件',
-    'No headings in this document': '此文档中没有标题',
+    'No headings to link to': '没有可链接的标题',
   };
 
   const dialogText = (dialog: HTMLElement, selector: string): string | undefined =>
@@ -478,7 +489,7 @@ describe('linkDialog localization', () => {
       expect(dialogText(dialog, '.link-dialog-autocomplete-empty')).toBe('未找到文件');
 
       openMode(dialog, 'headings').dispatchEvent(new Event('focus'));
-      expect(dialogText(dialog, '.link-dialog-autocomplete-empty')).toBe('此文档中没有标题');
+      expect(dialogText(dialog, '.link-dialog-autocomplete-empty')).toBe('没有可链接的标题');
     } finally {
       delete (window as unknown as { vscode?: unknown }).vscode;
       jest.useRealTimers();

@@ -159,6 +159,7 @@
   "Could not allocate a unique feedback round. Try starting feedback again.": "Não foi possível reservar uma rodada de feedback exclusiva. Tente iniciar o feedback novamente.",
   "Could not apply pending editor changes before starting feedback.": "Não foi possível aplicar as alterações pendentes do editor antes de iniciar o feedback.",
   "Could not apply the latest editor changes, so feedback did not start.": "Não foi possível aplicar as alterações mais recentes do editor; por isso, o feedback não foi iniciado.",
+  "Could not apply this fix. The document was not changed.": "Não foi possível aplicar esta correção. O documento não foi alterado.",
   "Could not capture the selection.": "Não foi possível capturar a seleção.",
   "Could not capture those blocks.": "Não foi possível capturar esses blocos.",
   "Could not copy a reference for AI.": "Não foi possível copiar uma referência para IA.",
@@ -440,7 +441,7 @@
   "No approximate positions were used.": "Nenhuma posição aproximada foi usada.",
   "No feedback logged yet": "Nenhum feedback registrado ainda",
   "No files found": "Nenhum arquivo encontrado",
-  "No headings in this document": "Nenhum título neste documento",
+  "No headings to link to": "Nenhum título para vincular",
   "No headings yet.": "Ainda não há títulos.",
   "No mappable Markdown blocks are available to capture.": "Não há blocos Markdown mapeáveis disponíveis para captura.",
   "No markdown document open": "Nenhum documento Markdown aberto",
@@ -902,5 +903,7 @@
   "GitHub Copilot is not available. Copied {0} to the clipboard instead.": "O GitHub Copilot não está disponível. {0} foi copiado para a área de transferência.",
   "Not added: the file has changes that could not be saved.": "Não adicionado: o arquivo tem alterações que não puderam ser salvas.",
   "Saved the file and added {0} to GitHub Copilot (context {1})": "O arquivo foi salvo e {0} foi adicionado ao GitHub Copilot (contexto {1})",
-  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "Este documento não pode ser anexado ao GitHub Copilot. {0} foi copiado para a área de transferência."
+  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "Este documento não pode ser anexado ao GitHub Copilot. {0} foi copiado para a área de transferência.",
+  "Link works in this editor but not on GitHub: #{0}": "O link funciona neste editor, mas não no GitHub: #{0}",
+  "Update the link to the anchor GitHub uses:": "Atualize o link para a âncora usada pelo GitHub:"
 }

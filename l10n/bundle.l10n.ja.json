@@ -159,6 +159,7 @@
   "Could not allocate a unique feedback round. Try starting feedback again.": "一意のフィードバック ラウンドを割り当てられませんでした。もう一度フィードバックを開始してみてください。",
   "Could not apply pending editor changes before starting feedback.": "フィードバックを開始する前に、保留中のエディターの変更を適用できませんでした。",
   "Could not apply the latest editor changes, so feedback did not start.": "エディターの最新の変更を適用できなかったため、フィードバックは開始されませんでした。",
+  "Could not apply this fix. The document was not changed.": "この修正を適用できませんでした。ドキュメントは変更されていません。",
   "Could not capture the selection.": "選択範囲をキャプチャできませんでした。",
   "Could not capture those blocks.": "それらのブロックをキャプチャできませんでした。",
   "Could not copy a reference for AI.": "AI 用の参照をコピーできませんでした。",
@@ -440,7 +441,7 @@
   "No approximate positions were used.": "おおよその位置は使用されていません。",
   "No feedback logged yet": "フィードバックはまだ記録されていません",
   "No files found": "ファイルが見つかりません",
-  "No headings in this document": "このドキュメントには見出しがありません",
+  "No headings to link to": "リンクできる見出しがありません",
   "No headings yet.": "見出しはまだありません。",
   "No mappable Markdown blocks are available to capture.": "キャプチャできる、ソースに対応付け可能な Markdown ブロックがありません。",
   "No markdown document open": "開いている Markdown ドキュメントがありません",
@@ -902,5 +903,7 @@
   "GitHub Copilot is not available. Copied {0} to the clipboard instead.": "GitHub Copilot は利用できません。代わりに {0} をクリップボードにコピーしました。",
   "Not added: the file has changes that could not be saved.": "追加されませんでした: ファイルに保存できない変更があります。",
   "Saved the file and added {0} to GitHub Copilot (context {1})": "ファイルを保存し、{0} を GitHub Copilot に追加しました (コンテキスト {1})",
-  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "このドキュメントは GitHub Copilot に添付できません。代わりに {0} をクリップボードにコピーしました。"
+  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "このドキュメントは GitHub Copilot に添付できません。代わりに {0} をクリップボードにコピーしました。",
+  "Link works in this editor but not on GitHub: #{0}": "リンクはこのエディターでは動作しますが、GitHub では動作しません: #{0}",
+  "Update the link to the anchor GitHub uses:": "リンクを GitHub が使用するアンカーに更新してください:"
 }

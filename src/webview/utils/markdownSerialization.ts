@@ -75,6 +75,7 @@ const editorBlockSerializationCaches = new WeakMap<Editor, EditorBlockSerializat
 interface PatchableMarkdownManager {
   encodeTextForMarkdown?: (text: string, node: JSONContent, parentNode?: JSONContent) => string;
   escapeMarkdownSyntax?: (text: string) => string;
+  renderNodes?: (nodes: JSONContent | JSONContent[], ...rest: unknown[]) => string;
   codeTypes?: Set<string>;
   __md4hSerializationPatched?: boolean;
 }
@@ -174,6 +175,57 @@ function decodeNonTagHtmlEntities(
 }
 
 /**
+ * Escape a # that Markdown would read as a heading's closing sequence and drop on reload. That
+ * takes the end of the heading, and a space or tab right before it, which may sit in the previous
+ * run, or nothing before it at all. `# C#` and `# **C**#` are plain text and stay as they are.
+ */
+function escapeClosingHashes(text: string, node: JSONContent, parentNode?: JSONContent): string {
+  const siblings = parentNode?.content ?? [];
+  if (
+    parentNode?.type !== 'heading' ||
+    node.marks?.length ||
+    siblings.slice(siblings.indexOf(node) + 1).some(isMeaningfulInlineNode)
+  ) {
+    return text;
+  }
+  return text.replace(/(^|[ \t])(#+\s*)$/, (match, gap: string, hashes: string) =>
+    gap || siblings[0] === node || /^$|[ \t]$/.test(lineTextBeforeNode(node, parentNode))
+      ? `${gap}\\${hashes}`
+      : match
+  );
+}
+
+/**
+ * Give every code run its own code span. TipTap tracks marks by type and keeps a code span open
+ * across runs, but Markdown inside a code span is literal: `[`a`](#x)[`b`](#y)` would save as a
+ * code span holding the text `[a](#x)[b](#y)`, with both links gone. An empty run without code
+ * between them closes the span, and carries the marks the two runs share so those stay open.
+ * Only two text runs need it: a hard break, image or math with a code mark already ends the span,
+ * and a run beside one would only push a space out of the code.
+ * Runs that lead up to such a node stay one span when the last of them has another mark or only
+ * spaces. Code would reopen outside that mark and stay open across the node, which saves two
+ * stray backticks in the code (`a``[e](#x)`) or an empty span around the node.
+ */
+function separateAdjacentCodeRuns(nodes: JSONContent[]): JSONContent[] {
+  const isCodeText = (node?: JSONContent) =>
+    node?.type === 'text' && node.marks?.some(mark => mark.type === 'code');
+  return nodes.flatMap((node, index) => {
+    const next = nodes[index + 1];
+    if (!isCodeText(node) || !isCodeText(next)) return [node];
+    let last = index + 1;
+    while (isCodeText(nodes[last + 1])) last++;
+    const { marks, text } = nodes[last];
+    const reachesCodeNode = nodes[last + 1]?.marks?.some(mark => mark.type === 'code');
+    if (reachesCodeNode && (marks?.length !== 1 || !text?.trim())) return [node];
+    const nextMarks = new Set(next.marks?.map(mark => JSON.stringify(mark)));
+    const shared = node.marks?.filter(
+      mark => mark.type !== 'code' && nextMarks.has(JSON.stringify(mark))
+    );
+    return [node, { type: 'text', text: '', marks: shared }];
+  });
+}
+
+/**
  * Install TipTap MarkdownManager patches used by every serialize path (sync,
  * Feedback snapshots, copy-as-markdown). Idempotent.
  */
@@ -205,8 +257,18 @@ export function patchMarkdownSerialization(manager: MarkdownManager): void {
       }
       const encoded = original(text, node, parentNode);
       if (isEncodedInsideCode(patchable, node, parentNode)) return encoded;
-      return decodeNonTagHtmlEntities(encoded, node, parentNode);
+      return escapeClosingHashes(
+        decodeNonTagHtmlEntities(encoded, node, parentNode),
+        node,
+        parentNode
+      );
     };
+  }
+
+  if (typeof patchable.renderNodes === 'function') {
+    const original = patchable.renderNodes.bind(manager);
+    patchable.renderNodes = (nodes, ...rest) =>
+      original(Array.isArray(nodes) ? separateAdjacentCodeRuns(nodes) : nodes, ...rest);
   }
 
   patchable.__md4hSerializationPatched = true;

@@ -39,7 +39,7 @@ describe('Audit Overlay UI', () => {
           markedOptions: { gfm: true, breaks: true },
         }),
       ],
-      content: '<p>Test content with a [broken link](missing.md)</p>',
+      content: '<p><a href="broken.md">Test content</a></p>',
     });
   });
 
@@ -594,6 +594,7 @@ describe('Audit Overlay UI', () => {
       'Waiting…': '等待中…',
       'Heading name changed slightly. Pick the updated one:':
         '标题名称略有变化，请选择更新后的标题：',
+      'Update the link to the anchor GitHub uses:': '请将链接更新为 GitHub 使用的锚点：',
       'Your document is healthy: no issues found!': '文档状态良好，未发现问题！',
       'All fixed! 🎉': '全部修复！🎉',
       Preview: '预览',
@@ -702,6 +703,25 @@ describe('Audit Overlay UI', () => {
 
       expect(document.querySelector('.audit-heading-hint')?.textContent).toBe(
         '标题名称略有变化，请选择更新后的标题：'
+      );
+    });
+
+    it('translates the hint on an older-form link', () => {
+      l10n.configureL10n(sampleBundle);
+      showAuditOverlay(editor, [
+        {
+          type: 'heading',
+          message: 'Link works in this editor but not on GitHub: #ber-uns',
+          target: 'ber-uns',
+          suggestions: ['über-uns'],
+          olderFormAnchor: true,
+          pos: 1,
+          nodeSize: 1,
+        },
+      ]);
+
+      expect(document.querySelector('.audit-heading-hint')?.textContent).toBe(
+        '请将链接更新为 GitHub 使用的锚点：'
       );
     });
 
