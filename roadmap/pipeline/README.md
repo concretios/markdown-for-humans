@@ -7,7 +7,6 @@ Agents: boot from this allowlist. Shipped mega-docs live under `roadmap/shipped/
 
 ## Open post-merge work
 - `task-fix-postmerge-01-markdown-roundtrip.md` — R2–R5 remainder
-- `task-fix-postmerge-08-ai-review-ci.md`
 - `task-followups-postmerge.md`
 
 ## True backlog
