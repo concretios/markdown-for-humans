@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Document Audit** fixes now work on link text formatted as code, such as ``[`setup`](#old)``, on heading, file and URL links. The fix used to change nothing and still report "All fixed!". A fix that cannot change the document now keeps its row and says so.
 - Editing elsewhere in a paragraph no longer merges code-formatted text that touches a link or other formatting into one code span. ``[`a`](#x)[`b`](#y)`` and `` `x`[`a`](#y) `` saved as one code span with the link syntax as literal text, so the links were lost.
 - A `#` typed at the end of a heading after a space, such as `# Issue #`, now survives saving, written as `\#`. Markdown read it as a closing marker, so it disappeared on the next open and the heading's anchor changed.
+- Typing next to a link formatted as code, such as ``[`setup`](#setup)``, no longer removes the link. A letter typed right before or after it, or between two of them, saved the text as plain code: ``[`one`](#a)[`two`](#b)`` became `` `one`x`two` ``. The link dialog can now link text formatted as code, and pasting a code link keeps the link.
 
 ---
 
