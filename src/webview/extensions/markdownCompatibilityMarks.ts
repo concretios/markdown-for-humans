@@ -4,6 +4,7 @@
  * Licensed under the MIT License. See LICENSE file in the project root for details.
  */
 
+import { flattenExtensions } from '@tiptap/core';
 import Code from '@tiptap/extension-code';
 import Link from '@tiptap/extension-link';
 
@@ -115,4 +116,22 @@ export const MarkdownLink = Link.extend({
  */
 export const MarkdownCode = Code.extend({
   priority: 80,
+
+  /**
+   * The base extension excludes every mark (`_`). A link may wrap code
+   * (`[`name`](url)`), and with `_` ProseMirror dropped the link whenever it
+   * re-read the DOM: typing a letter beside a code link saved it as plain
+   * code, and `addMark` could not link code text (link dialog). ProseMirror
+   * has no "all but one" syntax and rejects unknown names, so list every mark
+   * this editor registers except link. Marks added later stay excluded.
+   * Without an editor (TipTap's `generateJSON` for HTML tokens), keep `_`.
+   */
+  excludes() {
+    const extensions = this.editor?.options.extensions;
+    if (!extensions) return '_';
+    const names = flattenExtensions(extensions)
+      .filter(extension => extension.type === 'mark' && extension.name !== 'link')
+      .map(extension => extension.name);
+    return [...new Set(names)].join(' ');
+  },
 });

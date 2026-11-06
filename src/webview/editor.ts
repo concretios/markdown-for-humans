@@ -68,7 +68,7 @@ import { insertPlainText, readsAsMarkdown } from './utils/plainTextPaste';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
 import { isUndoRedoShortcut } from './utils/undoRedoShortcut';
 import { shouldAutoLink } from './utils/linkValidation';
-import { buildOutlineFromEditor } from './utils/outline';
+import { buildOutlineFromEditor, findHeadingPos } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
 import { collectExportContent, getDocumentTitle } from './utils/exportContent';
 import { shouldOpenLinkFromClick } from './utils/linkClick';
@@ -119,26 +119,6 @@ import { createFeedbackPeerReleaseClient } from './features/feedbackPeerReleaseC
 import { createFeedbackPeerLockClient } from './features/feedbackPeerLockClient';
 import { createFeedbackSessionTransferClient } from './features/feedbackSessionTransferClient';
 
-// Helper function for slug generation (same as in linkDialog)
-function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
-  const slug = text
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  let finalSlug = slug;
-  let counter = 1;
-  while (existingSlugs.has(finalSlug)) {
-    finalSlug = `${slug}-${counter}`;
-    counter++;
-  }
-
-  existingSlugs.add(finalSlug);
-  return finalSlug;
-}
 import {
   handleImageResized,
   handleLocalImageCopied,
@@ -1397,17 +1377,7 @@ function initializeEditor(initialContent: string) {
         console.log('[MD4H Webview] Handling anchor link:', href);
         const slug = href.slice(1);
         if (editorInstance) {
-          // Find heading by slug
-          const outline = buildOutlineFromEditor(editorInstance);
-          const existingSlugs = new Set<string>();
-          const headingMap = new Map<string, number>();
-
-          outline.forEach(entry => {
-            const headingSlug = generateHeadingSlug(entry.text, existingSlugs);
-            headingMap.set(headingSlug, entry.pos);
-          });
-
-          const headingPos = headingMap.get(slug);
+          const headingPos = findHeadingPos(editorInstance, slug);
           if (headingPos !== undefined) {
             console.log('[MD4H Webview] Scrolling to heading at position:', headingPos);
             scrollToHeading(editorInstance, headingPos);

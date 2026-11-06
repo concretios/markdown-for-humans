@@ -1,0 +1,1527 @@
+{
+  "source": "GitHub POST /markdown, mode=markdown, one document per call. The user-content- prefix is removed from each id.",
+  "recorded": "2026-11-05",
+  "excluded": [
+    {
+      "markdown": "# <!-- c -->",
+      "ids": [],
+      "reason": "GitHub gives a heading with nothing rendered no id and does not count it for numbering; the editor counts it. Rare, not in this PR."
+    },
+    {
+      "markdown": "# <unknown>z</unknown> x",
+      "ids": ["z-x"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# Foo <script>x</script>",
+      "ids": ["foo-scriptxscript"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "#",
+      "ids": [],
+      "reason": "GitHub gives a heading with nothing rendered no id and does not count it for numbering; the editor counts it. Rare, not in this PR."
+    },
+    {
+      "markdown": "# ",
+      "ids": [],
+      "reason": "GitHub gives a heading with nothing rendered no id and does not count it for numbering; the editor counts it. Rare, not in this PR."
+    },
+    {
+      "markdown": "<h1 align=\"center\">\n  <img src=\"logo.png\">\n  Multi Line\n</h1>",
+      "ids": ["----multi-line"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "<details><summary><h2>Sum Heading</h2></summary>\n\nbody\n\n</details>",
+      "ids": ["sum-heading"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "<center><h1>Centered Tag</h1></center>",
+      "ids": ["centered-tag"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "$$\n# In Math\n$$",
+      "ids": ["in-math"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# fnA[^f1] fnB[^f2]\n\n[^f1]: n\n\n[^f2]: m",
+      "ids": ["fna1-fnb2"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# <font color=red>f1</font>",
+      "ids": ["f1"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# <center>c4</center>",
+      "ids": ["c4"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# <tt>t1</tt>",
+      "ids": ["t1"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# <big>b1</big>",
+      "ids": ["b1"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# <foo>z1</foo>",
+      "ids": ["z1"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# <video src=\"u\"></video> z4",
+      "ids": ["-z4"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# <hr> z5",
+      "ids": ["-z5"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# <input> z6",
+      "ids": ["-z6"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# <?php x ?> z8",
+      "ids": ["-z8"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# <!DOCTYPE x> z9",
+      "ids": ["-z9"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# <![CDATA[x]]> z10",
+      "ids": ["-z10"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# a b",
+      "ids": ["ab"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# ab",
+      "ids": ["ab"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "#\n\n# 🚀\n\n# 🚀",
+      "ids": ["", "-1"],
+      "reason": "GitHub gives a heading with nothing rendered no id and does not count it for numbering; the editor counts it. Rare, not in this PR."
+    },
+    {
+      "markdown": "# <!-- c5 -->\n\n# 🚀",
+      "ids": [""],
+      "reason": "GitHub gives a heading with nothing rendered no id and does not count it for numbering; the editor counts it. Rare, not in this PR."
+    },
+    {
+      "markdown": "## <a name=\"x\"></a> Title",
+      "ids": ["-title"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "## Title <a name=\"x\"></a>",
+      "ids": ["title-"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "## <a id=\"x\"></a> Title",
+      "ids": ["-title"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "## <span></span> Title",
+      "ids": ["-title"],
+      "reason": "Accepted: the parser drops this inline HTML and leaves a space that looks the same as a typed one. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# `a `",
+      "ids": ["a-"],
+      "reason": "Accepted: an edge space inside inline syntax in the source looks the same as a typed one. Lost by the serializer once the heading is edited. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# ` a`",
+      "ids": ["-a"],
+      "reason": "Accepted: an edge space inside inline syntax in the source looks the same as a typed one. Lost by the serializer once the heading is edited. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# [a ](u)",
+      "ids": ["a-"],
+      "reason": "Accepted: an edge space inside inline syntax in the source looks the same as a typed one. Lost by the serializer once the heading is edited. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# [ a](u)",
+      "ids": ["-a"],
+      "reason": "Accepted: an edge space inside inline syntax in the source looks the same as a typed one. Lost by the serializer once the heading is edited. Anchor without the hyphen, same as before this PR."
+    },
+    {
+      "markdown": "# <b>a </b>",
+      "ids": ["a-"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# <kbd>K </kbd>",
+      "ids": ["k-"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    },
+    {
+      "markdown": "# $a<b>c$ d",
+      "ids": ["ac-d"],
+      "reason": "Accepted: GitHub reads HTML or link syntax inside the math; the editor keeps the LaTeX as written."
+    },
+    {
+      "markdown": "# $<b>$ x",
+      "ids": ["-x"],
+      "reason": "Accepted: GitHub reads HTML or link syntax inside the math; the editor keeps the LaTeX as written."
+    },
+    {
+      "markdown": "# $[a](b)$ x",
+      "ids": ["a-x"],
+      "reason": "Accepted: GitHub reads HTML or link syntax inside the math; the editor keeps the LaTeX as written."
+    },
+    {
+      "markdown": "# Foo  ",
+      "ids": ["foo-"],
+      "reason": "Triage C5: the editor parser reads this differently from GitHub."
+    }
+  ],
+  "cases": [
+    {
+      "markdown": "# Foo ![alt](x.png)",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# ![alt](x.png) Foo",
+      "ids": ["-foo"]
+    },
+    {
+      "markdown": "# Foo ![alt](x.png) Bar",
+      "ids": ["foo--bar"]
+    },
+    {
+      "markdown": "# ![alt](x.png)",
+      "ids": [""]
+    },
+    {
+      "markdown": "# [![Build](b.svg)](http://x.y) Foo",
+      "ids": ["-foo"]
+    },
+    {
+      "markdown": "# Foo <img src=\"x.png\">",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# <img src=\"x.png\"> Foo",
+      "ids": ["-foo"]
+    },
+    {
+      "markdown": "# Foo <!-- c -->",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# <!-- c --> Foo",
+      "ids": ["-foo"]
+    },
+    {
+      "markdown": "# Foo <!-- c --> Bar",
+      "ids": ["foo--bar"]
+    },
+    {
+      "markdown": "# Energy $E=mc^2$ rule",
+      "ids": ["energy-emc2-rule"]
+    },
+    {
+      "markdown": "# $x$",
+      "ids": ["x"]
+    },
+    {
+      "markdown": "# Cost $5 and $6",
+      "ids": ["cost-5-and-6"]
+    },
+    {
+      "markdown": "# Math $`x^2`$ end",
+      "ids": ["math-x2-end"]
+    },
+    {
+      "markdown": "# Price is $5",
+      "ids": ["price-is-5"]
+    },
+    {
+      "markdown": "# Foo <span>bar</span>",
+      "ids": ["foo-bar"]
+    },
+    {
+      "markdown": "# <a name=\"x\"></a>Title",
+      "ids": ["title"]
+    },
+    {
+      "markdown": "# <a id=\"x\">Title</a>",
+      "ids": ["title"]
+    },
+    {
+      "markdown": "# Foo <kbd>Ctrl</kbd>",
+      "ids": ["foo-ctrl"]
+    },
+    {
+      "markdown": "# x<sup>2</sup>",
+      "ids": ["x2"]
+    },
+    {
+      "markdown": "# H<sub>2</sub>O",
+      "ids": ["h2o"]
+    },
+    {
+      "markdown": "# Foo<br>Bar",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# Foo<br/>Bar",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# <em>Foo</em>",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "# <b>Foo</b> bar",
+      "ids": ["foo-bar"]
+    },
+    {
+      "markdown": "# <u>U</u> x",
+      "ids": ["u-x"]
+    },
+    {
+      "markdown": "# <mark>m</mark> x",
+      "ids": ["m-x"]
+    },
+    {
+      "markdown": "# a < b",
+      "ids": ["a--b"]
+    },
+    {
+      "markdown": "# a <b",
+      "ids": ["a-b"]
+    },
+    {
+      "markdown": "<h2>Raw Html</h2>",
+      "ids": ["raw-html"]
+    },
+    {
+      "markdown": "<h2 id=\"custom\">Raw Id</h2>",
+      "ids": ["raw-id"]
+    },
+    {
+      "markdown": "<h1 align=\"center\">Centered</h1>",
+      "ids": ["centered"]
+    },
+    {
+      "markdown": "<a name=\"foo\"></a>\n\ntext",
+      "ids": []
+    },
+    {
+      "markdown": "<a id=\"bar\"></a>\n\ntext",
+      "ids": []
+    },
+    {
+      "markdown": "# A &amp; B",
+      "ids": ["a--b"]
+    },
+    {
+      "markdown": "# A &lt;b&gt;",
+      "ids": ["a-b"]
+    },
+    {
+      "markdown": "# caf&eacute;",
+      "ids": ["café"]
+    },
+    {
+      "markdown": "# Foo&nbsp;Bar",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# &#x1F680; Go",
+      "ids": ["-go"]
+    },
+    {
+      "markdown": "# &copy; 2024",
+      "ids": ["-2024"]
+    },
+    {
+      "markdown": "# &quot;q&quot;",
+      "ids": ["q"]
+    },
+    {
+      "markdown": "# A&#32;B",
+      "ids": ["a-b"]
+    },
+    {
+      "markdown": "# &unknown; x",
+      "ids": ["unknown-x"]
+    },
+    {
+      "markdown": "# Title[^1]\n\n[^1]: note",
+      "ids": ["title1"]
+    },
+    {
+      "markdown": "# :rocket: Launch",
+      "ids": ["rocket-launch"]
+    },
+    {
+      "markdown": "# Hello :smile:",
+      "ids": ["hello-smile"]
+    },
+    {
+      "markdown": "# 🚀",
+      "ids": [""]
+    },
+    {
+      "markdown": "# 🚀 🚀",
+      "ids": ["-"]
+    },
+    {
+      "markdown": "# foo\\_bar",
+      "ids": ["foo_bar"]
+    },
+    {
+      "markdown": "# 1\\. Foo",
+      "ids": ["1-foo"]
+    },
+    {
+      "markdown": "# \\# Hash",
+      "ids": ["-hash"]
+    },
+    {
+      "markdown": "# *a* _b_ **c** ~~d~~",
+      "ids": ["a-b-c-d"]
+    },
+    {
+      "markdown": "# `code` here",
+      "ids": ["code-here"]
+    },
+    {
+      "markdown": "# `a  b`",
+      "ids": ["a--b"]
+    },
+    {
+      "markdown": "# [Link](http://x.y) here",
+      "ids": ["link-here"]
+    },
+    {
+      "markdown": "# See https://example.com",
+      "ids": ["see-httpsexamplecom"]
+    },
+    {
+      "markdown": "# www.example.com",
+      "ids": ["wwwexamplecom"]
+    },
+    {
+      "markdown": "# a@b.com",
+      "ids": ["abcom"]
+    },
+    {
+      "markdown": "# #123",
+      "ids": ["123"]
+    },
+    {
+      "markdown": "# @octocat",
+      "ids": ["octocat"]
+    },
+    {
+      "markdown": "# Foo #",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "# Foo ##",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "# Foo \\#",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# Foo \\\\",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# ==mark==",
+      "ids": ["mark"]
+    },
+    {
+      "markdown": "# ^sup^",
+      "ids": ["sup"]
+    },
+    {
+      "markdown": "# [ref][r]\n\n[r]: http://x.y",
+      "ids": ["ref"]
+    },
+    {
+      "markdown": "Foo\n===",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "Foo\nbar\n===",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "Foo  \nbar\n===",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "Foo\\\nbar\n---",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "  Foo  \n---",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "> # Foo",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "- # Foo",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "1. # Foo",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "> [!NOTE]\n> # Foo",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "> [!NOTE]\n> text\n>\n> ## Alert heading",
+      "ids": ["alert-heading"]
+    },
+    {
+      "markdown": "<details>\n<summary>S</summary>\n\n# In details\n\n</details>",
+      "ids": ["in-details"]
+    },
+    {
+      "markdown": "<details><summary>\n\n# In summary\n\n</summary>body</details>",
+      "ids": ["in-summary"]
+    },
+    {
+      "markdown": "<div>\n\n# In div\n\n</div>",
+      "ids": ["in-div"]
+    },
+    {
+      "markdown": "<table><tr><td>\n\n# In td\n\n</td></tr></table>",
+      "ids": ["in-td"]
+    },
+    {
+      "markdown": "- [ ] # Task",
+      "ids": []
+    },
+    {
+      "markdown": "| a |\n|---|\n| b |\n\n# After table",
+      "ids": ["after-table"]
+    },
+    {
+      "markdown": "#  Foo  Bar  ",
+      "ids": ["foo--bar"]
+    },
+    {
+      "markdown": "# Foo  bar",
+      "ids": ["foo--bar"]
+    },
+    {
+      "markdown": "#\tFoo",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "# Foo\tBar",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# Foo Bar",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# Foo Bar",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# foo-bar",
+      "ids": ["foo-bar"]
+    },
+    {
+      "markdown": "# -foo-",
+      "ids": ["-foo-"]
+    },
+    {
+      "markdown": "# --",
+      "ids": ["--"]
+    },
+    {
+      "markdown": "# - - -",
+      "ids": ["-----"]
+    },
+    {
+      "markdown": "---\ntitle: Foo\n---\n\n# Bar",
+      "ids": ["title-foo", "bar"]
+    },
+    {
+      "markdown": "# Foo_",
+      "ids": ["foo_"]
+    },
+    {
+      "markdown": "# foo'bar",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# “curly”",
+      "ids": ["curly"]
+    },
+    {
+      "markdown": "# $100",
+      "ids": ["100"]
+    },
+    {
+      "markdown": "# 100%",
+      "ids": ["100"]
+    },
+    {
+      "markdown": "# a+b=c",
+      "ids": ["abc"]
+    },
+    {
+      "markdown": "# (parens)",
+      "ids": ["parens"]
+    },
+    {
+      "markdown": "# foo/bar.md",
+      "ids": ["foobarmd"]
+    },
+    {
+      "markdown": "# ÄÖÜ",
+      "ids": ["äöü"]
+    },
+    {
+      "markdown": "# İstanbul",
+      "ids": ["i̇stanbul"]
+    },
+    {
+      "markdown": "# ẞ",
+      "ids": ["ß"]
+    },
+    {
+      "markdown": "# ǅ",
+      "ids": ["ǆ"]
+    },
+    {
+      "markdown": "# Ⅷ",
+      "ids": ["ⅷ"]
+    },
+    {
+      "markdown": "# 中文（全角）",
+      "ids": ["中文全角"]
+    },
+    {
+      "markdown": "# ﬁ",
+      "ids": ["ﬁ"]
+    },
+    {
+      "markdown": "# ٣",
+      "ids": ["٣"]
+    },
+    {
+      "markdown": "# 𝒳",
+      "ids": ["𝒳"]
+    },
+    {
+      "markdown": "# ㊗",
+      "ids": [""]
+    },
+    {
+      "markdown": "# ¼",
+      "ids": [""]
+    },
+    {
+      "markdown": "# ʼn",
+      "ids": ["ʼn"]
+    },
+    {
+      "markdown": "# á",
+      "ids": ["á"]
+    },
+    {
+      "markdown": "# ᾼ",
+      "ids": ["ᾳ"]
+    },
+    {
+      "markdown": "# 𐐀",
+      "ids": ["𐐨"]
+    },
+    {
+      "markdown": "# Ά",
+      "ids": ["ά"]
+    },
+    {
+      "markdown": "# Foo\n\n# Foo-1\n\n# Foo",
+      "ids": ["foo", "foo-1", "foo-2"]
+    },
+    {
+      "markdown": "# Foo-1\n\n# Foo\n\n# Foo",
+      "ids": ["foo-1", "foo", "foo-2"]
+    },
+    {
+      "markdown": "# Foo\n\n# Foo\n\n# Foo-1",
+      "ids": ["foo", "foo-1", "foo-1-1"]
+    },
+    {
+      "markdown": "# a\n\n# a\n\n# a-1\n\n# a-1",
+      "ids": ["a", "a-1", "a-1-1", "a-1-2"]
+    },
+    {
+      "markdown": "# 🚀\n\n# 🚀\n\n# -1",
+      "ids": ["", "-1", "-1-1"]
+    },
+    {
+      "markdown": "# FOO\n\n# foo",
+      "ids": ["foo", "foo-1"]
+    },
+    {
+      "markdown": "# Über\n\n# Über",
+      "ids": ["über", "über"]
+    },
+    {
+      "markdown": "<h2>Foo</h2>\n\n# Foo",
+      "ids": ["foo", "foo-1"]
+    },
+    {
+      "markdown": "# Foo\n\n<details>\n\n# Foo\n\n</details>\n\n# Foo",
+      "ids": ["foo", "foo-1", "foo-2"]
+    },
+    {
+      "markdown": "> # Foo\n\n# Foo",
+      "ids": ["foo", "foo-1"]
+    },
+    {
+      "markdown": "# Foo!\n\n# Foo?",
+      "ids": ["foo", "foo-1"]
+    },
+    {
+      "markdown": "<h1 align=\"center\"><a href=\"u\"><img src=\"y.png\"></a><br>Project Alpha</h1>",
+      "ids": ["project-alpha"]
+    },
+    {
+      "markdown": "<div align=\"center\">\n<h1>In Div Raw</h1>\n</div>",
+      "ids": ["in-div-raw"]
+    },
+    {
+      "markdown": "<div><h2>AAA</h2><h2>BBB</h2></div>",
+      "ids": ["aaa", "bbb"]
+    },
+    {
+      "markdown": "<h2><a name=\"n1\"></a>Named Inside</h2>",
+      "ids": ["named-inside"]
+    },
+    {
+      "markdown": "<h2>Code <code>x</code> in</h2>",
+      "ids": ["code-x-in"]
+    },
+    {
+      "markdown": "<h2>Em <em>y</em> in</h2>",
+      "ids": ["em-y-in"]
+    },
+    {
+      "markdown": "<p><h1>In P</h1></p>",
+      "ids": ["in-p"]
+    },
+    {
+      "markdown": "<h2>Trailing Html</h2> tail text",
+      "ids": ["trailing-html"]
+    },
+    {
+      "markdown": "<h3>\n\nBlank Inside\n\n</h3>",
+      "ids": [""]
+    },
+    {
+      "markdown": "<!--\n# Hidden Comment\n-->",
+      "ids": []
+    },
+    {
+      "markdown": "<!-- # c1 -->",
+      "ids": []
+    },
+    {
+      "markdown": "```\n# Fenced\n```",
+      "ids": []
+    },
+    {
+      "markdown": "~~~\n# Tilde\n~~~",
+      "ids": []
+    },
+    {
+      "markdown": "    # Indented",
+      "ids": []
+    },
+    {
+      "markdown": "<pre>\n# In Pre\n</pre>",
+      "ids": []
+    },
+    {
+      "markdown": "<div>\n# In Html No Blank\n</div>",
+      "ids": []
+    },
+    {
+      "markdown": "<details>\n# Details No Blank\n</details>",
+      "ids": []
+    },
+    {
+      "markdown": "#nospace",
+      "ids": []
+    },
+    {
+      "markdown": "####### seven",
+      "ids": []
+    },
+    {
+      "markdown": "\\# not",
+      "ids": []
+    },
+    {
+      "markdown": "```mermaid\n# merm\n```",
+      "ids": []
+    },
+    {
+      "markdown": "<script>\n# in script\n</script>",
+      "ids": []
+    },
+    {
+      "markdown": "<style>\n# in style\n</style>",
+      "ids": []
+    },
+    {
+      "markdown": "   # Three Indent",
+      "ids": ["three-indent"]
+    },
+    {
+      "markdown": "para text\n# After Para",
+      "ids": ["after-para"]
+    },
+    {
+      "markdown": "> quote\n# After Quote",
+      "ids": ["after-quote"]
+    },
+    {
+      "markdown": "- item\n# After List",
+      "ids": ["after-list"]
+    },
+    {
+      "markdown": "Foo2\n=",
+      "ids": ["foo2"]
+    },
+    {
+      "markdown": "Foo3\n-",
+      "ids": ["foo3"]
+    },
+    {
+      "markdown": "Foo4\n   ===   ",
+      "ids": ["foo4"]
+    },
+    {
+      "markdown": "Foo5\n    ---",
+      "ids": []
+    },
+    {
+      "markdown": "> Foo6\n---",
+      "ids": []
+    },
+    {
+      "markdown": "- Foo7\n-----",
+      "ids": []
+    },
+    {
+      "markdown": "a|b\n-|-\nc|d",
+      "ids": []
+    },
+    {
+      "markdown": "* # Star H",
+      "ids": ["star-h"]
+    },
+    {
+      "markdown": "+ # Plus H",
+      "ids": ["plus-h"]
+    },
+    {
+      "markdown": "1) # Paren H",
+      "ids": ["paren-h"]
+    },
+    {
+      "markdown": "- - # Nested H",
+      "ids": ["nested-h"]
+    },
+    {
+      "markdown": "> > # Double Quote",
+      "ids": ["double-quote"]
+    },
+    {
+      "markdown": "Foo8\n---\nBar8\n---",
+      "ids": ["foo8", "bar8"]
+    },
+    {
+      "markdown": "[r2]: http://x.y\n# After Ref",
+      "ids": ["after-ref"]
+    },
+    {
+      "markdown": "# Foo9\n===",
+      "ids": ["foo9"]
+    },
+    {
+      "markdown": "#\tTab H",
+      "ids": ["tab-h"]
+    },
+    {
+      "markdown": "# Tab2\t",
+      "ids": ["tab2"]
+    },
+    {
+      "markdown": "# Closing ## x",
+      "ids": ["closing--x"]
+    },
+    {
+      "markdown": "# Closing2 #\t",
+      "ids": ["closing2"]
+    },
+    {
+      "markdown": "## Closing3 ##   ",
+      "ids": ["closing3"]
+    },
+    {
+      "markdown": "# Closing4#",
+      "ids": ["closing4"]
+    },
+    {
+      "markdown": "# \\# Closing5 \\#",
+      "ids": ["-closing5-"]
+    },
+    {
+      "markdown": "# <http://auto.link>",
+      "ids": ["httpautolink"]
+    },
+    {
+      "markdown": "# <a2@b.com>",
+      "ids": ["a2bcom"]
+    },
+    {
+      "markdown": "# \\<b\\> esc",
+      "ids": ["b-esc"]
+    },
+    {
+      "markdown": "# \\&amp; esc",
+      "ids": ["amp-esc"]
+    },
+    {
+      "markdown": "# &amp;amp; dbl",
+      "ids": ["amp-dbl"]
+    },
+    {
+      "markdown": "# `&amp;` c",
+      "ids": ["amp-c"]
+    },
+    {
+      "markdown": "# `<b>` c2",
+      "ids": ["b-c2"]
+    },
+    {
+      "markdown": "# **<b>x3</b>**",
+      "ids": ["x3"]
+    },
+    {
+      "markdown": "# ![a](b.png \"ttl\") img",
+      "ids": ["-img"]
+    },
+    {
+      "markdown": "# [a4](b \"t\")",
+      "ids": ["a4"]
+    },
+    {
+      "markdown": "# [a5]",
+      "ids": ["a5"]
+    },
+    {
+      "markdown": "# [a6][]",
+      "ids": ["a6"]
+    },
+    {
+      "markdown": "# [^undef]",
+      "ids": ["undef"]
+    },
+    {
+      "markdown": "# a_b_c",
+      "ids": ["a_b_c"]
+    },
+    {
+      "markdown": "# *foo1",
+      "ids": ["foo1"]
+    },
+    {
+      "markdown": "# ~~",
+      "ids": [""]
+    },
+    {
+      "markdown": "# ~a7~",
+      "ids": ["a7"]
+    },
+    {
+      "markdown": "# H~2~O",
+      "ids": ["h2o"]
+    },
+    {
+      "markdown": "# ***x8***",
+      "ids": ["x8"]
+    },
+    {
+      "markdown": "# __x9__",
+      "ids": ["x9"]
+    },
+    {
+      "markdown": "# x^2^ y",
+      "ids": ["x2-y"]
+    },
+    {
+      "markdown": "# a*b*c",
+      "ids": ["abc"]
+    },
+    {
+      "markdown": "# foo*bar*",
+      "ids": ["foobar"]
+    },
+    {
+      "markdown": "# _a_b",
+      "ids": ["_a_b"]
+    },
+    {
+      "markdown": "# <del>d1</del>",
+      "ids": ["d1"]
+    },
+    {
+      "markdown": "# <s>s1</s>",
+      "ids": ["s1"]
+    },
+    {
+      "markdown": "# <ins>i1</ins>",
+      "ids": ["i1"]
+    },
+    {
+      "markdown": "# <i>i2</i>",
+      "ids": ["i2"]
+    },
+    {
+      "markdown": "# <strong>s2</strong>",
+      "ids": ["s2"]
+    },
+    {
+      "markdown": "# <code>c3</code>",
+      "ids": ["c3"]
+    },
+    {
+      "markdown": "# <small>s3</small>",
+      "ids": ["s3"]
+    },
+    {
+      "markdown": "# <abbr title=\"x\">y1</abbr>",
+      "ids": ["y1"]
+    },
+    {
+      "markdown": "# <a href=\"u\">l1</a>",
+      "ids": ["l1"]
+    },
+    {
+      "markdown": "# <span style=\"color:red\">r1</span>",
+      "ids": ["r1"]
+    },
+    {
+      "markdown": "# <dfn>d2</dfn>",
+      "ids": ["d2"]
+    },
+    {
+      "markdown": "# <q>q1</q>",
+      "ids": ["q1"]
+    },
+    {
+      "markdown": "# <var>v1</var>",
+      "ids": ["v1"]
+    },
+    {
+      "markdown": "# <samp>s4</samp>",
+      "ids": ["s4"]
+    },
+    {
+      "markdown": "# <custom-tag>z2</custom-tag>",
+      "ids": ["z2"]
+    },
+    {
+      "markdown": "# <wbr>w1",
+      "ids": ["w1"]
+    },
+    {
+      "markdown": "# <svg></svg>z3",
+      "ids": ["z3"]
+    },
+    {
+      "markdown": "# <!---->z7",
+      "ids": ["z7"]
+    },
+    {
+      "markdown": "# Trail ",
+      "ids": ["trail"]
+    },
+    {
+      "markdown": "# Trail2   ",
+      "ids": ["trail2"]
+    },
+    {
+      "markdown": " # Lead",
+      "ids": ["lead"]
+    },
+    {
+      "markdown": "#   Lead2",
+      "ids": ["lead2"]
+    },
+    {
+      "markdown": "# 🇮🇳 India",
+      "ids": ["-india"]
+    },
+    {
+      "markdown": "# 1️⃣ One",
+      "ids": ["1️⃣-one"]
+    },
+    {
+      "markdown": "# ©️ Copy",
+      "ids": ["️-copy"]
+    },
+    {
+      "markdown": "# ™ tm",
+      "ids": ["-tm"]
+    },
+    {
+      "markdown": "# ℃ deg",
+      "ids": ["-deg"]
+    },
+    {
+      "markdown": "# ℓ ell",
+      "ids": ["ℓ-ell"]
+    },
+    {
+      "markdown": "# ª o",
+      "ids": ["ª-o"]
+    },
+    {
+      "markdown": "# º o2",
+      "ids": ["º-o2"]
+    },
+    {
+      "markdown": "# ⅓ third",
+      "ids": ["-third"]
+    },
+    {
+      "markdown": "# 한글 제목",
+      "ids": ["한글-제목"]
+    },
+    {
+      "markdown": "# مرحبا بالعالم",
+      "ids": ["مرحبا-بالعالم"]
+    },
+    {
+      "markdown": "# שלום עולם",
+      "ids": ["שלום-עולם"]
+    },
+    {
+      "markdown": "# हिन्दी शीर्षक",
+      "ids": ["हिन्दी-शीर्षक"]
+    },
+    {
+      "markdown": "# ภาษาไทย",
+      "ids": ["ภาษาไทย"]
+    },
+    {
+      "markdown": "# Привет Мир",
+      "ids": ["привет-мир"]
+    },
+    {
+      "markdown": "# Tiếng Việt",
+      "ids": ["tiếng-việt"]
+    },
+    {
+      "markdown": "# İI ıi",
+      "ids": ["i̇i-ıi"]
+    },
+    {
+      "markdown": "# Ⴀ ა Ა",
+      "ids": ["ⴀ-ა-ა"]
+    },
+    {
+      "markdown": "# Ꭰ ꭰ",
+      "ids": ["ꭰ-ꭰ"]
+    },
+    {
+      "markdown": "# K Å Ω",
+      "ids": ["k-å-ω"]
+    },
+    {
+      "markdown": "# ϴ ΐ",
+      "ids": ["θ-ΐ"]
+    },
+    {
+      "markdown": "# ß ss",
+      "ids": ["ß-ss"]
+    },
+    {
+      "markdown": "# ـ tatweel",
+      "ids": ["ـ-tatweel"]
+    },
+    {
+      "markdown": "# ゛゜ー",
+      "ids": ["ー"]
+    },
+    {
+      "markdown": "# ㄅ",
+      "ids": ["ㄅ"]
+    },
+    {
+      "markdown": "# ꙮ",
+      "ids": ["ꙮ"]
+    },
+    {
+      "markdown": "# a​b",
+      "ids": ["ab"]
+    },
+    {
+      "markdown": "# a‌b",
+      "ids": ["a‌b"]
+    },
+    {
+      "markdown": "# a‍b",
+      "ids": ["a‍b"]
+    },
+    {
+      "markdown": "# a­b",
+      "ids": ["ab"]
+    },
+    {
+      "markdown": "# a﻿b",
+      "ids": ["ab"]
+    },
+    {
+      "markdown": "# a⁠b",
+      "ids": ["ab"]
+    },
+    {
+      "markdown": "# ![i](i.png)\n\n# ![j](j.png)\n\n# 🚀",
+      "ids": ["", "-1", "-2"]
+    },
+    {
+      "markdown": "# $m1$\n\n# $m2$",
+      "ids": ["m1", "m2"]
+    },
+    {
+      "markdown": "# Über uns",
+      "ids": ["über-uns"]
+    },
+    {
+      "markdown": "# Größe und Maße",
+      "ids": ["größe-und-maße"]
+    },
+    {
+      "markdown": "# Änderungen",
+      "ids": ["änderungen"]
+    },
+    {
+      "markdown": "# Setup & Config",
+      "ids": ["setup--config"]
+    },
+    {
+      "markdown": "# Tools & Tips",
+      "ids": ["tools--tips"]
+    },
+    {
+      "markdown": "# What's new?",
+      "ids": ["whats-new"]
+    },
+    {
+      "markdown": "# 1. Introduction",
+      "ids": ["1-introduction"]
+    },
+    {
+      "markdown": "# The foo option",
+      "ids": ["the-foo-option"]
+    },
+    {
+      "markdown": "# snake_case name",
+      "ids": ["snake_case-name"]
+    },
+    {
+      "markdown": "# 🚀 Launch",
+      "ids": ["-launch"]
+    },
+    {
+      "markdown": "# ⚠️ Warning",
+      "ids": ["️-warning"]
+    },
+    {
+      "markdown": "# Foo — bar",
+      "ids": ["foo--bar"]
+    },
+    {
+      "markdown": "# 日本語 見出し",
+      "ids": ["日本語-見出し"]
+    },
+    {
+      "markdown": "# Mixed Case Anchor",
+      "ids": ["mixed-case-anchor"]
+    },
+    {
+      "markdown": "# C++ & C#",
+      "ids": ["c--c"]
+    },
+    {
+      "markdown": "# Trailing dash -",
+      "ids": ["trailing-dash--"]
+    },
+    {
+      "markdown": "# a.b/c:d",
+      "ids": ["abcd"]
+    },
+    {
+      "markdown": "# Version 2",
+      "ids": ["version-2"]
+    },
+    {
+      "markdown": "# 日本語　見出し",
+      "ids": ["日本語見出し"]
+    },
+    {
+      "markdown": "# می‌خواهم",
+      "ids": ["می‌خواهم"]
+    },
+    {
+      "markdown": "# 👨‍👩‍👧 Family",
+      "ids": ["‍‍-family"]
+    },
+    {
+      "markdown": "# Area in m²",
+      "ids": ["area-in-m"]
+    },
+    {
+      "markdown": "# ① First step",
+      "ids": ["-first-step"]
+    },
+    {
+      "markdown": "# ½ cup",
+      "ids": ["-cup"]
+    },
+    {
+      "markdown": "# Ⓐ Option",
+      "ids": ["ⓐ-option"]
+    },
+    {
+      "markdown": "# ΟΔΟΣ",
+      "ids": ["οδοσ"]
+    },
+    {
+      "markdown": "# Über uns",
+      "ids": ["über-uns"]
+    },
+    {
+      "markdown": "# My Project ![CI](b.svg)",
+      "ids": ["my-project-"]
+    },
+    {
+      "markdown": "# ![Logo](l.png) My Project",
+      "ids": ["-my-project"]
+    },
+    {
+      "markdown": "# <!-- c --> After",
+      "ids": ["-after"]
+    },
+    {
+      "markdown": "# ![a](x.png)",
+      "ids": [""]
+    },
+    {
+      "markdown": "# Notes\n\n# Notes\n\n# Notes-1",
+      "ids": ["notes", "notes-1", "notes-1-1"]
+    },
+    {
+      "markdown": "# $x$ and $y$",
+      "ids": ["x-and-y"]
+    },
+    {
+      "markdown": "# $x$ $y$",
+      "ids": ["x-y"]
+    },
+    {
+      "markdown": "# $\\alpha + \\beta$",
+      "ids": ["alpha--beta"]
+    },
+    {
+      "markdown": "# $a_b$ x",
+      "ids": ["a_b-x"]
+    },
+    {
+      "markdown": "# $a*b*c$",
+      "ids": ["abc"]
+    },
+    {
+      "markdown": "# $x$!",
+      "ids": ["x"]
+    },
+    {
+      "markdown": "# $`x^2`$",
+      "ids": ["x2"]
+    },
+    {
+      "markdown": "# $$x$$",
+      "ids": ["x"]
+    },
+    {
+      "markdown": "# Math $a\\$b$ z",
+      "ids": ["math-ab-z"]
+    },
+    {
+      "markdown": "# $E = mc^2$",
+      "ids": ["e--mc2"]
+    },
+    {
+      "markdown": "# **$x$** y",
+      "ids": ["x-y"]
+    },
+    {
+      "markdown": "# [$x$](u) y",
+      "ids": ["x-y"]
+    },
+    {
+      "markdown": "# $A$ upper",
+      "ids": ["a-upper"]
+    },
+    {
+      "markdown": "# $Ä$",
+      "ids": ["ä"]
+    },
+    {
+      "markdown": "# $\\frac{a}{b}$",
+      "ids": ["fracab"]
+    },
+    {
+      "markdown": "# $a b$ c",
+      "ids": ["a-b-c"]
+    },
+    {
+      "markdown": "# $x$ ![i](i.png)",
+      "ids": ["x-"]
+    },
+    {
+      "markdown": "# ![i](i.png) $x$",
+      "ids": ["-x"]
+    },
+    {
+      "markdown": "# $x$1",
+      "ids": ["x1"]
+    },
+    {
+      "markdown": "# $5$200 x",
+      "ids": ["5200-x"]
+    },
+    {
+      "markdown": "# a$x$b",
+      "ids": ["axb"]
+    },
+    {
+      "markdown": "# Foo $a$\n\n# Foo $a$",
+      "ids": ["foo-a", "foo-a-1"]
+    },
+    {
+      "markdown": "# Foo\n\n# $foo$",
+      "ids": ["foo", "foo-1"]
+    },
+    {
+      "markdown": "# $x$\n\n# x\n\n# $x$",
+      "ids": ["x", "x-1", "x-2"]
+    },
+    {
+      "markdown": "# x $a$, $b$.",
+      "ids": ["x-a-b"]
+    },
+    {
+      "markdown": "# foo‿bar",
+      "ids": ["foo‿bar"]
+    },
+    {
+      "markdown": "# foo⁀bar",
+      "ids": ["foo⁀bar"]
+    },
+    {
+      "markdown": "# Foo\n\n# user-content-foo",
+      "ids": ["foo", "user-content-foo"]
+    },
+    {
+      "markdown": "# user-content-foo",
+      "ids": ["user-content-foo"]
+    },
+    {
+      "markdown": "# Foo &nbsp;",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# &nbsp;Foo",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "# Foo <br>",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# <br> Foo",
+      "ids": ["-foo"]
+    },
+    {
+      "markdown": "# Foo ",
+      "ids": ["foo"]
+    },
+    {
+      "markdown": "# Setup & Config\n\n# Setup Config",
+      "ids": ["setup--config", "setup-config"]
+    },
+    {
+      "markdown": "# Über uns\n\n# Ber uns",
+      "ids": ["über-uns", "ber-uns"]
+    },
+    {
+      "markdown": "# Foo\n\n# Foo ![i](i.png)\n\n# Foo",
+      "ids": ["foo", "foo-", "foo-1"]
+    },
+    {
+      "markdown": "# Project ![CI](b.svg)\n\n## Project",
+      "ids": ["project-", "project"]
+    },
+    {
+      "markdown": "# 🚀 🚀\n\n# 🚀",
+      "ids": ["-", ""]
+    },
+    {
+      "markdown": "# Foo&#32;",
+      "ids": ["foo-"]
+    },
+    {
+      "markdown": "# &#32;Foo",
+      "ids": ["-foo"]
+    }
+  ]
+}

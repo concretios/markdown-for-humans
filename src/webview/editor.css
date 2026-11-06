@@ -2841,6 +2841,10 @@
   transition: background-color 0.3s ease;
 }
 
+.validation-error-highlight.validation-older-anchor {
+  text-decoration-color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
 .audit-overlay {
   position: fixed;
   top: 0;

@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Links to headings with non-English letters or punctuation now jump to the heading. `[Über uns](#über-uns)` and `[Setup](#setup--config)` did nothing on Cmd/Ctrl+click and **Document Audit** reported them as broken, because the editor worked out a different anchor from GitHub's. Percent-encoded links and links in a different case also work.
+- The link dialog writes the anchor GitHub generates. A space typed at the start or end of a heading is left out, because Markdown drops it on save. The dialog no longer offers a heading whose anchor would be empty, such as `# 🚀`, because a link to it could not work.
+- Headings with inline math have GitHub's anchor: `# Energy $E=mc^2$ rule` is `#energy-emc2-rule`. Links in the older form still work.
+- Links copied from GitHub's HTML, such as `#user-content-license`, now work, and **Document Audit** suggests a fix for a percent-encoded typo.
+- Links in the older form (`#ber-uns`) keep working. The exception is when another heading now has that exact anchor: the link then goes to that heading, as it does on GitHub.
+- **Document Audit** now lists a link in the older form that is dead on GitHub, such as `#ber-uns`, with the current anchor as its fix. The link still jumps on Cmd/Ctrl+click, and nothing changes until you apply the fix, which keeps the link's title. Its underline uses the warning style, not the error style, because the link works here. The text was translated by AI for the five shipped languages.
+- **Document Audit** no longer calls a bare `[top](#)` broken or offers to replace it. Cmd/Ctrl+click on it is unchanged.
+- **Document Audit** fixes now work on link text formatted as code, such as ``[`setup`](#old)``, on heading, file and URL links. The fix used to change nothing and still report "All fixed!". A fix that cannot change the document now keeps its row and says so.
+- Editing elsewhere in a paragraph no longer merges code-formatted text that touches a link or other formatting into one code span. ``[`a`](#x)[`b`](#y)`` and `` `x`[`a`](#y) `` saved as one code span with the link syntax as literal text, so the links were lost.
+- A `#` typed at the end of a heading after a space, such as `# Issue #`, now survives saving, written as `\#`. Markdown read it as a closing marker, so it disappeared on the next open and the heading's anchor changed.
+- Typing next to a link formatted as code, such as ``[`setup`](#setup)``, no longer removes the link. A letter typed right before or after it, or between two of them, saved the text as plain code: ``[`one`](#a)[`two`](#b)`` became `` `one`x`two` ``. The link dialog can now link text formatted as code, and pasting a code link keeps the link.
+
 ---
 
 ## [0.4.5] - 2026-10-14

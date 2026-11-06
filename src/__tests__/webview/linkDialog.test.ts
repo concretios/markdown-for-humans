@@ -97,6 +97,88 @@ const createMockEditor = (overrides: Record<string, unknown> = {}) => {
 };
 
 describe('linkDialog', () => {
+  describe('heading list', () => {
+    const openHeadingList = (headingTexts: string[]) => {
+      const descendants = (visit: (node: unknown, pos: number) => void) => {
+        headingTexts.forEach((textContent, pos) => {
+          visit(
+            {
+              type: { name: 'heading' },
+              attrs: { level: 1 },
+              textContent,
+              nodeSize: 1,
+              childCount: 1,
+              forEach: (each: (child: unknown, offset: number, index: number) => void) =>
+                each({ type: { name: 'text' }, isText: true, marks: [], text: textContent }, 0, 0),
+            },
+            pos
+          );
+        });
+      };
+      const create = jest.fn(attrs => ({ attrs }));
+      const tr = {
+        removeMark: jest.fn(),
+        insertText: jest.fn(),
+        addMark: jest.fn(),
+        setSelection: jest.fn(),
+      };
+      const chain: { focus: jest.Mock; run: jest.Mock } = {
+        focus: jest.fn(() => chain),
+        run: jest.fn(),
+      };
+      const editor = createMockEditor({
+        state: {
+          selection: { from: 0, to: 0, empty: true, $from: {} as unknown },
+          schema: { marks: { link: { create } } },
+          tr,
+          doc: {
+            descendants,
+            content: { size: headingTexts.length },
+            textBetween: jest.fn(() => ''),
+            resolve: () => ({ depth: 0, parent: { textContent: 'go' }, start: () => 0 }),
+          },
+        } as unknown,
+        chain: jest.fn(() => chain),
+      });
+      mockGetMarkRange.mockReturnValue(null);
+      showLinkDialog(editor);
+
+      const radio = document.querySelector('#link-mode-headings') as HTMLInputElement;
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change'));
+      (document.querySelector('#link-url-input') as HTMLInputElement).dispatchEvent(
+        new Event('focus')
+      );
+
+      return {
+        create,
+        items: () =>
+          Array.from(
+            document.querySelectorAll<HTMLElement>('.link-dialog-autocomplete-item-heading')
+          ),
+      };
+    };
+
+    it('does not offer a heading that has no anchor', () => {
+      const { items } = openHeadingList(['🚀', 'Über uns', '🚀']);
+
+      expect(items().map(item => item.textContent?.split(':')[0].trim())).toEqual([
+        'Über uns',
+        '🚀',
+      ]);
+    });
+
+    it('writes the GitHub anchor of the heading picked', () => {
+      const { items, create } = openHeadingList(['Über uns']);
+
+      items()[0].click();
+      (document.querySelector('#link-text-input') as HTMLInputElement).value = 'go';
+      (document.querySelector('#link-ok-btn') as HTMLButtonElement).click();
+
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ href: '#über-uns' }));
+    });
+  });
+
   it('prefills full link text and URL when cursor is inside a link mark', () => {
     const doc = { textBetween: jest.fn(() => 'product') };
     const selection = { from: 0, to: 0, empty: true, $from: {} as unknown };
@@ -290,7 +372,7 @@ describe('linkDialog localization', () => {
     'Start typing to search files...': '开始输入以搜索文件...',
     'Select a heading from the list below': '从下方列表选择标题',
     'No files found': '未找到文件',
-    'No headings in this document': '此文档中没有标题',
+    'No headings to link to': '没有可链接的标题',
   };
 
   const dialogText = (dialog: HTMLElement, selector: string): string | undefined =>
@@ -407,7 +489,7 @@ describe('linkDialog localization', () => {
       expect(dialogText(dialog, '.link-dialog-autocomplete-empty')).toBe('未找到文件');
 
       openMode(dialog, 'headings').dispatchEvent(new Event('focus'));
-      expect(dialogText(dialog, '.link-dialog-autocomplete-empty')).toBe('此文档中没有标题');
+      expect(dialogText(dialog, '.link-dialog-autocomplete-empty')).toBe('没有可链接的标题');
     } finally {
       delete (window as unknown as { vscode?: unknown }).vscode;
       jest.useRealTimers();

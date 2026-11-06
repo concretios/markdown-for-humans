@@ -141,6 +141,82 @@ describe('Audit Document Feature', () => {
     });
   });
 
+  it.each(['#über-uns', '#%C3%BCber-uns', '#ÜBER-UNS'])(
+    'should not report a link to a heading with an umlaut written as %s',
+    async anchor => {
+      editor.commands.setContent(`# Über uns\n\n[link](${anchor})`, { contentType: 'markdown' });
+
+      expect(await runAudit(editor)).toHaveLength(0);
+    }
+  );
+
+  it('should report an older-form link with the current anchor as its fix', async () => {
+    editor.commands.setContent('# Über uns\n\n[link](#ber-uns)', { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      type: 'heading',
+      message: 'Link works in this editor but not on GitHub: #ber-uns',
+      target: 'ber-uns',
+      suggestions: ['über-uns'],
+      olderFormAnchor: true,
+    });
+  });
+
+  it('should not mark a missing anchor as an older form', async () => {
+    editor.commands.setContent('# Über uns\n\n[link](#über-unss)', { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].message).toBe('Heading anchor not found: #über-unss');
+    expect(results[0].olderFormAnchor).toBeUndefined();
+  });
+
+  it('should suggest the GitHub form of a heading anchor', async () => {
+    editor.commands.setContent('# Setup & Config\n\n[link](#setup-configs)', {
+      contentType: 'markdown',
+    });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].suggestions).toEqual(['setup--config']);
+  });
+
+  it.each([
+    ['# 日本語　見出し', '#日本語見出し'],
+    ['# ΟΔΟΣ', '#οδοσ'],
+    ['# Area in m²', '#area-in-m'],
+    ['# My Project ![CI](b.svg)', '#my-project-'],
+  ])('should not report the GitHub anchor of %s', async (heading, anchor) => {
+    editor.commands.setContent(`${heading}\n\n[link](${anchor})`, { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results.filter(issue => issue.type === 'heading')).toHaveLength(0);
+  });
+
+  it('should still accept a bare # written for a heading with no ASCII letters', async () => {
+    editor.commands.setContent('# 日本語\n\n[link](#)', { contentType: 'markdown' });
+
+    expect(await runAudit(editor)).toHaveLength(0);
+  });
+
+  it('should not report a bare # when no heading has that older anchor', async () => {
+    editor.commands.setContent('# Foo\n\n[link](#)', { contentType: 'markdown' });
+
+    expect(await runAudit(editor)).toHaveLength(0);
+  });
+
+  it('should not offer a heading with no anchor as a suggestion', async () => {
+    editor.commands.setContent('# 🚀\n\n[link](#ab)', { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].suggestions).toBeUndefined();
+  });
+
   it('should not report issues for valid heading anchor', async () => {
     editor.commands.setContent('# Existing Heading\n\n[link](#existing-heading)', {
       contentType: 'markdown',
@@ -335,6 +411,8 @@ describe('Audit Document Feature', () => {
       'Image file not found: {0}': '找不到图片文件: {0}',
       'Heading anchor not found: #{0}': '找不到标题锚点: #{0}',
       'Broken link URL: {0}': '链接地址已失效: {0}',
+      'Link works in this editor but not on GitHub: #{0}':
+        '链接在此编辑器中有效，但在 GitHub 上无效：#{0}',
     };
 
     afterEach(() => {
@@ -356,6 +434,15 @@ describe('Audit Document Feature', () => {
       const results = await runAudit(editor);
 
       expect(results[0].message).toBe('图片没有源路径。');
+    });
+
+    it('translates the older-form link message', async () => {
+      l10n.configureL10n(sampleBundle);
+      editor.commands.setContent('# Über uns\n\n[link](#ber-uns)', { contentType: 'markdown' });
+
+      const results = await runAudit(editor);
+
+      expect(results[0].message).toBe('链接在此编辑器中有效，但在 GitHub 上无效：#ber-uns');
     });
 
     it('translates a message that carries the target', async () => {

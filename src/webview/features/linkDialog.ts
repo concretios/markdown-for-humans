@@ -11,7 +11,8 @@
 import { getMarkRange, Editor } from '@tiptap/core';
 import { TextSelection } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { buildOutlineFromEditor } from '../utils/outline';
+import { generateHeadingSlug, type SeenSlugs } from '../utils/headingSlug';
+import { getHeadingsWithAnchorText } from '../utils/outline';
 import * as l10n from '../l10n';
 
 type Range = { from: number; to: number };
@@ -58,29 +59,6 @@ let fileSearchRequestId = 0;
 let actualLinkPath: string | null = null; // Store actual path separately from displayed value
 
 const isWhitespace = (char: string) => /\s/.test(char);
-
-/**
- * Generate GFM-style slug from heading text with duplicate handling
- */
-function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
-  const slug = text
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  let finalSlug = slug;
-  let counter = 1;
-  while (existingSlugs.has(finalSlug)) {
-    finalSlug = `${slug}-${counter}`;
-    counter++;
-  }
-
-  existingSlugs.add(finalSlug);
-  return finalSlug;
-}
 
 /**
  * Load filter state from localStorage
@@ -416,7 +394,7 @@ function updateAutocompleteDropdown(
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'link-dialog-autocomplete-empty';
     emptyMsg.textContent =
-      currentMode === 'file' ? l10n.t('No files found') : l10n.t('No headings in this document');
+      currentMode === 'file' ? l10n.t('No files found') : l10n.t('No headings to link to');
     dropdown.appendChild(emptyMsg);
     dropdown.style.display = 'block';
     return;
@@ -624,13 +602,15 @@ function handleFileSearch(query: string, filters: FileFilterState): void {
  */
 function handleHeadingExtraction(editor: Editor, query: string, urlInput: HTMLInputElement): void {
   try {
-    const outline = buildOutlineFromEditor(editor);
-    const existingSlugs = new Set<string>();
-    const headingResults: HeadingResult[] = outline.map(entry => ({
-      text: entry.text,
-      level: entry.level,
-      slug: generateHeadingSlug(entry.text, existingSlugs),
-    }));
+    const seenSlugs: SeenSlugs = new Map();
+    const headingResults: HeadingResult[] = getHeadingsWithAnchorText(editor)
+      .map(heading => {
+        const slug = generateHeadingSlug(heading.anchorText, seenSlugs);
+        // A heading of inline math alone has no text to show, so show its anchor.
+        return { text: heading.text.trim() ? heading.text : slug, level: heading.level, slug };
+      })
+      // An empty anchor cannot be linked to: on GitHub a bare # is the top of the page.
+      .filter(heading => heading.slug);
 
     const filtered = query.trim()
       ? headingResults.filter(
