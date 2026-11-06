@@ -159,6 +159,7 @@
   "Could not allocate a unique feedback round. Try starting feedback again.": "Не удалось выделить уникальный раунд замечаний. Попробуйте запустить режим замечаний ещё раз.",
   "Could not apply pending editor changes before starting feedback.": "Не удалось применить ожидающие изменения редактора перед запуском режима замечаний.",
   "Could not apply the latest editor changes, so feedback did not start.": "Не удалось применить последние изменения редактора, поэтому режим замечаний не запущен.",
+  "Could not apply this fix. The document was not changed.": "Не удалось применить это исправление. Документ не изменён.",
   "Could not capture the selection.": "Не удалось захватить выделенный фрагмент.",
   "Could not capture those blocks.": "Не удалось захватить эти блоки.",
   "Could not copy a reference for AI.": "Не удалось скопировать ссылку для ИИ.",
@@ -440,7 +441,7 @@
   "No approximate positions were used.": "Приблизительные положения не использовались.",
   "No feedback logged yet": "Замечаний пока нет",
   "No files found": "Файлы не найдены",
-  "No headings in this document": "В этом документе нет заголовков",
+  "No headings to link to": "Нет заголовков, на которые можно сослаться",
   "No headings yet.": "Заголовков пока нет.",
   "No mappable Markdown blocks are available to capture.": "Нет доступных для захвата блоков Markdown, которые можно сопоставить с исходным текстом.",
   "No markdown document open": "Нет открытого документа Markdown",
@@ -902,5 +903,7 @@
   "GitHub Copilot is not available. Copied {0} to the clipboard instead.": "GitHub Copilot недоступен. {0} скопирован в буфер обмена.",
   "Not added: the file has changes that could not be saved.": "Не добавлено: в файле есть изменения, которые не удалось сохранить.",
   "Saved the file and added {0} to GitHub Copilot (context {1})": "Файл сохранён, и {0} добавлен в GitHub Copilot (контекст {1})",
-  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "Этот документ нельзя прикрепить к GitHub Copilot. {0} скопирован в буфер обмена."
+  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "Этот документ нельзя прикрепить к GitHub Copilot. {0} скопирован в буфер обмена.",
+  "Link works in this editor but not on GitHub: #{0}": "Ссылка работает в этом редакторе, но не на GitHub: #{0}",
+  "Update the link to the anchor GitHub uses:": "Обновите ссылку, указав якорь, который использует GitHub:"
 }

@@ -159,6 +159,7 @@
   "Could not allocate a unique feedback round. Try starting feedback again.": "无法分配唯一的反馈轮次。请尝试重新开始反馈。",
   "Could not apply pending editor changes before starting feedback.": "无法在开始反馈前应用待处理的编辑器更改。",
   "Could not apply the latest editor changes, so feedback did not start.": "无法应用最新的编辑器更改，因此未开始反馈。",
+  "Could not apply this fix. The document was not changed.": "无法应用此修复。文档未更改。",
   "Could not capture the selection.": "无法截取所选内容。",
   "Could not capture those blocks.": "无法截取这些块。",
   "Could not copy a reference for AI.": "无法复制供 AI 使用的引用。",
@@ -440,7 +441,7 @@
   "No approximate positions were used.": "未使用任何近似位置。",
   "No feedback logged yet": "尚未记录反馈",
   "No files found": "未找到文件",
-  "No headings in this document": "此文档中没有标题",
+  "No headings to link to": "没有可链接的标题",
   "No headings yet.": "暂无标题。",
   "No mappable Markdown blocks are available to capture.": "没有可映射的 Markdown 块可供截取。",
   "No markdown document open": "没有打开的 Markdown 文档",
@@ -902,5 +903,7 @@
   "GitHub Copilot is not available. Copied {0} to the clipboard instead.": "GitHub Copilot 不可用。已改为将 {0} 复制到剪贴板。",
   "Not added: the file has changes that could not be saved.": "未添加: 文件有无法保存的更改。",
   "Saved the file and added {0} to GitHub Copilot (context {1})": "已保存文件并将 {0} 添加到 GitHub Copilot (上下文 {1})",
-  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "此文档无法附加到 GitHub Copilot。已改为将 {0} 复制到剪贴板。"
+  "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "此文档无法附加到 GitHub Copilot。已改为将 {0} 复制到剪贴板。",
+  "Link works in this editor but not on GitHub: #{0}": "链接在此编辑器中有效，但在 GitHub 上无效：#{0}",
+  "Update the link to the anchor GitHub uses:": "请将链接更新为 GitHub 使用的锚点："
 }

@@ -5,6 +5,7 @@
  */
 
 import { Editor } from '@tiptap/core';
+import { buildHeadingAnchors, headingAnchorText, resolveHeadingAnchor } from './headingSlug';
 
 export interface OutlineEntry {
   level: number;
@@ -67,4 +68,37 @@ export function buildOutlineFromEditor(editor: Editor): OutlineEntry[] {
   });
 
   return computeOutline(headings, doc.content.size);
+}
+
+export interface HeadingWithAnchorText {
+  level: number;
+  text: string;
+  anchorText: string;
+  pos: number;
+}
+
+/** Every heading with what a link to it needs. Display text stays in `text`. */
+export function getHeadingsWithAnchorText(editor: Editor): HeadingWithAnchorText[] {
+  const headings: HeadingWithAnchorText[] = [];
+
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'heading') {
+      headings.push({
+        level: node.attrs.level as number,
+        text: node.textContent,
+        anchorText: headingAnchorText(node),
+        pos,
+      });
+    }
+    return true;
+  });
+
+  return headings;
+}
+
+/** Position of the heading a link fragment (the part after #) points to, if any. */
+export function findHeadingPos(editor: Editor, fragment: string): number | undefined {
+  const headings = getHeadingsWithAnchorText(editor);
+  const index = resolveHeadingAnchor(buildHeadingAnchors(headings), fragment);
+  return index === undefined ? undefined : headings[index].pos;
 }
