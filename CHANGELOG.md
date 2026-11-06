@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Document Audit** now lists a link in the older form that is dead on GitHub, such as `#ber-uns`, with the current anchor as its fix. The link still jumps on Cmd/Ctrl+click, and nothing changes until you apply the fix, which keeps the link's title. Its underline uses the warning style, not the error style, because the link works here. The text was translated by AI for the five shipped languages.
 - **Document Audit** no longer calls a bare `[top](#)` broken or offers to replace it. Cmd/Ctrl+click on it is unchanged.
 - **Document Audit** fixes now work on link text formatted as code, such as ``[`setup`](#old)``, on heading, file and URL links. The fix used to change nothing and still report "All fixed!". A fix that cannot change the document now keeps its row and says so.
-- Editing a paragraph no longer merges code-formatted text that touches a link or other formatting into one code span. ``[`a`](#x)[`b`](#y)`` and `` `x`[`a`](#y) `` saved as one code span with the link syntax as literal text, so the links were lost.
+- Editing elsewhere in a paragraph no longer merges code-formatted text that touches a link or other formatting into one code span. ``[`a`](#x)[`b`](#y)`` and `` `x`[`a`](#y) `` saved as one code span with the link syntax as literal text, so the links were lost.
 - A `#` typed at the end of a heading after a space, such as `# Issue #`, now survives saving, written as `\#`. Markdown read it as a closing marker, so it disappeared on the next open and the heading's anchor changed.
 
 ---
