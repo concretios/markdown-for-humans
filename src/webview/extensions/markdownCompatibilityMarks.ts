@@ -8,6 +8,18 @@ import Code from '@tiptap/extension-code';
 import Link from '@tiptap/extension-link';
 
 /**
+ * Markdown destination for a link or image target. CommonMark ends a bare
+ * destination at the first space, so `[a](my file.md)` is not a link at all.
+ * Such a target must be written as `<my file.md>` to survive a reload.
+ *
+ * @param destination - The target as the editor holds it (`my file.md`).
+ * @returns The destination as Markdown source (`<my file.md>`).
+ */
+export function formatMarkdownDestination(destination: string): string {
+  return /\s/.test(destination) ? `<${destination}>` : destination;
+}
+
+/**
  * TipTap 3.30 nests Markdown marks by extension priority. Keep transparent
  * formatting marks outside links, matching the editor's established canonical
  * Markdown (`**[text](url)**` rather than `[**text**](url)`).
@@ -84,14 +96,15 @@ export const MarkdownLink = Link.extend({
     ) {
       return `<${text}>`;
     }
+    const destination = formatMarkdownDestination(href);
     if (!title) {
-      return `[${text}](${href})`;
+      return `[${text}](${destination})`;
     }
     if (title.includes('"') && !title.includes("'")) {
-      return `[${text}](${href} '${title.replace(/\\/g, '\\\\')}')`;
+      return `[${text}](${destination} '${title.replace(/\\/g, '\\\\')}')`;
     }
     const escapedTitle = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    return `[${text}](${href} "${escapedTitle}")`;
+    return `[${text}](${destination} "${escapedTitle}")`;
   },
 });
 
