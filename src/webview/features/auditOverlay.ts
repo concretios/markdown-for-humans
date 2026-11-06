@@ -913,8 +913,9 @@ function applyFix(
           : `#${suggestion}`
         : suggestion;
 
-    // addMark is refused on code text, because code excludes every other mark. Rewrite the
-    // run instead, which keeps its title and other marks. A position inside a text node means
+    // Rewrite the run's link instead of calling addMark: a new link mark would replace the old
+    // one and drop its title. The rewrite keeps the title and the run's other marks, code
+    // included. A position inside a text node means
     // an earlier fix merged this run with its neighbour, so the row no longer describes it.
     if (node && editor.state.doc.resolve(pos).textOffset === 0) {
       const marks = node.marks.map(mark =>
