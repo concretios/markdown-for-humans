@@ -41,7 +41,7 @@ describe('Mermaid zoom button', () => {
     await createEditor();
 
     expect(zoomButton()).not.toBeNull();
-    expect(zoomButton().getAttribute('aria-label')).toBe('Open diagram in full screen');
+    expect(zoomButton().getAttribute('aria-label')).toBe('Expand diagram');
   });
 
   it('should open the lightbox showing the rendered diagram', async () => {

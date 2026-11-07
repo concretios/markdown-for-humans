@@ -4,10 +4,10 @@
 
 - **Task name:** Mermaid diagram lightbox (zoom & pan)
 - **Slug:** mermaid-lightbox
-- **Status:** shipped
-- **Created:** 2026-08-15
-- **Last updated:** 2026-08-15
-- **Shipped:** 2026-08-15
+- **Status:** ready to merge, waiting for a release
+- **Created:** 2026-08-15 by [@yonatoasis](https://github.com/yonatoasis) (PR 78)
+- **Last updated:** 2026-11-07
+- **Shipped:** not yet
 
 ---
 
@@ -75,7 +75,7 @@
 - A drag that ends over empty space does not dismiss the viewer.
 - Scale is clamped to 10%–1000%.
 - The button is hidden when the diagram is empty or failed to render.
-- A failure to load the viewer module is logged, not surfaced — the diagram stays readable inline.
+- A failure to load the viewer module is logged, not surfaced; the diagram stays readable inline.
 
 ---
 
@@ -126,7 +126,7 @@
 
 ### 2026-08-15 – Built and shipped
 
-- **What:** Full feature, TDD throughout — four red/green cycles for the viewer, one for the NodeView button.
+- **What:** Full feature, TDD throughout: four red/green cycles for the viewer, one for the NodeView button.
 - **Files:** `mermaidLightbox.ts` (new), `mermaid.ts`, `editor.css`, two new test files.
 - **Notes:** Two bugs surfaced only because tests forced the drag-vs-click question: an early version closed the viewer when the zoom buttons were clicked, and again whenever a pan gesture ended over empty space.
 
@@ -135,6 +135,19 @@
 - **What:** Zooming past ~200% produced a soft, upscaled image.
 - **Files:** `editor.css`.
 - **Notes:** Cause was `will-change: transform` on `.mermaid-lightbox-canvas`. It promotes the element to a compositor layer rasterised once at its natural size (281px here), which the GPU then scaled to 2016px at 716% zoom. Isolated by comparing three variants at identical zoom in a real window: as-shipped (blurry), `will-change` removed (sharp), and SVG re-layout in pixels (sharp). Removing the hint was the smaller of the two fixes and equally sharp, so the transform approach stayed.
+
+### 2026-11-07 – Brought current with main (0.4.6) for merge
+
+- **What:** PR 78 was opened against 0.3.0; main moved 406 commits. Merged `origin/main`, kept the contributor's commit, then made the house gates pass.
+- **Files:** `mermaidLightbox.ts`, `mermaid.ts`, `editor.css`, the two test files, a new `mermaidLightboxDocument.realEditor.test.ts`, `l10n/` bundles, this plan.
+- **Notes:**
+  - Every label now goes through `l10n.t` / `l10n.html`; the five new messages were AI translated into the five shipped languages.
+  - The button label is "Expand diagram" (the overlay covers the editor pane, not the window).
+  - Wheel zoom scales with the wheel delta: a mouse notch is one step, a trackpad's many small deltas move a little each. The fixed step per event made trackpad zoom unusable.
+  - A second open while a viewer is up is ignored (a held Enter on the focused button repeats clicks).
+  - The zoom label is formatted for the display language (`Intl.NumberFormat`, percent style).
+  - Added a production-editor test proving the ProseMirror document, the selection and the serialized Markdown are byte-identical after open, zoom, pan, fit and close.
+  - Render-state tracking (`data-md4h-mermaid-state`) landed on main next to the button's visibility toggles; both are kept.
 
 ### 2026-08-15 – Self-review against `vibe-coding-rules/`
 
@@ -158,6 +171,5 @@
 
 - Inline zoom/pan on the diagram in the document flow, reusing the transform logic here.
 - `task-p0-mermaid-split-view` rebuilds this NodeView; the button and its event suppression will need re-wiring.
-- Rename the button's label — it says "Open diagram in full screen", but a webview overlay can only cover the editor pane.
 - Rapid repeated zooming can show brief softness mid-gesture while Chromium re-rasterises. Sizing the SVG in pixels instead of transforming it would remove this entirely.
 - `.mermaid-preview-btn` in `editor.css` is dead: nothing renders it, only a test fixture references it.

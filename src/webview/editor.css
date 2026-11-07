@@ -1206,7 +1206,7 @@
     box-shadow: 0 0 0 3px var(--vscode-focusBorder, rgba(0, 122, 204, 0.15));
   }
   
-  /* Zoom button — revealed on hover, sits in the corner ahead of the tooltip */
+  /* Zoom button: revealed on hover, sits in the corner ahead of the tooltip */
   .mermaid-zoom-btn {
     position: absolute;
     top: 8px;
@@ -6268,6 +6268,8 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
   display: flex;
   flex-direction: column;
   background: var(--vscode-editor-background);
+  /* The dialog takes focus on open; the controls carry the visible focus ring. */
+  outline: none;
 }
 
 .mermaid-lightbox-viewport {

@@ -4,22 +4,65 @@
  * Licensed under the MIT License. See LICENSE file in the project root for details.
  */
 
+import * as l10n from '../l10n';
+
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 10;
 const ZOOM_STEP = 1.2;
+/** Wheel delta, in pixels, that zooms by one full step. One mouse wheel notch is about 100. */
+const WHEEL_DELTA_PER_STEP = 100;
+const OVERLAY_CLASS = 'mermaid-lightbox-overlay';
+
+/** Zoom level for the controls, in the display language ("120%", "120 %"). */
+function formatPercent(scale: number): string {
+  const language = document.documentElement.lang || 'en-US';
+  try {
+    return new Intl.NumberFormat(language, {
+      style: 'percent',
+      maximumFractionDigits: 0,
+      useGrouping: false,
+    }).format(scale);
+  } catch {
+    // The host passes VS Code's language id through; an id the runtime rejects must not break the UI.
+    return `${Math.round(scale * 100)}%`;
+  }
+}
 
 /**
- * Full-screen viewer for a rendered mermaid diagram.
+ * Give the diagram its authored size, so 100% means the size Mermaid laid it out at.
+ *
+ * Mermaid emits `width="100%"` with a viewBox and an inline max-width. In the
+ * viewer's shrink-to-fit canvas a percentage width resolves to the 300px SVG
+ * fallback, which made the fitted view read as "347%" and 100% unreadable.
+ */
+function sizeToViewBox(diagram: SVGElement | null): void {
+  const parts =
+    diagram
+      ?.getAttribute('viewBox')
+      ?.trim()
+      .split(/[\s,]+/)
+      .map(Number) ?? [];
+  const [, , width, height] = parts;
+  if (!diagram || parts.length !== 4 || !(width > 0) || !(height > 0)) return;
+  diagram.style.width = `${width}px`;
+  diagram.style.height = `${height}px`;
+  diagram.style.maxWidth = 'none';
+}
+
+/**
+ * Viewer for a rendered mermaid diagram that fills the editor pane.
  * View-only: zoom and pan state lives here and is never written back to the document.
+ * A second call while a viewer is open does nothing (a held Enter key repeats clicks).
  */
 export function showMermaidLightbox(svg: string): void {
+  if (document.querySelector(`.${OVERLAY_CLASS}`)) return;
   const opener = document.activeElement as HTMLElement | null;
 
   const overlay = document.createElement('div');
-  overlay.className = 'mermaid-lightbox-overlay';
+  overlay.className = OVERLAY_CLASS;
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
-  overlay.setAttribute('aria-label', 'Diagram viewer');
+  overlay.setAttribute('aria-label', l10n.t('Diagram viewer'));
   // Focusable container so the dialog itself can hold focus on open.
   overlay.tabIndex = -1;
 
@@ -29,21 +72,25 @@ export function showMermaidLightbox(svg: string): void {
   const canvas = document.createElement('div');
   canvas.className = 'mermaid-lightbox-canvas';
   canvas.innerHTML = svg;
+  sizeToViewBox(canvas.querySelector('svg'));
 
   const controls = document.createElement('div');
   controls.className = 'mermaid-lightbox-controls';
+  const zoomOut = l10n.html('Zoom out');
+  const zoomIn = l10n.html('Zoom in');
+  const fitToView = l10n.html('Fit to view');
   controls.innerHTML = `
-    <button id="mlb-zoom-out" class="mermaid-lightbox-btn" title="Zoom out" aria-label="Zoom out">
+    <button id="mlb-zoom-out" class="mermaid-lightbox-btn" title="${zoomOut}" aria-label="${zoomOut}">
       <span class="codicon codicon-zoom-out"></span>
     </button>
-    <span class="mermaid-lightbox-zoom-level" aria-live="polite">100%</span>
-    <button id="mlb-zoom-in" class="mermaid-lightbox-btn" title="Zoom in" aria-label="Zoom in">
+    <span class="mermaid-lightbox-zoom-level" aria-live="polite"></span>
+    <button id="mlb-zoom-in" class="mermaid-lightbox-btn" title="${zoomIn}" aria-label="${zoomIn}">
       <span class="codicon codicon-zoom-in"></span>
     </button>
-    <button id="mlb-fit" class="mermaid-lightbox-btn" title="Fit to screen" aria-label="Fit to screen">
+    <button id="mlb-fit" class="mermaid-lightbox-btn" title="${fitToView}" aria-label="${fitToView}">
       <span class="codicon codicon-screen-normal"></span>
     </button>
-    <button id="mlb-close" class="mermaid-lightbox-btn" title="Close (Esc)" aria-label="Close">
+    <button id="mlb-close" class="mermaid-lightbox-btn" title="${l10n.html('Close (Esc)')}" aria-label="${l10n.html('Close')}">
       <span class="codicon codicon-close"></span>
     </button>
   `;
@@ -61,7 +108,7 @@ export function showMermaidLightbox(svg: string): void {
 
   const applyTransform = () => {
     canvas.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-    zoomLabel.textContent = `${Math.round(scale * 100)}%`;
+    zoomLabel.textContent = formatPercent(scale);
   };
 
   /** Zoom about a point given in pixels from the viewport centre, keeping that point stationary. */
@@ -79,7 +126,7 @@ export function showMermaidLightbox(svg: string): void {
     const diagram = canvas.firstElementChild?.getBoundingClientRect();
     tx = 0;
     ty = 0;
-    // Diagram or viewport not laid out yet (also the case under jsdom) — 1:1 is the honest default.
+    // Diagram or viewport not laid out yet (also the case under jsdom): 1:1 is the honest default.
     if (!diagram?.width || !diagram.height || !view.width || !view.height) {
       scale = 1;
     } else {
@@ -180,7 +227,11 @@ export function showMermaidLightbox(svg: string): void {
       const view = viewport.getBoundingClientRect();
       const originX = event.clientX - view.left - view.width / 2;
       const originY = event.clientY - view.top - view.height / 2;
-      zoomBy(event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, originX, originY);
+      // Scale by the delta: a mouse notch is one step, a trackpad sends many
+      // small deltas per second and each must move a little, not a full step.
+      // Clamped so one oversized event cannot jump further than a step.
+      const notches = Math.max(-1, Math.min(1, -event.deltaY / WHEEL_DELTA_PER_STEP));
+      zoomBy(Math.pow(ZOOM_STEP, notches), originX, originY);
     },
     { passive: false }
   );

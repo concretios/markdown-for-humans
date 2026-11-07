@@ -199,8 +199,8 @@ export const Mermaid = Node.create({
       const zoomButton = document.createElement('button');
       zoomButton.type = 'button';
       zoomButton.classList.add('mermaid-zoom-btn');
-      zoomButton.title = 'Open diagram in full screen';
-      zoomButton.setAttribute('aria-label', 'Open diagram in full screen');
+      zoomButton.title = l10n.t('Expand diagram');
+      zoomButton.setAttribute('aria-label', l10n.t('Expand diagram'));
       zoomButton.innerHTML = '<span class="codicon codicon-zoom-in"></span>';
       zoomButton.hidden = true;
 

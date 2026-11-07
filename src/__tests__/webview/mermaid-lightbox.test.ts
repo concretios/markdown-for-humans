@@ -25,6 +25,28 @@ describe('Mermaid lightbox: open and close', () => {
     expect(canvas().querySelector('#diagram')).not.toBeNull();
   });
 
+  it('should size the diagram from its viewBox so zoom is relative to the authored size', () => {
+    // Mermaid emits width="100%" plus a viewBox and an inline max-width. Inside the
+    // viewer's shrink-to-fit canvas a percentage width resolves to the 300px SVG
+    // fallback, so "100%" would mean nothing. The authored size is the viewBox.
+    showMermaidLightbox(
+      '<svg id="diagram" width="100%" viewBox="0 0 800 400" style="max-width: 800px;"></svg>'
+    );
+
+    const diagram = canvas().querySelector('svg') as SVGElement;
+    expect(diagram.style.width).toBe('800px');
+    expect(diagram.style.height).toBe('400px');
+    expect(diagram.style.maxWidth).toBe('none');
+  });
+
+  it('should leave an svg without a viewBox at its own size', () => {
+    showMermaidLightbox('<svg id="diagram" width="120" height="80"></svg>');
+
+    const diagram = canvas().querySelector('svg') as SVGElement;
+    expect(diagram.style.width).toBe('');
+    expect(diagram.style.height).toBe('');
+  });
+
   it('should close on Escape key', () => {
     showMermaidLightbox(SVG);
 
@@ -55,6 +77,16 @@ describe('Mermaid lightbox: open and close', () => {
     canvas().click();
 
     expect(overlay()).not.toBeNull();
+  });
+
+  it('should not open a second viewer while one is open', () => {
+    showMermaidLightbox(SVG);
+    showMermaidLightbox(SVG);
+
+    expect(document.querySelectorAll('.mermaid-lightbox-overlay')).toHaveLength(1);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(overlay()).toBeNull();
   });
 
   it('should stop responding to Escape once closed', () => {
@@ -140,6 +172,32 @@ describe('Mermaid lightbox: zoom', () => {
     canvas().dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true }));
 
     expect(scaleOf()).toBeLessThan(1);
+  });
+
+  it('should zoom by one full step on a mouse wheel notch', () => {
+    showMermaidLightbox(SVG);
+
+    canvas().dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
+
+    expect(scaleOf()).toBeCloseTo(1.2);
+  });
+
+  it('should zoom by a fraction of a step on a small trackpad delta', () => {
+    showMermaidLightbox(SVG);
+
+    canvas().dispatchEvent(new WheelEvent('wheel', { deltaY: -10, bubbles: true }));
+
+    // A trackpad fires dozens of small events per second; each must move a little.
+    expect(scaleOf()).toBeGreaterThan(1);
+    expect(scaleOf()).toBeLessThan(1.05);
+  });
+
+  it('should treat a huge single delta as one step at most', () => {
+    showMermaidLightbox(SVG);
+
+    canvas().dispatchEvent(new WheelEvent('wheel', { deltaY: -5000, bubbles: true }));
+
+    expect(scaleOf()).toBeCloseTo(1.2);
   });
 });
 
