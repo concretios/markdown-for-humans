@@ -123,7 +123,7 @@ The editor follows your VS Code display language. Menus, dialogs, messages, comm
 
 ![Edit Mermaid source beside the rendered view and watch the diagram update](https://raw.githubusercontent.com/concretios/markdown-for-humans/77fe1f0d8a388da2dd20ede7efb6065dc2e1f96a/marketplace-assets/gifs/v2/mermaid.gif)
 
-- **Mermaid diagrams:** edit the source beside the rendered view and the diagram updates as you type; 15 templates; double-click a diagram to edit its source in a dialog
+- **Mermaid diagrams:** edit the source beside the rendered view and the diagram updates as you type; 15 templates; double-click a diagram to edit its source in a dialog; hover a diagram and click the magnifier to zoom and pan it in a viewer that fills the editor pane
 - **Math:** LaTeX equations rendered with KaTeX
 - **GitHub alerts:** Note, Tip, Important, Warning and Caution callouts
 - **Code blocks:** syntax highlighting for 37 languages, including ABAP and C#, with a copy button
