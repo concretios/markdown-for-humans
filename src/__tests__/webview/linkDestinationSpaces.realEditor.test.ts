@@ -115,6 +115,27 @@ describe('link destinations with spaces', () => {
     editor.destroy();
   });
 
+  it.each([
+    ['a `>`', 'See [a](<my\\>x file.md>) now.', 'my>x file.md'],
+    ['a `<`', 'See [a](<my\\<x file.md>) now.', 'my<x file.md'],
+    ['a backslash before punctuation', 'See [a](<my\\\\*x file.md>) now.', 'my\\*x file.md'],
+    ['a Windows backslash', 'See [a](<C:\\My Docs\\a.md>) now.', 'C:\\My Docs\\a.md'],
+  ])('keeps a target with a space and %s as a link after an edit', (_label, source, href) => {
+    const editor = createEditor(source);
+    appendToFirstParagraph(editor, ' EDITED');
+    const saved = getEditorMarkdownForSync(editor);
+    expect(saved).toBe(`${source} EDITED`);
+    expect(linkHrefsAfterReload(saved)).toEqual([href]);
+    editor.destroy();
+  });
+
+  it('keeps an image whose path has a space and a `>` after an edit', () => {
+    const editor = createEditor('Look ![pic](<my\\>x pic.png>) here.');
+    appendToFirstParagraph(editor, ' EDITED');
+    expect(getEditorMarkdownForSync(editor)).toBe('Look ![pic](<my\\>x pic.png>) here. EDITED');
+    editor.destroy();
+  });
+
   it('leaves a link without spaces unbracketed', () => {
     const editor = createEditor('See [a](my-file.md) now.');
     appendToFirstParagraph(editor, ' EDITED');

@@ -11,13 +11,17 @@ import Link from '@tiptap/extension-link';
 /**
  * Markdown destination for a link or image target. CommonMark ends a bare
  * destination at the first space, so `[a](my file.md)` is not a link at all.
- * Such a target must be written as `<my file.md>` to survive a reload.
+ * Such a target must be written as `<my file.md>` to survive a reload. Inside
+ * the brackets `<` and `>` must be escaped, and so must a backslash that comes
+ * before ASCII punctuation, or it would read as an escape. Other backslashes
+ * (`C:\My Docs`) stay as they are.
  *
  * @param destination - The target as the editor holds it (`my file.md`).
  * @returns The destination as Markdown source (`<my file.md>`).
  */
 export function formatMarkdownDestination(destination: string): string {
-  return /\s/.test(destination) ? `<${destination}>` : destination;
+  if (!/\s/.test(destination)) return destination;
+  return `<${destination.replace(/[<>]|\\(?=[!-/:-@[-`{-~])/g, '\\$&')}>`;
 }
 
 /**
