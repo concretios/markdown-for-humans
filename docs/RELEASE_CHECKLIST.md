@@ -33,7 +33,7 @@ git checkout main && git pull
 npx vsce package
 az login --tenant concret.io --allow-no-subscriptions             # Entra sign-in, once per session (needs publisher membership)
 npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix   # VS Code Marketplace
-OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx publish markdown-for-humans-<x.y.z>.vsix   # Open VSX: the owner runs this (the token lives in the owner's macOS Keychain, not in an agent's shell)
+OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx publish markdown-for-humans-<x.y.z>.vsix   # Open VSX (token read from the owner's macOS Keychain; run only on the owner's explicit go)
 # NEVER use `vsce publish patch|minor|major`: it bumps the version at publish time
 
 # 6. Draft the GitHub release with the vsix attached (tag is created when you publish it)
@@ -145,12 +145,14 @@ Marketplace publishing uses Microsoft Entra sign-in. Do NOT create, paste or use
 - [ ] Get token from https://open-vsx.org/user-settings/tokens
 - [ ] Store it in the macOS Keychain, never in a dotfile: `security add-generic-password -a "$USER" -s ovsx-pat-concretio -w` (prompts for the value; nothing echoes)
   - Verify without printing it: `security find-generic-password -a "$USER" -s ovsx-pat-concretio -w >/dev/null && echo ok`
+  - Dry run: `OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx verify-pat concretio` checks the token against the namespace without publishing; expect "PAT valid to publish at concretio"
 - [ ] Create namespace: `ovsx create-namespace concretio -p <your-token>`
   - ⚠️ **Required before first publish** - namespace must match publisher in package.json
   - Only needed once per publisher
 
 **Every Release:**
-- [ ] The owner publishes the same vsix, reading the token from the Keychain: `OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx publish markdown-for-humans-<x.y.z>.vsix`. An agent has no token: it stops after the Marketplace publish and hands this step over
+- [ ] Dry run: `OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx verify-pat concretio` checks the token against the namespace without publishing; expect "PAT valid to publish at concretio"
+- [ ] Publish the same vsix, reading the token from the Keychain: `OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx publish markdown-for-humans-<x.y.z>.vsix`. Like the Marketplace publish, only on the owner's explicit go
 - [ ] Open VSX takes about 10 minutes (pre-publish scan) before the new version shows
 - [ ] Verify at https://open-vsx.org/extension/concretio/markdown-for-humans
 

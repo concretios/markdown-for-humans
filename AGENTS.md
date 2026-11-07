@@ -111,7 +111,7 @@ Everything committed, every PR description, commit message, issue comment and re
 - The version is bumped in a release PR (`npm version <x.y.z> --no-git-tag-version`, CHANGELOG dated, KNOWN_ISSUES version lines). `src/__tests__/release/releaseDocs.test.ts` fails the PR when any of those is stale.
 - The vsix is built once from merged `main` in the main checkout (not a worktree) and that same file goes to both stores.
 - VS Code Marketplace publishing uses Microsoft Entra (`az login`, then `vsce publish --azure-credential --packagePath`), never a PAT.
-- Open VSX publishing is the owner's step: `OVSX_PAT` is not in an agent's shell. Stop after the Marketplace publish and hand over.
+- Open VSX publishing reads the token from the owner's macOS Keychain (the checklist has the command). Like the Marketplace publish, run it only on the owner's explicit go.
 - Do not publish, tag or create the GitHub release without the user's explicit go.
 
 **Usage:** Proactively load guides when starting relevant work. The guides contain detailed patterns and examples.
