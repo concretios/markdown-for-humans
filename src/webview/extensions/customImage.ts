@@ -38,6 +38,7 @@ import {
   escapeImageAttribute,
 } from './htmlImageSource';
 import { isSvgImageSource } from '../../shared/imageSource';
+import { formatMarkdownDestination } from './markdownCompatibilityMarks';
 
 const INDENT_PIXELS_PER_LEVEL = 30;
 const INDENT_SPACES_PER_LEVEL = 4;
@@ -523,7 +524,7 @@ export const CustomImage = Image.extend({
       typeof linkTitle === 'string' && linkTitle
         ? ` "${linkTitle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
         : '';
-    return `${image.prefix}[${image.markdown.slice(image.prefix.length)}](${href}${title})`;
+    return `${image.prefix}[${image.markdown.slice(image.prefix.length)}](${formatMarkdownDestination(href)}${title})`;
   }) as unknown as (
     node: JSONContent,
     _helpers: MarkdownRendererHelpers,
@@ -563,7 +564,7 @@ function renderImageMarkdown(node: JSONContent): { markdown: string; prefix: str
       prefix: sourcePrefix + indentPrefix,
     };
   }
-  const formattedDestination = /\s/.test(destination) ? `<${destination}>` : destination;
+  const formattedDestination = formatMarkdownDestination(destination);
 
   // Use markdown-src if available (preserves original path with dimensions after resize)
   // Fall back to src if markdown-src is not set

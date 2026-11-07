@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Editing elsewhere in a paragraph no longer merges code-formatted text that touches a link or other formatting into one code span. ``[`a`](#x)[`b`](#y)`` and `` `x`[`a`](#y) `` saved as one code span with the link syntax as literal text, so the links were lost.
 - A `#` typed at the end of a heading after a space, such as `# Issue #`, now survives saving, written as `\#`. Markdown read it as a closing marker, so it disappeared on the next open and the heading's anchor changed.
 - Typing next to a link formatted as code, such as ``[`setup`](#setup)``, no longer removes the link. A letter typed right before or after it, or between two of them, saved the text as plain code: ``[`one`](#a)[`two`](#b)`` became `` `one`x`two` ``. The link dialog can now link text formatted as code, and pasting a code link keeps the link.
+- Links whose target has a space, such as `[a](<my file.md>)`, are no longer lost on save. Editing the paragraph, or a **Document Audit** fix to a path with a space (typed, suggested or picked with Browse), wrote `[a](my file.md)`, which Markdown does not read as a link, and Audit still reported "All fixed!". The same applies to the link around a linked image.
 
 ---
 
