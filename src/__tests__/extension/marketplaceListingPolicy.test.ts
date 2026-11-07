@@ -4,7 +4,7 @@
  * VS Code Marketplace search ranks extensions whose display name contains the
  * query phrase first, so the display name and every contributed label share
  * one product name. vsce does not enforce the documented 30 keyword cap, so
- * this test does. See roadmap/pipeline/task-marketplace-discoverability.md.
+ * this test does. See roadmap/shipped/task-marketplace-discoverability.md.
  */
 
 import fs from 'fs';

@@ -30,15 +30,18 @@ The workflow is:
 
 ```
 src/__tests__/
-├── features/           # Extension-side feature tests
-│   ├── wordCount.test.ts
-│   └── imageDragDrop.test.ts
-├── webview/            # Webview utility tests
-│   ├── pasteHandler.test.ts
-│   ├── copyMarkdown.test.ts
-│   ├── tocOverlay.test.ts
-│   └── imageConfirmation.test.ts
-└── setup.ts            # Jest setup and custom matchers
+├── editor/             # Extension host: provider, sync, Feedback services
+├── extension/          # Activation, commands, manifest policy
+├── features/           # Outline, export, word count
+├── webview/            # TipTap editor, serialization, *.realEditor.test.ts round trips
+├── shared/             # Protocols shared by host and webview
+├── l10n/               # Translation bundle and hardcoded-text guards
+├── release/            # Release docs guard
+├── audit/              # Source fidelity audit corpus
+├── fixtures/, helpers/
+├── setup.ts            # Jest setup and custom matchers
+└── setup-after-env.ts
+test/integration/       # Extension Development Host suite (*.extHost.test.cjs)
 ```
 
 ---

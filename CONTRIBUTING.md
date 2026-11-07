@@ -206,9 +206,17 @@ npm test -- --coverage
 
 ```
 src/__tests__/
-├── editor/           # Extension-side tests
-├── webview/          # Webview/TipTap tests
-└── fixtures/         # Test fixtures
+├── editor/           # Extension host: provider, sync, Feedback services
+├── extension/        # Activation, commands, manifest policy
+├── features/         # Outline, export, word count
+├── webview/          # TipTap editor, serialization, real-editor round trips
+├── shared/           # Protocols shared by host and webview
+├── l10n/             # Translation bundle and hardcoded-text guards
+├── release/          # Release docs guard (README table, CHANGELOG, KNOWN_ISSUES)
+├── audit/            # Source fidelity audit corpus
+├── fixtures/         # Markdown fixtures
+└── helpers/          # Test helpers
+test/integration/     # Extension Development Host suite (npm run test:integration)
 ```
 
 ### Writing Tests
@@ -258,7 +266,7 @@ After packaging, install the `.vsix` file locally to test:
 
 **Via Command Line:**
 ```bash
-code --install-extension markdown-for-humans-0.1.0.vsix
+code --install-extension markdown-for-humans-<x.y.z>.vsix
 ```
 
 **Via VS Code UI:**
@@ -309,8 +317,11 @@ npm run lint:fix
 # Check for linting issues
 npm run lint
 
-# Prettier runs automatically on save (VS Code)
+# Check types (CI runs this; the bundler and Jest do not check every file)
+npm run typecheck
 ```
+
+Prettier runs through ESLint (`plugin:prettier/recommended`), so `npm run lint:fix` formats the code.
 
 ### Commit Messages
 
@@ -383,7 +394,7 @@ We use a **planning-first approach** where features are planned before implement
    - The template includes placeholders and hints to guide you
 
 2. **If your tool has a plan feature** (like Cursor):
-   - Use it — plans are typically created in tool-specific locations (e.g., `.cursor/plans/`)
+   - Use it: plans are typically created in tool-specific locations (e.g., `.cursor/plans/`)
    - Move to pipeline when ready: `git mv [source]/[name].md roadmap/pipeline/[name].md`
 
 3. **If your tool doesn't have a plan mode:**
@@ -414,9 +425,10 @@ See [roadmap/README.md](./roadmap/README.md) for detailed planning workflow.
 
 ### Pull Request Checklist
 
-- [ ] Tests added/updated and passing
-- [ ] Linting passes (`npm run lint`)
+- [ ] Tests added/updated and passing (write the failing test first)
+- [ ] Linting passes (`npm run lint`) and types check (`npm run typecheck`)
 - [ ] Build succeeds (`npm run build:release`)
+- [ ] New or changed UI text is translatable and `npm run l10n:extract` was run (see [`vibe-coding-rules/localization.md`](./vibe-coding-rules/localization.md))
 - [ ] Documentation updated if needed
 - [ ] Commit messages follow conventions
 - [ ] PR description explains changes

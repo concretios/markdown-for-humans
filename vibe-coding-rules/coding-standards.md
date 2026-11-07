@@ -120,10 +120,10 @@ const DEBOUNCE_DELAY = 500;
 ### Auto-Update Discipline
 
 **When modifying code, always:**
-1. **Update adjacent docs** — If you change a function, update its JSDoc
-2. **Update file header** — If you add/remove key exports
-3. **Remove stale comments** — Delete comments that no longer apply
-4. **Add migration notes** — For breaking changes, add `@deprecated` or `@since`
+1. **Update adjacent docs**: If you change a function, update its JSDoc
+2. **Update file header**: If you add/remove key exports
+3. **Remove stale comments**: Delete comments that no longer apply
+4. **Add migration notes**: For breaking changes, add `@deprecated` or `@since`
 
 ```typescript
 /**

@@ -43,7 +43,7 @@
 
 **5. Reading Experience > Feature Completeness**
 - Better to have 80% of features with 120% reading quality
-- Typography isn't decoration—it's the core value proposition
+- Typography isn't decoration; it's the core value proposition
 - Test every change by reading a 3000+ word doc
 
 ---
@@ -91,8 +91,6 @@ Subtle background, good contrast, professional monospace, theme-aware syntax hig
 ### 4. Theme Adaptability
 
 **System inheritance:** Use `var(--vscode-editor-background)` / `--vscode-editor-foreground` so any VS Code theme carries into the editor.
-
-**Reading modes:** System (default), Light, Dark, Sepia — for when users want a fixed reading condition.
 
 ### 5. Inspiration Sources
 
@@ -143,9 +141,9 @@ Product version and shipped surface: see `package.json` (`version`) and the late
 
 Plans are public markdown files:
 
-1. **Draft** — Start from [`roadmap/task-plan-template.md`](../roadmap/task-plan-template.md) (any AI tool or manually)
-2. **Ready** — Move to `roadmap/pipeline/[name].md` when locked for implementation
-3. **Complete** — `git mv roadmap/pipeline/[name].md roadmap/shipped/` when done and tests pass
+1. **Draft**: Start from [`roadmap/task-plan-template.md`](../roadmap/task-plan-template.md) (any AI tool or manually)
+2. **Ready**: Move to `roadmap/pipeline/[name].md` when locked for implementation
+3. **Complete**: `git mv roadmap/pipeline/[name].md roadmap/shipped/` when done and tests pass
 
 If a tool creates plans under `.cursor/plans/` (or similar), move them into `roadmap/pipeline/` when ready:
 
@@ -157,9 +155,9 @@ git mv [source-location]/[name].md roadmap/pipeline/[name].md
 
 [`AGENTS.md`](../AGENTS.md) follows the [agents.md](https://agents.md/) standard and points agents at:
 
-- `roadmap/pipeline/*.md` — active work
-- `roadmap/shipped/*.md` — completed work
-- `vibe-coding-rules/` — coding guides
+- `roadmap/pipeline/*.md`: active work
+- `roadmap/shipped/*.md`: completed work
+- `vibe-coding-rules/`: coding guides
 
 See [roadmap/README.md](../roadmap/README.md) for tool-specific guidance.
 
@@ -167,24 +165,9 @@ See [roadmap/README.md](../roadmap/README.md) for tool-specific guidance.
 
 ## Release Process
 
-We follow [Semantic Versioning](https://semver.org/):
+We follow [Semantic Versioning](https://semver.org/): major for breaking changes, minor for features, patch for fixes. Recent practice is a patch release per batch of fixes and small features.
 
-- **Major**: Breaking changes
-- **Minor**: New features (backward-compatible)
-- **Patch**: Bug fixes
-
-**Pre-release:** tests pass, docs/CHANGELOG updated, version bumped in `package.json`.
-
-```bash
-npm run build:release
-npm run package:release
-# Install the .vsix locally, then publish that same file (see RELEASE_CHECKLIST.md; sign in first with az login):
-npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
-```
-
-**Post-release:** GitHub release notes, watch issues.
-
-Cadence: patches as needed; minors roughly every few weeks when features land.
+The steps live in one place, [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md): a release PR bumps the version and dates the CHANGELOG, one vsix is built from merged `main`, tested, and published as-is to the VS Code Marketplace and Open VSX, then the GitHub release is published with the vsix attached.
 
 ---
 
@@ -198,14 +181,14 @@ Cadence: patches as needed; minors roughly every few weeks when features land.
 
 ## Related Documentation
 
-- **[CONTRIBUTING.md](../CONTRIBUTING.md)** — Setup, workflow, PR process
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — Technical architecture
-- **[BUILD.md](./BUILD.md)** — Build and packaging
-- **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)** — Dev troubleshooting
-- **[README.md](../README.md)** — User-facing docs
-- **[AGENTS.md](../AGENTS.md)** — AI agent instructions
-- **[KNOWN_ISSUES.md](../KNOWN_ISSUES.md)** — Open limitations
+- **[CONTRIBUTING.md](../CONTRIBUTING.md)**: Setup, workflow, PR process
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)**: Technical architecture
+- **[BUILD.md](./BUILD.md)**: Build and packaging
+- **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)**: Dev troubleshooting
+- **[README.md](../README.md)**: User-facing docs
+- **[AGENTS.md](../AGENTS.md)**: AI agent instructions
+- **[KNOWN_ISSUES.md](../KNOWN_ISSUES.md)**: Open limitations
 
 ---
 
-**Last Updated:** 2026-10-03
+**Last Updated:** 2026-11-07
