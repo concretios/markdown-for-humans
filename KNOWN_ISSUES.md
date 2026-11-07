@@ -1,8 +1,8 @@
 # Known Issues
 
-Living list of open limitations for **Markdown Editor for Humans 0.4.5**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
+Living list of open limitations for **Markdown Editor for Humans 0.4.6**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
-**Status:** 0.4.5 (2026-10-14) · **Last updated:** 2026-10-14
+**Status:** 0.4.6 (2026-11-07) · **Last updated:** 2026-11-07
 
 ---
 
