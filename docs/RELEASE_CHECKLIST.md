@@ -35,7 +35,6 @@ az login --tenant concret.io --allow-no-subscriptions             # Entra sign-i
 npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix   # VS Code Marketplace
 npx ovsx publish markdown-for-humans-<x.y.z>.vsix                 # Open VSX: the owner runs this (OVSX_PAT is not in an agent's shell)
 # NEVER use `vsce publish patch|minor|major`: it bumps the version at publish time
-# NEVER use the publish:* npm scripts: they rebuild, so they would publish a build nobody tested
 
 # 6. Draft the GitHub release with the vsix attached (tag is created when you publish it)
 gh release create v<x.y.z> markdown-for-humans-<x.y.z>.vsix --draft --target <full merge SHA> --notes-file <notes.md>

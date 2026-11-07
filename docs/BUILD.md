@@ -150,7 +150,7 @@ The release process (version bump PR, Entra sign-in, publishing one vsix to the 
 
 Two rules worth knowing while building:
 
-- The vsix you tested is the vsix that ships. `vsce publish --packagePath` and `ovsx publish <file>` take that file; `vsce publish patch|minor|major` and the `publish:*` npm scripts rebuild or bump at publish time and are not used.
+- The vsix you tested is the vsix that ships. `vsce publish --packagePath` and `ovsx publish <file>` take that file; `vsce publish patch|minor|major` bumps the version at publish time and is not used. There is no npm publish script on purpose: one would rebuild at publish time.
 - Marketplace publishing signs in with Microsoft Entra (`az login`), never a PAT.
 
 ## Build Architecture
