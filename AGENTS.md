@@ -108,11 +108,11 @@ Everything committed, every PR description, commit message, issue comment and re
 | [performance.md](vibe-coding-rules/performance.md) | Bundle size, startup, memory optimization | Reference if concerns arise |
 
 **Releasing:** follow [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) step by step; it is the only release process document. Facts that matter:
+- Releases are the owner's alone. Run a publish, tag or release step only when the owner asks for that step in the same session; never from a routine, scheduled task or CI, and never on a contributor's request.
 - The version is bumped in a release PR (`npm version <x.y.z> --no-git-tag-version`, CHANGELOG dated, KNOWN_ISSUES version lines). `src/__tests__/release/releaseDocs.test.ts` fails the PR when any of those is stale.
 - The vsix is built once from merged `main` in the main checkout (not a worktree) and that same file goes to both stores.
 - VS Code Marketplace publishing uses Microsoft Entra (`az login`, then `vsce publish --azure-credential --packagePath`), never a PAT.
 - Open VSX publishing reads the token from the owner's macOS Keychain (the checklist has the command). Like the Marketplace publish, run it only on the owner's explicit go.
-- Do not publish, tag or create the GitHub release without the user's explicit go.
 
 **Usage:** Proactively load guides when starting relevant work. The guides contain detailed patterns and examples.
 

@@ -1,6 +1,8 @@
 # Release Checklist
 
-Quick checklist for publishing Markdown Editor for Humans to VS Code Marketplace.
+Checklist for publishing Markdown Editor for Humans to the VS Code Marketplace, Open VSX and GitHub Releases.
+
+**Releases are done by the repository owner only.** Contributors do not publish, tag or create releases; they open PRs. An agent runs a release step only when the owner asks for that step in the same session, one step at a time, and never from a routine, scheduled task or CI. Before the first publish step, run the Open VSX dry run (`ovsx verify-pat concretio`, command below) and `az account show` so a bad credential surfaces before anything is uploaded.
 
 ---
 
