@@ -14,6 +14,9 @@ Agents: boot from this list. Every file in this folder is listed here with its s
 - `html-loss-findings-2026-10.md`: raw HTML loss measured on 0.4.4; the loss guard (option B) shipped in 0.4.4, the rest waits on section 5
 - `issue-triage-2026-10.md`: all 25 open issues bucketed on 2026-10-10; replies drafted, not posted
 
+## Ready to merge, waiting for a release
+- `task-mermaid-lightbox.md`: zoom and pan viewer for Mermaid diagrams (PR 78 by a contributor, brought current on 2026-11-07)
+
 ## True backlog
 - `task-p0-mermaid-split-view.md`
 - `task-p0-slash-commands.md`: general `/` menu (math slash already exists)
