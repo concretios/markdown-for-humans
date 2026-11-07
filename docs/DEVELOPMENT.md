@@ -188,7 +188,3 @@ The steps live in one place, [RELEASE_CHECKLIST.md](./RELEASE_CHECKLIST.md): a r
 - **[README.md](../README.md)**: User-facing docs
 - **[AGENTS.md](../AGENTS.md)**: AI agent instructions
 - **[KNOWN_ISSUES.md](../KNOWN_ISSUES.md)**: Open limitations
-
----
-
-**Last Updated:** 2026-11-07

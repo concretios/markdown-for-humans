@@ -117,7 +117,7 @@ Marketplace publishing uses Microsoft Entra sign-in. Do NOT create, paste or use
 ### Publish to VS Code Marketplace
 
 **Recommended: publish the exact vsix you tested**
-- [ ] Merge the release PR, then from main in the main checkout: `npx vsce package` (packaging has failed inside git worktrees)
+- [ ] Merge the release PR, then from main in the main checkout: `npx vsce package` (one attempt in a scratch worktree failed with "Extension entrypoint(s) missing" on 2026-11-06, cause unknown; the main checkout is the known-good place)
 - [ ] Confirm Entra sign-in (see Marketplace Account above)
 - [ ] Publish: `npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix`
 - [ ] Do not use `vsce publish patch|minor|major`; it changes the version at publish time

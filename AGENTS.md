@@ -70,10 +70,10 @@
 - After adding or changing text run `npm run l10n:extract`. CI fails on missed extraction and on new hardcoded UI text.
 - See: [vibe-coding-rules/localization.md](vibe-coding-rules/localization.md)
 
-### 7. Public Text (this repo has 30K+ monthly users)
+### 7. Public Text (this repo has tens of thousands of users)
 Everything committed, every PR description, commit message, issue comment and release note is public and is read by users.
 
-- **Never use the em dash character** in files, commits, PR text or messages. Use a comma, colon, semicolon, or a new sentence.
+- **Never use the em dash character** in guidance, docs, commit messages, PR text, issue comments, release notes or UI text. Use a comma, colon, semicolon, or a new sentence. Test data under `src/` that exercises the character on purpose, and shipped plans and old CHANGELOG sections (history), are left as they are.
 - **Nothing public names or characterises a user.** Thank a reporter once by handle when they contributed; never describe their setup, skill or behaviour.
 - **No apologies in public text.** State what changed and what to do.
 - **Issue and PR comments, reviews and public files about users** need deep analysis, testing and the owner's explicit go before posting. Draft them in the PR description or a session note instead.
@@ -110,7 +110,7 @@ Everything committed, every PR description, commit message, issue comment and re
 **Releasing:** follow [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) step by step; it is the only release process document. Facts that matter:
 - Releases are the owner's alone. Run a publish, tag or release step only when the owner asks for that step in the same session; never from a routine, scheduled task or CI, and never on a contributor's request.
 - The version is bumped in a release PR (`npm version <x.y.z> --no-git-tag-version`, CHANGELOG dated, KNOWN_ISSUES version lines). `src/__tests__/release/releaseDocs.test.ts` fails the PR when any of those is stale.
-- The vsix is built once from merged `main` in the main checkout (not a worktree) and that same file goes to both stores.
+- The vsix is built once from merged `main` in the main checkout and that same file goes to both stores. One packaging attempt in a scratch worktree failed with "Extension entrypoint(s) missing" (2026-11-06) and the cause is unknown, so package in the main checkout.
 - VS Code Marketplace publishing uses Microsoft Entra (`az login`, then `vsce publish --azure-credential --packagePath`), never a PAT.
 - Open VSX publishing reads the token from the owner's macOS Keychain (the checklist has the command). Like the Marketplace publish, run it only on the owner's explicit go.
 
@@ -256,7 +256,3 @@ See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md
 4. **Embrace VS Code**: don't fight the platform
 5. **Simplicity wins**: simplest solution that works
 6. **Test by using**: read a 3000+ word doc for 10 minutes
-
----
-
-**Last Updated:** 2026-11-07
