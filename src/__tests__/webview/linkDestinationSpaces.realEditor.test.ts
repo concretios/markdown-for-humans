@@ -120,6 +120,7 @@ describe('link destinations with spaces', () => {
     ['a `<`', 'See [a](<my\\<x file.md>) now.', 'my<x file.md'],
     ['a backslash before punctuation', 'See [a](<my\\\\*x file.md>) now.', 'my\\*x file.md'],
     ['a Windows backslash', 'See [a](<C:\\My Docs\\a.md>) now.', 'C:\\My Docs\\a.md'],
+    ['a trailing backslash', 'See [a](<C:\\My Docs\\\\>) now.', 'C:\\My Docs\\'],
   ])('keeps a target with a space and %s as a link after an edit', (_label, source, href) => {
     const editor = createEditor(source);
     appendToFirstParagraph(editor, ' EDITED');
