@@ -7,7 +7,11 @@
 /**
  * @file documentExport.ts - PDF and Word document export
  * @description Handles exporting markdown documents to PDF (via local Chrome) and Word (via docx).
- * Applies export theme settings and embeds Mermaid diagrams as high-quality images.
+ * Applies export theme settings, embeds Mermaid diagrams as high-quality images,
+ * exports only local images the host contains (as canonical relative URLs), no
+ * other local resource loads and no `http:` loads (the preview CSP refuses them),
+ * prints PDF in an isolated Chrome session, and reads
+ * dimensions from a small, bounded set of explicitly supported formats.
  */
 
 import * as vscode from 'vscode';
@@ -15,8 +19,714 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { spawn } from 'child_process';
+import { pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
-import { imageSize } from 'image-size';
+import { encodeImagePathSegment } from '../shared/imageSource';
+
+type SafeDimensionImageFormat = 'png' | 'jpeg' | 'gif' | 'webp' | 'bmp' | 'ico' | 'svg';
+
+const SAFE_DIMENSION_IMAGE_EXTENSIONS: Readonly<Record<string, SafeDimensionImageFormat>> = {
+  '.png': 'png',
+  '.jpg': 'jpeg',
+  '.jpeg': 'jpeg',
+  '.gif': 'gif',
+  '.webp': 'webp',
+  '.bmp': 'bmp',
+  '.ico': 'ico',
+  '.svg': 'svg',
+};
+
+const SAFE_DIMENSION_IMAGE_MEDIA_TYPES: Readonly<Record<string, SafeDimensionImageFormat>> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpeg',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/x-ms-bmp': 'bmp',
+  'image/vnd.microsoft.icon': 'ico',
+  'image/x-icon': 'ico',
+  'image/svg+xml': 'svg',
+};
+
+/**
+ * Resolve an allowlisted image format from a local path, URI, or data URL.
+ *
+ * Query strings and fragments are ignored for extension checks, and both
+ * extensions and media types are matched case-insensitively.
+ *
+ * @param source - Original image source used by the Word export pipeline
+ * @returns The allowlisted format, or undefined for an unsupported source
+ */
+function getSafeDimensionImageFormat(source: string): SafeDimensionImageFormat | undefined {
+  const normalizedSource = source.trim();
+  const dataUrlMatch = /^data:([^;,]+)/i.exec(normalizedSource);
+  if (dataUrlMatch) {
+    return SAFE_DIMENSION_IMAGE_MEDIA_TYPES[dataUrlMatch[1].toLowerCase()];
+  }
+
+  const pathWithoutQueryOrFragment = normalizedSource.split(/[?#]/, 1)[0];
+  const extension = path.extname(pathWithoutQueryOrFragment).toLowerCase();
+  return SAFE_DIMENSION_IMAGE_EXTENSIONS[extension];
+}
+
+/**
+ * Identify one of the seven image signatures approved for synchronous sizing.
+ *
+ * @param data - Image bytes to inspect without parsing
+ * @returns The detected allowlisted format, or undefined for any other signature
+ */
+function getSafeDimensionImageSignature(data: Uint8Array): SafeDimensionImageFormat | undefined {
+  if (
+    data.length >= 8 &&
+    data[0] === 0x89 &&
+    data[1] === 0x50 &&
+    data[2] === 0x4e &&
+    data[3] === 0x47 &&
+    data[4] === 0x0d &&
+    data[5] === 0x0a &&
+    data[6] === 0x1a &&
+    data[7] === 0x0a
+  ) {
+    return 'png';
+  }
+
+  if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) {
+    return 'jpeg';
+  }
+
+  if (
+    data.length >= 6 &&
+    data[0] === 0x47 &&
+    data[1] === 0x49 &&
+    data[2] === 0x46 &&
+    data[3] === 0x38 &&
+    (data[4] === 0x37 || data[4] === 0x39) &&
+    data[5] === 0x61
+  ) {
+    return 'gif';
+  }
+
+  if (
+    data.length >= 12 &&
+    data[0] === 0x52 &&
+    data[1] === 0x49 &&
+    data[2] === 0x46 &&
+    data[3] === 0x46 &&
+    data[8] === 0x57 &&
+    data[9] === 0x45 &&
+    data[10] === 0x42 &&
+    data[11] === 0x50
+  ) {
+    return 'webp';
+  }
+
+  if (data.length >= 2 && data[0] === 0x42 && data[1] === 0x4d) {
+    return 'bmp';
+  }
+
+  // Reserved (LE16) = 0, type (LE16) = 1. Type 2 is the CUR cursor format,
+  // which shares this exact header shape and must not be parsed as ICO.
+  if (
+    data.length >= 4 &&
+    data[0] === 0x00 &&
+    data[1] === 0x00 &&
+    data[2] === 0x01 &&
+    data[3] === 0x00
+  ) {
+    return 'ico';
+  }
+
+  if (getSvgSignatureSlice(data) !== undefined) {
+    return 'svg';
+  }
+
+  return undefined;
+}
+
+/**
+ * Check whether image bytes may be passed to the bounded dimension reader.
+ *
+ * The source must name an explicitly supported format and the bytes must carry
+ * that format's signature. Checking both prevents a vulnerable ICNS, JXL, or
+ * HEIF payload from reaching the parser after being renamed with a safe suffix.
+ *
+ * @param source - Original image source used by the Word export pipeline
+ * @param data - Image bytes to inspect
+ * @returns True only for matching PNG, JPEG, GIF, WebP, BMP, ICO, or SVG inputs
+ */
+export function isSafeForImageDimensionParsing(source: string, data: Uint8Array): boolean {
+  const sourceFormat = getSafeDimensionImageFormat(source);
+  return sourceFormat !== undefined && sourceFormat === getSafeDimensionImageSignature(data);
+}
+
+const MAX_JPEG_HEADER_SCAN_BYTES = 1024 * 1024;
+const MAX_JPEG_MARKERS = 4096;
+const MAX_EXPORT_IMAGE_DIMENSION = 0xffff;
+
+interface ExportImageDimensions {
+  width: number;
+  height: number;
+}
+
+/**
+ * Read an unsigned 16-bit big-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readBigEndian16(data: Uint8Array, offset: number): number {
+  return data[offset] * 0x100 + data[offset + 1];
+}
+
+/**
+ * Read an unsigned 32-bit big-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readBigEndian32(data: Uint8Array, offset: number): number {
+  return (
+    data[offset] * 0x1000000 +
+    data[offset + 1] * 0x10000 +
+    data[offset + 2] * 0x100 +
+    data[offset + 3]
+  );
+}
+
+/**
+ * Read an unsigned 16-bit little-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readLittleEndian16(data: Uint8Array, offset: number): number {
+  return data[offset] + data[offset + 1] * 0x100;
+}
+
+/**
+ * Read an unsigned 24-bit little-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readLittleEndian24(data: Uint8Array, offset: number): number {
+  return data[offset] + data[offset + 1] * 0x100 + data[offset + 2] * 0x10000;
+}
+
+/**
+ * Read an unsigned 32-bit little-endian integer from a validated offset.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @returns Decoded integer
+ */
+function readLittleEndian32(data: Uint8Array, offset: number): number {
+  return (
+    data[offset] +
+    data[offset + 1] * 0x100 +
+    data[offset + 2] * 0x10000 +
+    data[offset + 3] * 0x1000000
+  );
+}
+
+/**
+ * Return dimensions only when both values are non-zero and practical for DOCX.
+ *
+ * @param width - Parsed image width
+ * @param height - Parsed image height
+ * @returns Valid dimensions, or undefined for a malformed zero dimension
+ */
+function validDimensions(width: number, height: number): ExportImageDimensions | undefined {
+  return width > 0 &&
+    height > 0 &&
+    width <= MAX_EXPORT_IMAGE_DIMENSION &&
+    height <= MAX_EXPORT_IMAGE_DIMENSION
+    ? { width, height }
+    : undefined;
+}
+
+/**
+ * Read PNG dimensions from the fixed IHDR location.
+ *
+ * @param data - Signature-validated PNG bytes
+ * @returns Dimensions, or undefined for a truncated or malformed IHDR
+ */
+function readPngDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const minimumPngHeaderLength = 33;
+  if (
+    data.length < minimumPngHeaderLength ||
+    readBigEndian32(data, 8) !== 13 ||
+    data[12] !== 0x49 ||
+    data[13] !== 0x48 ||
+    data[14] !== 0x44 ||
+    data[15] !== 0x52
+  ) {
+    return undefined;
+  }
+
+  return validDimensions(readBigEndian32(data, 16), readBigEndian32(data, 20));
+}
+
+/**
+ * Read GIF logical-screen dimensions from the fixed header.
+ *
+ * @param data - Signature-validated GIF bytes
+ * @returns Dimensions, or undefined for a truncated header
+ */
+function readGifDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  if (data.length < 13) {
+    return undefined;
+  }
+
+  return validDimensions(readLittleEndian16(data, 6), readLittleEndian16(data, 8));
+}
+
+/**
+ * Check whether a JPEG marker carries a start-of-frame segment.
+ *
+ * @param marker - JPEG marker byte
+ * @returns True for baseline, progressive, differential, or lossless frame markers
+ */
+function isJpegStartOfFrame(marker: number): boolean {
+  return marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+}
+
+/**
+ * Read JPEG dimensions with explicit byte and marker limits.
+ *
+ * Every loop either advances the cursor or consumes one of the fixed marker
+ * budget entries. Segment lengths below two and out-of-bounds jumps terminate
+ * immediately, preventing zero-length segment loops.
+ *
+ * @param data - Signature-validated JPEG bytes
+ * @returns Dimensions, or undefined for a malformed or over-budget header
+ */
+function readJpegDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  if (data.length < 4) {
+    return undefined;
+  }
+
+  const scanLimit = Math.min(data.length, MAX_JPEG_HEADER_SCAN_BYTES);
+  let offset = 2;
+
+  for (let markerCount = 0; markerCount < MAX_JPEG_MARKERS && offset < scanLimit; markerCount++) {
+    if (data[offset] !== 0xff) {
+      return undefined;
+    }
+
+    while (offset < scanLimit && data[offset] === 0xff) {
+      offset++;
+    }
+    if (offset >= scanLimit) {
+      return undefined;
+    }
+
+    const marker = data[offset++];
+    if (marker === 0x00 || marker === 0xd8 || marker === 0xd9 || marker === 0xda) {
+      return undefined;
+    }
+
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+
+    if (offset + 2 > scanLimit) {
+      return undefined;
+    }
+
+    const segmentLength = readBigEndian16(data, offset);
+    if (segmentLength < 2) {
+      return undefined;
+    }
+
+    const segmentEnd = offset + segmentLength;
+    if (segmentEnd > scanLimit || segmentEnd > data.length) {
+      return undefined;
+    }
+
+    if (isJpegStartOfFrame(marker)) {
+      if (segmentLength < 11) {
+        return undefined;
+      }
+      return validDimensions(readBigEndian16(data, offset + 5), readBigEndian16(data, offset + 3));
+    }
+
+    offset = segmentEnd;
+  }
+
+  return undefined;
+}
+
+/**
+ * Check four bytes against an ASCII chunk identifier.
+ *
+ * @param data - Source bytes
+ * @param offset - Validated byte offset
+ * @param value - Four-character ASCII identifier
+ * @returns True when the bytes match
+ */
+function hasAsciiFourCc(data: Uint8Array, offset: number, value: string): boolean {
+  return (
+    data[offset] === value.charCodeAt(0) &&
+    data[offset + 1] === value.charCodeAt(1) &&
+    data[offset + 2] === value.charCodeAt(2) &&
+    data[offset + 3] === value.charCodeAt(3)
+  );
+}
+
+/**
+ * Read dimensions from the first VP8, VP8L, or VP8X WebP header.
+ *
+ * @param data - Signature-validated WebP bytes
+ * @returns Dimensions, or undefined for invalid RIFF/chunk bounds or payloads
+ */
+function readWebpDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  if (data.length < 20) {
+    return undefined;
+  }
+
+  const declaredFileEnd = readLittleEndian32(data, 4) + 8;
+  const chunkLength = readLittleEndian32(data, 16);
+  const chunkEnd = 20 + chunkLength;
+  if (declaredFileEnd < 20 || declaredFileEnd > data.length || chunkEnd > declaredFileEnd) {
+    return undefined;
+  }
+
+  if (hasAsciiFourCc(data, 12, 'VP8 ')) {
+    if (
+      chunkLength < 10 ||
+      (data[20] & 0x01) !== 0 ||
+      data[23] !== 0x9d ||
+      data[24] !== 0x01 ||
+      data[25] !== 0x2a
+    ) {
+      return undefined;
+    }
+    return validDimensions(
+      readLittleEndian16(data, 26) & 0x3fff,
+      readLittleEndian16(data, 28) & 0x3fff
+    );
+  }
+
+  if (hasAsciiFourCc(data, 12, 'VP8L')) {
+    if (chunkLength < 5 || data[20] !== 0x2f || (data[24] & 0xe0) !== 0) {
+      return undefined;
+    }
+    const width = 1 + data[21] + ((data[22] & 0x3f) << 8);
+    const height = 1 + ((data[22] & 0xc0) >> 6) + (data[23] << 2) + ((data[24] & 0x0f) << 10);
+    return validDimensions(width, height);
+  }
+
+  if (hasAsciiFourCc(data, 12, 'VP8X')) {
+    if (chunkLength < 10) {
+      return undefined;
+    }
+    return validDimensions(readLittleEndian24(data, 24) + 1, readLittleEndian24(data, 27) + 1);
+  }
+
+  return undefined;
+}
+
+/**
+ * Read BMP dimensions using the DIB header size to select a layout.
+ *
+ * BITMAPCOREHEADER (size 12) stores unsigned LE16 width/height. BITMAPINFOHEADER
+ * and later (size >= 40, e.g. V4/V5) store signed LE32 width/height, where a
+ * negative height is purely a top-down storage-order flag rather than a real
+ * negative size. Any other DIB header size is rejected rather than guessed.
+ *
+ * @param data - Signature-validated BMP bytes
+ * @returns Dimensions, or undefined for a truncated header, an unrecognized DIB
+ *   header size, or a declared DIB header size that doesn't fit within `data`
+ */
+function readBmpDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const dibHeaderSizeFieldEnd = 18; // DIB header size is a LE32 at offset 14
+  if (data.length < dibHeaderSizeFieldEnd) {
+    return undefined;
+  }
+
+  const dibHeaderSize = readLittleEndian32(data, 14);
+  if (data.length < 14 + dibHeaderSize) {
+    return undefined;
+  }
+
+  if (dibHeaderSize === 12) {
+    return validDimensions(readLittleEndian16(data, 18), readLittleEndian16(data, 20));
+  }
+
+  if (dibHeaderSize >= 40) {
+    const rawWidth = readLittleEndian32(data, 18);
+    const width = rawWidth >= 0x80000000 ? rawWidth - 0x100000000 : rawWidth;
+    const rawHeight = readLittleEndian32(data, 22);
+    const height = rawHeight >= 0x80000000 ? rawHeight - 0x100000000 : rawHeight;
+    return validDimensions(width, Math.abs(height));
+  }
+
+  return undefined;
+}
+
+/**
+ * Read dimensions from the first ICONDIRENTRY of an ICO file.
+ *
+ * The 6-byte ICONDIR header is followed by one or more 16-byte ICONDIRENTRY
+ * records; the first record's width and height are single bytes at offsets 6
+ * and 7. A raw byte value of 0 in either field means 256, since a single byte
+ * cannot otherwise represent that value.
+ *
+ * @param data - Signature-validated ICO bytes
+ * @returns Dimensions, or undefined for a truncated header or zero icon entries
+ */
+function readIcoDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const minimumIcoHeaderLength = 22; // 6-byte ICONDIR + first 16-byte ICONDIRENTRY
+  if (data.length < minimumIcoHeaderLength) {
+    return undefined;
+  }
+
+  const entryCount = readLittleEndian16(data, 4);
+  if (entryCount === 0) {
+    return undefined;
+  }
+
+  const rawWidth = data[6];
+  const rawHeight = data[7];
+  return validDimensions(rawWidth === 0 ? 256 : rawWidth, rawHeight === 0 ? 256 : rawHeight);
+}
+
+const MAX_SVG_SIGNATURE_SCAN_BYTES = 4096;
+const SVG_ROOT_TAG_PATTERN_ANCHORED = /^<svg[\s>]/i;
+
+/**
+ * Advance an index past an optional UTF-8 BOM, whitespace, an `<?xml ... ?>`
+ * declaration, XML comments, and a `<!DOCTYPE ...>` declaration (in any
+ * order/repetition), so the caller can check what tag comes next. Each step
+ * either returns or strictly advances the index, so this always terminates
+ * within the scanned slice with no backtracking-prone patterns.
+ *
+ * @param slice - Bounded decoded text to scan
+ * @returns The index of the next real tag, or -1 if a prolog element never closes
+ */
+function skipSvgProlog(slice: string): number {
+  let index = slice.startsWith('\ufeff') ? 1 : 0;
+
+  for (;;) {
+    while (index < slice.length && /\s/.test(slice[index])) {
+      index++;
+    }
+
+    if (slice.startsWith('<?', index)) {
+      const end = slice.indexOf('?>', index + 2);
+      if (end === -1) {
+        return -1;
+      }
+      index = end + 2;
+      continue;
+    }
+
+    if (slice.startsWith('<!--', index)) {
+      const end = slice.indexOf('-->', index + 4);
+      if (end === -1) {
+        return -1;
+      }
+      index = end + 3;
+      continue;
+    }
+
+    if (/^<!doctype/i.test(slice.slice(index, index + 9))) {
+      // Bounded bracket-depth scan so an internal subset (`<!DOCTYPE svg [ ... ]>`)
+      // doesn't end the declaration at a `>` inside its `[...]` block.
+      let cursor = index + 9;
+      let bracketDepth = 0;
+      let closed = false;
+      while (cursor < slice.length) {
+        const char = slice[cursor];
+        if (char === '[') {
+          bracketDepth++;
+        } else if (char === ']') {
+          bracketDepth = Math.max(0, bracketDepth - 1);
+        } else if (char === '>' && bracketDepth === 0) {
+          closed = true;
+          break;
+        }
+        cursor++;
+      }
+      if (!closed) {
+        return -1;
+      }
+      index = cursor + 1;
+      continue;
+    }
+
+    return index;
+  }
+}
+
+/**
+ * Decode the first 4,096 bytes of a candidate image and check that, after
+ * skipping the document prolog (BOM, whitespace, XML declaration, comments,
+ * DOCTYPE), the next tag is a root `<svg>`. Used identically by the
+ * signature gate and the dimension reader so the two can never disagree on
+ * whether a payload is SVG, and so an `<svg>` nested in an HTML body doesn't
+ * pass as a root element.
+ *
+ * @param data - Image bytes to inspect
+ * @returns The bounded decoded text starting at the root `<svg` tag (prolog
+ *   removed), or undefined when no root `<svg` tag is found
+ */
+function getSvgSignatureSlice(data: Uint8Array): string | undefined {
+  const slice = Buffer.from(data.subarray(0, MAX_SVG_SIGNATURE_SCAN_BYTES)).toString('utf8');
+  const prologEnd = skipSvgProlog(slice);
+  if (prologEnd === -1) {
+    return undefined;
+  }
+  const rootSlice = slice.slice(prologEnd);
+  return SVG_ROOT_TAG_PATTERN_ANCHORED.test(rootSlice) ? rootSlice : undefined;
+}
+
+/**
+ * Extract the root `<svg ...>` opening tag's text from an SVG signature slice.
+ *
+ * @param slice - Prolog-skipped text returned by getSvgSignatureSlice, which
+ *   already starts exactly at the root `<svg` tag
+ * @returns The tag's text, or undefined if it isn't closed within the scanned slice
+ */
+function extractSvgRootTag(slice: string): string | undefined {
+  const match = SVG_ROOT_TAG_PATTERN_ANCHORED.exec(slice);
+  if (!match) {
+    return undefined;
+  }
+  const tagEnd = slice.indexOf('>', match.index);
+  return tagEnd === -1 ? undefined : slice.slice(match.index, tagEnd);
+}
+
+/**
+ * Read one attribute's raw string value from an SVG root tag's text.
+ *
+ * @param tag - Bounded root tag text
+ * @param name - Attribute name
+ * @returns The attribute value, or undefined if absent
+ */
+function extractSvgAttribute(tag: string, name: string): string | undefined {
+  // Anchored to the tag boundary or whitespace (not `\b`, which also matches
+  // after a hyphen) so `data-width="7"` can't be mistaken for `width="7"`.
+  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i');
+  const match = pattern.exec(tag);
+  return match ? (match[1] ?? match[2]) : undefined;
+}
+
+// Anchored so hex literals (0x10) and other non-SVG-numeric syntax that
+// bare Number() would silently accept are rejected instead.
+const SVG_STRICT_NUMBER_PATTERN = /^\d+(?:\.\d+)?$/;
+// Same, but allowing an optional leading sign: viewBox's min-x/min-y may
+// legitimately be negative, unlike width/height.
+const SVG_STRICT_SIGNED_NUMBER_PATTERN = /^-?\d+(?:\.\d+)?$/;
+
+/**
+ * Parse an SVG width/height attribute value, accepting only unitless numbers
+ * or explicit px values. Any other unit (%, cm, in, pt, em, ...) is rejected.
+ *
+ * @param value - Raw attribute value
+ * @returns The parsed length, or undefined for a missing value or disallowed unit
+ */
+function parseSvgLength(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const match = /^(\d+(?:\.\d+)?)(px)?$/i.exec(value.trim());
+  return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * Parse an SVG viewBox attribute's width and height (its 3rd and 4th values).
+ *
+ * @param value - Raw viewBox attribute value ("min-x min-y width height")
+ * @returns The parsed dimensions, or undefined for a malformed viewBox
+ */
+function parseSvgViewBox(value: string | undefined): ExportImageDimensions | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parts = value.trim().split(/[\s,]+/);
+  if (
+    parts.length < 4 ||
+    !parts.slice(0, 2).every(part => SVG_STRICT_SIGNED_NUMBER_PATTERN.test(part)) ||
+    !parts.slice(2, 4).every(part => SVG_STRICT_NUMBER_PATTERN.test(part))
+  ) {
+    return undefined;
+  }
+  return { width: Number(parts[2]), height: Number(parts[3]) };
+}
+
+/**
+ * Read SVG dimensions from the root tag's width/height, falling back to
+ * viewBox when width/height are missing or use a disallowed unit.
+ *
+ * @param data - Signature-validated SVG bytes
+ * @returns Dimensions, or undefined when no usable width/height or viewBox is found
+ */
+function readSvgDimensions(data: Uint8Array): ExportImageDimensions | undefined {
+  const slice = getSvgSignatureSlice(data);
+  if (!slice) {
+    return undefined;
+  }
+  const rootTag = extractSvgRootTag(slice);
+  if (!rootTag) {
+    return undefined;
+  }
+
+  const width = parseSvgLength(extractSvgAttribute(rootTag, 'width'));
+  const height = parseSvgLength(extractSvgAttribute(rootTag, 'height'));
+  if (width !== undefined && height !== undefined) {
+    return validDimensions(width, height);
+  }
+
+  const viewBoxDimensions = parseSvgViewBox(extractSvgAttribute(rootTag, 'viewBox'));
+  return viewBoxDimensions
+    ? validDimensions(viewBoxDimensions.width, viewBoxDimensions.height)
+    : undefined;
+}
+
+/**
+ * Read export image dimensions without invoking a general-purpose parser.
+ *
+ * The strict source/signature gate prevents format confusion. PNG, GIF, WebP,
+ * BMP, and ICO use fixed-offset reads. JPEG traversal is capped at 1 MiB and
+ * 4,096 markers, and rejects non-advancing or truncated segments. SVG uses a
+ * bounded regex scan over the first 4,096 bytes only.
+ *
+ * @param source - Original image source used by the Word export pipeline
+ * @param data - Image bytes to inspect
+ * @returns Dimensions for a supported well-formed header, otherwise undefined
+ */
+export function readExportImageDimensions(
+  source: string,
+  data: Uint8Array
+): ExportImageDimensions | undefined {
+  const sourceFormat = getSafeDimensionImageFormat(source);
+  if (!sourceFormat || sourceFormat !== getSafeDimensionImageSignature(data)) {
+    return undefined;
+  }
+
+  switch (sourceFormat) {
+    case 'png':
+      return readPngDimensions(data);
+    case 'jpeg':
+      return readJpegDimensions(data);
+    case 'gif':
+      return readGifDimensions(data);
+    case 'webp':
+      return readWebpDimensions(data);
+    case 'bmp':
+      return readBmpDimensions(data);
+    case 'ico':
+      return readIcoDimensions(data);
+    case 'svg':
+      return readSvgDimensions(data);
+  }
+}
 
 /**
  * Strip active content from HTML before passing it to Chrome for PDF rendering.
@@ -139,11 +849,150 @@ function getDocumentBasePath(document: vscode.TextDocument): string {
  */
 async function showExportWarning(format: string): Promise<boolean> {
   const formatName = format === 'pdf' ? 'PDF' : 'Word';
-  const message = `Export to ${formatName} works best with simple markdown files.\n\nKnown limitations:\n• Images (especially remote URLs)\n• Mermaid diagrams\n• Complex markdown structures\n\nSome content may not render correctly in the exported document.`;
+  const message = vscode.l10n.t(
+    'Export to {0} works best with simple markdown files.\n\nKnown limitations:\n• Images (especially remote URLs)\n• Mermaid diagrams\n• Complex markdown structures\n\nSome content may not render correctly in the exported document.',
+    formatName
+  );
+  const understand = vscode.l10n.t('I Understand');
 
-  const action = await vscode.window.showWarningMessage(message, { modal: true }, 'I Understand');
+  const action = await vscode.window.showWarningMessage(message, { modal: true }, understand);
 
-  return action === 'I Understand';
+  return action === understand;
+}
+
+/**
+ * Host decision for an authored local image destination: the contained file and
+ * its URL suffix, or undefined when the preview refuses the path.
+ */
+export type ExportImageResolver = (
+  source: string
+) => { absolutePath: string; suffix: string } | undefined;
+
+/**
+ * Destinations the preview loads directly, without host path resolution. Not
+ * `http:`: the preview CSP (`img-src` webview resources, `https:`, `data:`,
+ * `blob:`) refuses it, so export drops it too (decision #5).
+ */
+const DIRECT_IMAGE_SOURCE = /^(?:data:|blob:|https:\/\/|vscode-webview:\/\/)/;
+
+/** An `http:` image the preview passes to the CSP, which refuses it; any letter case. */
+const HTTP_IMAGE_SOURCE = /^http:/i;
+
+/** Attributes that fetch a URL on elements other than `img`: SVG `image`/`use`/`feImage`, table `background`. */
+const RESOURCE_URL_ATTRIBUTES = new Set(['href', 'xlink:href', 'background']);
+
+/**
+ * Attributes Chrome parses as CSS: `style`, the SVG presentation attributes that
+ * take `url()`, and SMIL animation values, which can set those properties.
+ */
+const CSS_ATTRIBUTES = new Set([
+  'style',
+  'fill',
+  'stroke',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+  'clip-path',
+  'mask',
+  'filter',
+  'cursor',
+  'to',
+  'from',
+  'by',
+  'values',
+]);
+
+/**
+ * True for a reference export must drop: neither a fragment nor a direct source.
+ * That is a file Chrome would resolve, or an `http:` URL the preview CSP refuses.
+ */
+function isLocalReference(target: string): boolean {
+  const normalized = target.trim().toLowerCase();
+  return !normalized.startsWith('#') && !DIRECT_IMAGE_SOURCE.test(normalized);
+}
+
+/**
+ * True when CSS text could fetch a local file or an `http:` URL: such a `url()`,
+ * or any `image-set()` or `@import`, since both also take bare strings. Escapes
+ * are decoded first because `\75 rl(` is also `url(`.
+ */
+function cssLoadsLocalResource(css: string): boolean {
+  const decoded = css
+    .replace(/\\(?:([0-9a-f]{1,6})\s?|([\s\S]))/gi, (_, hex: string | undefined, char: string) =>
+      hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : char
+    )
+    .toLowerCase();
+  if (/image-set\(|@import/.test(decoded)) return true;
+  return [...decoded.matchAll(/url\(\s*['"]?([^'")]*)/g)].some(([, target]) =>
+    isLocalReference(target)
+  );
+}
+
+/**
+ * Drop local resource loads outside `img`: CSS in `style` elements and in CSS
+ * attributes (`style`, SVG `fill`, ...), and URL attributes such as SVG `image`
+ * `href`. The preview resolves these against the webview origin, so it never
+ * shows a local file through them; raw Mermaid SVG, kept when PNG conversion
+ * fails, can still carry them into export (02-F3). `http:` loads go too, since
+ * the preview CSP refuses them (decision #5). Links are navigation, not loads.
+ * Other attributes (`src`, `alt`, `title`, link `href`) are not CSS, so a
+ * `url(` in their text loads nothing and stays (02-R1).
+ */
+function dropLocalResourceLoads($: cheerio.CheerioAPI): void {
+  $('style').each((_, style) => {
+    if (cssLoadsLocalResource($(style).text())) $(style).remove();
+  });
+  $('*').each((_, element) => {
+    const { name, attribs } = element as { name: string; attribs: Record<string, string> };
+    for (const [attribute, value] of Object.entries(attribs)) {
+      const lower = attribute.toLowerCase();
+      const fetchesUrl =
+        RESOURCE_URL_ATTRIBUTES.has(lower) &&
+        !((name === 'a' || name === 'area') && lower.endsWith('href'));
+      const isCss = CSS_ATTRIBUTES.has(lower);
+      if ((fetchesUrl && isLocalReference(value)) || (isCss && cssLoadsLocalResource(value))) {
+        $(element).removeAttr(attribute);
+      }
+    }
+  });
+}
+
+/**
+ * Give every exported image the source the preview would load, before either
+ * exporter sees it. Local destinations become a canonical, segment-encoded URL
+ * relative to `baseDir` for a file the host contained; refused ones lose `src`,
+ * and so do `http:` sources, which the preview CSP refuses (decision #5).
+ * SECURITY (#101): Chrome must never resolve the authored string itself. Its
+ * URL parser treats `\`, tabs and `//host` differently from Node's path logic.
+ * Local and `http:` loads outside `img` (CSS, SVG `href`, `background`) are dropped.
+ */
+function restrictExportImageSources(
+  html: string,
+  resolveLocalImage: ExportImageResolver,
+  baseDir: string
+): string {
+  const $ = cheerio.load(html, undefined, false);
+  $('img').each((_, image) => {
+    const source = $(image).attr('data-markdown-src') || $(image).attr('src') || '';
+    $(image).removeAttr('data-markdown-src').removeAttr('srcset');
+    if (DIRECT_IMAGE_SOURCE.test(source)) {
+      $(image).attr('src', source);
+      return;
+    }
+    const resolved =
+      source && !HTTP_IMAGE_SOURCE.test(source) ? resolveLocalImage(source) : undefined;
+    const relativePath = resolved && path.relative(baseDir, resolved.absolutePath);
+    // A different Windows drive or UNC share has no relative form; fail closed.
+    if (!resolved || !relativePath || path.isAbsolute(relativePath)) {
+      $(image).removeAttr('src');
+      return;
+    }
+    // Split on the platform separator only: a POSIX filename may contain `\`.
+    const url = relativePath.split(path.sep).map(encodeImagePathSegment).join('/');
+    $(image).attr('src', url + resolved.suffix);
+  });
+  dropLocalResourceLoads($);
+  return $.html();
 }
 
 /**
@@ -154,13 +1003,15 @@ async function showExportWarning(format: string): Promise<boolean> {
  * @param mermaidImages - Mermaid diagrams as PNG data URLs
  * @param title - Document title
  * @param document - Source VS Code document
+ * @param resolveLocalImage - Host containment decision for local image destinations
  */
 export async function exportDocument(
   format: string,
   html: string,
   mermaidImages: MermaidImage[],
   title: string,
-  document: vscode.TextDocument
+  document: vscode.TextDocument,
+  resolveLocalImage: ExportImageResolver
 ): Promise<void> {
   // Show warning dialog and wait for user confirmation
   const userConfirmed = await showExportWarning(format);
@@ -170,6 +1021,7 @@ export async function exportDocument(
 
   // Convert all images (local and remote) to data URLs for embedding
   // html = await convertImagesToDataUrls(html, document);
+  html = restrictExportImageSources(html, resolveLocalImage, getDocumentBasePath(document));
 
   // Export theme is always light
   const exportTheme = 'light';
@@ -178,7 +1030,9 @@ export async function exportDocument(
   const defaultFilename = title.replace(/[<>:"/\\|?*]/g, '-') || 'document';
   const extension = format === 'pdf' ? 'pdf' : 'docx';
   const filters: Record<string, string[]> = {};
-  filters[format === 'pdf' ? 'PDF Document' : 'Word Document'] = [extension];
+  filters[format === 'pdf' ? vscode.l10n.t('PDF Document') : vscode.l10n.t('Word Document')] = [
+    extension,
+  ];
 
   const docBasePath = getDocumentBasePath(document);
   const saveUri = await vscode.window.showSaveDialog({
@@ -196,7 +1050,7 @@ export async function exportDocument(
   await vscode.window.withProgress(
     {
       location: vscode.ProgressLocation.Notification,
-      title: `Exporting to ${format.toUpperCase()}...`,
+      title: vscode.l10n.t('Exporting to {0}...', format.toUpperCase()),
       cancellable: true,
     },
     async (progress, token) => {
@@ -227,7 +1081,7 @@ export async function exportDocument(
         // Only show success message if export actually completed
         if (exportSucceeded) {
           vscode.window.showInformationMessage(
-            `Document exported successfully to ${path.basename(uri.fsPath)}`
+            vscode.l10n.t('Document exported successfully to {0}', path.basename(uri.fsPath))
           );
 
           // Auto-open PDF in default viewer (only for PDF format)
@@ -245,7 +1099,7 @@ export async function exportDocument(
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Export failed: ${errorMessage}`);
+        vscode.window.showErrorMessage(vscode.l10n.t('Export failed: {0}', errorMessage));
         console.error('[MD4H] Export error:', error);
       }
     }
@@ -280,7 +1134,7 @@ async function ensureChromePath(
   const configuredRaw = config.get<string>('chromePath');
   if (configuredRaw) {
     const configuredPath = resolveChromeExecutable(configuredRaw);
-    report('Validating configured Chrome path…', 20);
+    report(vscode.l10n.t('Validating configured Chrome path…'), 20);
     const validation = await validateChromePath(configuredPath);
     if (validation.valid) {
       return configuredPath;
@@ -288,7 +1142,7 @@ async function ensureChromePath(
   }
 
   // 2) Auto-detect common paths
-  report('Detecting Chrome on this system…', 20);
+  report(vscode.l10n.t('Detecting Chrome on this system…'), 20);
   const detected = await findChromeExecutable();
   if (detected.path) {
     const detectedPath = resolveChromeExecutable(detected.path);
@@ -332,7 +1186,10 @@ export async function validateChromePath(chromePath: string): Promise<ChromeVali
 
   // Check if file exists
   if (!fs.existsSync(executablePath)) {
-    return { valid: false, error: 'Chrome executable not found at the specified path' };
+    return {
+      valid: false,
+      error: vscode.l10n.t('Chrome executable not found at the specified path'),
+    };
   }
 
   // Try running Chrome with --version to verify it's actually Chrome/Chromium
@@ -357,7 +1214,7 @@ export async function validateChromePath(chromePath: string): Promise<ChromeVali
   } catch {
     return {
       valid: false,
-      error: 'The specified file is not a valid Chrome/Chromium executable',
+      error: vscode.l10n.t('The specified file is not a valid Chrome/Chromium executable'),
     };
   }
 }
@@ -372,36 +1229,45 @@ export async function validateChromePath(chromePath: string): Promise<ChromeVali
 export async function promptForChromePath(detectedPath: string | null): Promise<string | null> {
   if (detectedPath) {
     // Chrome was detected - offer to use it or choose different
+    const usePath = vscode.l10n.t('Use This Path');
+    const chooseDifferentPath = vscode.l10n.t('Choose Different Path');
     const choice = await vscode.window.showInformationMessage(
-      `Chrome detected at:\n${detectedPath}\n\nWould you like to use this for PDF export?`,
+      vscode.l10n.t(
+        'Chrome detected at:\n{0}\n\nWould you like to use this for PDF export?',
+        detectedPath
+      ),
       { modal: true },
-      'Use This Path',
-      'Choose Different Path',
-      'Cancel'
+      usePath,
+      chooseDifferentPath,
+      vscode.l10n.t('Cancel')
     );
 
-    if (choice === 'Use This Path') {
+    if (choice === usePath) {
       return detectedPath;
-    } else if (choice === 'Choose Different Path') {
+    } else if (choice === chooseDifferentPath) {
       return await showChromeFilePicker();
     } else {
       return null; // Cancelled
     }
   } else {
     // Chrome not detected - offer to choose path or download
+    const downloadChrome = vscode.l10n.t('Download Chrome');
+    const chooseChromePath = vscode.l10n.t('Choose Chrome Path');
     const choice = await vscode.window.showInformationMessage(
-      'Chrome/Chromium is required for PDF export but was not found on your system.\n\nYou can download Chrome or select an existing installation.',
+      vscode.l10n.t(
+        'Chrome/Chromium is required for PDF export but was not found on your system.\n\nYou can download Chrome or select an existing installation.'
+      ),
       { modal: true },
-      'Download Chrome',
-      'Choose Chrome Path',
-      'Cancel'
+      downloadChrome,
+      chooseChromePath,
+      vscode.l10n.t('Cancel')
     );
 
-    if (choice === 'Download Chrome') {
+    if (choice === downloadChrome) {
       // Open Chrome download page
       await vscode.env.openExternal(vscode.Uri.parse('https://www.google.com/chrome/'));
       return null; // User needs to install and try again
-    } else if (choice === 'Choose Chrome Path') {
+    } else if (choice === chooseChromePath) {
       return await showChromeFilePicker();
     } else {
       return null; // Cancelled
@@ -429,7 +1295,7 @@ async function showChromeFilePicker(): Promise<string | null> {
     canSelectFolders: platform === 'darwin', // allow picking .app bundles
     canSelectMany: false,
     filters,
-    title: 'Select Chrome/Chromium Executable',
+    title: vscode.l10n.t('Select Chrome/Chromium Executable'),
   });
 
   if (result && result.length > 0) {
@@ -449,39 +1315,47 @@ async function promptForChromePathInlineResolver(
 ): Promise<string | null> {
   let lastError: string | undefined;
   let lastValue: string | undefined;
+  const browse = vscode.l10n.t('Browse…');
+  const enterPath = vscode.l10n.t('Enter Path');
+  const downloadChrome = vscode.l10n.t('Download Chrome');
+  const cancel = vscode.l10n.t('Cancel');
 
   while (!token.isCancellationRequested) {
     const choice = await vscode.window.showInformationMessage(
       lastError
-        ? `Chrome is required for PDF export.\nLast check failed: ${lastError}`
-        : 'Chrome is required for PDF export. Provide a path to Chrome/Chromium.',
+        ? vscode.l10n.t('Chrome is required for PDF export.\nLast check failed: {0}', lastError)
+        : vscode.l10n.t('Chrome is required for PDF export. Provide a path to Chrome/Chromium.'),
       { modal: true },
-      'Browse…',
-      'Enter Path',
-      'Download Chrome',
-      'Cancel'
+      browse,
+      enterPath,
+      downloadChrome,
+      cancel
     );
 
-    if (!choice || choice === 'Cancel') {
+    if (!choice || choice === cancel) {
       return null;
     }
 
-    if (choice === 'Download Chrome') {
+    if (choice === downloadChrome) {
       await vscode.env.openExternal(vscode.Uri.parse('https://www.google.com/chrome/'));
       continue;
     }
 
     let candidate: string | null = null;
 
-    if (choice === 'Browse…') {
+    if (choice === browse) {
       const picked = await showChromeFilePicker();
       candidate = picked ?? null;
-    } else if (choice === 'Enter Path') {
+    } else if (choice === enterPath) {
       const input = await vscode.window.showInputBox({
-        title: 'Enter Chrome/Chromium executable path',
+        title: vscode.l10n.t('Enter Chrome/Chromium executable path'),
         value: lastValue,
-        prompt:
-          'Examples:\n- /Applications/Google Chrome.app/Contents/MacOS/Google Chrome (macOS)\n- C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe (Windows)\n- /usr/bin/google-chrome (Linux)',
+        prompt: vscode.l10n.t(
+          'Examples:\n- {0} (macOS)\n- {1} (Windows)\n- {2} (Linux)',
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          'C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe',
+          '/usr/bin/google-chrome'
+        ),
         ignoreFocusOut: true,
       });
       candidate = input ?? null;
@@ -489,7 +1363,7 @@ async function promptForChromePathInlineResolver(
     }
 
     if (!candidate) {
-      lastError = 'No path selected';
+      lastError = vscode.l10n.t('No path selected');
       continue;
     }
 
@@ -497,7 +1371,7 @@ async function promptForChromePathInlineResolver(
     if (token.isCancellationRequested) {
       return null;
     }
-    progress.report({ message: 'Validating Chrome path…' });
+    progress.report({ message: vscode.l10n.t('Validating Chrome path…') });
     const validation = await validateChromePath(candidate);
     if (validation.valid) {
       const resolved = resolveChromeExecutable(candidate);
@@ -506,9 +1380,12 @@ async function promptForChromePathInlineResolver(
       return resolved;
     }
 
-    lastError = validation.error || 'Invalid Chrome path';
+    lastError = validation.error || vscode.l10n.t('Invalid Chrome path');
     await vscode.window.showErrorMessage(
-      `Chrome not ready: ${lastError}. Please choose a valid Chrome/Chromium executable.`
+      vscode.l10n.t(
+        'Chrome not ready: {0}. Please choose a valid Chrome/Chromium executable.',
+        lastError
+      )
     );
   }
 
@@ -516,7 +1393,19 @@ async function promptForChromePathInlineResolver(
 }
 
 /**
- * Export to PDF using the user's local Chrome/Chromium installation
+ * Drop source-less editor separators before printing. Image sources were already
+ * restricted by `restrictExportImageSources`, so Chrome resolves only vetted
+ * relative URLs against the document's trusted base directory.
+ */
+function preparePdfImageSources(html: string): string {
+  const $ = cheerio.load(html, undefined, false);
+  $('img.ProseMirror-separator:not([src]):not([srcset])').remove();
+  return $.html();
+}
+
+/**
+ * Export to PDF using the user's local Chrome/Chromium installation with a
+ * temporary incognito profile. The profile is removed after the print process exits.
  *
  * @returns true if export succeeded, false if user cancelled
  */
@@ -529,7 +1418,7 @@ async function exportToPDF(
   document: vscode.TextDocument,
   token: vscode.CancellationToken
 ): Promise<boolean> {
-  progress.report({ message: 'Preparing PDF export…', increment: 20 });
+  progress.report({ message: vscode.l10n.t('Preparing PDF export…'), increment: 20 });
 
   const chromePath = await ensureChromePath(progress, token);
   if (!chromePath) {
@@ -537,14 +1426,17 @@ async function exportToPDF(
   }
 
   // Build complete HTML document
-  const completeHtml = buildExportHTML(html, theme, 'pdf');
+  const completeHtml = buildExportHTML(preparePdfImageSources(html), theme, 'pdf');
 
   // Set content with the document's directory as the base URL
   // This allows relative paths (src="./foo.png") to be resolved correctly by Chrome
   const docDir = getDocumentBasePath(document);
 
   // Inject base tag to ensure relative paths are resolved correctly
-  const htmlWithBase = completeHtml.replace('<head>', `<head><base href="file://${docDir}/">`);
+  const baseHref = pathToFileURL(docDir + path.sep)
+    .href.replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
+  const htmlWithBase = completeHtml.replace('<head>', `<head><base href="${baseHref}">`);
 
   // Write the HTML to a temp file for Chrome to print
   const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'md4h-export-'));
@@ -553,11 +1445,11 @@ async function exportToPDF(
   try {
     await fs.promises.writeFile(tempHtmlPath, htmlWithBase, 'utf8');
   } catch (error) {
-    throw new Error(`Failed to write temporary HTML for export: ${error}`);
+    throw new Error(vscode.l10n.t('Failed to write temporary HTML for export: {0}', String(error)));
   }
 
   try {
-    progress.report({ message: 'Launching Chrome...', increment: 20 });
+    progress.report({ message: vscode.l10n.t('Launching Chrome...'), increment: 20 });
 
     // SECURITY: `--allow-file-access-from-files` was REMOVED here. Chromium
     // documents that flag as "intended for testing only — do not use it on
@@ -568,6 +1460,10 @@ async function exportToPDF(
     // See SECURITY review §H3.
     const chromeArgs = [
       '--headless=chrome',
+      // QA-001: a normal Chrome profile can stay alive after printing. Incognito
+      // exits with the print session; a temporary profile avoids the user's live browser.
+      '--incognito',
+      `--user-data-dir=${path.join(tempDir, 'chrome-profile')}`,
       '--disable-gpu',
       '--no-first-run',
       '--no-default-browser-check',
@@ -575,17 +1471,24 @@ async function exportToPDF(
       '--disable-software-rasterizer',
       '--disable-dev-shm-usage',
       '--print-to-pdf=' + outputPath,
-      `file://${tempHtmlPath}`,
+      // Chrome's default print header and footer stamp every page with the
+      // date and the temporary export.html path. Older Chrome only knows the
+      // second flag name; each build ignores the one it does not recognise.
+      '--no-pdf-header-footer',
+      '--print-to-pdf-no-header',
+      pathToFileURL(tempHtmlPath).href,
     ];
 
-    progress.report({ message: 'Rendering PDF...', increment: 30 });
+    progress.report({ message: vscode.l10n.t('Rendering PDF...'), increment: 30 });
     await runChrome(chromePath, chromeArgs);
     progress.report({ increment: 20 });
     return true; // Export succeeded
   } catch (error) {
     // Surface a user-friendly error
     const errMessage =
-      error instanceof Error ? error.message : 'Unknown error while exporting to PDF';
+      error instanceof Error
+        ? error.message
+        : vscode.l10n.t('Unknown error while exporting to PDF');
     throw new Error(errMessage);
   } finally {
     // Clean up temp files
@@ -620,7 +1523,12 @@ async function runChrome(executablePath: string, args: string[]): Promise<void> 
 
     chromeProcess.once('error', error => {
       reject(
-        new Error(`Failed to launch Chrome: ${error instanceof Error ? error.message : error}`)
+        new Error(
+          vscode.l10n.t(
+            'Failed to launch Chrome: {0}',
+            error instanceof Error ? error.message : String(error)
+          )
+        )
       );
     });
 
@@ -630,7 +1538,11 @@ async function runChrome(executablePath: string, args: string[]): Promise<void> 
       } else {
         reject(
           new Error(
-            `Chrome exited with code ${code}. Install or point to a working Chrome/Chromium via "markdownForHumans.chromePath".`
+            vscode.l10n.t(
+              'Chrome exited with code {0}. Install or point to a working Chrome/Chromium via "{1}".',
+              String(code),
+              'markdownForHumans.chromePath'
+            )
           )
         );
       }
@@ -735,14 +1647,14 @@ async function exportToWord(
   progress: vscode.Progress<{ message?: string; increment?: number }>,
   document: vscode.TextDocument
 ): Promise<boolean> {
-  progress.report({ message: 'Converting to Word format...', increment: 30 });
+  progress.report({ message: vscode.l10n.t('Converting to Word format...'), increment: 30 });
 
   try {
     const docxModule = await import('docx');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const docx = (docxModule as any).default ?? docxModule;
 
-    progress.report({ message: 'Building document...', increment: 30 });
+    progress.report({ message: vscode.l10n.t('Building document...'), increment: 30 });
 
     // Parse HTML and convert to docx elements
     const children = await htmlToDocx(html, docx, theme, document);
@@ -756,7 +1668,7 @@ async function exportToWord(
       ],
     });
 
-    progress.report({ message: 'Saving Word document...', increment: 20 });
+    progress.report({ message: vscode.l10n.t('Saving Word document...'), increment: 20 });
 
     // Generate buffer and write to file
     const buffer = await docx.Packer.toBuffer(doc);
@@ -920,8 +1832,17 @@ function getExportStyles(theme: string): string {
 /**
  * Convert HTML to docx elements using Cheerio for reliable parsing
  * Handles headings, paragraphs, lists, tables, and images with nested tags
+ * Exported for tests; production callers go through exportDocument.
+ *
+ * @param html - Rendered document HTML from the editor
+ * @param docx - The loaded `docx` module, passed in so it can be imported lazily
+ * @param theme - Export theme name; sets the text color of blockquotes
+ * @param document - Source document, passed on to paragraph parsing
+ * @returns The docx block elements, in document order
+ * @throws If Cheerio cannot be loaded or an element cannot be converted; the
+ *   caller reports the failure to the user
  */
-async function htmlToDocx(
+export async function htmlToDocx(
   html: string,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   docx: any,
@@ -939,11 +1860,23 @@ async function htmlToDocx(
   const cheerio = (cheerioModule as any).default ?? cheerioModule;
   const $ = cheerio.load(html);
 
+  // TipTap task items hold a visually hidden label ("Task item checkbox for ...") that only
+  // CSS hides; without CSS it would export as text. Replace the label with the checked state.
+  // The editor's node view sets only data-checked on the li; data-type is static renderHTML only.
+  $('li[data-checked]').each((_index: number, item: unknown) => {
+    const checked = $(item).attr('data-checked') === 'true';
+    $(item)
+      .children('label')
+      .replaceWith(checked ? '☑ ' : '☐ ');
+  });
+
   // Select all block-level elements we care about, maintaining document order
   // Cheerio traverses in document order automatically
   // Select all block-level elements we care about
   // We need to use a loop that supports await
-  const elements = $('h1, h2, h3, h4, h5, h6, p, li, blockquote, table').toArray();
+  const elements = $(
+    'h1, h2, h3, h4, h5, h6, p, li, blockquote, table, pre, div[data-math-block]'
+  ).toArray();
 
   for (const element of elements) {
     const $el = $(element);
@@ -986,6 +1919,28 @@ async function htmlToDocx(
             children: paragraphChildren,
             bullet: { level: 0 },
             spacing: { after: 100 },
+          })
+        );
+      }
+    } else if (tagName === 'pre') {
+      // Code block: one monospace paragraph per source line keeps indentation and blank lines
+      const lines: string[] = String($el.text()).replace(/\n$/, '').split('\n');
+      lines.forEach((line, index) => {
+        children.push(
+          new docx.Paragraph({
+            children: [new docx.TextRun({ text: line, font: 'Courier New' })],
+            spacing: { after: index === lines.length - 1 ? 200 : 0 },
+          })
+        );
+      });
+    } else if (tagName === 'div') {
+      // Block math: Word has no KaTeX, so export the LaTeX source instead of dropping the block
+      const latex = ($el.attr('data-latex') ?? '').trim();
+      if (latex) {
+        children.push(
+          new docx.Paragraph({
+            children: [new docx.TextRun({ text: latex, font: 'Courier New' })],
+            spacing: { before: 200, after: 200 },
           })
         );
       }
@@ -1120,8 +2075,8 @@ async function parseParagraphChildren(
               let height = 300;
 
               try {
-                const dimensions = imageSize(buffer);
-                if (dimensions.width && dimensions.height) {
+                const dimensions = readExportImageDimensions(resolvableSrc, buffer);
+                if (dimensions?.width && dimensions.height) {
                   // Scale down if too large (e.g. max width 600px)
                   const maxWidth = 600;
                   if (dimensions.width > maxWidth) {

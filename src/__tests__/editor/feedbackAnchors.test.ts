@@ -1,0 +1,714 @@
+/**
+ * Copyright (c) 2025-2026 Concret.io
+ *
+ * Licensed under the MIT License. See LICENSE file in the project root for details.
+ */
+
+import {
+  FEEDBACK_ANCHOR_ERROR_CODE,
+  FEEDBACK_TARGET_ERROR_CODE,
+  buildFeedbackAnchorMap,
+  findFeedbackOrdinalsForLines,
+  mapFeedbackSelection,
+  type CanonicalFeedbackBlock,
+  type FeedbackAnchorMap,
+} from '../../editor/feedbackAnchors';
+
+function block(ordinal: number, kind: string, markdown: string): CanonicalFeedbackBlock {
+  return { ordinal, kind, markdown };
+}
+
+function expectAnchorMap(
+  rawMarkdown: string,
+  canonicalBlocks: CanonicalFeedbackBlock[]
+): FeedbackAnchorMap {
+  const result = buildFeedbackAnchorMap(rawMarkdown, canonicalBlocks);
+  if (!result.ok) {
+    throw new Error(`${result.error.reason}: ${result.error.detail}`);
+  }
+  return result.map;
+}
+
+describe('buildFeedbackAnchorMap', () => {
+  it('maps canonical blocks to exact raw lines across Setext headings and hard wraps', () => {
+    const rawMarkdown = [
+      'A source-preserved title',
+      '========================',
+      '',
+      'A hard-wrapped paragraph',
+      'spans two source lines.',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'heading', '# A source-preserved title'),
+      block(1, 'paragraph', 'A hard-wrapped paragraph spans two source lines.'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'heading', startLine: 1, endLine: 2 },
+      { ordinal: 1, kind: 'paragraph', startLine: 4, endLine: 5 },
+    ]);
+  });
+
+  it('preserves CRLF and Unicode line locations', () => {
+    const rawMarkdown =
+      'Caf\u00e9 \ud83d\ude00 is wrapped\r\nacross two lines.\r\n\r\n## R\u00e9sum\u00e9\r\n';
+    const canonicalBlocks = [
+      block(0, 'paragraph', 'Caf\u00e9 \ud83d\ude00 is wrapped across two lines.'),
+      block(1, 'heading', '## R\u00e9sum\u00e9'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'paragraph', startLine: 1, endLine: 2 },
+      { ordinal: 1, kind: 'heading', startLine: 4, endLine: 4 },
+    ]);
+  });
+
+  it('maps lists, tables, blockquotes, and fenced code as top-level blocks', () => {
+    const rawMarkdown = [
+      '- alpha',
+      '- beta',
+      '  - nested',
+      '',
+      '| Name | Value |',
+      '| --- | --- |',
+      '| one | two |',
+      '',
+      '> quoted line',
+      '> continued',
+      '',
+      '```ts',
+      'const answer = 42;',
+      '```',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'bulletList', '* alpha\n* beta\n  * nested'),
+      block(1, 'table', '| Name | Value |\n| --- | --- |\n| one | two |'),
+      block(2, 'blockquote', '> quoted line continued'),
+      block(3, 'codeBlock', '```typescript\nconst answer = 42;\n```'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'list', startLine: 1, endLine: 3 },
+      { ordinal: 1, kind: 'table', startLine: 5, endLine: 7 },
+      { ordinal: 2, kind: 'blockquote', startLine: 9, endLine: 10 },
+      { ordinal: 3, kind: 'code', startLine: 12, endLine: 14 },
+    ]);
+  });
+
+  it('maps the webview alert alias to its blockquote source span', () => {
+    const rawMarkdown = ['> [!IMPORTANT]', '> Keep the snapshot exact.'].join('\n');
+    const canonical = '> [!IMPORTANT]\n> Keep the snapshot exact.';
+
+    expect(expectAnchorMap(rawMarkdown, [block(0, 'alert', canonical)]).blocks).toEqual([
+      { ordinal: 0, kind: 'blockquote', startLine: 1, endLine: 2 },
+    ]);
+  });
+
+  it('maps an HTML-preserved table as a table block', () => {
+    const rawMarkdown = [
+      '<table>',
+      '  <tr><th>Name</th><th>Value</th></tr>',
+      '  <tr><td colspan="2">one</td></tr>',
+      '</table>',
+    ].join('\n');
+
+    expect(expectAnchorMap(rawMarkdown, [block(0, 'table', rawMarkdown)]).blocks).toEqual([
+      { ordinal: 0, kind: 'table', startLine: 1, endLine: 4 },
+    ]);
+  });
+
+  it.each([
+    '<img src="diagram.svg" width="480" />',
+    "<img width='480' alt='A > B' src='diagram.svg#view' >",
+    '<IMG SRC="diagram.svg" WIDTH="480">',
+    '<img\n src="diagram.svg"\n width="480" />',
+    '<img src="first.svg" width="480" />\n<img src="second.svg" width="240" />',
+  ])('maps a standalone supported HTML image to its exact source lines: %s', image => {
+    const source = `# Diagram\n\n${image}\n\nAfter`;
+    const imageEndLine = 3 + image.split('\n').length - 1;
+    expect(
+      expectAnchorMap(source, [
+        block(0, 'heading', '# Diagram'),
+        block(1, 'paragraph', image),
+        block(2, 'paragraph', 'After'),
+      ]).blocks
+    ).toEqual([
+      { ordinal: 0, kind: 'heading', startLine: 1, endLine: 1 },
+      { ordinal: 1, kind: 'paragraph', startLine: 3, endLine: imageEndLine },
+      { ordinal: 2, kind: 'paragraph', startLine: imageEndLine + 2, endLine: imageEndLine + 2 },
+    ]);
+  });
+
+  it.each([
+    '<div><img src="diagram.svg" width="480" /></div>',
+    '<img data-src="diagram.svg" width="480" />',
+    '<img alt="src=diagram.svg" width="480" />',
+    '<img src="diagram.svg" />\nUnseparated following text',
+  ])('keeps unsupported or compound image HTML strict: %s', source => {
+    expect(buildFeedbackAnchorMap(source, [block(0, 'paragraph', source)]).ok).toBe(false);
+    expect(expectAnchorMap(source, [block(0, 'html', source)]).blocks[0].kind).toBe('html');
+  });
+
+  it('maps the webview math alias to its Markdown paragraph container', () => {
+    const rawMarkdown = '$$\n\\int_0^1 x^2 dx\n$$';
+
+    expect(expectAnchorMap(rawMarkdown, [block(0, 'math', rawMarkdown)]).blocks).toEqual([
+      { ordinal: 0, kind: 'paragraph', startLine: 1, endLine: 3 },
+    ]);
+  });
+
+  it('treats bullet, ordered, and task-list node kinds as equivalent list anchors', () => {
+    const rawMarkdown = ['1. first', '2. second', '', '- [x] done'].join('\n');
+    const canonicalBlocks = [
+      block(4, 'bulletList', '- first\n- second'),
+      block(7, 'taskList', '- [x] done'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 4, kind: 'list', startLine: 1, endLine: 2 },
+      { ordinal: 7, kind: 'list', startLine: 4, endLine: 4 },
+    ]);
+  });
+
+  it('maps wrapped YAML frontmatter as one synthetic source block', () => {
+    const rawMarkdown = [
+      '---',
+      'title: Caf\u00e9',
+      'tags: [docs, review]',
+      '---',
+      '',
+      '# Introduction',
+      '',
+      'Body',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'codeBlock', '```yaml\n---\ntitle: Caf\u00e9\ntags: [docs, review]\n---\n```'),
+      block(1, 'heading', '# Introduction'),
+      block(2, 'paragraph', 'Body'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'frontmatter', startLine: 1, endLine: 4 },
+      { ordinal: 1, kind: 'heading', startLine: 6, endLine: 6 },
+      { ordinal: 2, kind: 'paragraph', startLine: 8, endLine: 8 },
+    ]);
+  });
+
+  it('maps leading JSON frontmatter when the canonical block identifies it', () => {
+    const rawMarkdown = [
+      '{',
+      '  "title": "R\u00e9sum\u00e9",',
+      '  "draft": true',
+      '}',
+      '',
+      '# Introduction',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(
+        0,
+        'frontmatter',
+        '```json\n{\n  "title": "R\u00e9sum\u00e9",\n  "draft": true\n}\n```'
+      ),
+      block(1, 'heading', '# Introduction'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'frontmatter', startLine: 1, endLine: 4 },
+      { ordinal: 1, kind: 'heading', startLine: 6, endLine: 6 },
+    ]);
+  });
+
+  it('preserves non-contiguous ProseMirror ordinals in document order', () => {
+    const anchorMap = expectAnchorMap('First\n\nSecond', [
+      block(2, 'paragraph', 'First'),
+      block(5, 'paragraph', 'Second'),
+    ]);
+
+    expect(anchorMap.blocks.map(anchor => anchor.ordinal)).toEqual([2, 5]);
+  });
+
+  it('returns the stable anchor error when block counts differ', () => {
+    const result = buildFeedbackAnchorMap('# Heading\n\nBody', [block(0, 'heading', '# Heading')]);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason: 'block-count-mismatch',
+        detail: 'Canonical block count 1 does not match raw block count 2.',
+      },
+    });
+  });
+
+  it('returns the stable anchor error when block kinds differ', () => {
+    const result = buildFeedbackAnchorMap('# Heading', [block(0, 'paragraph', 'Plain paragraph')]);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: FEEDBACK_ANCHOR_ERROR_CODE,
+        reason: 'block-kind-mismatch',
+        detail:
+          'Block ordinal 0 is paragraph in the canonical snapshot but heading in the raw source.',
+      },
+    });
+  });
+
+  it('rejects canonical blocks whose ordinals are duplicated or out of order', () => {
+    const duplicate = buildFeedbackAnchorMap('One\n\nTwo', [
+      block(1, 'paragraph', 'One'),
+      block(1, 'paragraph', 'Two'),
+    ]);
+    const descending = buildFeedbackAnchorMap('One\n\nTwo', [
+      block(2, 'paragraph', 'One'),
+      block(1, 'paragraph', 'Two'),
+    ]);
+
+    expect(duplicate.ok).toBe(false);
+    expect(descending.ok).toBe(false);
+    if (!duplicate.ok && !descending.ok) {
+      expect(duplicate.error.code).toBe(FEEDBACK_ANCHOR_ERROR_CODE);
+      expect(duplicate.error.reason).toBe('invalid-canonical-order');
+      expect(descending.error.reason).toBe('invalid-canonical-order');
+    }
+  });
+
+  it('maps production mixed lists when two-space nested bullets split an ordered block', () => {
+    const rawMarkdown = [
+      '1. Ordered parent item',
+      '  - Nested unordered child item one',
+      '  - Nested unordered child item two',
+      '    - Deeper unordered grandchild item',
+      '',
+      '- Unordered parent item',
+      '  1. Nested ordered child one',
+      '  2. Nested ordered child two',
+      '    1. Deep nested ordered grandchild',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(
+        58,
+        'list',
+        [
+          '1. Ordered parent item',
+          '  - Nested unordered child item one',
+          '  - Nested unordered child item two',
+          '    - Deeper unordered grandchild item',
+        ].join('\n')
+      ),
+      block(
+        59,
+        'list',
+        [
+          '- Unordered parent item',
+          '  1. Nested ordered child one',
+          '  2. Nested ordered child two',
+          '    1. Deep nested ordered grandchild',
+        ].join('\n')
+      ),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 58, kind: 'list', startLine: 1, endLine: 4 },
+      { ordinal: 59, kind: 'list', startLine: 6, endLine: 9 },
+    ]);
+  });
+
+  // TipTap's task-list tokenizer ends a task list at a blank line, so a loose
+  // task list renders as one task list per run. CommonMark reads one loose list.
+  it('maps a task list with blank lines between items to one block per rendered run', () => {
+    const rawMarkdown = [
+      '# Checklist',
+      '',
+      '- [ ] one',
+      '- [ ] two',
+      '',
+      '- [x] three',
+      '',
+      '',
+      '- [ ] four',
+      '- [ ] five',
+      '',
+      'After.',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'heading', '# Checklist'),
+      block(1, 'taskList', '- [ ] one\n- [ ] two'),
+      block(2, 'taskList', '- [x] three'),
+      block(3, 'taskList', '- [ ] four\n- [ ] five'),
+      block(4, 'paragraph', 'After.'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'heading', startLine: 1, endLine: 1 },
+      { ordinal: 1, kind: 'list', startLine: 3, endLine: 4 },
+      { ordinal: 2, kind: 'list', startLine: 6, endLine: 6 },
+      { ordinal: 3, kind: 'list', startLine: 9, endLine: 10 },
+      { ordinal: 4, kind: 'paragraph', startLine: 12, endLine: 12 },
+    ]);
+  });
+
+  it('keeps a blank line inside a task item when deeper content follows it', () => {
+    const rawMarkdown = [
+      '- [ ] parent',
+      '',
+      '  continued paragraph',
+      '  - [ ] child',
+      '',
+      '- [x] next run',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'taskList', '- [ ] parent\n\n  continued paragraph\n  - [ ] child'),
+      block(1, 'taskList', '- [x] next run'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'list', startLine: 1, endLine: 4 },
+      { ordinal: 1, kind: 'list', startLine: 6, endLine: 6 },
+    ]);
+  });
+
+  it('maps CRLF task lists with gaps to the same lines', () => {
+    const rawMarkdown = '- [ ] one\r\n\r\n- [ ] two\r\n';
+    const canonicalBlocks = [block(0, 'taskList', '- [ ] one'), block(1, 'taskList', '- [ ] two')];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'list', startLine: 1, endLine: 1 },
+      { ordinal: 1, kind: 'list', startLine: 3, endLine: 3 },
+    ]);
+  });
+
+  it('leaves tight task lists and loose plain bullet lists as one block', () => {
+    expect(
+      expectAnchorMap('- [ ] one\n- [x] two', [block(0, 'taskList', '- [ ] one\n- [x] two')]).blocks
+    ).toEqual([{ ordinal: 0, kind: 'list', startLine: 1, endLine: 2 }]);
+    expect(
+      expectAnchorMap('- one\n\n- two', [block(0, 'bulletList', '- one\n- two')]).blocks
+    ).toEqual([{ ordinal: 0, kind: 'list', startLine: 1, endLine: 3 }]);
+  });
+
+  it('still fails closed for a list that mixes plain and task items', () => {
+    const result = buildFeedbackAnchorMap('- [ ] todo\n\n- note', [
+      block(0, 'taskList', '- [ ] todo'),
+      block(1, 'bulletList', '- note'),
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.reason).toBe('block-count-mismatch');
+  });
+
+  it('rejects one canonical block that serializes as unrelated top-level blocks', () => {
+    const result = buildFeedbackAnchorMap('# Heading\n\nBody', [
+      block(0, 'heading', '# Heading\n\nBody'),
+    ]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe(FEEDBACK_ANCHOR_ERROR_CODE);
+      expect(result.error.reason).toBe('invalid-canonical-block');
+      expect(result.error.detail).toBe('Block ordinal 0 produced 2 top-level Markdown blocks.');
+    }
+  });
+
+  // A link reference definition renders nothing, so markdown-it emits no block
+  // for it, while the rich view keeps each one as a visible marker block.
+  describe('link reference definitions', () => {
+    it('anchors each trailing definition to its own source line', () => {
+      const rawMarkdown = [
+        '# Title',
+        '',
+        'See [docs] and [site].',
+        '',
+        '[docs]: https://example.com/docs',
+        '[site]: https://example.com',
+        '',
+      ].join('\n');
+
+      expect(
+        expectAnchorMap(rawMarkdown, [
+          block(0, 'heading', '# Title'),
+          block(
+            1,
+            'paragraph',
+            'See [docs](https://example.com/docs) and [site](https://example.com).'
+          ),
+          block(2, 'html', '[docs]: https://example.com/docs'),
+          block(3, 'html', '[site]: https://example.com'),
+        ]).blocks
+      ).toEqual([
+        { ordinal: 0, kind: 'heading', startLine: 1, endLine: 1 },
+        { ordinal: 1, kind: 'paragraph', startLine: 3, endLine: 3 },
+        { ordinal: 2, kind: 'html', startLine: 5, endLine: 5 },
+        { ordinal: 3, kind: 'html', startLine: 6, endLine: 6 },
+      ]);
+    });
+
+    it('anchors definitions at the start, between blocks, and over several lines', () => {
+      const rawMarkdown = [
+        '[a]: https://a.example',
+        '',
+        'One [a].',
+        '',
+        '[b]:',
+        '  https://b.example',
+        '  "Title"',
+        '',
+        '',
+        '[c]: https://c.example',
+        'Text right after.',
+      ].join('\r\n');
+
+      expect(
+        expectAnchorMap(rawMarkdown, [
+          block(0, 'html', '[a]: https://a.example'),
+          block(1, 'paragraph', 'One [a](https://a.example).'),
+          block(2, 'html', '[b]:\n  https://b.example\n  "Title"'),
+          block(4, 'html', '[c]: https://c.example'),
+          block(5, 'paragraph', 'Text right after.'),
+        ]).blocks
+      ).toEqual([
+        { ordinal: 0, kind: 'html', startLine: 1, endLine: 1 },
+        { ordinal: 1, kind: 'paragraph', startLine: 3, endLine: 3 },
+        { ordinal: 2, kind: 'html', startLine: 5, endLine: 7 },
+        { ordinal: 4, kind: 'html', startLine: 10, endLine: 10 },
+        { ordinal: 5, kind: 'paragraph', startLine: 11, endLine: 11 },
+      ]);
+    });
+
+    it('anchors definitions after frontmatter and in a document with nothing else', () => {
+      expect(
+        expectAnchorMap('---\ntitle: T\n---\n\n[a]: https://a.example\n', [
+          block(0, 'frontmatter', '```yaml\ntitle: T\n```'),
+          block(1, 'html', '[a]: https://a.example'),
+        ]).blocks
+      ).toEqual([
+        { ordinal: 0, kind: 'frontmatter', startLine: 1, endLine: 3 },
+        { ordinal: 1, kind: 'html', startLine: 5, endLine: 5 },
+      ]);
+      expect(
+        expectAnchorMap('[a]: https://a.example\n', [block(0, 'html', '[a]: https://a.example')])
+          .blocks
+      ).toEqual([{ ordinal: 0, kind: 'html', startLine: 1, endLine: 1 }]);
+    });
+
+    // The editor trims a marker block's text; edge whitespace means nothing in a definition.
+    it('anchors an indented definition and one with trailing spaces', () => {
+      const rawMarkdown =
+        'Intro [a] [b].\n\n   [a]: https://a.example\n[b]:\n    https://b.example  \n';
+
+      expect(
+        expectAnchorMap(rawMarkdown, [
+          block(0, 'paragraph', 'Intro [a](https://a.example) [b](https://b.example).'),
+          block(1, 'html', '[a]: https://a.example'),
+          block(2, 'html', '[b]:\n    https://b.example'),
+        ]).blocks
+      ).toEqual([
+        { ordinal: 0, kind: 'paragraph', startLine: 1, endLine: 1 },
+        { ordinal: 1, kind: 'html', startLine: 3, endLine: 3 },
+        { ordinal: 2, kind: 'html', startLine: 4, endLine: 5 },
+      ]);
+    });
+
+    it('keeps definition lines resolvable in both directions', () => {
+      const map = expectAnchorMap(
+        'Intro [a] [b].\n\n[a]: https://a.example\n[b]: https://b.example\n',
+        [
+          block(0, 'paragraph', 'Intro [a](https://a.example) [b](https://b.example).'),
+          block(1, 'html', '[a]: https://a.example'),
+          block(2, 'html', '[b]: https://b.example'),
+        ]
+      );
+
+      expect(findFeedbackOrdinalsForLines(map, 4, 4)).toEqual({ startOrdinal: 2, endOrdinal: 2 });
+      expect(findFeedbackOrdinalsForLines(map, 1, 4)).toEqual({ startOrdinal: 0, endOrdinal: 2 });
+      expect(mapFeedbackSelection(map, 1, 1)).toEqual({
+        ok: true,
+        range: { startOrdinal: 1, endOrdinal: 1, startLine: 3, endLine: 3 },
+      });
+    });
+
+    it.each([
+      [
+        'the marker text differs from the source line',
+        'Intro [a].\n\n[a]: https://a.example\n',
+        [
+          block(0, 'paragraph', 'Intro [a](https://a.example).'),
+          block(1, 'html', '[a]: https://other.example'),
+        ],
+      ],
+      [
+        'a definition in the source has no marker block beside the others',
+        'Intro [a].\n\n[a]: https://a.example\n[b]: https://b.example\n',
+        [
+          block(0, 'paragraph', 'Intro [a](https://a.example).'),
+          block(1, 'html', '[a]: https://a.example'),
+        ],
+      ],
+      [
+        'the marker blocks are in a different order than the source lines',
+        'Intro.\n\n[a]: https://a.example\n[b]: https://b.example\n',
+        [
+          block(0, 'paragraph', 'Intro.'),
+          block(1, 'html', '[b]: https://b.example'),
+          block(2, 'html', '[a]: https://a.example'),
+        ],
+      ],
+      [
+        'the marker sits on the other side of a block from its source line',
+        'Intro.\n\n[a]: https://a.example\n\nEnd.\n',
+        [
+          block(0, 'paragraph', 'Intro.'),
+          block(1, 'paragraph', 'End.'),
+          block(2, 'html', '[a]: https://a.example'),
+        ],
+      ],
+      [
+        'the source has no definition at all',
+        'Intro.\n\nEnd.\n',
+        [
+          block(0, 'paragraph', 'Intro.'),
+          block(1, 'html', '[a]: https://a.example'),
+          block(2, 'paragraph', 'End.'),
+        ],
+      ],
+    ])('fails closed when %s', (_name, rawMarkdown, canonicalBlocks) => {
+      const result = buildFeedbackAnchorMap(rawMarkdown, canonicalBlocks);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(FEEDBACK_ANCHOR_ERROR_CODE);
+        expect(result.error.reason).toBe('invalid-canonical-block');
+        expect(result.error.detail).toMatch(
+          /does not match the source lines between its neighbors/
+        );
+      }
+    });
+
+    it('still rejects a non-marker block that parses to no Markdown block', () => {
+      const result = buildFeedbackAnchorMap('[a]: https://a.example\n', [
+        block(0, 'paragraph', '[a]: https://a.example'),
+      ]);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.detail).toBe('Block ordinal 0 produced 0 top-level Markdown blocks.');
+      }
+    });
+  });
+
+  it('builds one exact map for a roughly 10,000-line snapshot', () => {
+    const blockCount = 5_000;
+    const sourceBlocks = Array.from({ length: blockCount }, (_, index) => `Block ${index + 1}`);
+    const rawMarkdown = sourceBlocks.join('\n\n');
+    const canonicalBlocks = sourceBlocks.map((markdown, ordinal) =>
+      block(ordinal, 'paragraph', markdown)
+    );
+
+    const startedAt = Date.now();
+    const anchorMap = expectAnchorMap(rawMarkdown, canonicalBlocks);
+
+    expect(anchorMap.blocks).toHaveLength(blockCount);
+    expect(anchorMap.blocks[0]).toEqual({
+      ordinal: 0,
+      kind: 'paragraph',
+      startLine: 1,
+      endLine: 1,
+    });
+    expect(anchorMap.blocks[blockCount - 1]).toEqual({
+      ordinal: blockCount - 1,
+      kind: 'paragraph',
+      startLine: blockCount * 2 - 1,
+      endLine: blockCount * 2 - 1,
+    });
+    // Mapping is a one-time session-start operation. This loose ceiling catches
+    // accidental quadratic behavior without making the test sensitive to CI load.
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+});
+
+describe('findFeedbackOrdinalsForLines', () => {
+  it('uses logarithmic anchor reads for a large frozen map', () => {
+    const blockCount = 10_000;
+    let indexedReads = 0;
+    const blocks = new Proxy(
+      Array.from({ length: blockCount }, (_, index) => ({
+        ordinal: index,
+        kind: 'paragraph' as const,
+        startLine: index * 2 + 1,
+        endLine: index * 2 + 1,
+      })),
+      {
+        get(target, property, receiver) {
+          if (typeof property === 'string' && /^\d+$/.test(property)) indexedReads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      }
+    );
+
+    expect(findFeedbackOrdinalsForLines({ blocks }, 5_001, blockCount * 2 - 1)).toEqual({
+      startOrdinal: 2_500,
+      endOrdinal: blockCount - 1,
+    });
+    expect(indexedReads).toBeLessThanOrEqual(64);
+  });
+
+  it('rejects line endpoints that are absent or reversed in the anchor map', () => {
+    const anchorMap = expectAnchorMap('First\n\nSecond', [
+      block(3, 'paragraph', 'First'),
+      block(8, 'paragraph', 'Second'),
+    ]);
+
+    expect(findFeedbackOrdinalsForLines(anchorMap, 1, 2)).toBeNull();
+    expect(findFeedbackOrdinalsForLines(anchorMap, 3, 1)).toBeNull();
+  });
+});
+
+describe('mapFeedbackSelection', () => {
+  const anchorMap = (): FeedbackAnchorMap =>
+    expectAnchorMap('First\nline\n\n## Middle\n\nLast', [
+      block(0, 'paragraph', 'First line'),
+      block(2, 'heading', '## Middle'),
+      block(5, 'paragraph', 'Last'),
+    ]);
+
+  it('returns the containing raw range for one selected block', () => {
+    expect(mapFeedbackSelection(anchorMap(), 0, 0)).toEqual({
+      ok: true,
+      range: { startOrdinal: 0, endOrdinal: 0, startLine: 1, endLine: 2 },
+    });
+  });
+
+  it('returns the exact first-to-last raw range for an ordinal span', () => {
+    expect(mapFeedbackSelection(anchorMap(), 2, 5)).toEqual({
+      ok: true,
+      range: { startOrdinal: 2, endOrdinal: 5, startLine: 4, endLine: 6 },
+    });
+  });
+
+  it('normalizes a reverse-direction ordinal selection', () => {
+    expect(mapFeedbackSelection(anchorMap(), 5, 2)).toEqual({
+      ok: true,
+      range: { startOrdinal: 2, endOrdinal: 5, startLine: 4, endLine: 6 },
+    });
+  });
+
+  it('maps a selection ending on the final block', () => {
+    expect(mapFeedbackSelection(anchorMap(), 5, 5)).toEqual({
+      ok: true,
+      range: { startOrdinal: 5, endOrdinal: 5, startLine: 6, endLine: 6 },
+    });
+  });
+
+  it('rejects ordinal endpoints that are not present in the frozen map', () => {
+    const result = mapFeedbackSelection(anchorMap(), 0, 4);
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: FEEDBACK_TARGET_ERROR_CODE,
+        reason: 'selection-out-of-range',
+        detail: 'Selection ordinals 0-4 do not both exist in the frozen anchor map.',
+      },
+    });
+  });
+});

@@ -11,7 +11,8 @@
  */
 
 import { Editor } from '@tiptap/core';
-import { reorderMarksForSerialization } from './markdownSerialization';
+import { Fragment } from '@tiptap/pm/model';
+import { patchMarkdownSerialization } from './markdownSerialization';
 
 /**
  * Result of a copy operation
@@ -39,17 +40,26 @@ export function getSelectionAsMarkdown(editor: Editor): string | null {
     // Get the selected slice
     const slice = editor.state.doc.slice(from, to);
 
+    // A selection inside one textblock yields bare inline nodes. Under the doc node
+    // the serializer would write each styled run as its own block, so wrap them in
+    // a paragraph first. Selections that span blocks already hold block nodes.
+    const content = slice.content.firstChild?.isInline
+      ? Fragment.from(editor.schema.nodes.paragraph.create(null, slice.content))
+      : slice.content;
+
     // Create a temporary document with just the selection content
-    const tempDoc = editor.schema.topNodeType.create(null, slice.content);
+    const tempDoc = editor.schema.topNodeType.create(null, content);
 
     // Try to use the markdown manager from @tiptap/markdown
     // The official package exposes editor.markdown.serialize(json)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const markdownManager = (editor as any).markdown;
     if (markdownManager?.serialize) {
+      // Same TipTap entity/escape patches as the save path (M2).
+      patchMarkdownSerialization(markdownManager);
       // Convert temp doc to JSON and serialize
       const json = tempDoc.toJSON();
-      return markdownManager.serialize(reorderMarksForSerialization(json));
+      return markdownManager.serialize(json);
     }
 
     // Fallback: Convert to basic markdown by analyzing node types

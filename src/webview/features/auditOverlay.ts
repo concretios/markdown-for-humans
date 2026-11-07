@@ -16,6 +16,7 @@ import {
   requestFilePickerForIssue,
 } from './auditDocument';
 import { getLevenshteinDistance } from './levenshtein';
+import * as l10n from '../l10n';
 
 // Maximum number of suggestion pills to show per issue (keeps the UI clean).
 const MAX_SUGGESTION_PILLS = 5;
@@ -31,9 +32,16 @@ type ToastLifecycle = {
   showFrame?: ToastFrameHandle;
   autoDismiss?: ToastTimerHandle;
   removal?: ToastTimerHandle;
+  dedupeKey?: string;
 };
 
 const toastLifecycles = new Map<string, ToastLifecycle>();
+const keyedToastIds = new Map<string, string>();
+
+export interface ToastOptions {
+  /** Reuse one non-loading toast for repeated messages from the same UI channel. */
+  dedupeKey?: string;
+}
 
 function getToastLifecycle(toastId: string): ToastLifecycle {
   let lifecycle = toastLifecycles.get(toastId);
@@ -66,6 +74,9 @@ function clearToastLifecycle(toastId: string): void {
   }
   clearToastTimer(lifecycle.autoDismiss);
   clearToastTimer(lifecycle.removal);
+  if (lifecycle.dedupeKey && keyedToastIds.get(lifecycle.dedupeKey) === toastId) {
+    keyedToastIds.delete(lifecycle.dedupeKey);
+  }
   toastLifecycles.delete(toastId);
 }
 
@@ -117,15 +128,71 @@ function scheduleToastRemoval(toastId: string, toast: HTMLElement): void {
   );
 }
 
+function scheduleToastAutoDismiss(toastId: string, toast: HTMLElement): void {
+  scheduleToastTimer(
+    toastId,
+    'autoDismiss',
+    () => {
+      toast.classList.remove('visible');
+      scheduleToastRemoval(toastId, toast);
+    },
+    TOAST_AUTO_DISMISS_MS
+  );
+}
+
+function refreshKeyedToast(
+  message: string,
+  type: 'success' | 'info',
+  dedupeKey: string
+): string | null {
+  const toastId = keyedToastIds.get(dedupeKey);
+  if (!toastId) return null;
+
+  const toast = document.getElementById(toastId);
+  if (!toast) {
+    clearToastLifecycle(toastId);
+    keyedToastIds.delete(dedupeKey);
+    return null;
+  }
+
+  const lifecycle = getToastLifecycle(toastId);
+  clearToastTimer(lifecycle.removal);
+  delete lifecycle.removal;
+  toast.classList.remove('toast-success', 'toast-info');
+  toast.classList.add(`toast-${type}`, 'visible');
+  const icon = toast.querySelector<HTMLElement>('.toast-icon');
+  if (icon) {
+    icon.className = `toast-icon codicon ${
+      type === 'success' ? 'codicon-verified' : 'codicon-info'
+    }`;
+  }
+  const messageElement = toast.querySelector<HTMLElement>('.toast-message');
+  if (messageElement && messageElement.textContent !== message) {
+    messageElement.textContent = message;
+  }
+  scheduleToastAutoDismiss(toastId, toast);
+  return toastId;
+}
+
 /**
  * Display a toast notification.
  * Auto-dismisses after TOAST_AUTO_DISMISS_MS unless type is 'loading'.
  *
  * @param message - The message to display
  * @param type - Toast type: 'success' | 'info' | 'loading' (affects styling and auto-dismiss)
+ * @param options - Optional channel key for coalescing repeated non-loading messages
  * @returns id for dismissing the toast manually (only used for 'loading' type)
  */
-export function showToast(message: string, type: 'success' | 'info' | 'loading' = 'info'): string {
+export function showToast(
+  message: string,
+  type: 'success' | 'info' | 'loading' = 'info',
+  options: ToastOptions = {}
+): string {
+  if (type !== 'loading' && options.dedupeKey) {
+    const refreshedToastId = refreshKeyedToast(message, type, options.dedupeKey);
+    if (refreshedToastId) return refreshedToastId;
+  }
+
   let toastContainer = document.getElementById('toast-container');
   if (!toastContainer) {
     toastContainer = document.createElement('div');
@@ -148,12 +215,22 @@ export function showToast(message: string, type: 'success' | 'info' | 'loading' 
   };
   const icon = iconMap[type];
 
-  toast.innerHTML = `
-    <span class="toast-icon codicon ${icon}" aria-hidden="true"></span>
-    <span class="toast-message">${message}</span>
-  `;
+  // SECURITY (#93): messages can carry host error text; never parse them as HTML.
+  const iconElement = document.createElement('span');
+  iconElement.className = `toast-icon codicon ${icon}`;
+  iconElement.setAttribute('aria-hidden', 'true');
+  const messageElement = document.createElement('span');
+  messageElement.className = 'toast-message';
+  messageElement.textContent = message;
+  toast.append(iconElement, messageElement);
 
   toastContainer.appendChild(toast);
+
+  if (type !== 'loading' && options.dedupeKey) {
+    const lifecycle = getToastLifecycle(toastId);
+    lifecycle.dedupeKey = options.dedupeKey;
+    keyedToastIds.set(options.dedupeKey, toastId);
+  }
 
   // Trigger animation
   scheduleToastFrame(toastId, () => {
@@ -162,15 +239,7 @@ export function showToast(message: string, type: 'success' | 'info' | 'loading' 
 
   // Auto-dismiss only for non-loading toasts
   if (type !== 'loading') {
-    scheduleToastTimer(
-      toastId,
-      'autoDismiss',
-      () => {
-        toast.classList.remove('visible');
-        scheduleToastRemoval(toastId, toast);
-      },
-      TOAST_AUTO_DISMISS_MS
-    );
+    scheduleToastAutoDismiss(toastId, toast);
   }
 
   return toastId;
@@ -207,6 +276,7 @@ export function clearToasts(): void {
   document.querySelectorAll('.toast').forEach(toast => {
     toast.remove();
   });
+  keyedToastIds.clear();
   document.getElementById('toast-container')?.remove();
 }
 
@@ -221,7 +291,7 @@ export function clearToasts(): void {
 export function showAuditOverlay(editor: Editor, issues: AuditIssue[]) {
   if (issues.length === 0) {
     // Show toast instead of panel for no issues
-    showToast('Your document is healthy — no issues found!', 'success');
+    showToast(l10n.t('Your document is healthy: no issues found!'), 'success');
     return;
   }
 
@@ -237,8 +307,11 @@ export function showAuditOverlay(editor: Editor, issues: AuditIssue[]) {
     <div class="audit-overlay-backdrop"></div>
     <div class="audit-overlay-panel">
       <div class="audit-overlay-header">
-        <h3 class="audit-overlay-title">Document Audit (${issues.length} issues)</h3>
-        <button class="audit-overlay-close" aria-label="Close">
+        <h3 class="audit-overlay-title">${l10n.html(
+          issues.length === 1 ? 'Document Audit ({0} issue)' : 'Document Audit ({0} issues)',
+          issues.length
+        )}</h3>
+        <button class="audit-overlay-close" aria-label="${l10n.html('Close')}">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
             <path fill-rule="evenodd" clip-rule="evenodd" d="M8 8.707l3.646 3.647.708-.707L8.707 8l3.647-3.646-.707-.708L8 7.293 4.354 3.646l-.708.708L7.293 8l-3.647 3.646.708.707L8 8.707z"/>
           </svg>
@@ -328,8 +401,8 @@ function buildIssueItem(issue: AuditIssue): HTMLElement {
   const navBtn = document.createElement('button');
   navBtn.className = 'audit-issue-nav-btn';
   navBtn.setAttribute('type', 'button');
-  navBtn.setAttribute('aria-label', 'Navigate to issue');
-  navBtn.title = 'Jump to issue';
+  navBtn.setAttribute('aria-label', l10n.t('Navigate to issue'));
+  navBtn.title = l10n.t('Jump to issue');
   navBtn.textContent = '↗';
   headerEl.appendChild(navBtn);
 
@@ -356,14 +429,17 @@ function buildIssueItem(issue: AuditIssue): HTMLElement {
     const bestMatch = issue.suggestions[0];
     const distance = getLevenshteinDistance(targetSlug, bestMatch);
 
-    if (distance === 1) {
-      hintEl.textContent = 'Heading name changed slightly — pick the updated one:';
+    // An older-form link is not a typo and its heading was not renamed, whatever the distance.
+    if (issue.olderFormAnchor) {
+      hintEl.textContent = l10n.t('Update the link to the anchor GitHub uses:');
+    } else if (distance === 1) {
+      hintEl.textContent = l10n.t('Heading name changed slightly. Pick the updated one:');
     } else if (distance <= 3) {
-      hintEl.textContent = 'Seems these headings were renamed — pick the updated one:';
+      hintEl.textContent = l10n.t('Seems these headings were renamed. Pick the updated one:');
     } else if (issue.suggestions.length === 1) {
-      hintEl.textContent = 'Found a similar heading — is this what you meant?';
+      hintEl.textContent = l10n.t('Found a similar heading. Is this what you meant?');
     } else {
-      hintEl.textContent = 'Multiple similar headings found — pick the correct one:';
+      hintEl.textContent = l10n.t('Multiple similar headings found. Pick the correct one:');
     }
 
     actionEl.appendChild(hintEl);
@@ -390,11 +466,11 @@ function buildIssueItem(issue: AuditIssue): HTMLElement {
     input.type = 'text';
     input.className = 'audit-manual-input';
     input.value = issue.target;
-    input.placeholder = `Fix ${issue.type}...`;
+    input.placeholder = issue.type === 'image' ? l10n.t('Fix image...') : l10n.t('Fix link...');
 
     const fixBtn = document.createElement('button');
     fixBtn.className = 'audit-fix-button manual-fix';
-    fixBtn.textContent = 'Fix';
+    fixBtn.textContent = l10n.t('Fix');
     fixBtn.setAttribute('data-pos', String(issue.pos));
     fixBtn.setAttribute('data-type', issue.type);
     const browseBtn = buildBrowseButton(issue.type === 'image' ? 'image' : 'any');
@@ -573,8 +649,8 @@ const auditPreviewPopover = (() => {
 
     const loadingEl = document.createElement('div');
     loadingEl.className = 'audit-preview-loading';
-    loadingEl.textContent = 'Loading preview…';
-    render(createPreviewCard('Preview', loadingEl), targetRect, previewId);
+    loadingEl.textContent = l10n.t('Loading preview…');
+    render(createPreviewCard(l10n.t('Preview'), loadingEl), targetRect, previewId);
 
     if (isImageSuggestion(suggestion)) {
       if (typeof window.resolveImagePath === 'function') {
@@ -596,7 +672,7 @@ const auditPreviewPopover = (() => {
           const body = document.createElement('div');
           body.appendChild(wrapper);
           body.appendChild(caption);
-          render(createPreviewCard('Image preview', body), targetRect, previewId);
+          render(createPreviewCard(l10n.t('Image preview'), body), targetRect, previewId);
           return;
         } catch {
           if (previewId !== activePreviewId) return;
@@ -605,8 +681,8 @@ const auditPreviewPopover = (() => {
 
       const unavailable = document.createElement('div');
       unavailable.className = 'audit-preview-empty';
-      unavailable.textContent = 'Image preview is not available for this path.';
-      render(createPreviewCard('Preview unavailable', unavailable), targetRect, previewId);
+      unavailable.textContent = l10n.t('Image preview is not available for this path.');
+      render(createPreviewCard(l10n.t('Preview unavailable'), unavailable), targetRect, previewId);
       return;
     }
 
@@ -627,7 +703,7 @@ const auditPreviewPopover = (() => {
     meta.appendChild(pathEl);
     file.appendChild(icon);
     file.appendChild(meta);
-    render(createPreviewCard('File preview', file), targetRect, previewId);
+    render(createPreviewCard(l10n.t('File preview'), file), targetRect, previewId);
   }
 
   return {
@@ -646,8 +722,8 @@ function buildBrowseButton(fileType: AuditFileType): HTMLButtonElement {
   const btn = document.createElement('button');
   btn.className = 'audit-browse-btn';
   btn.setAttribute('data-file-type', fileType);
-  btn.innerHTML = '<span class="codicon codicon-folder" aria-hidden="true"></span> Browse…';
-  btn.title = 'Open file picker to select the correct file';
+  btn.innerHTML = `<span class="codicon codicon-folder" aria-hidden="true"></span> ${l10n.html('Browse…')}`;
+  btn.title = l10n.t('Open file picker to select the correct file');
   return btn;
 }
 
@@ -709,8 +785,7 @@ function wireItemHandlers(
       browseBtn.disabled = true;
 
       // Update wait state
-      browseBtn.innerHTML =
-        '<span class="codicon codicon-clock" aria-hidden="true"></span> Waiting…';
+      browseBtn.innerHTML = `<span class="codicon codicon-clock" aria-hidden="true"></span> ${l10n.html('Waiting…')}`;
 
       try {
         const selected = await requestFilePickerForIssue(fileType);
@@ -718,18 +793,14 @@ function wireItemHandlers(
           const pos = parseInt(item.getAttribute('data-pos') ?? '0', 10);
           const typeStr = item.getAttribute('data-type');
           applyFix(pos, typeStr, selected, item, allIssues, editor, overlay);
-        } else {
-          // User cancelled – restore button with folder icon
-          browseBtn.disabled = false;
-          browseBtn.innerHTML =
-            '<span class="codicon codicon-folder" aria-hidden="true"></span> Browse…';
         }
       } catch {
-        // Error – restore button with folder icon
-        browseBtn.disabled = false;
-        browseBtn.innerHTML =
-          '<span class="codicon codicon-folder" aria-hidden="true"></span> Browse…';
+        // Picker error: nothing to apply.
       }
+
+      // Cancelled, failed or a fix that changed nothing: the row is still there.
+      browseBtn.disabled = false;
+      browseBtn.innerHTML = `<span class="codicon codicon-folder" aria-hidden="true"></span> ${l10n.html('Browse…')}`;
     });
   }
 
@@ -797,7 +868,7 @@ function navigateToIssue(item: HTMLElement, editor: Editor): void {
 
 /**
  * Apply a path fix to the document, then remove the issue from the overlay.
- * Dispatcher: routes to image attribute update or link mark update.
+ * Dispatcher: updates an image's attributes or rewrites a link's text run.
  */
 function applyFix(
   pos: number,
@@ -821,7 +892,13 @@ function applyFix(
   const fixTr = editor.state.tr;
   if (typeStr === 'image') {
     const node = editor.state.doc.nodeAt(pos);
-    if (node && (node.type.name === 'image' || node.type.name === 'customImage')) {
+    // The file holds markdown-src or src. Setting markdown-src to that same address would
+    // change the document but not the file, and the row would be reported as fixed.
+    if (
+      node &&
+      (node.type.name === 'image' || node.type.name === 'customImage') &&
+      (node.attrs['markdown-src'] || node.attrs.src) !== suggestion
+    ) {
       fixTr.setNodeMarkup(pos, undefined, {
         ...node.attrs,
         src: suggestion,
@@ -836,9 +913,28 @@ function applyFix(
           : `#${suggestion}`
         : suggestion;
 
-    // Use a custom link mark update that works with the transaction
-    const linkMark = editor.schema.marks.link.create({ href });
-    fixTr.addMark(pos, pos + nodeSize, linkMark);
+    // Rewrite the run's link instead of calling addMark: a new link mark would replace the old
+    // one and drop its title. The rewrite keeps the title and the run's other marks, code
+    // included. A position inside a text node means
+    // an earlier fix merged this run with its neighbour, so the row no longer describes it.
+    if (node && editor.state.doc.resolve(pos).textOffset === 0) {
+      const marks = node.marks.map(mark =>
+        mark.type.name === 'link' ? mark.type.create({ ...mark.attrs, href }) : mark
+      );
+      fixTr.replaceWith(pos, pos + nodeSize, node.mark(marks));
+      // The autolink plugin treats a replaced run as typed, and would unlink a trailing space.
+      fixTr.setMeta('preventAutolink', true);
+      // replaceWith moves the caret to the end of the run. The run keeps its size, so put it back.
+      fixTr.setSelection(editor.state.selection.getBookmark().resolve(fixTr.doc));
+    }
+  }
+
+  // Nothing changed, so keep the row: reporting this as fixed would be false.
+  if (fixTr.doc.eq(editor.state.doc)) {
+    showToast(l10n.t('Could not apply this fix. The document was not changed.'), 'info', {
+      dedupeKey: 'audit-fix-no-change',
+    });
+    return;
   }
 
   // Now map all remaining issues to their new positions
@@ -878,7 +974,7 @@ function applyFix(
   if (remainingCount === 0) {
     const list = overlay.querySelector('.audit-overlay-list');
     if (list) {
-      list.innerHTML = `<div style="padding:20px;text-align:center;">All fixed! 🎉</div>`;
+      list.innerHTML = `<div style="padding:20px;text-align:center;">${l10n.html('All fixed! 🎉')}</div>`;
     }
   }
 }
@@ -889,7 +985,8 @@ function applyFix(
 function updateAuditTitleCount(overlay: HTMLElement, remainingCount: number): void {
   const titleEl = overlay.querySelector('.audit-overlay-title');
   if (!titleEl) return;
-  titleEl.textContent = `Document Audit (${remainingCount} ${
-    remainingCount === 1 ? 'issue' : 'issues'
-  })`;
+  titleEl.textContent = l10n.t(
+    remainingCount === 1 ? 'Document Audit ({0} issue)' : 'Document Audit ({0} issues)',
+    remainingCount
+  );
 }

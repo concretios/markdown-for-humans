@@ -29,6 +29,19 @@ describe('BubbleMenuView', () => {
   let createFormattingToolbar: (editor: Editor) => HTMLElement;
   let createTableMenu: (editor: Editor) => HTMLElement;
   let updateToolbarStates: () => void;
+  let getFeedbackToolbarMenuHost:
+    ((trigger: HTMLElement | null, fallback: HTMLElement) => HTMLElement) | undefined;
+  let setFeedbackToolbarState: (state: {
+    active: boolean;
+    count?: number;
+    commentsVisible?: boolean;
+    commentsState?: 'hidden' | 'collapsed' | 'expanded';
+    commentsLocked?: boolean;
+    invalidated?: boolean;
+    starting?: boolean;
+    closing?: boolean;
+    captureState?: 'idle' | 'armed' | 'rasterizing';
+  }) => void;
 
   beforeEach(async () => {
     jest.resetModules();
@@ -39,6 +52,15 @@ describe('BubbleMenuView', () => {
     createFormattingToolbar = module.createFormattingToolbar;
     createTableMenu = module.createTableMenu;
     updateToolbarStates = module.updateToolbarStates;
+    setFeedbackToolbarState = module.setFeedbackToolbarState;
+    getFeedbackToolbarMenuHost = (
+      module as typeof module & {
+        getFeedbackToolbarMenuHost?: (
+          trigger: HTMLElement | null,
+          fallback: HTMLElement
+        ) => HTMLElement;
+      }
+    ).getFeedbackToolbarMenuHost;
   });
 
   afterEach(() => {
@@ -85,6 +107,61 @@ describe('BubbleMenuView', () => {
     } as unknown as Editor;
   };
 
+  describe('localization', () => {
+    const iconOf = (toolbar: HTMLElement, ariaLabel: string): HTMLElement | null => {
+      const button = Array.from(toolbar.querySelectorAll('button')).find(
+        candidate => candidate.getAttribute('aria-label') === ariaLabel
+      );
+      return button?.querySelector<HTMLElement>('.toolbar-icon') ?? null;
+    };
+
+    it('keeps the icon-font glyph for Bold while the language keeps the letter B', () => {
+      const icon = iconOf(createFormattingToolbar(createMockEditor()), 'Toggle bold (Ctrl+B)');
+
+      expect(icon?.classList.contains('codicon-bold')).toBe(true);
+      expect(icon?.getAttribute('data-fallback')).toBe('B');
+    });
+
+    it('shows translated tooltips, menu labels and the reason a button is disabled', async () => {
+      const l10n = await import('../../webview/l10n');
+      l10n.configureL10n({
+        'Toggle bold ({0}+B)': 'Fett umschalten ({0}+B)',
+        'Insert Table': 'Tabelle einfügen',
+        '{0} (Click in document to edit)': '{0} (Zum Bearbeiten in das Dokument klicken)',
+      });
+      const toolbar = createFormattingToolbar(createMockEditor());
+      document.body.appendChild(toolbar);
+      updateToolbarStates();
+
+      const bold = Array.from(toolbar.querySelectorAll('button')).find(
+        candidate => candidate.getAttribute('aria-label') === 'Fett umschalten (Ctrl+B)'
+      );
+      expect(bold?.title).toBe('Fett umschalten (Ctrl+B) (Zum Bearbeiten in das Dokument klicken)');
+      expect(toolbar.querySelector('[aria-label="Tabelle einfügen"]')).not.toBeNull();
+      // Not in the bundle: falls back to English.
+      expect(toolbar.querySelector('[aria-label="Toggle strikethrough"]')).not.toBeNull();
+    });
+
+    it('renders the letter a language uses for Bold instead of the B glyph', async () => {
+      const l10n = await import('../../webview/l10n');
+      l10n.configureL10n({ 'B/Bold button letter': 'F', 'H1/Heading 1 button text': 'Ü1' });
+      const toolbar = createFormattingToolbar(createMockEditor());
+
+      const bold = iconOf(toolbar, 'Toggle bold (Ctrl+B)');
+      expect(bold?.textContent).toBe('F');
+      expect(bold?.classList.contains('codicon-bold')).toBe(false);
+      // A plain letter would not say "bold", so it is drawn in the style it stands for.
+      expect(bold?.classList.contains('toolbar-letter-bold')).toBe(true);
+      expect(iconOf(toolbar, 'Toggle Heading 1')?.textContent).toBe('Ü1');
+      // Heading text is not a styled letter.
+      expect(iconOf(toolbar, 'Toggle Heading 1')?.className).not.toContain('toolbar-letter-');
+      // Italic was not given another letter, so it keeps its glyph.
+      expect(iconOf(toolbar, 'Toggle italic (Ctrl+I)')?.classList.contains('codicon-italic')).toBe(
+        true
+      );
+    });
+  });
+
   describe('createFormattingToolbar', () => {
     it('creates a toolbar element with correct class', () => {
       const editor = createMockEditor();
@@ -103,12 +180,463 @@ describe('BubbleMenuView', () => {
       expect(buttons.length).toBeGreaterThan(0);
     });
 
+    it('exposes Insert image with a picture SVG icon and tooltip', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      const imageButton = Array.from(toolbar.querySelectorAll('button')).find(
+        button => button.getAttribute('aria-label') === 'Insert image'
+      );
+
+      expect(imageButton).toBeTruthy();
+      expect(imageButton?.title).toBe('Insert image');
+      expect(imageButton?.getAttribute('aria-label')).toBe('Insert image');
+      // Prefer a purpose-drawn picture glyph over codicon-file-media, which
+      // reads as a document/upload badge next to link and chart icons.
+      expect(imageButton?.querySelector('.codicon-file-media')).toBeNull();
+      const icon = imageButton?.querySelector('.toolbar-icon.uses-svg-icon');
+      expect(icon).not.toBeNull();
+      const svg = icon?.querySelector('svg');
+      expect(svg).not.toBeNull();
+      expect(svg?.getAttribute('stroke')).toBe('currentColor');
+      expect(svg?.innerHTML.toLowerCase()).toMatch(/rect|circle|polyline|path/);
+    });
+
     it('registers selection update listener', () => {
       const editor = createMockEditor();
       createFormattingToolbar(editor);
 
       // Toolbar should register for selection updates
       expect(editor.on).toHaveBeenCalledWith('selectionUpdate', expect.any(Function));
+    });
+
+    it('puts LLM feedback first and only shows review actions in feedback mode', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      // The retired @ control stays gone and Feedback is first. Copy Reference for AI
+      // sits right after it (toolbarCopyReferenceButton.test.ts).
+      expect(toolbar.querySelector('.copy-ai-ref-button')).toBeNull();
+
+      const start = toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]');
+      expect(start).toBeTruthy();
+      expect(toolbar.firstElementChild).toBe(start);
+      expect(start?.getAttribute('aria-label')).toBe('Log feedback for an LLM');
+      expect(start?.title).toBe('Log feedback for an LLM');
+      expect(start?.querySelector('.codicon-comment-discussion-sparkle')).not.toBeNull();
+      expect(start?.querySelector('.toolbar-button-label')).toBeNull();
+      expect(start?.textContent).not.toContain('Start feedback');
+      expect(toolbar.querySelector('[data-feedback-finish]')).toBeNull();
+
+      setFeedbackToolbarState({ active: true, count: 3, commentsVisible: true });
+
+      expect(toolbar.querySelector('[data-feedback-start]')).toBeNull();
+      expect(toolbar.querySelector('[data-feedback-finish]')?.textContent).toContain(
+        'Finish & copy'
+      );
+      expect(toolbar.querySelector('[data-feedback-capture]')).toBeTruthy();
+      expect(toolbar.querySelector('[data-feedback-comments]')?.textContent).toContain('3');
+      expect(toolbar.querySelectorAll('.toolbar-button:not([data-feedback-action])')).toHaveLength(
+        0
+      );
+    });
+
+    it('mounts review actions as one centered group and restores the normal toolbar cleanly', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      setFeedbackToolbarState({ active: true, count: 3, commentsState: 'collapsed' });
+
+      const group = toolbar.querySelector('[data-feedback-toolbar-group]');
+      expect(group).not.toBeNull();
+      expect(group?.getAttribute('role')).toBe('group');
+      expect(group?.getAttribute('aria-label')).toBe('Feedback session actions');
+      expect(group?.querySelectorAll('[data-feedback-action]')).toHaveLength(5);
+      expect(group?.querySelector('[data-feedback-toolbar-divider]')).not.toBeNull();
+      expect(group?.lastElementChild?.hasAttribute('data-feedback-discard')).toBe(true);
+      expect(toolbar.children).toHaveLength(1);
+      expect(toolbar.classList).toContain('feedback-toolbar-active');
+
+      setFeedbackToolbarState({ active: false });
+
+      expect(toolbar.querySelector('[data-feedback-toolbar-group]')).toBeNull();
+      expect(toolbar.classList).not.toContain('feedback-toolbar-active');
+      expect(toolbar.querySelector('[data-feedback-start]')).not.toBeNull();
+    });
+
+    it('dispatches Start feedback from the compact AI-comment action', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      const requested = jest.fn();
+      window.addEventListener('feedbackStartRequested', requested);
+
+      try {
+        toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]')?.click();
+        expect(requested).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('feedbackStartRequested', requested);
+      }
+    });
+
+    it('shows Discard draft as a visible separated Trash action and dispatches it', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      const requested = jest.fn();
+      window.addEventListener('feedbackDiscardRequested', requested);
+
+      try {
+        setFeedbackToolbarState({ active: true, count: 4, commentsState: 'collapsed' });
+
+        const discard = toolbar.querySelector<HTMLButtonElement>('[data-feedback-discard]');
+        const divider = toolbar.querySelector<HTMLElement>('[data-feedback-toolbar-divider]');
+        const moreHost = toolbar.querySelector<HTMLElement>('[data-feedback-menu-host]');
+        expect(discard).toBeTruthy();
+        expect(discard?.classList).toContain('feedback-discard-button');
+        expect(discard?.querySelector('.codicon-trash')).not.toBeNull();
+        expect(discard?.querySelector('.toolbar-button-label')?.textContent).toBe('Discard draft…');
+        expect(discard?.getAttribute('aria-label')).toBe(
+          'Discard Feedback draft (moves it to Trash)'
+        );
+        expect(discard?.title).toBe('Discard Feedback draft (moves it to Trash)');
+        expect(divider?.getAttribute('role')).toBe('separator');
+        expect(moreHost?.querySelector('[data-feedback-more]')).not.toBeNull();
+        expect(moreHost?.nextElementSibling).toBe(divider);
+        expect(divider?.nextElementSibling).toBe(discard);
+
+        discard?.click();
+        expect(requested).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('feedbackDiscardRequested', requested);
+      }
+    });
+
+    it('uses the centered action group as the More menu positioning host', () => {
+      const fallback = document.createElement('div');
+      const group = document.createElement('div');
+      group.setAttribute('data-feedback-toolbar-group', '');
+      const trigger = document.createElement('button');
+      group.append(trigger);
+      fallback.append(group);
+
+      expect(getFeedbackToolbarMenuHost).toBeDefined();
+      expect(getFeedbackToolbarMenuHost?.(trigger, fallback)).toBe(group);
+      expect(getFeedbackToolbarMenuHost?.(null, fallback)).toBe(fallback);
+
+      const dedicatedHost = document.createElement('div');
+      dedicatedHost.setAttribute('data-feedback-menu-host', '');
+      dedicatedHost.append(trigger);
+      group.append(dedicatedHost);
+      expect(getFeedbackToolbarMenuHost?.(trigger, fallback)).toBe(dedicatedHost);
+    });
+
+    it('moves focus from Start feedback to Finish & copy when feedback mode activates', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      document.body.append(toolbar);
+      const start = toolbar.querySelector('[data-feedback-start]') as HTMLButtonElement;
+      start.focus();
+      expect(document.activeElement).toBe(start);
+
+      setFeedbackToolbarState({ active: true, count: 0, commentsState: 'collapsed' });
+
+      const finish = toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement;
+      expect(document.activeElement).toBe(finish);
+    });
+
+    it.each([
+      {
+        commentsState: 'hidden' as const,
+        ariaPressed: 'false',
+        ariaExpanded: 'false',
+        active: false,
+        icon: 'codicon-layout-sidebar-right-off',
+      },
+      {
+        commentsState: 'collapsed' as const,
+        ariaPressed: 'true',
+        ariaExpanded: 'false',
+        active: false,
+        icon: 'codicon-comment-discussion-sparkle',
+      },
+      {
+        commentsState: 'expanded' as const,
+        ariaPressed: 'true',
+        ariaExpanded: 'true',
+        active: true,
+        icon: 'codicon-comment-discussion-sparkle',
+      },
+    ])(
+      'renders the $commentsState comments state with matching visual and accessible state',
+      ({ commentsState, ariaPressed, ariaExpanded, active, icon }) => {
+        const editor = createMockEditor();
+        const toolbar = createFormattingToolbar(editor);
+
+        setFeedbackToolbarState({ active: true, count: 6, commentsState });
+
+        const comments = toolbar.querySelector('[data-feedback-comments]') as HTMLButtonElement;
+        expect(comments.getAttribute('data-feedback-comments-state')).toBe(commentsState);
+        expect(comments.getAttribute('aria-pressed')).toBe(ariaPressed);
+        expect(comments.getAttribute('aria-expanded')).toBe(ariaExpanded);
+        expect(comments.getAttribute('aria-controls')).toBe('feedback-comments-rail');
+        expect(comments.classList.contains('active')).toBe(active);
+        expect(comments.querySelector('.toolbar-icon')?.classList).toContain(icon);
+        expect(comments.textContent).toContain('Comments · 6');
+      }
+    );
+
+    it('keeps the comment count stable while moving through all comments states', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      for (const commentsState of ['hidden', 'collapsed', 'expanded'] as const) {
+        setFeedbackToolbarState({ active: true, count: 6, commentsState });
+        const comments = toolbar.querySelector('[data-feedback-comments]') as HTMLButtonElement;
+        expect(comments.textContent).toContain('Comments · 6');
+        expect(comments.getAttribute('data-feedback-comments-state')).toBe(commentsState);
+      }
+    });
+
+    it('preserves Comments button focus when its state or count rerenders', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      document.body.append(toolbar);
+      setFeedbackToolbarState({ active: true, count: 6, commentsState: 'collapsed' });
+
+      let comments = toolbar.querySelector('[data-feedback-comments]') as HTMLButtonElement;
+      comments.focus();
+      expect(document.activeElement).toBe(comments);
+
+      setFeedbackToolbarState({ active: true, count: 6, commentsState: 'expanded' });
+      comments = toolbar.querySelector('[data-feedback-comments]') as HTMLButtonElement;
+      expect(document.activeElement).toBe(comments);
+
+      setFeedbackToolbarState({ active: true, count: 7, commentsState: 'expanded' });
+      comments = toolbar.querySelector('[data-feedback-comments]') as HTMLButtonElement;
+      expect(document.activeElement).toBe(comments);
+      expect(comments.textContent).toContain('Comments · 7');
+
+      setFeedbackToolbarState({ active: true, count: 7, commentsState: 'hidden' });
+      comments = toolbar.querySelector('[data-feedback-comments]') as HTMLButtonElement;
+      expect(document.activeElement).toBe(comments);
+    });
+
+    it('explains that expanded comments remain open while feedback is being added', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      setFeedbackToolbarState({
+        active: true,
+        count: 2,
+        commentsState: 'expanded',
+        commentsLocked: true,
+      });
+
+      const comments = toolbar.querySelector('[data-feedback-comments]') as HTMLButtonElement;
+      expect(comments.getAttribute('data-feedback-comments-state')).toBe('expanded');
+      expect(comments.getAttribute('aria-pressed')).toBe('true');
+      expect(comments.getAttribute('aria-expanded')).toBe('true');
+      expect(comments.classList).toContain('active');
+      expect(comments.getAttribute('aria-label')).toBe(
+        'Comments remain open while adding feedback, 2 saved'
+      );
+      expect(comments.title).toBe('Comments remain open while adding feedback, 2 saved');
+      expect(comments.textContent).toContain('Comments · 2');
+    });
+
+    it('disables finish and capture when the frozen source is invalidated', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      setFeedbackToolbarState({ active: true, invalidated: true });
+
+      expect((toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement).disabled).toBe(
+        true
+      );
+      expect((toolbar.querySelector('[data-feedback-capture]') as HTMLButtonElement).disabled).toBe(
+        true
+      );
+      expect((toolbar.querySelector('[data-feedback-discard]') as HTMLButtonElement).disabled).toBe(
+        false
+      );
+    });
+
+    it('dispatches Finish with an unfinished comment so the controller can reveal draft guidance', () => {
+      const toolbar = createFormattingToolbar(createMockEditor());
+      const finishRequested = jest.fn();
+      window.addEventListener('feedbackFinishRequested', finishRequested);
+      try {
+        setFeedbackToolbarState({ active: true, commentsState: 'expanded', commentsLocked: true });
+        const finish = toolbar.querySelector<HTMLButtonElement>('[data-feedback-finish]');
+        expect(finish?.disabled).toBe(false);
+        finish?.click();
+        expect(finishRequested).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener('feedbackFinishRequested', finishRequested);
+      }
+    });
+
+    it('keeps finish reachable before and after a comment draft so guidance is available', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      setFeedbackToolbarState({ active: true, commentsLocked: true });
+
+      let finish = toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement;
+      expect(finish.disabled).toBe(false);
+      expect(finish.getAttribute('aria-disabled')).toBe('false');
+
+      setFeedbackToolbarState({ active: true, commentsLocked: false });
+      finish = toolbar.querySelector('[data-feedback-finish]') as HTMLButtonElement;
+      expect(finish.disabled).toBe(false);
+    });
+
+    it('marks Start feedback disabled and busy while a session is starting', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      setFeedbackToolbarState({ active: false, starting: true });
+
+      const start = toolbar.querySelector('[data-feedback-start]') as HTMLButtonElement;
+      expect(start.disabled).toBe(true);
+      expect(start.getAttribute('aria-disabled')).toBe('true');
+      expect(start.getAttribute('aria-busy')).toBe('true');
+
+      setFeedbackToolbarState({ active: false, starting: false });
+      expect(start.disabled).toBe(false);
+      expect(start.getAttribute('aria-busy')).toBe('false');
+    });
+
+    it('locks every normal toolbar action while a Feedback transition is starting', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      setFeedbackToolbarState({ active: false, starting: true });
+
+      expect(toolbar.getAttribute('aria-busy')).toBe('true');
+      expect(
+        Array.from(toolbar.querySelectorAll<HTMLButtonElement>('button')).every(
+          button => button.disabled
+        )
+      ).toBe(true);
+
+      setFeedbackToolbarState({ active: false, starting: false });
+
+      expect(toolbar.getAttribute('aria-busy')).toBe('false');
+      expect((toolbar.querySelector('[data-feedback-start]') as HTMLButtonElement).disabled).toBe(
+        false
+      );
+    });
+
+    it('marks the Feedback action group busy and disables every action while closing', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      setFeedbackToolbarState({ active: true, count: 2, closing: true });
+
+      const group = toolbar.querySelector<HTMLElement>('[data-feedback-toolbar-group]');
+      const controls = Array.from(
+        group?.querySelectorAll<HTMLButtonElement>('[data-feedback-action]') ?? []
+      );
+      expect(group?.getAttribute('aria-busy')).toBe('true');
+      expect(controls).toHaveLength(5);
+      expect(controls.every(control => control.disabled)).toBe(true);
+      expect(controls.every(control => control.getAttribute('aria-disabled') === 'true')).toBe(
+        true
+      );
+
+      setFeedbackToolbarState({ active: true, count: 2, closing: false });
+
+      const unlockedGroup = toolbar.querySelector<HTMLElement>('[data-feedback-toolbar-group]');
+      expect(unlockedGroup?.getAttribute('aria-busy')).toBe('false');
+      expect(
+        Array.from(
+          unlockedGroup?.querySelectorAll<HTMLButtonElement>('[data-feedback-action]') ?? []
+        ).every(control => !control.disabled)
+      ).toBe(true);
+    });
+
+    it('renders an armed area capture as the only available Cancel capture action', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      setFeedbackToolbarState({
+        active: true,
+        count: 2,
+        commentsState: 'collapsed',
+        captureState: 'armed',
+      });
+
+      const group = toolbar.querySelector<HTMLElement>('[data-feedback-toolbar-group]');
+      const capture = toolbar.querySelector<HTMLButtonElement>('[data-feedback-capture]');
+      const siblingControls = Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>('[data-feedback-action]')
+      ).filter(control => control !== capture);
+
+      expect(capture?.textContent).toContain('Cancel capture');
+      expect(capture?.querySelector('.toolbar-icon')?.classList).toContain('codicon-close');
+      expect(capture?.classList).toContain('active');
+      expect(capture?.getAttribute('aria-pressed')).toBe('true');
+      expect(capture?.getAttribute('aria-label')).toBe('Cancel area capture');
+      expect(capture?.title).toBe('Cancel area capture');
+      expect(capture?.disabled).toBe(false);
+      expect(siblingControls.every(control => control.disabled)).toBe(true);
+      expect(group?.getAttribute('aria-busy')).toBe('false');
+    });
+
+    it('dispatches an explicit cancel event instead of starting another capture while armed', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      const startRequested = jest.fn();
+      const cancelRequested = jest.fn();
+      window.addEventListener('feedbackCaptureRequested', startRequested);
+      window.addEventListener('feedbackCaptureCancelRequested', cancelRequested);
+
+      try {
+        setFeedbackToolbarState({ active: true, captureState: 'armed' });
+        toolbar.querySelector<HTMLButtonElement>('[data-feedback-capture]')?.click();
+
+        expect(cancelRequested).toHaveBeenCalledTimes(1);
+        expect(startRequested).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener('feedbackCaptureRequested', startRequested);
+        window.removeEventListener('feedbackCaptureCancelRequested', cancelRequested);
+      }
+    });
+
+    it('marks rasterization busy and disables every Feedback action', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+
+      setFeedbackToolbarState({ active: true, count: 2, captureState: 'rasterizing' });
+
+      const group = toolbar.querySelector<HTMLElement>('[data-feedback-toolbar-group]');
+      const controls = Array.from(
+        toolbar.querySelectorAll<HTMLButtonElement>('[data-feedback-action]')
+      );
+      const capture = toolbar.querySelector<HTMLButtonElement>('[data-feedback-capture]');
+
+      expect(group?.getAttribute('aria-busy')).toBe('true');
+      expect(capture?.textContent).toContain('Preparing capture…');
+      expect(capture?.getAttribute('aria-busy')).toBe('true');
+      expect(controls.every(control => control.disabled)).toBe(true);
+    });
+
+    it('preserves logical capture focus while its armed state rerenders', () => {
+      const editor = createMockEditor();
+      const toolbar = createFormattingToolbar(editor);
+      document.body.append(toolbar);
+      setFeedbackToolbarState({ active: true, captureState: 'idle' });
+      const initialCapture = toolbar.querySelector<HTMLButtonElement>('[data-feedback-capture]')!;
+      initialCapture.focus();
+
+      setFeedbackToolbarState({ active: true, captureState: 'armed' });
+
+      const armedCapture = toolbar.querySelector<HTMLButtonElement>('[data-feedback-capture]')!;
+      expect(armedCapture).not.toBe(initialCapture);
+      expect(document.activeElement).toBe(armedCapture);
+
+      setFeedbackToolbarState({ active: true, captureState: 'idle' });
+      expect(document.activeElement).toBe(
+        toolbar.querySelector<HTMLButtonElement>('[data-feedback-capture]')
+      );
     });
   });
 

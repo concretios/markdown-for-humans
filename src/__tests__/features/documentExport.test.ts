@@ -54,6 +54,8 @@ jest.mock('fs', () => ({
   },
 }));
 
+const refuseLocalImages = () => undefined;
+
 // SKIP: This test suite causes heap out of memory errors due to heavy mocking.
 // The actual export functionality works correctly - this is a test infrastructure issue.
 // TODO: Investigate memory leak in mock setup or split into smaller test files.
@@ -98,7 +100,7 @@ describe.skip('Document Export Integration', () => {
     });
 
     // Act
-    await exportDocument('pdf', htmlContent, [], 'Test Doc', mockDocument);
+    await exportDocument('pdf', htmlContent, [], 'Test Doc', mockDocument, refuseLocalImages);
 
     // Assert
     expect(vscode.window.withProgress).toHaveBeenCalled();
@@ -121,7 +123,7 @@ describe.skip('Document Export Integration', () => {
     (vscode.window.showSaveDialog as jest.Mock).mockResolvedValue({ fsPath: '/test/output.docx' });
 
     // Act
-    await exportDocument('docx', htmlContent, [], 'Test Doc', mockDocument);
+    await exportDocument('docx', htmlContent, [], 'Test Doc', mockDocument, refuseLocalImages);
 
     // Assert
     expect(vscode.window.withProgress).toHaveBeenCalled();
@@ -137,7 +139,14 @@ describe.skip('Document Export Integration', () => {
     (vscode.window.showSaveDialog as jest.Mock).mockResolvedValue(undefined);
 
     // Act
-    await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+    await exportDocument(
+      'pdf',
+      '<h1>Content</h1>',
+      [],
+      'Test Doc',
+      mockDocument,
+      refuseLocalImages
+    );
 
     // Assert
     expect(childProcess.spawn).not.toHaveBeenCalled();
@@ -155,7 +164,14 @@ describe.skip('Document Export Integration', () => {
     (vscode.window.showInformationMessage as jest.Mock).mockResolvedValue('Cancel'); // User cancels
 
     // Act
-    await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+    await exportDocument(
+      'pdf',
+      '<h1>Content</h1>',
+      [],
+      'Test Doc',
+      mockDocument,
+      refuseLocalImages
+    );
 
     // Assert
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
@@ -196,7 +212,14 @@ describe.skip('Document Export Integration', () => {
     });
 
     // Act
-    await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+    await exportDocument(
+      'pdf',
+      '<h1>Content</h1>',
+      [],
+      'Test Doc',
+      mockDocument,
+      refuseLocalImages
+    );
 
     // Assert
     expect(vscode.window.showErrorMessage).toHaveBeenCalledWith(
@@ -223,7 +246,14 @@ describe.skip('Document Export Integration', () => {
       (vscode.window.showSaveDialog as jest.Mock).mockResolvedValue({ fsPath: '/test/output.pdf' });
 
       // Act
-      await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+      await exportDocument(
+        'pdf',
+        '<h1>Content</h1>',
+        [],
+        'Test Doc',
+        mockDocument,
+        refuseLocalImages
+      );
 
       // Assert
       expect(childProcess.spawn).toHaveBeenCalledWith(
@@ -247,7 +277,14 @@ describe.skip('Document Export Integration', () => {
       (vscode.window.showInformationMessage as jest.Mock).mockResolvedValue('Use This Path');
 
       // Act
-      await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+      await exportDocument(
+        'pdf',
+        '<h1>Content</h1>',
+        [],
+        'Test Doc',
+        mockDocument,
+        refuseLocalImages
+      );
 
       // Assert
       expect(childProcess.spawn).toHaveBeenCalledWith(
@@ -271,7 +308,14 @@ describe.skip('Document Export Integration', () => {
       (vscode.window.showInformationMessage as jest.Mock).mockResolvedValue('Use This Path');
 
       // Act
-      await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+      await exportDocument(
+        'pdf',
+        '<h1>Content</h1>',
+        [],
+        'Test Doc',
+        mockDocument,
+        refuseLocalImages
+      );
 
       // Assert
       expect(childProcess.spawn).toHaveBeenCalledWith(
@@ -517,7 +561,14 @@ describe.skip('Document Export Integration', () => {
       });
 
       // Act
-      await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+      await exportDocument(
+        'pdf',
+        '<h1>Content</h1>',
+        [],
+        'Test Doc',
+        mockDocument,
+        refuseLocalImages
+      );
 
       // Assert
       expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
@@ -547,7 +598,14 @@ describe.skip('Document Export Integration', () => {
       (vscode.window.showSaveDialog as jest.Mock).mockResolvedValue({ fsPath: '/test/output.pdf' });
 
       // Act
-      await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+      await exportDocument(
+        'pdf',
+        '<h1>Content</h1>',
+        [],
+        'Test Doc',
+        mockDocument,
+        refuseLocalImages
+      );
 
       // Assert
       expect(vscode.window.showInformationMessage).not.toHaveBeenCalledWith(
@@ -572,7 +630,14 @@ describe.skip('Document Export Integration', () => {
       (vscode.window.showSaveDialog as jest.Mock).mockResolvedValue({ fsPath: '/test/output.pdf' });
 
       // Act
-      await exportDocument('pdf', '<h1>Content</h1>', [], 'Test Doc', mockDocument);
+      await exportDocument(
+        'pdf',
+        '<h1>Content</h1>',
+        [],
+        'Test Doc',
+        mockDocument,
+        refuseLocalImages
+      );
 
       // Assert
       expect(childProcess.spawn).not.toHaveBeenCalled();

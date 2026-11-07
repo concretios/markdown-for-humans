@@ -9,6 +9,8 @@
  * These templates provide starter code for various Mermaid diagram types
  */
 
+import * as l10n from './l10n';
+
 export interface MermaidTemplate {
   label: string;
   diagram: string;
@@ -16,7 +18,7 @@ export interface MermaidTemplate {
 
 export const MERMAID_TEMPLATES: MermaidTemplate[] = [
   {
-    label: 'Flowchart',
+    label: l10n.t('Flowchart'),
     diagram: `graph TD
     A[Start] --> B{Decision}
     B -->|Yes| C[Process]
@@ -25,7 +27,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     D --> E`,
   },
   {
-    label: 'Sequence Diagram',
+    label: l10n.t('Sequence Diagram'),
     diagram: `sequenceDiagram
     participant Client
     participant Server
@@ -36,7 +38,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     Server-->>Client: Response`,
   },
   {
-    label: 'Class Diagram',
+    label: l10n.t('Class Diagram'),
     diagram: `classDiagram
     class Animal {
         +String name
@@ -50,7 +52,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     Animal <|-- Dog`,
   },
   {
-    label: 'State Diagram',
+    label: l10n.t('State Diagram'),
     diagram: `stateDiagram-v2
     [*] --> Idle
     Idle --> Processing: Start
@@ -60,7 +62,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     Error --> Idle: Retry`,
   },
   {
-    label: 'Entity Relationship Diagram',
+    label: l10n.t('Entity Relationship Diagram'),
     diagram: `erDiagram
     CUSTOMER ||--o{ ORDER : places
     ORDER ||--|{ LINE-ITEM : contains
@@ -74,7 +76,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     }`,
   },
   {
-    label: 'Gantt Chart',
+    label: l10n.t('Gantt Chart'),
     diagram: `gantt
     title Project Schedule
     dateFormat  YYYY-MM-DD
@@ -86,7 +88,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     Testing            :a4, after a3, 5d`,
   },
   {
-    label: 'Pie Chart',
+    label: l10n.t('Pie Chart'),
     diagram: `pie title Distribution
     "Category A" : 45
     "Category B" : 30
@@ -94,7 +96,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     "Category D" : 10`,
   },
   {
-    label: 'User Journey',
+    label: l10n.t('User Journey'),
     diagram: `journey
     title User Shopping Experience
     section Browse
@@ -105,7 +107,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
       Checkout: 2: Customer`,
   },
   {
-    label: 'Git Graph (Timeline)',
+    label: l10n.t('Git Graph (Timeline)'),
     diagram: `gitGraph
     commit
     commit
@@ -118,7 +120,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     commit`,
   },
   {
-    label: 'Mindmap',
+    label: l10n.t('Mindmap'),
     diagram: `mindmap
   root((Project))
     Planning
@@ -132,7 +134,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
       Integration`,
   },
   {
-    label: 'Requirement Diagram',
+    label: l10n.t('Requirement Diagram'),
     diagram: `requirementDiagram
     requirement user_req {
         id: 1
@@ -146,7 +148,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     user_req - satisfies -> login_system`,
   },
   {
-    label: 'C4 Diagram',
+    label: l10n.t('C4 Diagram'),
     diagram: `C4Context
     title System Context diagram for Internet Banking System
     Person(customer, "Customer", "A customer of the bank")
@@ -156,7 +158,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     Rel(banking, email, "Sends e-mails using")`,
   },
   {
-    label: 'Sankey Diagram',
+    label: l10n.t('Sankey Diagram'),
     diagram: `sankey-beta
     Agricultural 'waste',Bio-conversion,124.729
     Bio-conversion,Liquid,0.597
@@ -165,7 +167,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     Bio-conversion,Gas,81.144`,
   },
   {
-    label: 'XY Chart',
+    label: l10n.t('XY Chart'),
     diagram: `xychart-beta
     title "Sales Revenue"
     x-axis [Jan, Feb, Mar, Apr, May]
@@ -174,7 +176,7 @@ export const MERMAID_TEMPLATES: MermaidTemplate[] = [
     bar [20, 30, 40, 50, 60]`,
   },
   {
-    label: 'Quadrant Chart',
+    label: l10n.t('Quadrant Chart'),
     diagram: `quadrantChart
     title Priority Matrix
     x-axis Low Effort --> High Effort

@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import { OutlineViewProvider, OutlineEntry } from '../../features/outlineView';
 
 describe('OutlineViewProvider', () => {
@@ -430,5 +431,62 @@ describe('OutlineViewProvider', () => {
       const filtered = await provider.getChildren();
       expect(filtered?.length).toBe(1);
     });
+  });
+});
+
+describe('OutlineViewProvider localization', () => {
+  const translate = vscode.l10n.t as jest.Mock;
+  const englishTranslate = translate.getMockImplementation();
+  const windowApi = vscode.window as unknown as { createQuickPick?: jest.Mock };
+  // Leaves out "Go to heading" on purpose, to exercise the fallback to English.
+  const sampleBundle: Record<string, string> = {
+    '(Untitled)': '（无标题）',
+    'H{0}': '标题{0}',
+    'Type to filter headings... (X to clear, Esc to close)':
+      '输入以筛选标题...（按 X 清除，按 Esc 关闭）',
+  };
+
+  beforeEach(() => {
+    translate.mockImplementation((message: string, ...args: Array<string | number | boolean>) =>
+      (sampleBundle[message] ?? message).replace(/\{(\d+)\}/g, (placeholder, index: string) =>
+        args[Number(index)] === undefined ? placeholder : String(args[Number(index)])
+      )
+    );
+  });
+
+  afterEach(() => {
+    translate.mockImplementation(englishTranslate);
+    delete windowApi.createQuickPick;
+  });
+
+  it('shows the translated label and level badge', async () => {
+    const provider = new OutlineViewProvider();
+    provider.setOutline([{ level: 2, text: '', pos: 7, sectionEnd: 10 }]);
+
+    const [item] = (await provider.getChildren()) ?? [];
+
+    expect(item.label).toBe('（无标题）');
+    expect(item.description).toBe('标题2');
+    expect(item.command?.title).toBe('Go to heading');
+  });
+
+  it('keeps heading text as written and translates the filter placeholder', async () => {
+    const quickPick = {
+      placeholder: '',
+      value: '',
+      onDidChangeValue: jest.fn(),
+      onDidHide: jest.fn(),
+      onDidAccept: jest.fn(),
+      show: jest.fn(),
+    };
+    windowApi.createQuickPick = jest.fn(() => quickPick);
+    const provider = new OutlineViewProvider();
+    provider.setOutline([{ level: 1, text: 'Overview', pos: 0, sectionEnd: 10 }]);
+
+    const [item] = (await provider.getChildren()) ?? [];
+    provider.showFilterInput();
+
+    expect(item.label).toBe('Overview');
+    expect(quickPick.placeholder).toBe('输入以筛选标题...（按 X 清除，按 Esc 关闭）');
   });
 });

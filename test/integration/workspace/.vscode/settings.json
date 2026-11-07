@@ -1,0 +1,7 @@
+{
+  // Read by typographySettings.extHost.test.cjs. A static fixture keeps that
+  // suite read-only: it never writes settings while the other suites run.
+  "[markdown]": {
+    "editor.fontFamily": "MD4H Integration Probe"
+  }
+}

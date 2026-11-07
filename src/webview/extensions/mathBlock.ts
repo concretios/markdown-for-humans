@@ -19,6 +19,7 @@ import { Node, mergeAttributes } from '@tiptap/core';
 import type { JSONContent, MarkdownRendererHelpers, MarkdownToken } from '@tiptap/core';
 import katex from 'katex';
 import { preserveProseSpaces } from '../utils/preserveProseSpaces';
+import * as l10n from '../l10n';
 
 interface MathBlockToken {
   type: string;
@@ -132,7 +133,7 @@ export const MathBlock = Node.create({
 
       const tooltip = document.createElement('div');
       tooltip.className = 'md4h-math-block-tooltip';
-      tooltip.textContent = 'Double-click to edit';
+      tooltip.textContent = l10n.t('Double-click to edit');
       tooltip.style.display = 'none';
       container.appendChild(tooltip);
 
@@ -144,8 +145,7 @@ export const MathBlock = Node.create({
         render.classList.remove('md4h-math-error-body');
 
         if (!currentLatex.trim()) {
-          render.innerHTML =
-            '<div class="md4h-math-block-placeholder">Empty equation. Double-click to edit.</div>';
+          render.innerHTML = `<div class="md4h-math-block-placeholder">${l10n.html('Empty equation. Double-click to edit.')}</div>`;
           return;
         }
 
@@ -159,11 +159,11 @@ export const MathBlock = Node.create({
         } catch (err) {
           container.classList.add('md4h-math-error');
           render.classList.add('md4h-math-error-body');
-          const message = err instanceof Error ? err.message : 'KaTeX render error';
+          const message = err instanceof Error ? err.message : l10n.t('KaTeX render error');
           render.innerHTML = '';
           const errorBox = document.createElement('div');
           errorBox.className = 'md4h-math-error-message';
-          errorBox.textContent = `LaTeX error: ${message}`;
+          errorBox.textContent = l10n.t('LaTeX error: {0}', message);
           const sourceBox = document.createElement('pre');
           sourceBox.className = 'md4h-math-error-source';
           sourceBox.textContent = currentLatex;

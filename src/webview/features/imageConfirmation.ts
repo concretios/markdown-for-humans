@@ -13,6 +13,8 @@
  * - Remember their choice for the session
  */
 
+import * as l10n from '../l10n';
+
 interface ImageDropOptions {
   targetFolder: string;
   rememberChoice: boolean;
@@ -30,8 +32,8 @@ export async function confirmImageDrop(
   const imagePathBase = (window as any).imagePathBase as string | undefined;
   const pathBaseLabel =
     imagePathBase === 'workspaceFolder'
-      ? 'Relative to workspace folder'
-      : 'Relative to current markdown file';
+      ? l10n.html('Relative to workspace folder')
+      : l10n.html('Relative to current markdown file');
 
   return new Promise(resolve => {
     // Create modal overlay
@@ -65,17 +67,16 @@ export async function confirmImageDrop(
 
     dialog.innerHTML = `
       <h3 style="margin: 0 0 16px 0; color: var(--vscode-foreground);">
-        📸 Save ${fileCount} Image${fileCount > 1 ? 's' : ''}
+        📸 ${l10n.html(fileCount > 1 ? 'Save {0} Images' : 'Save {0} Image', fileCount)}
       </h3>
 
       <div style="margin-bottom: 16px;">
         <label style="display: block; margin-bottom: 8px; color: var(--vscode-foreground);">
-          Save to folder:
+          ${l10n.html('Save to folder:')}
         </label>
         <input
           type="text"
           id="image-folder-input"
-          value="${defaultFolder}"
           style="
             width: 100%;
             padding: 6px 8px;
@@ -85,7 +86,7 @@ export async function confirmImageDrop(
             border-radius: 3px;
             font-family: var(--vscode-font-family);
           "
-          placeholder="e.g., images, assets/img, docs/screenshots"
+          placeholder="${l10n.html('e.g., images, assets/img, docs/screenshots')}"
         />
         <small style="display: block; margin-top: 4px; color: var(--vscode-descriptionForeground);">
           ${pathBaseLabel}
@@ -95,7 +96,7 @@ export async function confirmImageDrop(
       <div style="margin-bottom: 20px;">
         <label style="display: flex; align-items: center; color: var(--vscode-foreground); cursor: pointer;">
           <input type="checkbox" id="remember-choice" style="margin-right: 8px;">
-          Remember for this session
+          ${l10n.html('Remember for this session')}
         </label>
       </div>
 
@@ -108,7 +109,7 @@ export async function confirmImageDrop(
           border-radius: 3px;
           cursor: pointer;
           font-family: var(--vscode-font-family);
-        ">Cancel</button>
+        ">${l10n.html('Cancel')}</button>
         <button id="save-btn" style="
           padding: 6px 14px;
           background: var(--vscode-button-background);
@@ -118,7 +119,7 @@ export async function confirmImageDrop(
           cursor: pointer;
           font-family: var(--vscode-font-family);
           font-weight: 500;
-        ">Save Images</button>
+        ">${l10n.html('Save Images')}</button>
       </div>
     `;
 
@@ -127,6 +128,8 @@ export async function confirmImageDrop(
 
     // Get elements
     const folderInput = dialog.querySelector('#image-folder-input') as HTMLInputElement;
+    // Set as a property: the folder comes from workspace settings, not trusted markup.
+    folderInput.value = defaultFolder;
     const rememberCheckbox = dialog.querySelector('#remember-choice') as HTMLInputElement;
     const cancelBtn = dialog.querySelector('#cancel-btn') as HTMLButtonElement;
     const saveBtn = dialog.querySelector('#save-btn') as HTMLButtonElement;

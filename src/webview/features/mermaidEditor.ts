@@ -13,6 +13,8 @@
  * - Escape key closes without saving
  */
 
+import * as l10n from '../l10n';
+
 interface MermaidEditResult {
   code: string;
   wasSaved: boolean;
@@ -70,7 +72,7 @@ export async function showMermaidEditor(initialCode: string): Promise<MermaidEdi
     `;
     header.innerHTML = `
       <h3 style="margin: 0; color: var(--vscode-foreground); font-size: 14px; font-weight: 600;">
-        Edit Mermaid Diagram
+        ${l10n.html('Edit Mermaid Diagram')}
       </h3>
       <button id="close-btn" style="
         background: none;
@@ -82,7 +84,7 @@ export async function showMermaidEditor(initialCode: string): Promise<MermaidEdi
         padding: 0;
         width: 24px;
         height: 24px;
-      " title="Close (Esc)" aria-label="Close">×</button>
+      " title="${l10n.html('Close (Esc)')}" aria-label="${l10n.html('Close')}">×</button>
     `;
 
     // Textarea
@@ -123,7 +125,7 @@ export async function showMermaidEditor(initialCode: string): Promise<MermaidEdi
         cursor: pointer;
         font-family: var(--vscode-font-family);
         font-size: 13px;
-      ">Cancel</button>
+      ">${l10n.html('Cancel')}</button>
       <button id="save-btn" style="
         padding: 6px 14px;
         background: var(--vscode-button-background);
@@ -134,7 +136,7 @@ export async function showMermaidEditor(initialCode: string): Promise<MermaidEdi
         font-family: var(--vscode-font-family);
         font-weight: 500;
         font-size: 13px;
-      ">Save</button>
+      ">${l10n.html('Save')}</button>
     `;
 
     // Assemble dialog

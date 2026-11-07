@@ -1,12 +1,224 @@
 # Changelog
 
-All notable changes to Markdown for Humans will be documented in this file.
+All notable changes to Markdown Editor for Humans will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 **Note:** This is the ONLY changelog file. Use this content for GitHub releases (copy and polish as needed with emojis and user-friendly sections).
 
 ## [Unreleased]
+
+## [0.4.6] - 2026-11-07
+
+### Fixed
+
+- Links to headings with non-English letters or punctuation now jump to the heading. `[Über uns](#über-uns)` and `[Setup](#setup--config)` did nothing on Cmd/Ctrl+click and **Document Audit** reported them as broken, because the editor worked out a different anchor from GitHub's. Percent-encoded links and links in a different case also work.
+- The link dialog writes the anchor GitHub generates. A space typed at the start or end of a heading is left out, because Markdown drops it on save. The dialog no longer offers a heading whose anchor would be empty, such as `# 🚀`, because a link to it could not work.
+- Headings with inline math have GitHub's anchor: `# Energy $E=mc^2$ rule` is `#energy-emc2-rule`. Links in the older form still work.
+- Links copied from GitHub's HTML, such as `#user-content-license`, now work, and **Document Audit** suggests a fix for a percent-encoded typo.
+- Links in the older form (`#ber-uns`) keep working. The exception is when another heading now has that exact anchor: the link then goes to that heading, as it does on GitHub.
+- **Document Audit** now lists a link in the older form that is dead on GitHub, such as `#ber-uns`, with the current anchor as its fix. The link still jumps on Cmd/Ctrl+click, and nothing changes until you apply the fix, which keeps the link's title. Its underline uses the warning style, not the error style, because the link works here. The text was translated by AI for the five shipped languages.
+- **Document Audit** no longer calls a bare `[top](#)` broken or offers to replace it. Cmd/Ctrl+click on it is unchanged.
+- **Document Audit** fixes now work on link text formatted as code, such as ``[`setup`](#old)``, on heading, file and URL links. The fix used to change nothing and still report "All fixed!". A fix that cannot change the document now keeps its row and says so.
+- Editing elsewhere in a paragraph no longer merges code-formatted text that touches a link or other formatting into one code span. ``[`a`](#x)[`b`](#y)`` and `` `x`[`a`](#y) `` saved as one code span with the link syntax as literal text, so the links were lost.
+- A `#` typed at the end of a heading after a space, such as `# Issue #`, now survives saving, written as `\#`. Markdown read it as a closing marker, so it disappeared on the next open and the heading's anchor changed.
+- Typing next to a link formatted as code, such as ``[`setup`](#setup)``, no longer removes the link. A letter typed right before or after it, or between two of them, saved the text as plain code: ``[`one`](#a)[`two`](#b)`` became `` `one`x`two` ``. The link dialog can now link text formatted as code, and pasting a code link keeps the link.
+- Links whose target has a space, such as `[a](<my file.md>)`, are no longer lost on save. Editing the paragraph, or a **Document Audit** fix to a path with a space (typed, suggested or picked with Browse), wrote `[a](my file.md)`, which Markdown does not read as a link, and Audit still reported "All fixed!". The same applies to the link around a linked image.
+
+---
+
+## [0.4.5] - 2026-10-14
+
+### Added
+
+- **Add to GitHub Copilot.** When GitHub Copilot Chat is installed and signed in, a Copilot button appears in the toolbar beside **@**. Put the caret on a line or select a range, click it, and the exact lines of the saved file are attached to Copilot Chat as their own context chip. Each press adds another chip, and you can remove them one by one. If the file has unsaved changes it is saved first, so the lines match what Copilot reads. The button stays hidden when Copilot Chat is not available. Thanks to [@fmabap](https://github.com/fmabap) for the contribution ([#167](https://github.com/concretios/markdown-for-humans/issues/167), [#168](https://github.com/concretios/markdown-for-humans/pull/168)).
+
+---
+
+## [0.4.4] - 2026-10-12
+
+### Added
+
+- **Font and readability settings.** A reader with ADHD asked for font options ([#86](https://github.com/concretios/markdown-for-humans/issues/86)), so we built them: set the font, weight, line height, letter spacing and word spacing you read best in, next to the existing `markdownForHumans.zoom`. `markdownForHumans.font.family` takes any font installed on your computer (no font ships with the editor), and `font.weight`, `font.lineHeight`, `font.letterSpacing` and `font.wordSpacing` adjust body text. Changes apply at once to every open editor. Code stays monospace, and math and diagrams keep their own fonts. `markdownForHumans.font.useEditorFont` uses your VS Code editor font instead, including `"[markdown]"` overrides of `editor.fontFamily`, `editor.fontWeight` and `editor.fontSize`. Nothing changes until you set one of these, and PDF and Word exports keep their own fonts.
+- **Five more languages: Simplified Chinese, Japanese, Spanish, Brazilian Portuguese and Russian.** The editor follows your VS Code display language: toolbar, menus, dialogs, messages, command names and setting descriptions are translated. Run **Configure Display Language** to switch. The translations were drafted and cross-checked by AI against VS Code's own wording and have not had a native review yet; corrections are welcome, see `l10n/README.md`. Any other display language shows English. Feedback files and the prompt handed to your AI agent stay in English.
+- **ABAP syntax highlighting for code blocks.** ` ```abap ` fences are highlighted (keywords, strings, comments), and ABAP is available in the code block language menu. `sap-abap` works as a fence alias. The grammar comes from the community `highlightjs-sap-abap` package, since highlight.js itself ships no ABAP grammar.
+- **Copy Reference for AI is back, and exact.** The **@** toolbar button and the command **Markdown Editor for Humans: Copy Reference for AI** copy a reference such as `@bom/README.md#L10-14` for the caret or selection, ready to paste into Claude Code, Copilot or any agent ([#140](https://github.com/concretios/markdown-for-humans/issues/140), [#61](https://github.com/concretios/markdown-for-humans/issues/61)). Line numbers are read from the saved file: a caret in a table cell gives that row's line, a caret in a code block gives that code line, and nested list items, quotes, alerts, frontmatter and hard-wrapped paragraphs resolve to their own line. Where a position cannot be verified, the reference covers the smallest enclosing block instead of guessing. Unsaved changes are saved first so the lines match what the agent reads. A path with spaces is copied in quotes (`@"release notes/v1 draft.md#L3-5"`), the form Claude Code reads as one reference. The button sits beside **Log feedback for an LLM**. The command has no default shortcut; you can assign one in Keyboard Shortcuts.
+- **Paste as plain text.** `Ctrl+Shift+V` (`Cmd+Shift+V` on macOS) pastes the clipboard's text as written: formatting from the source is dropped, nothing is converted from HTML or Markdown, and no code block is created. Line breaks are kept, and one undo removes the paste. The command, **Markdown Editor for Humans: Paste as Plain Text**, is in the Command Palette and can be rebound in Keyboard Shortcuts. If the text contains Markdown syntax that would turn into formatting when the file is reopened, the editor asks first: paste it as code, as Markdown, or as plain text anyway.
+- **A warning before the editor drops Markdown it cannot keep.** Some source has no place in the rich view, for example `<video>`, `<iframe>` or a standalone `<a name="...">` anchor. When a file has such content, a notice names it and the editor stays read-only until you choose **Edit anyway**, because any edit would remove it from the file; **Open source view (split)** lets you edit the Markdown directly instead. When you edit a block that holds HTML the editor cannot write back (`<mark>`, `<u>`, `<span>`, a `<br>` in a paragraph), the edit goes through and a notice names what was removed, with **Undo**. An edit that only changes how a block reads (a dropped `\*` escape, spaces inside a code span) shows a general notice once. The text was translated by AI for the five shipped languages.
+
+### Fixed
+
+- A link to another Markdown file opens in this editor. It opened in VS Code's text editor, even when this editor was your default for Markdown.
+- Links that carry a section (`guide.md#install`) or encoded characters (`my%20notes.md`) open the file. They reported "File not found".
+- C# is in the code block language menu. C# code was already highlighted, but the menu did not offer it.
+- Word export keeps code blocks (one monospace line each) and block math (as its LaTeX source). Both were dropped from the document.
+- Word export shows checklist items as ☐ and ☑ instead of the hidden "Task item checkbox for ..." text.
+- The toolbar gear is labeled "Extension settings"; it was labeled "Export settings" but opens the extension's settings.
+- The word count counts Chinese and Japanese text by character, the way word processors do. A whole sentence counted as one word, so the count and the reading time were close to zero.
+- The status bar says "1 word", not "1 words".
+- Feedback toolbar buttons no longer run into each other in a narrow editor, for example in a split view. When the labels do not fit, the buttons show icons, and each keeps its name as a tooltip.
+- The Bold, Italic and Strikethrough buttons show a letter that matches your language instead of always B, I and S.
+- The "Feedback is not ready" warning says to reopen the editor if it stays blank. It only said to wait for the editor to load, which does not help when the editor never finished starting.
+- A word or single line copied from a VS Code code editor pastes as text inside the sentence. It was pasted as a code block that split the paragraph.
+- Feedback starts on a document that has link reference definitions (`[label]: https://...`), such as a changelog with version links at the end. It refused to start with "Feedback could not match this document to the saved file". A comment on a definition points at that definition's own line.
+- A link reference definition that repeats a label (`[a]: ...` twice, or `[docs]` and `[DOCS]`) is no longer deleted when the file is saved after an edit. Links still use the first definition.
+
+---
+
+## [0.4.3] - 2026-10-10
+
+### Changed
+
+- **The extension is now named Markdown Editor for Humans.** Commands, the Outline view and the Settings section use the new name. In **Open With...** and the editor picker the editor is listed as **Visual Editor**, with Markdown Editor for Humans beside it. The extension ID (`concretio.markdown-for-humans`), your settings and your keybindings are unchanged.
+- **New icon.** A Markdown mark on a soft gradient circle, with a transparent background that suits light and dark themes.
+
+### Fixed
+
+- **Log feedback for an LLM** starts on documents with a blank line between checklist items. The editor shows each run of items as its own checklist, while the saved file reads as one list, so Feedback could not match them.
+- Pasting a copied checklist keeps it a checklist. Checkboxes and their checked state came back as a bullet list with literal `[x]` text.
+- Ctrl+Z no longer shows "This file changed outside the rich editor". VS Code undid the file a second time on top of the editor's own undo; the editor now keeps undo and redo to itself.
+- Mermaid diagrams follow a theme switch. Changing VS Code between a light and a dark theme left open diagrams in the old theme's colors until the file was reopened; they now redraw in place, and each diagram stays on screen until its redrawn version is ready, so the page does not jump.
+- Editing a code block indented with four spaces no longer turns it into a paragraph on save. The first line lost its indentation when the block was saved, so the code became plain text.
+- **Log feedback for an LLM** starts on documents with a code block indented with four spaces. The same lost indentation made Feedback refuse to start.
+- When Feedback cannot match a document to the saved file, the message no longer tells you to split a mixed plain and task list unless the document has one, and otherwise points to the known issues list.
+- Exported PDFs no longer print a date header and a temporary file path footer on every page.
+- Editing a paragraph that contains a linked image (`[![Logo](logo.png)](https://example.com)`) no longer removes the link on save. **Log feedback for an LLM** also starts on documents with linked images.
+
+---
+
+## [0.4.2] - 2026-10-06
+
+### Changed
+
+- **Links now open with Cmd/Ctrl+click.** A plain click only places the caret, so link text can be edited without launching the browser or VS Code opening the link itself.
+
+### Fixed
+
+- The editor no longer stays blank, with no toolbar, when its view is slow to load. The document was sent to the view once and could arrive before the view was listening; it is now sent again when the view reports ready. (Listed here on 2026-10-11; the fix shipped in 0.4.2.)
+- Saving after an edit elsewhere no longer deletes the tags of an HTML wrapper that has Markdown inside it. `<div align="center">`, `<center>`, `<p>` and `<details>` blocks with blank lines between the tags and their content lost their opening or closing tag on the next save. The tags now show as muted markers and save exactly as written.
+- Pressing Undo repeatedly no longer empties the file. The first load of a document was an undo step, so one Undo too many blanked the editor and synced an empty file to VS Code. Undo now stops at the document you opened.
+- Editing a paragraph no longer strips `<kbd>`, `<sub>` and `<sup>`. `Press <kbd>Ctrl</kbd>+<kbd>C</kbd>` became `Press Ctrl+C` once the paragraph was edited.
+- **Copy selection as Markdown** copies a partial selection as one line. A selection such as `with **bold**, *italic*` used to be split into separate paragraphs, and a plain-text selection could copy nothing.
+- Right-clicking a table cell opens the table menu on the first click, and acts on the cell you clicked. The first right-click from outside the table used to open only VS Code's own menu, and a caret in another cell made the menu act on that cell.
+- Editing a paragraph keeps `<https://…>` and `<name@host>` autolinks in angle form instead of rewriting them as `[url](url)`.
+- Saving no longer inserts blank lines between blocks you did not edit. A heading, label or paragraph written directly above a list, code fence or text (no blank line) kept its layout only until the first save, which added a blank line at every such boundary. In a check over this repository's own 156 Markdown files, editing one heading left 129 byte-identical, up from 54, and removed 855 of 863 inserted blank lines.
+- Link reference definitions (`[0.2.1]: https://…`) are no longer deleted on save. They showed nothing in the editor, so the next save removed them while the text above still used them as links. Each definition now shows as a muted marker line and saves exactly as written.
+- A wrapper whose opening line also has text (`<div>Intro`) keeps its closing tag, and unmatched closing tags no longer block later ones.
+- The toolbar wraps onto a second row when the editor is narrow. Beside a sidebar or in a split view its last buttons (Export, Audit, Export settings) were cut off and could not be reached.
+- In Feedback mode, the comment button beside a block appears again on hover after you add or cancel a comment or a screenshot. Closing the comment box or screenshot dialog left the browser selection outside the document, so the button stayed hidden for every block until you clicked back into the text.
+- In Feedback mode, the comment button beside a nested list item can be reached with the mouse. Moving toward it crossed the parent list, which moved the button to the parent item, so a nested item could only be targeted from the keyboard.
+- The editor's error log now names the message and location when the browser gives no error object, instead of printing an empty `Uncaught error:` line.
+- The `toggleTocOutlineView` command now toggles the outline overlay. It sent a message the editor did not handle.
+- The link button tooltip now shows the working shortcut, Cmd/Ctrl+K then Cmd/Ctrl+L, instead of Cmd/Ctrl+K alone.
+- When Feedback cannot start because a list mixes plain and task items, the message now says to split it into two lists instead of showing a technical block-shape error.
+
+---
+
+## [0.4.1] - 2026-10-04
+
+### Fixed
+
+- Saving no longer rewrites Markdown you did not edit. Soft line breaks, compact or aligned tables, `*` list markers and setext headings now keep their exact source; only the blocks you change are reformatted.
+- Inline code that contains a backtick no longer turns into broken code plus literal text on save (TipTap 3.31.4 chooses a longer backtick fence).
+- Closing a tab right after an edit no longer loses that edit. Previously, closing within about half a second of a change closed the tab without a save prompt and the change never reached the file. The first change after a pause now reaches VS Code at once, so the tab shows as unsaved and VS Code asks to save.
+- Toolbar tooltips now appear reliably when you hover over a button icon, not only its edges (contributed by @goltmann).
+- **Copy to Workspace & Edit** for an image outside the workspace now works. The image was copied, but the dialog closed and nothing else happened; the image now points at the copy and the resize panel opens.
+- HTML comments such as `<!-- medium: export as image -->` are no longer deleted. Since 0.3.0 the editor dropped them on load, so the next save removed them from the file and Feedback refused to start ("the rendered Markdown differs from the saved file"). They now show as a faint marker and save exactly as written, including a comment placed directly above a table, inside a list item or blockquote, or inside a line of text.
+- Editing a blockquote or GitHub alert with several paragraphs no longer merges them into one on save. The paragraphs were written back without the blank `>` line between them, so GitHub showed them as a single paragraph.
+
+### Changed
+
+- Upgraded the complete TipTap family from `3.30.5` to exact `3.31.4`. Also brings faster Markdown parsing (about 27% on a 9,400-line document), table cell pipe escaping, removal of a U+001F leak from multi-block table cells, and correct checked state when pressing Enter before a checked task item's text.
+
+### Performance
+
+- Large documents open faster: the task list Markdown tokenizer no longer rescans the rest of the document at every block (about 28% faster load on a 9,400-line document).
+
+### Security
+
+- Updated bundled `dompurify` (via mermaid) to 3.4.16, `markdown-it` to 14.3.2 (fixes a paste-time slowdown with linkify that could freeze the editor on large inputs) and `undici` (via cheerio) to 7.30.0. `npm audit --omit=dev` reports 0 vulnerabilities.
+
+---
+
+## [0.4.0] - 2026-10-01
+
+### What's New
+
+#### LLM Feedback review sessions
+Review a document in a read-only Feedback mode, comment on text, whole blocks, table cells or captured screen areas, and hand the finished bundle to an AI agent. Drafts are saved under `.md4h/feedback` and can be resumed later.
+
+#### SVG images
+SVG images render in the editor and stay sharp when resized. Display size is written to the Markdown without changing the SVG file.
+
+#### Syntax highlighting for code blocks
+Code blocks are highlighted incrementally in a background worker, with theme-aware colors for light, dark and high-contrast themes. Plain, unknown and unlabeled fences stay literal text.
+
+### Added
+
+- Added Feedback-mode whole-block gutter targeting with an animated hover preview for paragraphs, headings, lists, blockquotes, and whole tables while preserving exact text and rectangular table-cell selection precedence.
+- Added target-aware Feedback context for prose, code, tables, selected cells, Mermaid, math, images, and multi-block targets. Complex targets use a wider composer, feedback input grows to a viewport cap, and users can switch between Compact and Expand layouts.
+- Added the strict `md4h-feedback/v2` evidence contract: complete source-addressable blocks retain hash-bound frozen-source evidence, embedding the authored slice when safe and within budget or recording an explicit omission; native drags retain exact rendered text, selected cells retain a typed matrix with derived escaped TSV, and visual sub-regions retain hash-bound screenshots.
+
+### Fixed
+
+- Made Feedback split-view locks application-acknowledged and fail closed across delayed, duplicated, dropped, reloaded, and disposed renderer transitions.
+- Replaced active Feedback ownership handoff with generation-bound apply, commit, and rollback stages. The host exposes the new owner only after every exact application ACK and peer lock completes.
+- Prevented save, autosave, hidden-webview teardown, and pending image writes from losing the newest rich-editor revision.
+- Added exact document edit identities, host-version barriers, reconciliation after rejected edits, and serialized `WorkspaceEdit` ordering.
+- Hardened Feedback snapshot parity, table-cell selection mapping, capture cancellation, close recovery, and active-session restoration.
+- Fixed A to B to A split-delivery races, conflicting document-edit ID reuse, CSS-sensitive raw-HTML whitespace suppression, and final-panel custom autosave loss.
+- Made pending-image completion application acknowledged and retryable, with exact renderer-generation identities, atomic ProseMirror updates, dense typed-array retention, and fail-closed marker resolution.
+- Bounded pending image memory without evicting unresolved markers, released image byte buffers after writes settle, and prevented oversized multi-image drops from exhausting the host queue.
+- Pruned off-crop table rows, cells, and nested-list items during screenshot capture while preserving crop geometry and ordered-list numbering.
+- Removed quadratic full-source line splitting from Feedback snapshot finalization.
+- Replaced repeated linear Feedback item-to-anchor scans with logarithmic indexed lookup.
+- Deferred screenshot body reads and hashing from automatic draft discovery to explicit Resume while retaining path, file-type, and quota checks.
+- Kept compact and wide Feedback composers plus tall saved-comment edit forms visible below the sticky toolbar and near viewport edges, remeasured wrapped inputs after responsive width changes, and isolated an active edit from offscreen cards and Undo controls until it closes.
+- Ignored retained GapCursor widgets when resolving opaque selections, refreshed exact locators at Finish without rebuilding decorations, bounded renderer selection evidence before traversal, and capped exact table-cell feedback at 256 cells per item and 4,096 cells per session before an explained whole-table fallback.
+- Aligned host and durable-store exact-cell accounting so restored degraded locators cannot pass host validation and then fail persistence.
+- Stopped TipTap 3.30.5 Markdown serialization from growing backslashes in underscored URLs/emails, escaping ordinary prose (`snake_case`, footnotes, `[WIP]`), converting authored `&lt;tag&gt;` entity text into deletable HTML, or dropping `[x]`/`[ ]` markers from numbered lists.
+- Projected all-empty Feedback table-cell selections as `[Empty cells]` so the host protocol accepts the item instead of bricking the draft session.
+- Saving no longer rewrites a mid-line `>` as `&gt;` (for example `Click **File** > **Save**`). A `>` at the start of a line still stays literal text instead of becoming a blockquote.
+- Typing is no longer lost when format on save, trim trailing whitespace or another tool changes the file while you type. Your typing wins, and the replaced version can be opened from the notice.
+- Ctrl+S now tells you, with Retry, when the editor could not hand its newest changes to VS Code, instead of silently doing nothing.
+- Repeated sync failures between the editor and VS Code now stop after a few retries and show a persistent out-of-sync banner with Reload, instead of looping.
+- Fixed image paste, undo after an image save, legacy file names containing `#` or `?`, slow reference scans on malformed Markdown, and rename reporting.
+- Feedback: Discard works on Remote-SSH, WSL and dev containers and asks before a permanent delete when Trash is unavailable; Start works on CRLF files and with format on save; slow screenshot saves no longer create duplicates; locks left by a closed window clear after 5 minutes; failures are shown on screen.
+- Feedback capture recovers when the window resizes mid-capture, never saves a blank screenshot, stays responsive over large tables, and counts text limits in characters.
+- Feedback entry works while the outline, Find or a dialog is open; guidance notices clear when their dialog closes; focus lands on a visible element; Find no longer covers toolbar buttons.
+
+### Changed
+
+- Retired the Copy AI Context Reference (`@file#lines`) command, `Alt+C` keybinding, setting, toolbar wiring, and implementation. LLM Feedback remains the first toolbar control.
+- Upgraded the complete TipTap family to exact `3.30.5` on one deduplicated ProseMirror dependency graph.
+- Upgraded Mermaid to `11.17.2` and esbuild to `0.28.2`.
+- Raised the supported runtime floor to VS Code `1.98.0`, with explicit Node 20 and Chromium 132 build targets.
+- Disabled retained hidden webview contexts and restored bounded selection and scroll state after renderer recreation.
+- Declared `capabilities.virtualWorkspaces.supported: false`. VS Code previously treated an undeclared capability as supported, so the extension is newly unavailable in GitHub Repositories / vscode.dev until disk-backed workspace support lands.
+- Preserved strict rendered-text and table-cell locators beside human-readable Target summaries, while keeping whole-block source evidence distinct from rendered table coordinates and partial-selection evidence.
+- Moved Markdown serialization behind the 500 ms debounce and added minimal edits for documents of at least 32 KiB.
+
+### Security
+
+- Replaced the vulnerable `image-size` dependency with bounded PNG, JPEG, GIF, and WebP header readers.
+- Refreshed vulnerable compatible transitive dependencies. Production audits report zero known vulnerabilities; the remaining `js-yaml` advisory is development-only (eslint/mocha/vsce/jest) and does not ship in the VSIX.
+- Updated TipTap to `3.30.5`, which includes the upstream `mergeAttributes` prototype-pollution and Markdown attribute-parsing denial-of-service fixes that the npm audit feed did not surface.
+- Restricted webview local-file access to the exact extension/workspace or document roots, rejected out-of-root image requests, and honored cancelled editor resolution.
+- PDF and Word export embed only images the editor itself can show. Images outside the document and workspace roots (absolute paths, `..` traversal, encoded paths, UNC paths, symlinks) and `http:` images are left out.
+- Error messages, workspace settings and file names are shown in the editor UI as text, never interpreted as HTML.
+
+### Testing
+
+- Added deterministic 3,000-word and 10,000-line performance fixtures, renderer fault injection, Windows and Ubuntu Extension Host CI, and minimum/current VS Code coverage.
+- Added TipTap 3.30.5 Markdown escape/entity round-trip regressions for underscored URLs, HTML-entity prose, footnotes, and numbered-list checkboxes.
+
+### Known Issues
+
+- Word export leaves out embedded images. PDF export is not affected.
+- Text after a line break inside a task item can be lost when the file is reopened (reproduced with a backslash line break, `- [ ] task\`). Avoid line breaks inside task items until this is fixed.
+- Resizing a hand-written HTML `<img>` tag rewrites it without its other attributes (`align`, `class`, `style`).
+- Escaped Markdown characters such as `\*` are saved without their backslash and can turn into formatting.
+- Loose lists can be saved as tight lists, and `1)` list markers as `1.`.
 
 ---
 
@@ -15,21 +227,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### What's New
 
 #### Auto-Save
+
 New opt-in `markdownForHumans.autoSave.enabled` setting saves the document a short delay after you stop typing, independent of VS Code's built-in `files.autoSave`. Off by default, so nothing changes unless you turn it on.
 
 #### Formatting-Shortcut Control
+
 Cmd/Ctrl+B/I/U were previously hardcoded to stay inside the editor, which could permanently shadow a VS Code keybinding bound to the same chord. New `markdownForHumans.formattingShortcuts.enabled` setting (default on) lets you opt out, with a matching command and keybinding (Cmd/Ctrl+Alt+B) to toggle it without opening settings.
 
-#### Editor Theme Override
-New `markdownForHumans.display.editorTheme` setting (Follow VS Code theme / Always light / Always dark) plus a toolbar toggle next to the gear icon, so the editor's color mode no longer has to follow your OS/VS Code theme.
-
 #### Toolbar & Paste Improvements
+
 - Copy button added to code blocks
 - Toolbar active states now stay in sync with code blocks and document changes
 - Pasted HTML tables are preserved more reliably
 - Search box and other overlay inputs no longer have their pastes hijacked by the document paste handler
 
 #### Production Build Hardening
+
 Console output is now stripped from production builds, and the build verifier checks bundles for disallowed console calls.
 
 ### Fixed
@@ -59,29 +272,37 @@ Console output is now stripped from production builds, and the build verifier ch
 ### What's New
 
 #### Drag-and-Drop Block Reordering
+
 A six-dot handle now appears on any block, letting you drag it to a new position:
+
 - Smooth pointer-event-based drag with a ghost element preview
 - Visual drop indicator shows exactly where the block will land
 - Works with all block types including Mermaid diagrams
 - Regression tests added for drop position handling
 
 #### Paragraph Spacing and Zoom Level
+
 Two new settings give you fine control over the editor appearance:
+
 - `markdownForHumans.paragraphSpacing` — adjust spacing between paragraphs
 - `markdownForHumans.zoomLevel` — zoom editor content without OS-level zoom
 - Heading-to-paragraph spacing now honors the paragraph spacing setting
 
 #### AI Coding Tool Reference
+
 New "Copy AI Ref" button in the formatting toolbar:
+
 - Copies a structured context reference for the current document
 - Useful for feeding document context into AI coding tools (Claude Code, Cursor, etc.)
 - Enhanced handling for AI context references across the audit panel
 
 #### Open with Markdown for Humans (Context Menu)
+
 Right-click any editor tab to open the file in the Markdown for Humans WYSIWYG editor,
 without changing it as your default editor.
 
 #### Markdown Serialization Improvements
+
 - Consistent blank line preservation between blocks
 - Better handling of empty elements and edge cases in markdown output
 - Font size resets to default normal on open (prevents stale font-size state)
@@ -130,25 +351,31 @@ without changing it as your default editor.
 ### 🎯 What's New
 
 #### Document Audit Tool
+
 A new audit panel lets you check document quality without leaving the editor:
+
 - Validates all URLs and local file links for broken references
 - Auto-fix suggestions for common issues
 - Toast notifications for audit results
 - Enhanced overlay with issue navigation and a horizontal separator for clarity
 
 #### Image Overlay Controls
+
 New image overlay feature (contributed by @tomarsuraj13):
+
 - Contextual controls appear on image hover for quick resize and alignment
 - Improved image resize modal with better interaction
 - Fixed nested checkbox list rendering within image captions
 - Resolved VS Code keyboard shortcut conflicts introduced by image handling
 
 #### Code Block Improvements
+
 - Pastes inside code blocks now insert as raw text, preventing unwanted markdown parsing
 - Improved code context detection using TipTap state and DOM checks
 - Raw HTML source no longer auto-renders when pasted as plain text
 
 #### HTML-Preserving Tables
+
 - New `HtmlPreservingTable` extension maintains HTML classes when syncing tables to markdown
 
 ### 🛠️ Bug Fixes
@@ -179,10 +406,13 @@ New image overlay feature (contributed by @tomarsuraj13):
 ### 🎯 What's New
 
 #### Critical Bug Fix
+
 **Fixed Auto-Linking Bug:** Previously, typing text ending with file extensions (like `.md`, `.txt`, `.pdf`) would automatically convert them into links. This has been fixed. File extensions now remain as plain text, giving you complete control over when text becomes a link.
 
 #### Enhanced Link Creation Experience
+
 **Completely Redesigned Link Dialog:** Creating links is now faster and more intuitive:
+
 - **Three Link Modes**: Switch between URL, File, and Headings with radio buttons positioned right after the Link Text input
 - **Smart File Search**: Type to search workspace files with fuzzy matching and category filters (Markdown, Images, Code, Config)
 - **In-Document Headings**: Instantly link to any heading (H1-H6) within your current document
@@ -190,12 +420,14 @@ New image overlay feature (contributed by @tomarsuraj13):
 - **Better Navigation**: Fixed image and file link clicking - images now open in VS Code's preview, files open correctly in both development and packaged builds
 
 #### Documentation & Discovery
+
 - **Enhanced README:** Added comparison table showing how Markdown for Humans differs from other markdown editors
 - **Improved Marketplace Listing:** Better keywords and descriptions to help users discover the extension more easily
 
 ### 🛠️ Technical Improvements
 
 This release includes several under-the-hood improvements that make the extension more stable and reliable:
+
 - Enhanced test coverage for better reliability
 - Improved CI/CD pipeline for faster packaging
 - Code quality improvements

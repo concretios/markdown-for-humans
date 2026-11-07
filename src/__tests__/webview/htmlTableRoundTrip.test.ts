@@ -20,6 +20,10 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
+import { readFileSync } from 'fs';
+import { resolve } from 'path';
+import { isMarkdownStructurallyEquivalent } from '../../editor/markdownAstEquivalence';
+import { HtmlComment } from '../../webview/extensions/htmlComment';
 import { HtmlPreservingTable } from '../../webview/extensions/htmlPreservingTable';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
 import { BlankLinePreservation } from '../../webview/extensions/blankLinePreservation';
@@ -64,6 +68,7 @@ function createEditor(): Editor {
       StarterKit.configure({ paragraph: false } as never),
       MarkdownParagraph,
       BlankLinePreservation,
+      HtmlComment,
       Markdown.configure({ markedOptions: { gfm: true, breaks: true } }),
       HtmlPreservingTable.configure({ HTMLAttributes: { class: 'markdown-table' } }),
       TableRow,
@@ -216,6 +221,26 @@ describe('HTML table load from markdown', () => {
     }
   });
 
+  it('preserves merged-cell spans when serializing an HTML-origin table', () => {
+    const editor = createEditor();
+    try {
+      const source = [
+        '<table>',
+        '  <tr><th rowspan="2">State</th><th colspan="2">Actions</th></tr>',
+        '  <tr><td>Review</td><td>Approve</td></tr>',
+        '</table>',
+      ].join('\n');
+      editor.commands.setContent(source, { contentType: 'markdown' });
+
+      const serialized = getEditorMarkdownForSync(editor, 'strip');
+      expect(serialized).toContain('<th rowspan="2">State</th>');
+      expect(serialized).toContain('<th colspan="2">Actions</th>');
+      expect(isMarkdownStructurallyEquivalent(serialized, source)).toBe(true);
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('leaves GFM pipe tables as pipe tables', () => {
     const editor = createEditor();
     try {
@@ -228,6 +253,24 @@ describe('HTML table load from markdown', () => {
       expect(serialized).toMatch(/\|\s*A\s*\|\s*B\s*\|/);
       expect(serialized).toMatch(/\|\s*-+\s*\|/);
       expect(serialized).not.toContain('<table');
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('keeps the Feedback v2 golden source structurally equivalent after serialization', () => {
+    const editor = createEditor();
+    const source = readFileSync(
+      resolve(__dirname, '../fixtures/feedback-evidence-v2/source.md'),
+      'utf8'
+    );
+    try {
+      editor.commands.setContent(source, { contentType: 'markdown' });
+
+      const serialized = getEditorMarkdownForSync(editor, 'strip');
+      expect(serialized).toContain('Password \\| reset');
+      expect(serialized).toContain('<th colspan="2">Actions</th>');
+      expect(isMarkdownStructurallyEquivalent(serialized, source)).toBe(true);
     } finally {
       editor.destroy();
     }
@@ -329,21 +372,25 @@ describe('document scaffolding no longer leaves blank lines', () => {
    * `@tiptap/markdown` runs each HTML token through `generateJSON`, and a
    * fragment with no renderable content still yields a doc holding one empty
    * paragraph — which lands in the document as a blank line. So a bare
-   * doctype, the `<html>`/`<body>` wrapper, a comment, or a stray closing tag
-   * each inserted a visible gap. These assert that scaffolding is dropped
-   * instead.
+   * doctype, the `<html>`/`<body>` wrapper, or a stray closing tag each
+   * inserted a visible gap. These assert that scaffolding is dropped instead.
+   * Comments are part of the file, so they become an htmlComment block.
    */
   it.each([
     ['a doctype', '<!DOCTYPE html>'],
     ['closing wrapper tags', '</body>\n</html>'],
-    ['an HTML comment', '<!-- just a note -->'],
     ['a stray closing tag', '</p>'],
   ])('drops %s instead of emitting an empty paragraph', (_label, scaffolding) => {
     expect(load(scaffolding)).toEqual([]);
   });
 
+  it('keeps an HTML comment as a block instead of an empty paragraph', () => {
+    expect(load('<!-- just a note -->')).toEqual(['htmlComment']);
+    expect(load('# A\n\n<!-- note -->\n\n# B')).toEqual(['heading', 'htmlComment', 'heading']);
+  });
+
   it('does not insert a gap between blocks separated by scaffolding', () => {
-    expect(load('# A\n\n<!-- note -->\n\n# B')).toEqual(['heading', 'heading']);
+    expect(load('# A\n\n</p>\n\n# B')).toEqual(['heading', 'heading']);
     expect(load('# A\n\n# B')).toEqual(['heading', 'heading']);
   });
 

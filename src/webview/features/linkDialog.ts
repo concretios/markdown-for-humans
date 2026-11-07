@@ -9,9 +9,11 @@
  * @description Provides a modal dialog for inserting and editing hyperlinks.
  */
 import { getMarkRange, Editor } from '@tiptap/core';
-import { TextSelection } from 'prosemirror-state';
+import { TextSelection } from '@tiptap/pm/state';
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import { buildOutlineFromEditor } from '../utils/outline';
+import { generateHeadingSlug, type SeenSlugs } from '../utils/headingSlug';
+import { getHeadingsWithAnchorText } from '../utils/outline';
+import * as l10n from '../l10n';
 
 type Range = { from: number; to: number };
 type ParentContext = { parentStart: number; parentText: string };
@@ -57,29 +59,6 @@ let fileSearchRequestId = 0;
 let actualLinkPath: string | null = null; // Store actual path separately from displayed value
 
 const isWhitespace = (char: string) => /\s/.test(char);
-
-/**
- * Generate GFM-style slug from heading text with duplicate handling
- */
-function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
-  const slug = text
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  let finalSlug = slug;
-  let counter = 1;
-  while (existingSlugs.has(finalSlug)) {
-    finalSlug = `${slug}-${counter}`;
-    counter++;
-  }
-
-  existingSlugs.add(finalSlug);
-  return finalSlug;
-}
 
 /**
  * Load filter state from localStorage
@@ -130,7 +109,8 @@ function closeAutocomplete(): void {
 function escapeHtml(text: string): string {
   const div = document.createElement('div');
   div.textContent = text;
-  return div.innerHTML;
+  // Text serialization leaves quotes raw; callers also interpolate into quoted attributes.
+  return div.innerHTML.replace(/"/g, '&quot;');
 }
 
 const getParentContext = (
@@ -414,7 +394,7 @@ function updateAutocompleteDropdown(
     const emptyMsg = document.createElement('div');
     emptyMsg.className = 'link-dialog-autocomplete-empty';
     emptyMsg.textContent =
-      currentMode === 'file' ? 'No files found' : 'No headings in this document';
+      currentMode === 'file' ? l10n.t('No files found') : l10n.t('No headings to link to');
     dropdown.appendChild(emptyMsg);
     dropdown.style.display = 'block';
     return;
@@ -587,7 +567,7 @@ function handleFileSearch(query: string, filters: FileFilterState): void {
     if (autocompleteDropdown) {
       const emptyMsg = document.createElement('div');
       emptyMsg.className = 'link-dialog-autocomplete-empty';
-      emptyMsg.textContent = 'Start typing to search files...';
+      emptyMsg.textContent = l10n.t('Start typing to search files...');
       autocompleteDropdown.innerHTML = '';
       autocompleteDropdown.appendChild(emptyMsg);
       autocompleteDropdown.style.display = 'block';
@@ -622,13 +602,15 @@ function handleFileSearch(query: string, filters: FileFilterState): void {
  */
 function handleHeadingExtraction(editor: Editor, query: string, urlInput: HTMLInputElement): void {
   try {
-    const outline = buildOutlineFromEditor(editor);
-    const existingSlugs = new Set<string>();
-    const headingResults: HeadingResult[] = outline.map(entry => ({
-      text: entry.text,
-      level: entry.level,
-      slug: generateHeadingSlug(entry.text, existingSlugs),
-    }));
+    const seenSlugs: SeenSlugs = new Map();
+    const headingResults: HeadingResult[] = getHeadingsWithAnchorText(editor)
+      .map(heading => {
+        const slug = generateHeadingSlug(heading.anchorText, seenSlugs);
+        // A heading of inline math alone has no text to show, so show its anchor.
+        return { text: heading.text.trim() ? heading.text : slug, level: heading.level, slug };
+      })
+      // An empty anchor cannot be linked to: on GitHub a bare # is the top of the page.
+      .filter(heading => heading.slug);
 
     const filtered = query.trim()
       ? headingResults.filter(
@@ -668,19 +650,25 @@ function updateMode(
     case 'url':
       urlInput.placeholder = 'https://example.com';
       if (urlLabelText) {
-        urlLabelText.textContent = 'URL';
+        urlLabelText.textContent = l10n.t('URL');
       }
       break;
     case 'file':
-      urlInput.placeholder = 'Start typing to search files...';
+      urlInput.placeholder = l10n.t('Start typing to search files...');
       if (urlLabelText) {
-        urlLabelText.textContent = 'File';
+        urlLabelText.textContent = l10n.t({
+          message: 'File',
+          comment: 'Link type that points to a file in the workspace',
+        });
       }
       break;
     case 'headings':
-      urlInput.placeholder = 'Select a heading from the list below';
+      urlInput.placeholder = l10n.t('Select a heading from the list below');
       if (urlLabelText) {
-        urlLabelText.textContent = 'Heading';
+        urlLabelText.textContent = l10n.t({
+          message: 'Heading',
+          comment: 'Field label when the link type points to a heading in this document',
+        });
       }
       break;
   }
@@ -710,7 +698,7 @@ export function createLinkDialog(): HTMLElement {
   overlay.style.zIndex = '50';
   overlay.style.display = 'none';
   overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-label', 'Insert/Edit Link');
+  overlay.setAttribute('aria-label', l10n.t('Insert/Edit Link'));
   overlay.setAttribute('aria-modal', 'true');
 
   // Create content panel
@@ -725,8 +713,8 @@ export function createLinkDialog(): HTMLElement {
   const header = document.createElement('div');
   header.className = 'export-settings-overlay-header';
   header.innerHTML = `
-    <h2 class="export-settings-overlay-title" id="link-dialog-title">Insert Link</h2>
-    <button class="export-settings-overlay-close" aria-label="Close dialog" title="Close (Esc)">×</button>
+    <h2 class="export-settings-overlay-title" id="link-dialog-title">${l10n.html('Insert Link')}</h2>
+    <button class="export-settings-overlay-close" aria-label="${l10n.html('Close dialog')}" title="${l10n.html('Close (Esc)')}">×</button>
   `;
 
   const closeBtn = header.querySelector('.export-settings-overlay-close') as HTMLElement;
@@ -735,16 +723,17 @@ export function createLinkDialog(): HTMLElement {
   // Create dialog content
   const content = document.createElement('div');
   content.className = 'export-settings-content';
+  // l10n-ignore: the https://example.com placeholder is example input
   content.innerHTML = `
     <div class="export-settings-section" style="margin-bottom: 16px;">
-      <label class="export-settings-label" for="link-text-input">Link Text</label>
+      <label class="export-settings-label" for="link-text-input">${l10n.html('Link Text')}</label>
       <div style="display: flex; align-items: center; gap: 6px; flex-wrap: nowrap;">
         <div style="display: flex; gap: 4px;">
           <button
             id="link-trim-left-btn"
             class="export-settings-select"
             style="padding: 6px 10px; font-size: 12px;"
-            title="Trim left boundary by one word"
+            title="${l10n.html('Trim left boundary by one word')}"
           >
             -
           </button>
@@ -752,7 +741,7 @@ export function createLinkDialog(): HTMLElement {
             id="link-expand-left-btn"
             class="export-settings-select"
             style="padding: 6px 10px; font-size: 12px;"
-            title="Expand left boundary to previous word"
+            title="${l10n.html('Expand left boundary to previous word')}"
           >
             +
           </button>
@@ -762,14 +751,14 @@ export function createLinkDialog(): HTMLElement {
           id="link-text-input"
           class="export-settings-select"
           style="padding: 8px 12px; flex: 1; min-width: 0;"
-          placeholder="Text to display"
+          placeholder="${l10n.html('Text to display')}"
         />
         <div style="display: flex; gap: 4px;">
           <button
             id="link-expand-right-btn"
             class="export-settings-select"
             style="padding: 6px 10px; font-size: 12px;"
-            title="Expand right boundary to next word"
+            title="${l10n.html('Expand right boundary to next word')}"
           >
             +
           </button>
@@ -777,34 +766,43 @@ export function createLinkDialog(): HTMLElement {
             id="link-trim-right-btn"
             class="export-settings-select"
             style="padding: 6px 10px; font-size: 12px;"
-            title="Trim right boundary by one word"
+            title="${l10n.html('Trim right boundary by one word')}"
           >
             -
           </button>
         </div>
       </div>
-      <p class="export-settings-hint">The text that will be shown in the document</p>
+      <p class="export-settings-hint">${l10n.html('The text that will be shown in the document')}</p>
     </div>
     <div class="export-settings-section" style="margin-bottom: 16px;">
-      <label class="export-settings-label">Type</label>
+      <label class="export-settings-label">${l10n.html({
+        message: 'Type',
+        comment: 'Label above the choice of link kind: URL, file or heading',
+      })}</label>
       <div class="link-dialog-mode-group">
         <label class="link-dialog-mode-option">
           <input type="radio" name="link-mode" value="url" id="link-mode-url" checked />
-          <span>URL</span>
+          <span>${l10n.html('URL')}</span>
         </label>
         <label class="link-dialog-mode-option">
           <input type="radio" name="link-mode" value="file" id="link-mode-file" />
-          <span>File</span>
+          <span>${l10n.html({
+            message: 'File',
+            comment: 'Link type that points to a file in the workspace',
+          })}</span>
         </label>
         <label class="link-dialog-mode-option">
           <input type="radio" name="link-mode" value="headings" id="link-mode-headings" />
-          <span>Headings</span>
+          <span>${l10n.html({
+            message: 'Headings',
+            comment: 'Link type that points to a heading in this document',
+          })}</span>
         </label>
       </div>
     </div>
     <div class="export-settings-section" style="margin-bottom: 16px; position: relative;">
       <label class="export-settings-label" for="link-url-input" id="link-url-label">
-        <span id="link-url-label-text">URL</span>
+        <span id="link-url-label-text">${l10n.html('URL')}</span>
         <input
           type="text"
           id="link-url-input"
@@ -813,30 +811,39 @@ export function createLinkDialog(): HTMLElement {
           placeholder="https://example.com"
         />
       </label>
-      <p class="export-settings-hint">The web address or file path</p>
+      <p class="export-settings-hint">${l10n.html('The web address or file path')}</p>
     </div>
     <div class="export-settings-section" id="link-filters-container" style="margin-bottom: 16px; display: none;">
-      <label class="export-settings-label">Filter</label>
+      <label class="export-settings-label">${l10n.html({
+        message: 'Filter',
+        comment: 'Label above the file type checkboxes',
+      })}</label>
       <div class="link-dialog-filters">
         <label class="link-dialog-filter-checkbox">
           <input type="checkbox" id="link-filter-all" checked />
-          <span>All</span>
+          <span>${l10n.html('All')}</span>
         </label>
         <label class="link-dialog-filter-checkbox">
           <input type="checkbox" id="link-filter-md" checked />
-          <span>MD</span>
+          <span>${l10n.html({
+            message: 'MD',
+            comment: 'File type filter: Markdown files',
+          })}</span>
         </label>
         <label class="link-dialog-filter-checkbox">
           <input type="checkbox" id="link-filter-images" checked />
-          <span>Images</span>
+          <span>${l10n.html('Images')}</span>
         </label>
         <label class="link-dialog-filter-checkbox">
           <input type="checkbox" id="link-filter-code" checked />
-          <span>Code</span>
+          <span>${l10n.html({
+            message: 'Code',
+            comment: 'File type filter: source code files',
+          })}</span>
         </label>
         <label class="link-dialog-filter-checkbox">
           <input type="checkbox" id="link-filter-config" checked />
-          <span>Config</span>
+          <span>${l10n.html('Config')}</span>
         </label>
       </div>
     </div>
@@ -846,21 +853,21 @@ export function createLinkDialog(): HTMLElement {
         class="export-settings-select"
         style="padding: 8px 16px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; border-radius: 4px; margin-right: auto;"
       >
-        Remove Link
+        ${l10n.html('Remove Link')}
       </button>
       <button
         id="link-cancel-btn"
         class="export-settings-select"
         style="padding: 8px 24px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; border-radius: 4px;"
       >
-        Cancel
+        ${l10n.html('Cancel')}
       </button>
       <button
         id="link-ok-btn"
         class="export-settings-select"
         style="padding: 8px 24px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; cursor: pointer; border-radius: 4px;"
       >
-        OK
+        ${l10n.html('OK')}
       </button>
     </div>
   `;
@@ -980,7 +987,7 @@ export function createLinkDialog(): HTMLElement {
       if (autocompleteDropdown && !urlInput.value.trim()) {
         const emptyMsg = document.createElement('div');
         emptyMsg.className = 'link-dialog-autocomplete-empty';
-        emptyMsg.textContent = 'Start typing to search files...';
+        emptyMsg.textContent = l10n.t('Start typing to search files...');
         autocompleteDropdown.innerHTML = '';
         autocompleteDropdown.appendChild(emptyMsg);
         autocompleteDropdown.style.display = 'block';
@@ -998,7 +1005,7 @@ export function createLinkDialog(): HTMLElement {
         if (autocompleteDropdown) {
           const emptyMsg = document.createElement('div');
           emptyMsg.className = 'link-dialog-autocomplete-empty';
-          emptyMsg.textContent = 'Start typing to search files...';
+          emptyMsg.textContent = l10n.t('Start typing to search files...');
           autocompleteDropdown.innerHTML = '';
           autocompleteDropdown.appendChild(emptyMsg);
           autocompleteDropdown.style.display = 'block';
@@ -1137,10 +1144,10 @@ export function showLinkDialog(editor: Editor): void {
   const urlInput = linkDialogElement.querySelector('#link-url-input') as HTMLInputElement;
 
   if (currentUrl) {
-    title.textContent = 'Edit Link';
+    title.textContent = l10n.t('Edit Link');
     removeBtn.style.display = 'block';
   } else {
-    title.textContent = 'Insert Link';
+    title.textContent = l10n.t('Insert Link');
     removeBtn.style.display = 'none';
   }
 

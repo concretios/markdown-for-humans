@@ -4,9 +4,9 @@ This directory contains git hook templates that can be installed to automate com
 
 ## Available Hooks
 
-### `pre-commit` (Currently Disabled)
+### `pre-commit` (Enabled)
 
-**Status:** ⚠️ **DISABLED** - The pre-commit hook is currently disabled. It will be enabled once the codebase is ready for automated linting checks.
+**Status:** ✅ **ENABLED** — The pre-commit hook is active. Install it locally with `npm run install-hooks` after cloning.
 
 **Purpose:** Automatically fixes linting issues and prevents commits with linting errors.
 
@@ -18,16 +18,6 @@ This directory contains git hook templates that can be installed to automate com
 
 **Why it's useful:**
 Ensures code quality is maintained automatically. You don't need to remember to run linting - it happens automatically before every commit.
-
-**To enable when ready:**
-```bash
-# Rename the disabled hook back to active
-mv .github/hooks/pre-commit.disabled .github/hooks/pre-commit
-chmod +x .github/hooks/pre-commit
-
-# Reinstall hooks
-npm run install-hooks
-```
 
 **To skip (not recommended):**
 ```bash
@@ -77,6 +67,7 @@ After installation, you can verify the hooks work:
 **Hook not running:**
 - Ensure the hook file is executable: `chmod +x .git/hooks/pre-commit`
 - Check that you're using `git commit` (hooks don't run for `git commit --no-verify`)
+- Run `npm run install-hooks` if you haven't installed hooks yet
 
 **Want to disable a hook temporarily:**
 - Rename it: `mv .git/hooks/pre-commit .git/hooks/pre-commit.disabled`

@@ -33,6 +33,10 @@ jest.mock('@tiptap/pm/state', () => ({
   Plugin: class {},
   PluginKey: class {},
 }));
+jest.mock('@tiptap/pm/tables', () => ({
+  CellSelection: class {},
+  TableMap: { get: jest.fn() },
+}));
 jest.mock('@tiptap/pm/view', () => ({
   Decoration: { inline: jest.fn() },
   DecorationSet: { create: jest.fn(), empty: {} },
@@ -49,16 +53,18 @@ jest.mock('@tiptap/extension-table', () => ({
 }));
 jest.mock('@tiptap/extension-list', () => ({
   __esModule: true,
+  ListItem: { extend: (config: unknown) => config },
   ListKit: { configure: () => ({}) },
   OrderedList: { extend: (config: unknown) => config },
+  TaskList: { extend: (config: unknown) => config, config: {} },
 }));
 jest.mock('@tiptap/extension-link', () => ({
   __esModule: true,
   default: { configure: () => ({}) },
 }));
-jest.mock('@tiptap/extension-code-block-lowlight', () => ({
-  __esModule: true,
-  default: { configure: () => ({}) },
+jest.mock('../../webview/extensions/markdownCompatibilityMarks', () => ({
+  MarkdownCode: {},
+  MarkdownLink: { configure: () => ({}) },
 }));
 jest.mock('./../../webview/extensions/codeBlockWithCopy', () => ({
   CodeBlockWithCopy: { configure: () => ({}) },

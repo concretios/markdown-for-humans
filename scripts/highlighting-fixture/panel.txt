@@ -1,0 +1,152 @@
+// Build-time QA panel. This text is appended only to the fixture copy's bundle.
+const highlightQaPanel = document.createElement('aside');
+highlightQaPanel.setAttribute('aria-label', 'Highlighting fixture');
+highlightQaPanel.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:999999;border:2px solid var(--vscode-focusBorder);background:var(--vscode-editor-background);color:var(--vscode-editor-foreground);padding:10px;max-width:580px;font:12px monospace';
+const highlightQaHeading = document.createElement('strong');
+highlightQaHeading.textContent = 'Highlighting fixture: production worker';
+highlightQaPanel.append(highlightQaHeading);
+const highlightQaStats = document.createElement('div');
+highlightQaStats.setAttribute('role', 'group');
+highlightQaStats.setAttribute('aria-label', 'Highlighting metrics');
+highlightQaStats.style.cssText='margin:8px 0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 12px;font:11px/1.3 monospace';
+const highlightQaRows = new Map<string, HTMLDivElement>();
+highlightQaPanel.append(highlightQaStats);
+function highlightQaButton(label: string, action: () => void) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = 'margin:3px;padding:4px;font:12px monospace';
+  button.onclick = action;
+  highlightQaPanel.append(button);
+  return button;
+}
+function highlightQaPosition(kind: string): number {
+  let found = -1;
+  editor?.state.doc.descendants((node, pos) => {
+    if (found < 0 && node.type.name === kind &&
+        (kind !== 'codeBlock' || /^(typescript|ts|sql)(?:\s|$)/i.test(node.attrs.language || ''))) found = pos + 1;
+  });
+  return found;
+}
+const highlightQaToggle = highlightQaButton('Hide metrics', () => {
+  const hidden = highlightQaStats.style.display === 'none';
+  highlightQaStats.style.display = hidden ? 'grid' : 'none';
+  highlightQaToggle.textContent = hidden ? 'Hide metrics' : 'Show metrics';
+});
+highlightQaButton('Reset metrics', () => highlightQaReset('manual reset'));
+highlightQaButton('Focus code', () => {
+  const pos = highlightQaPosition('codeBlock'); if (!editor || pos < 0) return;
+  editor.chain().focus().setTextSelection(pos).run();
+});
+highlightQaButton('20 code edits', () => {
+  const pos = highlightQaPosition('codeBlock'); if (!editor || pos < 0) return;
+  editor.commands.setTextSelection(pos); highlightQaReset('20 synchronous code edits');
+  for (let index = 0; index < 20; index++) editor.view.dispatch(editor.state.tr.insertText(' ', pos));
+});
+highlightQaButton('Prose edit', () => {
+  const pos = highlightQaPosition('paragraph'); if (!editor || pos < 0) return;
+  editor.commands.setTextSelection(pos); highlightQaReset('one prose edit');
+  editor.view.dispatch(editor.state.tr.insertText(' ', pos));
+});
+highlightQaButton('Selection only', () => {
+  const pos = highlightQaPosition('codeBlock'); if (!editor || pos < 0) return;
+  highlightQaReset('selection only'); editor.commands.setTextSelection(pos);
+});
+highlightQaButton('Undo', () => { highlightQaReset('undo'); editor?.commands.undo(); });
+highlightQaButton('Sample colors', () => { highlightQaSampleColors(); });
+document.body.append(highlightQaPanel);
+let highlightQaEditor: typeof editor = null;
+let highlightQaColors = { codeBlocks: 0, tokenSpans: 0, coloredTokenSpans: 0, editorWidth: 0, firstCodeWidth: 0, firstCodeScrollWidth: 0 };
+function highlightQaSampleColors() {
+  const editorDom = editor?.view.dom;
+  const blocks = editorDom ? Array.from(editorDom.querySelectorAll('pre')) : [];
+  const tokens = editorDom ? Array.from(editorDom.querySelectorAll('pre [class*="hljs-"]')) : [];
+  highlightQaColors = {
+    codeBlocks: blocks.length,
+    editorWidth: editorDom?.clientWidth || 0,
+    firstCodeWidth: blocks[0]?.clientWidth || 0,
+    firstCodeScrollWidth: blocks[0]?.scrollWidth || 0,
+    tokenSpans: tokens.length,
+    coloredTokenSpans: tokens.filter(token => getComputedStyle(token).color !== getComputedStyle(token.closest('pre')!).color).length,
+  };
+}
+setInterval(() => {
+  if (editor && editor !== highlightQaEditor) {
+    highlightQaEditor = editor;
+    highlightQaInstrumentEditor(editor);
+    const view = editor.view;
+    const dispatch = view.dispatch.bind(view);
+    view.dispatch = transaction => {
+      const started = performance.now();
+      try { dispatch(transaction); }
+      finally {
+        const elapsed = performance.now() - started;
+        highlightQaMetrics.dispatches.push(elapsed);
+        if (transaction.docChanged) highlightQaMetrics.documentDispatches.push(elapsed);
+        else if (transaction.getMeta(highlightQaPluginKey)) highlightQaMetrics.colorDispatches.push(elapsed);
+        else highlightQaMetrics.otherDispatches.push(elapsed);
+      }
+    };
+    view.dom.addEventListener('beforeinput', () => {
+      const started = performance.now();
+      requestAnimationFrame(() => highlightQaMetrics.beforeinputToNextFrame.push(performance.now() - started));
+    }, true);
+  }
+  const p95 = (values: number[]) => values.length ? Number([...values].sort((a,b)=>a-b)[Math.ceil(values.length*0.95)-1].toFixed(2)) : 0;
+  const snapshot = {
+    operation: highlightQaMetrics.operation,
+    serviceRequests: highlightQaMetrics.serviceRequests,
+    workerJobs: highlightQaMetrics.workerJobs,
+    workerCharacters: highlightQaMetrics.workerCharacters,
+    workerResults: highlightQaMetrics.workerResults,
+    activeServices: highlightQaMetrics.activeServices,
+    fallbackReasons: highlightQaMetrics.fallbacks,
+    dispatches: highlightQaMetrics.dispatches.length,
+    syncDispatchP95Ms: p95(highlightQaMetrics.dispatches),
+    documentDispatchP95Ms: p95(highlightQaMetrics.documentDispatches),
+    stateApplyP95Ms: p95(highlightQaMetrics.documentStateApply),
+    domUpdateP95Ms: p95(highlightQaMetrics.documentDomUpdate),
+    editorEventsP95Ms: p95(highlightQaMetrics.documentEvents),
+    topPhaseP95Ms: Object.fromEntries(Object.entries(highlightQaMetrics.phaseDetails).map(([phase, values]) => [phase, p95(values)] as const).sort((a,b) => b[1] - a[1]).slice(0, 3)),
+    colorPublicationDispatchP95Ms: p95(highlightQaMetrics.colorDispatches),
+    otherDispatchP95Ms: p95(highlightQaMetrics.otherDispatches),
+    nativeBeforeinputEvents: highlightQaMetrics.beforeinputToNextFrame.length,
+    nativeBeforeinputToNextAnimationFrameP95Ms: p95(highlightQaMetrics.beforeinputToNextFrame),
+    longTaskCount: highlightQaMetrics.longTasks.length,
+    longestTaskMs: Number(Math.max(0, ...highlightQaMetrics.longTasks).toFixed(2)),
+    workerRoundTripP95Ms: p95(highlightQaMetrics.workerRoundTrips),
+    ...highlightQaColors,
+  };
+  const labels: Record<string, string> = {
+    operation: 'Operation', serviceRequests: 'Service requests', workerJobs: 'Worker jobs',
+    workerCharacters: 'Worker UTF16 units', workerResults: 'Worker results', activeServices: 'Active services',
+    fallbackReasons: 'Fallback reasons', dispatches: 'Dispatch count', syncDispatchP95Ms: 'All dispatch p95 ms',
+    documentDispatchP95Ms: 'Document p95 ms', colorPublicationDispatchP95Ms: 'Colors p95 ms',
+    stateApplyP95Ms: 'State apply p95 ms', domUpdateP95Ms: 'DOM update p95 ms', editorEventsP95Ms: 'Editor events p95 ms', topPhaseP95Ms: 'Top phases p95 ms',
+    otherDispatchP95Ms: 'Other dispatch p95 ms', nativeBeforeinputEvents: 'Native input events',
+    nativeBeforeinputToNextAnimationFrameP95Ms: 'Native next-frame p95 ms', longTaskCount: 'Long tasks',
+    longestTaskMs: 'Longest task ms', workerRoundTripP95Ms: 'Worker roundtrip p95 ms', codeBlocks: 'Code blocks',
+    tokenSpans: 'Token spans', coloredTokenSpans: 'Colored spans', editorWidth: 'Editor width',
+    firstCodeWidth: 'First code width', firstCodeScrollWidth: 'Code scroll width',
+  };
+  for (const [key, value] of Object.entries(snapshot)) {
+    let row = highlightQaRows.get(key);
+    if (!row) {
+      row = document.createElement('div');
+      row.dataset.metric = key;
+      row.style.cssText = 'min-width:0;overflow-wrap:anywhere';
+      highlightQaRows.set(key, row);
+      highlightQaStats.append(row);
+    }
+    const formatted = typeof value === 'object' ? JSON.stringify(value) : String(value);
+    row.dataset.value = formatted;
+    const line = `${labels[key] || key}: ${formatted}`;
+    if (row.textContent !== line) row.textContent = line;
+  }
+}, 300);
+
+if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+  const highlightQaLongTasks = new PerformanceObserver(entries => {
+    for (const entry of entries.getEntries()) if (entry.startTime >= highlightQaMetrics.resetAt) highlightQaMetrics.longTasks.push(entry.duration);
+  });
+  highlightQaLongTasks.observe({ type: 'longtask', buffered: true });
+}

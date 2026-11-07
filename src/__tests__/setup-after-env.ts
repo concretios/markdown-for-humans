@@ -12,8 +12,11 @@ beforeEach(() => {
   resetAllMocks();
 });
 
-// Global test timeout (useful for async operations)
-jest.setTimeout(10000);
+// Global test timeout. It is a hang guard, not a performance budget: the large-document
+// tests assert deterministic work counts. Several take 4 to 6 seconds locally under
+// coverage, so a 10 second limit failed CI on slower shared runners (the 10,000-block
+// feedbackDomCapture test timed out on Node 24).
+jest.setTimeout(30000);
 
 // Custom matchers can be added here
 expect.extend({

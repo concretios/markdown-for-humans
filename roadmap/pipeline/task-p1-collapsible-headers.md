@@ -98,7 +98,7 @@
    To install the extension:
    1. Open VS Code
    2. Navigate to Extensions
-   3. Search for "Markdown for Humans"
+   3. Search for "Markdown Editor for Humans"
 
    ### Prerequisites
 

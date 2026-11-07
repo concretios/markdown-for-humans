@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <link rel="stylesheet" href="/webview.css" />
+    <style>
+      :root {
+        --vscode-editor-font-size: 14px;
+        --vscode-editor-font-family: Menlo, monospace;
+        --vscode-font-family: Arial, sans-serif;
+        --vscode-font-size: 13px;
+        --vscode-editor-background: #fff;
+        --vscode-editor-foreground: #242424;
+        --vscode-foreground: #242424;
+        --vscode-editorWidget-background: #f3f3f3;
+        --vscode-editorWidget-border: #ccc;
+        --vscode-editorWidget-foreground: #242424;
+        --vscode-textCodeBlock-background: #f5f5f5;
+        --vscode-textPreformat-foreground: #242424;
+        --vscode-descriptionForeground: #616161;
+        --vscode-button-background: #0078d4;
+        --vscode-button-foreground: #fff;
+        --vscode-focusBorder: #0078d4;
+        --vscode-textLink-foreground: #006ab1;
+        --vscode-panel-border: #ccc;
+        --vscode-list-hoverBackground: #e8e8e8; /* extension-color-defaults */
+      }
+      body {
+        margin: 0;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-editor-foreground);
+      }
+      nav {
+        position: sticky;
+        top: 0;
+        z-index: 10000;
+        padding: 8px;
+        background: var(--vscode-editorWidget-background);
+        font: 12px Arial;
+      }
+    </style>
+    <script>
+      let fixtureVersion = 1;
+      const sendFixtureMessage = data =>
+        window.dispatchEvent(new MessageEvent('message', { data }));
+      async function loadFixture(name) {
+        try {
+          const response = await fetch('/' + name);
+          if (!response.ok) throw Error('Fixture missing');
+          sendFixtureMessage({
+            type: 'update',
+            content: await response.text(),
+            documentVersion: ++fixtureVersion,
+            enableMath: false,
+            blankLineMode: 'preserve',
+            force: true,
+          });
+        } catch (error) {
+          document.querySelector('#fixture-error').textContent = String(error);
+        }
+      }
+      window.acquireVsCodeApi = () => ({
+        getState: () => undefined,
+        setState: () => undefined,
+        postMessage: message => {
+          if (message.type === 'ready') loadFixture('language-matrix.md');
+          if (message.type === 'resolveImageUri')
+            queueMicrotask(() =>
+              sendFixtureMessage({
+                type: 'imageUriResolved',
+                requestId: message.requestId,
+                webviewUri: new URL(message.relativePath, location.href).href,
+              })
+            );
+          if (message.type === 'edit')
+            queueMicrotask(() =>
+              sendFixtureMessage({
+                type: 'document.edit.ack',
+                protocolVersion: 2,
+                editId: message.editId,
+                viewGeneration: message.viewGeneration,
+                localRevision: message.localRevision,
+                accepted: true,
+                documentVersion: ++fixtureVersion,
+              })
+            );
+        },
+      });
+    </script>
+  </head>
+  <body class="vscode-light" data-highlighting-worker-uri="/highlighting-worker.js">
+    <nav>
+      Production worker fixture <button onclick="loadFixture('deck.md')">Deck copy</button
+      ><button onclick="loadFixture('language-matrix.md')">Languages</button
+      ><button onclick="loadFixture('1000-blocks.md')">1,000 blocks</button
+      ><button onclick="loadFixture('long-block.md')">Long block</button
+      ><span id="fixture-error"></span>
+    </nav>
+    <div id="editor"></div>
+    <script src="/webview.js"></script>
+  </body>
+</html>

@@ -10,6 +10,7 @@
  */
 
 import type { Editor } from '@tiptap/core';
+import * as l10n from '../l10n';
 
 /**
  * Table Insert Dialog state
@@ -48,7 +49,7 @@ export function createTableInsertDialog(): HTMLElement {
   const overlay = document.createElement('div');
   overlay.className = 'export-settings-overlay'; // Reuse existing overlay styles
   overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-label', 'Insert Table');
+  overlay.setAttribute('aria-label', l10n.t('Insert Table'));
   overlay.setAttribute('aria-modal', 'true');
 
   // Create backdrop
@@ -65,8 +66,8 @@ export function createTableInsertDialog(): HTMLElement {
   const header = document.createElement('div');
   header.className = 'export-settings-overlay-header';
   header.innerHTML = `
-    <h2 class="export-settings-overlay-title">Insert Table</h2>
-    <button class="export-settings-overlay-close" aria-label="Close dialog" title="Close (Esc)">×</button>
+    <h2 class="export-settings-overlay-title">${l10n.html('Insert Table')}</h2>
+    <button class="export-settings-overlay-close" aria-label="${l10n.html('Close dialog')}" title="${l10n.html('Close (Esc)')}">×</button>
   `;
 
   const closeBtn = header.querySelector('.export-settings-overlay-close') as HTMLElement;
@@ -78,7 +79,7 @@ export function createTableInsertDialog(): HTMLElement {
   content.innerHTML = `
     <div class="export-settings-section table-insert-fields">
       <label class="export-settings-label" for="table-cols-input">
-        Columns
+        ${l10n.html('Columns')}
         <input
           type="number"
           id="table-cols-input"
@@ -89,7 +90,7 @@ export function createTableInsertDialog(): HTMLElement {
         />
       </label>
       <label class="export-settings-label" for="table-rows-input">
-        Rows
+        ${l10n.html('Rows')}
         <input
           type="number"
           id="table-rows-input"
@@ -106,14 +107,14 @@ export function createTableInsertDialog(): HTMLElement {
         class="export-settings-select"
         style="padding: 8px 24px; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); border: none; cursor: pointer; border-radius: 4px;"
       >
-        Cancel
+        ${l10n.html('Cancel')}
       </button>
       <button
         id="table-ok-btn"
         class="export-settings-select"
         style="padding: 8px 24px; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; cursor: pointer; border-radius: 4px;"
       >
-        OK
+        ${l10n.html('OK')}
       </button>
     </div>
   `;

@@ -8,7 +8,11 @@ import * as vscode from 'vscode';
 import { MarkdownEditorProvider } from './editor/MarkdownEditorProvider';
 import { WordCountFeature } from './features/wordCount';
 import { getActiveWebviewPanel } from './activeWebview';
+import { sendFeedbackCommand } from './feedbackCommandReadiness';
 import { outlineViewProvider } from './features/outlineView';
+import type { FeedbackHostMessage } from './shared/feedbackProtocol';
+
+type FeedbackCommand = Extract<FeedbackHostMessage, { type: 'feedback.command' }>['command'];
 
 export function activate(context: vscode.ExtensionContext) {
   // Register the custom editor provider
@@ -131,14 +135,13 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  // Forward the keybinding to the active webview, which runs the same code path
-  // as the toolbar button. The webview owns the selection state, so the host
-  // command stays a thin trigger.
+  // The rich view owns the selection, so the command only asks the active view
+  // to start the copy; the same path the toolbar button takes.
   context.subscriptions.push(
-    vscode.commands.registerCommand('markdownForHumans.copyAiContextRef', () => {
+    vscode.commands.registerCommand('markdownForHumans.copyReferenceForAi', () => {
       const panel = getActiveWebviewPanel();
       if (panel) {
-        panel.webview.postMessage({ type: 'triggerCopyAiContextRef' });
+        panel.webview.postMessage({ type: 'copyReferenceForAi' });
       }
     })
   );
@@ -156,11 +159,57 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.ConfigurationTarget.Global
       );
       vscode.window.setStatusBarMessage(
-        `Markdown for Humans: formatting shortcuts ${!current ? 'enabled' : 'disabled'}`,
+        !current
+          ? vscode.l10n.t('Markdown Editor for Humans: formatting shortcuts enabled')
+          : vscode.l10n.t('Markdown Editor for Humans: formatting shortcuts disabled'),
         3000
       );
     })
   );
+
+  // Paste as plain text. VS Code cancels Ctrl/Cmd+Shift+V inside a webview and
+  // forwards the key to the workbench, so no paste event reaches the editor:
+  // the chord is a keybinding on this command, which reads the clipboard here.
+  context.subscriptions.push(
+    vscode.commands.registerCommand('markdownForHumans.pastePlainText', async () => {
+      const panel = getActiveWebviewPanel();
+      if (!panel) return;
+      try {
+        const text = await vscode.env.clipboard.readText();
+        if (text) await panel.webview.postMessage({ type: 'pastePlainText', text });
+      } catch (error) {
+        console.error('[MD4H] Paste as plain text failed:', error);
+        vscode.window.showErrorMessage(
+          vscode.l10n.t('Markdown Editor for Humans: could not read the clipboard.')
+        );
+      }
+    })
+  );
+
+  // Feedback commands are intentionally unbound. They remain discoverable in
+  // the Command Palette and can be assigned personal keybindings without the
+  // extension claiming chords owned by VS Code or other extensions.
+  const feedbackCommands = [
+    ['markdownForHumans.feedback.start', 'start'],
+    ['markdownForHumans.feedback.commentSelection', 'commentSelection'],
+    ['markdownForHumans.feedback.chooseScope', 'chooseScope'],
+    ['markdownForHumans.feedback.captureArea', 'captureArea'],
+    ['markdownForHumans.feedback.captureSelectedBlocks', 'captureSelectedBlocks'],
+    ['markdownForHumans.feedback.toggleComments', 'toggleComments'],
+    ['markdownForHumans.feedback.next', 'nextFeedback'],
+    ['markdownForHumans.feedback.previous', 'previousFeedback'],
+    ['markdownForHumans.feedback.finish', 'finish'],
+    ['markdownForHumans.feedback.reveal', 'reveal'],
+    ['markdownForHumans.feedback.discard', 'discard'],
+  ] as const satisfies ReadonlyArray<readonly [string, FeedbackCommand]>;
+  for (const [commandId, command] of feedbackCommands) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, () => {
+        const panel = getActiveWebviewPanel();
+        return panel ? sendFeedbackCommand(panel, command) : false;
+      })
+    );
+  }
 }
 
 export function deactivate() {

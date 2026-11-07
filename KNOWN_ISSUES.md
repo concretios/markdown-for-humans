@@ -1,337 +1,158 @@
-# Known Issues & Technical Debt
+# Known Issues
 
-This document tracks known issues, limitations, workarounds, and technical debt for Markdown for Humans.
+Living list of open limitations for **Markdown Editor for Humans 0.4.6**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
-> **For Users:** Check the issues and workarounds sections below. If you encounter an issue not listed here, please [report it](https://github.com/concretios/markdown-for-humans/issues).
->
-> **For Developers:** See technical debt, roadmap, and development guidelines sections. For troubleshooting during development, see [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
-
-> **Note:** Updated on 2025-12-27 after pre-release audit. All items are **non-blocking** for the v0.1.0 release.
+**Status:** 0.4.6 (2026-11-07) · **Last updated:** 2026-11-07
 
 ---
 
-## 🔴 High Priority Issues
+## Open issues
 
-_None currently. All critical issues have been resolved._
+### Workspace file drag-drop in Cursor IDE
+Dragging images from the Cursor workspace explorer into the editor is often not detected. Works in VS Code and Devin Desktop (formerly Windsurf). External drops (Finder/desktop) may still work.
 
----
+**Workaround:** Image insert dialog, source view, or drop from Finder/desktop.
 
-## 🟡 Medium Priority Issues
+### Word export omits embedded images
+Word (DOCX) export does not embed images. PDF export is not affected by this specific gap. Both formats also omit images the editor itself cannot show (paths outside the document/workspace roots, `http:` URLs). Keep images next to the document or inside the workspace; prefer relative paths. Remote HTTPS may embed in PDF; Word skips remote HTTP/HTTPS.
 
-### Enter Key at Gap Cursor Before Image
-**Type:** Bug
-**Description:** When navigating with arrow keys on a selected image, pressing ArrowLeft moves the cursor to the left of the image (with left highlight visible). However, pressing Enter at this position creates a new paragraph to the right of the image instead of to the left.
-**Status:** Under investigation
-**Plan:** [Fix Enter Key at Gap Cursor Before Image](roadmap/shipped/fix_enter_key_at_gap_cursor_before_image_6b029688.plan.md)
-**Workaround:** Use source view to manually add blank lines, or position cursor after the image and press Enter.
+### Word export keeps the text, not all of the layout
+Word (DOCX) export writes headings, paragraphs, lists, quotes, code blocks and block math. It is simpler than the PDF:
 
-### Enter Key in Table Cells
-**Type:** Bug
-**Description:** Pressing Enter in table cells creates new paragraphs within the cell, which breaks markdown table formatting when serialized. Markdown tables require single-line cells or `<br>` tags for line breaks, not multiple paragraphs.
-**Status:** Under consideration
-**Current Behavior:** TipTap's TableKit extension allows Enter key to create paragraphs in table cells by default.
-**Workaround:** Use source view to edit table cells, or use Shift+Enter for line breaks within cells (if supported). Avoid pressing Enter in table cells to prevent formatting issues.
-**Future Consideration:** Enter key in table cells should be disabled or converted to `<br>` tags to preserve markdown table structure.
+- **Lists:** bold, italic and inline code inside a list item export as plain text. Numbered lists export as bullets. A nested item is joined onto its parent's line.
+- **Tables:** each cell exports as its own paragraph, so the grid is lost.
+- **Links:** the link text is exported without its address.
+- **Quotes and headings:** exported as plain text, without inline formatting. The paragraphs of a quote are joined into one.
+- **Block math:** exported as its LaTeX source.
 
-### Workspace File Drag-Drop in Cursor IDE
-**Type:** Bug
-**Description:** Dragging image files from the workspace file explorer into the markdown editor does not work in Cursor IDE. The drag-drop functionality works correctly in VS Code and Windsurf, but in Cursor, workspace file drops are not detected or processed.
-**Status:** Under investigation
-**Related Fix:** A previous fix ([Fix Cursor IDE drag-drop opening files in tabs](roadmap/shipped/fix_cursor_ide_drag-drop_opening_files_in_tabs_70263667.plan.md)) prevented files from opening in tabs, but workspace file drag-drop detection still fails in Cursor.
-**Current Behavior:** Workspace file drag-drop is not detected in Cursor IDE, so images are not inserted into the editor. External file drag-drop (from Finder/desktop) may work, but workspace file explorer drag-drop does not.
-**Workaround:** Use the image insert dialog (click the image button in the toolbar) or use source view to manually add image references. Alternatively, use external file drag-drop from Finder/desktop if the file is accessible outside the workspace.
-**Future Consideration:** Cursor IDE may handle drag-drop events differently than VS Code/Windsurf, requiring additional event handling or data transfer format detection for workspace files.
+**Workaround:** Use PDF export when layout matters.
 
----
+### SVG images
+Raw inline `<svg>` markup and Marp's `w:1000` alt-text directive are not interpreted. An unsized SVG fills the reading column, the same way the built-in preview does. Word export does not include SVG images (see above).
 
-## 🟢 Low Priority / Minor Issues
+**Workaround:** Reference SVGs as image files, and use **Image options > Display size** when one occurrence needs a different width.
 
-### Code Block Language Indicator and Picker
-**Type:** Feature Gap
-**Description:** Code blocks don't display their language indicator, and there's no easy way to see or change the language of an existing code block. Users must use source view to manually edit the language tag in the markdown syntax.
-**Status:** Under consideration
-**Proposed Solution:** Show the language label on hover over code blocks, with a dropdown menu to easily change the language.
-**Workaround:** Use source view (click the `</>` Source button) to manually edit the language tag in code block syntax (e.g., change ` ```javascript` to ` ```typescript`).
-**Future Consideration:** A hover-based language indicator with dropdown picker is planned for code blocks.
+### PDF export cannot use your browser sign-in
+PDF export runs in a temporary incognito Chrome session, so remote images that need your browser's sign-in cookies do not appear. Local images, including SVGs at their display sizes, export normally.
 
----
+**Workaround:** Keep images next to the document or inside the workspace.
 
-## 📝 Limitations & Design Decisions
+### Task-item line breaks can lose text
+Text after a line break inside a task item can disappear on reopen (e.g. `- [ ] task\` with a backslash break). Avoid line breaks inside task items until fixed.
 
-### Large Document Performance
-**Type:** Design Limitation
-**Description:** Documents with 10,000+ lines may experience slower performance during editing. This is due to TipTap's document model processing.
-**Workaround:** Consider splitting very large documents into multiple files.
-**Future Consideration:** Virtual scrolling and lazy loading are planned for future releases.
+### HTML the editor cannot keep
+The rich view has no place for some raw HTML. Two cases:
 
-### Image Processing
-**Type:** Design Limitation
-**Description:** Very large images (>10MB) may take longer to process during drag-and-drop or resize operations, even with automatic resizing.
-**Current Behavior:** Images larger than 2MB or 2000px automatically trigger a resize dialog offering to downsize them to a suggested resolution.
-**Workaround:** Use the built-in resize dialog when prompted, or resize extremely large images externally before adding them to documents.
+- **Removed by any edit:** `<video>`, `<audio>`, `<iframe>`, inline `<svg>`, `<style>`, `<script>`, a standalone `<a name="...">` or `<a id="...">` anchor, a `<br>` on a line of its own, `<dl>` and `<figure>` with `<figcaption>`. The file is intact until you edit. A notice names the content and the editor stays read-only until you choose **Edit anyway**. Saving while it is read-only leaves the file as it is. **Open source view (split)** opens the Markdown beside the editor; it does not unlock the rich view. The choice is not remembered: the file is read-only again the next time it is opened, and after it changes on disk.
+- **Removed when you edit that block:** inline tags such as `<mark>`, `<u>`, `<ins>`, `<abbr>`, `<span>`, `<font>`, `<b>`, `<i>`, a `<br>` in a paragraph, `<a id>` and `<a target>`; and one-line blocks such as `<h1 align="center">`, `<div>`, `<center>`, `<p>`, `<pre><code>`. A notice names what was removed and offers **Undo**. An edit that changes only how the block is written (a dropped `\*` escape, spaces inside a code span) shows a general notice instead; once closed, it does not appear again for that document until it is reopened.
 
-### PDF and Word Export - Images and Diagrams
-**Type:** Design Limitation
-**Description:** PDF and Word exports have limited support for images and Mermaid diagrams.
-**Current Behavior:**
-- **PDF Export:** Images with relative paths may not resolve correctly. Remote images (HTTP/HTTPS URLs) are not embedded. Image conversion to data URLs is currently disabled.
-- **Word Export:** Remote images (HTTP/HTTPS URLs) are explicitly skipped and not embedded. Images using `vscode-webview://` URLs may fail to resolve. Only data URLs and local file paths are reliably supported.
-- **Mermaid Diagrams:** While converted to PNG in the webview, they may not render correctly in exported documents if the conversion process fails.
-**Workaround:**
-- For PDF: Use absolute paths or ensure images are in the same directory as the document. Download remote images locally before exporting.
-- For Word: Download remote images locally before exporting. Ensure images use relative paths from the document location.
-- For Mermaid: Verify diagrams render correctly in the editor before exporting. If issues occur, try recreating the diagram.
-**Future Consideration:** Image conversion to data URLs will be re-enabled, and remote image fetching will be added for both export formats.
+Kept: comments, wrappers with blank lines around their content (`<div align="center">`, `<details>`), `<kbd>`, `<sub>`, `<sup>`, `<img>` and HTML tables. The first list was confirmed in VS Code for `<video>` and the anchor; the rest comes from automated tests outside VS Code.
 
----
+**Workaround:** Edit such content in the source view.
 
-## 🔧 Common Workarounds
+### HTML `<img>` resize drops attributes
+Resizing a hand-written HTML `<img>` rewrites the tag without other attributes (`align`, `class`, `style`).
 
-### Extension Not Opening Files
-**Issue:** Right-click → "Open with Markdown for Humans" doesn't work
-**Workaround:**
-1. Open VS Code Command Palette (Cmd/Ctrl + Shift + P)
-2. Type "Markdown for Humans: Open File"
-3. Select the command
+### Edited blocks are saved in a standard Markdown form
+Since 0.4.1, blocks you do not edit keep their exact source on save. A block you do edit (a paragraph, list, table or heading) is re-written in a standard form: soft line breaks become two-space line breaks, tables are padded, `*` list markers become `-`, and setext headings become `#` headings. The rendered result is the same.
 
-### Theme Colors Not Matching
-**Issue:** Editor colors don't match VS Code theme
-**Workaround:**
-1. Reload VS Code window (Cmd/Ctrl + Shift + P → "Reload Window")
-2. If issue persists, check VS Code theme settings
+### Escaped Markdown characters
+In a block you edit, escaped characters such as `\*` may be saved without the backslash and turn into formatting. Unedited blocks keep the backslash.
 
----
+### Plain-text paste and Markdown syntax
+Text pasted with `Ctrl+Shift+V` (`Cmd+Shift+V` on macOS) is saved as written. When it contains Markdown syntax (`**bold**`, or a line that starts with `#` or `-`), the editor asks how to paste it. If you choose **Paste as plain text**, it shows as plain characters after the paste and is read as Markdown the next time the file is opened.
 
-## 🔧 Technical Debt & Development Items
+**Workaround:** Choose **Paste as code** for text that must stay literal.
 
-> **Note for Developers:** Items below are tracked for future versions. All are non-blocking for v0.1.0 release.
+### Copy Reference for AI
+- **Multi-root workspaces:** the path is relative to the file's own workspace folder and does not include the folder's name, so two folders can give the same reference.
+- **Files outside the workspace** are copied with their absolute path.
+- **No line numbers:** if any block of the document cannot be matched to the saved file, the reference is the path alone, for every position in that file. The message says so.
+- **Saves first:** a file with unsaved changes is saved before the reference is copied, so the lines match what the agent reads. During a Feedback review the file is not saved; with unsaved changes nothing is copied.
+- **Untitled files** have no path and are refused with a message.
+- **File names with `#` or `"`** are copied as they are, so the reference can be read wrongly by the agent.
 
-### ESLint Type Safety in Tests
-**Status:** 83 warnings (0 errors) ✅ Major improvement from 569 issues
-**Impact:** Test code maintainability
-**Files Affected:** Test files and mocks only
+### Translations have had no native review
+The five translated languages (Simplified Chinese, Japanese, Spanish, Brazilian Portuguese, Russian) were drafted and checked by AI. No native speaker has reviewed them. Feedback files and the prompt handed to your agent stay in English. Corrections: see [Translations](./l10n/README.md).
 
-**Current State:**
-- **83 warnings:** All `@typescript-eslint/no-explicit-any` in test files and mocks
-- **0 errors:** All blocking errors have been resolved ✅
-- Production code is clean - only test/mock files use `any` types
+### The editor shows English in a translated VS Code
+A translation shows only when VS Code has the Language Pack for that language. **Configure Display Language** installs it for you. If VS Code was set to a language another way, for example started with `--locale`, and the pack is not installed, the editor shows English. Any display language other than the six shipped ones also shows English. Among Open VSX editors, only Cursor has been tested (Simplified Chinese and Japanese, with the Language Pack from its marketplace); VSCodium and Devin Desktop have not been tested.
 
-**Decision:** ✅ Keep as-is for v0.1.0. These warnings are acceptable in test code.
+**Workaround:** Run **Configure Display Language**, pick the language, and restart when asked.
 
-### Bundle Size Optimization
-**Current Size:** 3.1 MB (marketplace package) ✅ Within acceptable range
-**Bundle Analysis:**
-- **webview.js:** 4.3 MB (includes Mermaid ~2MB, TipTap, dependencies)
-- **extension.js:** 1.8 MB (includes docx, cheerio, PDF export)
+### Font settings do not apply to exports
+`markdownForHumans.font.*` change the editor only. PDF and Word exports keep their own fonts. A font that is not installed on your computer is ignored and the standard font is used. Code blocks stay monospace, and math and diagrams keep their own fonts.
 
-**Status:** Acceptable for v0.1.0 - defer optimization to v0.2.0
-**Target for v0.2.0:** < 2.8 MB
+### HTML comments inside links, emphasis, or before text
+Comments are kept on their own lines, inside lists and blockquotes, and inside a line of text (`Text <!-- note --> more`). Two placements are still dropped when the file is saved from the editor: a comment inside link text or emphasis (`**bold <!-- note --> text**`), and a comment at the start of a line with text after it on that line (`<!-- note --> text`).
 
-**Future Optimization Strategies (v0.2.0):**
-- Lazy-load Mermaid (only when diagram features used)
-- Evaluate if all TipTap extensions are needed
-- Consider making PDF/Word export optional
+**Workaround:** Move the comment outside the link or emphasis, or put it on its own line.
 
-### Build System Enhancements
-**Current:** Dual build system working well ✅
-**Improvement:** Minor polish for developer experience
+### Loose / ordered list markers
+In a list you edit, loose lists can round-trip as tight lists and `1)` markers may become `1.`. Unedited lists keep their source.
 
-**Current Setup:**
-- ✅ Marketplace build (no source maps): `npm run build:marketplace`
-- ✅ Development build (with source maps): `npm run build`
-- ✅ Build verification: `npm run verify-build`
-- ✅ Console.log removal via build flags
+### Blank line added next to a block you edit
+Blocks you do not edit keep the exact layout they had, including a heading, label or paragraph that sits directly above a list, code fence or text with no blank line. When you edit one of two such neighbors, saving puts a blank line between them (for example after an edited bold label above its list, or after an edited heading above text). The rendered result is the same; only the source layout changes.
 
-**Status:** Working well, no urgent changes needed
+### Feedback refuses lists that mix plain and task items
+A list that contains both plain items and task items (`- note` and `- [ ] todo` in one list) stops **Log feedback for an LLM** from starting: the editor splits it into two lists, so Feedback cannot match its blocks to the saved file. A brief message says to split the list; the file itself is not changed.
 
-### Documentation & Repository Polish
+**Workaround:** Separate the plain items and the task items into two lists.
 
-**GitHub Repository Setup:**
-- [x] Repository exists: https://github.com/concretios/markdown-for-humans
-- [x] README.md comprehensive and professional
-- [x] LICENSE file present (MIT)
-- [x] CONTRIBUTING.md present
-- [x] Gallery banner added ✅
-- [ ] **TODO:** Set up GitHub Wiki (README currently references it)
-- [ ] **TODO:** Enable GitHub Discussions for community Q&A
-- [ ] **TODO:** Add repository topics: `vscode-extension`, `markdown`, `wysiwyg`, `tiptap`
-- [ ] **TODO:** Create v0.1.0 GitHub release with notes
+### A link around both text and an image is split when edited
+A single link that wraps text and an image together (`[see ![Logo](logo.png) here](https://example.com)`) is saved as separate links with the same address once you edit its paragraph: `[see](https://example.com) [![Logo](logo.png)](https://example.com) [here](https://example.com)`. Every part still links to the same place. **Log feedback for an LLM** refuses to start on such a paragraph. A link around only an image (`[![Logo](logo.png)](https://example.com)`) is not affected.
 
-**Future README Enhancements (v0.2.0+):**
-- Add installation GIF/video
-- Add keyboard shortcuts reference
-- Create troubleshooting section in wiki
-- Add feature comparison table vs other markdown editors
+**Workaround:** Use separate links for the text and the image.
 
-### Testing & Quality
+### Feedback refuses escaped `*` and `_`
+A backslash-escaped asterisk or underscore (`\*not italic\*`, `\_not italic\_`) stops **Log feedback for an LLM** from starting with "Canonical block content does not match the saved source snapshot." The text shows and saves correctly; only Feedback is affected. Escaped brackets (`\[`) are fine.
 
-**Test Coverage:** ✅ Excellent
-- **584 tests passing** (25 skipped, 121 todo)
-- All test suites pass
-- Good coverage across features
+**Workaround:** Wrap the literal characters in inline code (`` `*not italic*` ``) while you review with Feedback.
 
-**Future Improvements (v0.2.0+):**
-- Add E2E tests for critical user workflows
-- Test marketplace package installation
-- Performance testing with large documents (10,000+ lines)
-- Memory leak testing for long editing sessions
+### Undo can step back over a change made outside the editor
+If the file is changed while it is open in the editor (a Git checkout, another extension, a formatter), pressing Undo first steps back to the text from before that change, and that older text is written to the file. VS Code's own text editor behaves the same way for edits that other extensions apply.
+
+**Workaround:** Check **Source Control** before committing, or use **Git: Discard Changes** to return to the checked-out version.
+
+### Files without a final newline get one
+The editor writes every file with exactly one trailing newline (markdownlint MD047). A file that ended without one gains a newline on the first edit, which shows as a one-line change in Git.
+
+### A new empty code fence is saved as `plaintext`
+Typing three backticks and then code writes ```` ```plaintext ```` rather than a bare fence. A bare fence that is already in the file stays bare, even after you edit its block.
 
 ---
 
-## 🔍 Technical Debt Analysis
+## Design limitations
 
-### Dependencies to Evaluate (v0.2.0):
-```json
-// Heavy dependencies - consider optimization:
-"mermaid": "^10.6.1",           // ~2MB - candidate for lazy loading
-"docx": "^9.5.1",              // Word export - consider optional
-"cheerio": "^1.1.2",           // HTML parsing - keep (essential)
-"@tiptap/starter-kit": "^3.0.0" // Evaluate which extensions are actually used
-```
+### Large documents
+Very large docs (10,000+ lines) may feel slower while editing (TipTap document model). Split files if needed.
 
-### Code Organization (Minor, v0.2.0+):
-- `src/webview/features/` - some large files could be split (not urgent)
-- Overall architecture is solid ✅
-- Good separation of concerns ✅
+### Large images
+Images over ~2MB or 2000px trigger a resize dialog. Extremely large files (>10MB) can still be slow to process.
 
-### Architecture Review (v0.2.0+):
-1. **TipTap Extension Strategy:** Evaluate which extensions are actually needed
-2. **Mermaid Integration:** Consider lazy loading for bundle size
-3. **Export Functionality:** PDF/Word export adds size but provides value
-4. **Image Handling:** Current implementation works well
+### Mermaid in exports
+Diagrams that fail conversion in the webview may not appear correctly in PDF/Word. Confirm they render in the editor before exporting.
 
 ---
 
-## 📋 Implementation Roadmap
+## Common workarounds
 
-### Version 0.1.0 (Current - Ready for Release) ✅
-- [x] Fix all ESLint errors (0 errors remaining) ✅
-- [x] Comprehensive test coverage (584 tests passing) ✅
-- [x] Bundle size within acceptable range (3.1 MB) ✅
-- [x] All documentation complete ✅
-- [x] Build system working ✅
-- [x] CI/CD pipeline configured ✅
-- [x] Gallery banner added ✅
-
-### Version 0.2.0 (Quality & Performance)
-- [ ] Lazy loading for Mermaid (reduce initial bundle)
-- [ ] Reduce bundle size to < 2.8 MB
-- [ ] Add E2E tests
-- [ ] Performance optimizations for large documents
-- [ ] GitHub Wiki setup
-- [ ] GitHub Discussions enabled
-- [ ] Repository topics added
-
-### Version 0.3.0 (Features & Polish)
-- [ ] Code block language picker UI
-- [ ] Enhanced table editing features
-- [ ] Advanced export options
-- [ ] Installation video/GIF
-
-### Future Versions
-- [ ] Plugin system for custom extensions
-- [ ] Collaboration features
-- [ ] Cloud synchronization
+| Symptom | Workaround |
+|---------|------------|
+| “Open with Markdown Editor for Humans” fails | Right-click the editor tab → **Reopen Editor With...** → **Visual Editor** (Markdown Editor for Humans) |
+| Theme colors look wrong | Reload Window; check VS Code theme settings |
 
 ---
 
-## 📊 Current Metrics (v0.1.0)
+## Recently fixed
 
-### Build Quality: ✅ Production Ready
-- **Lint Issues:** 83 warnings, **0 errors** ✅ (85% improvement from initial 569 issues)
-- **Package Size:** 3.1 MB (target: < 3.5 MB) ✅
-- **Bundle Size:** 6.1 MB total (webview: 4.3MB, extension: 1.8MB)
-- **Test Status:** 584 passing, 0 failing ✅
-- **Build Time:** ~200ms for marketplace build ✅
+Fixed in 0.4.4; see [CHANGELOG.md](CHANGELOG.md) for the full list.
 
-### Issue Statistics
-- **Total Known User-Facing Issues:** 4
-- **High Priority:** 0
-- **Medium Priority:** 3
-- **Low Priority:** 1
-- **Limitations:** 3
-- **Technical Debt Items:** 5
-
-### Release Checklist:
-- [x] All tests pass ✅
-- [x] No blocking lint errors ✅
-- [x] Documentation complete ✅
-- [x] License file present ✅
-- [x] CI/CD configured ✅
-- [x] Gallery banner configured ✅
-- [x] Git tag v0.1.0 created ✅
-- [ ] Repository made public
-- [ ] GitHub release created from tag
-- [ ] VS Code Marketplace published
-
-### Target Metrics (v0.2.0):
-- **Package Size:** < 2.8 MB
-- **Bundle Size:** < 5.5 MB total
-- **Lint Issues:** < 50 warnings
-- **E2E Test Coverage:** Add E2E tests
-- **Performance:** Optimize for 10,000+ line documents
+- **Feedback and link reference definitions:** Feedback starts on a document that has `[label]: https://...` definitions.
+- **Duplicate link reference definitions** are no longer deleted on save.
+- **Word export** keeps code blocks and block math, and shows checklist items as ☐ and ☑.
+- **Links to other Markdown files** open in this editor, including links with a section (`guide.md#install`) or encoded characters.
 
 ---
 
-## 🔗 Related Files
-
-### Build Configuration:
-- [package.json](package.json) - Build scripts and dependencies
-- [scripts/build-webview.js](scripts/build-webview.js) - Webview build logic
-- [eslint.config.js](eslint.config.js) - Linting configuration
-- [.vscodeignore](.vscodeignore) - Package exclusion rules
-- [.github/workflows/ci.yml](.github/workflows/ci.yml) - CI pipeline
-
-### Documentation:
-- [README.md](README.md) - User documentation
-- [CHANGELOG.md](CHANGELOG.md) - Release notes
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Development guidelines
-- [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) - Development troubleshooting
-
----
-
-## 📝 Release Status Summary
-
-### What Changed Since Initial Audit:
-- **Lint errors reduced from 30 to 0** ✅ (100% improvement)
-- **Total lint issues reduced from 569 to 83** ✅ (85% improvement)
-- All remaining warnings are in test/mock files only
-- CI workflow updated to use correct branch names (`main`)
-- Gallery banner added for marketplace presentation
-- Repository URLs corrected in package.json
-
-### Current Status:
-**✅ READY FOR PUBLIC RELEASE**
-
-The extension is production-ready with:
-- Zero blocking errors
-- Comprehensive test coverage (584 passing tests)
-- Complete documentation
-- Professional marketplace presentation
-- Solid architecture
-- Working CI/CD pipeline
-
-### What's Left:
-All items in this document are **nice-to-haves** for future versions (v0.2.0+), not blockers for v0.1.0.
-
-**Immediate Next Steps:**
-1. Make repository public
-2. ✅ Create v0.1.0 git tag (completed)
-3. Create v0.1.0 GitHub release from tag
-4. Publish to VS Code Marketplace
-
----
-
-## Contributing
-
-If you find a workaround for a known issue or have additional information, please:
-1. Update this document via a pull request
-2. Or comment on the related GitHub issue
-
----
-
-**Last Updated:** 2025-12-27
-**Status:** ✅ Production Ready for v0.1.0
-**Next Review:** After v0.1.0 marketplace release (plan v0.2.0 improvements)
-
-**Note:** This document is maintained manually. For the most up-to-date issue tracking, see [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
+**Agents:** Prefer [CHANGELOG.md](CHANGELOG.md) Known Issues for the current release. Do not treat this file as a roadmap or metrics dashboard. Active work: [`roadmap/pipeline/`](roadmap/pipeline/). Shipped plans: [`roadmap/shipped/`](roadmap/shipped/).

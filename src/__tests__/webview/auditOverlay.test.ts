@@ -14,6 +14,7 @@ import {
   clearToasts,
 } from '../../webview/features/auditOverlay';
 import { AuditIssue } from '../../webview/features/auditDocument';
+import * as l10n from '../../webview/l10n';
 
 let mockVscodeApi: { postMessage: jest.Mock };
 
@@ -38,7 +39,7 @@ describe('Audit Overlay UI', () => {
           markedOptions: { gfm: true, breaks: true },
         }),
       ],
-      content: '<p>Test content with a [broken link](missing.md)</p>',
+      content: '<p><a href="broken.md">Test content</a></p>',
     });
   });
 
@@ -94,7 +95,10 @@ describe('Audit Overlay UI', () => {
     expect(pill).not.toBeNull();
 
     pill.dispatchEvent(new Event('mouseover', { bubbles: true }));
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // The popover deliberately enters on the next animation frame. Waiting on
+    // a zero-delay timer races requestAnimationFrame in jsdom and made the full
+    // suite intermittently assert before the visible class was applied.
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
 
     const preview = document.querySelector('.audit-preview-popover');
     expect(preview).not.toBeNull();
@@ -575,6 +579,201 @@ describe('Audit Overlay UI', () => {
       expect(title.textContent).toContain('1 issue');
     });
   });
+
+  describe('localization', () => {
+    // Leaves out "Fix" on purpose, to exercise the fallback to English.
+    const sampleBundle: Record<string, string> = {
+      'Document Audit ({0} issue)': '文档审核（{0} 项问题）',
+      'Document Audit ({0} issues)': '文档审核（共 {0} 项问题）',
+      Close: '关闭',
+      'Navigate to issue': '转到问题',
+      'Jump to issue': '跳转到问题',
+      'Fix link...': '修复链接...',
+      'Browse…': '浏览…',
+      'Open file picker to select the correct file': '打开文件选择器以选择正确的文件',
+      'Waiting…': '等待中…',
+      'Heading name changed slightly. Pick the updated one:':
+        '标题名称略有变化，请选择更新后的标题：',
+      'Update the link to the anchor GitHub uses:': '请将链接更新为 GitHub 使用的锚点：',
+      'Your document is healthy: no issues found!': '文档状态良好，未发现问题！',
+      'All fixed! 🎉': '全部修复！🎉',
+      Preview: '预览',
+      'File preview': '文件预览',
+      'Preview unavailable': '无法预览',
+      'Image preview is not available for this path.': '此路径无法预览图片。',
+    };
+
+    const linkIssue = (index: number): AuditIssue => ({
+      type: 'link',
+      message: `Broken link ${index}`,
+      target: `missing-${index}.md`,
+      pos: 1,
+      nodeSize: 1,
+    });
+
+    afterEach(() => {
+      l10n.resetL10n();
+      document.querySelector('.audit-preview-popover')?.remove();
+    });
+
+    it('shows English when no bundle is loaded', () => {
+      showAuditOverlay(editor, [linkIssue(1), linkIssue(2)]);
+
+      expect(document.querySelector('.audit-overlay-title')?.textContent).toBe(
+        'Document Audit (2 issues)'
+      );
+      expect(document.querySelector('.audit-overlay-close')?.getAttribute('aria-label')).toBe(
+        'Close'
+      );
+    });
+
+    it('translates the title with its count, for one issue and for several', () => {
+      l10n.configureL10n(sampleBundle);
+
+      showAuditOverlay(editor, [linkIssue(1), linkIssue(2)]);
+      const title = document.querySelector('.audit-overlay-title') as HTMLElement;
+      expect(title.textContent).toBe('文档审核（共 2 项问题）');
+
+      (document.querySelector('.audit-fix-button.manual-fix') as HTMLButtonElement).click();
+      expect(title.textContent).toBe('文档审核（1 项问题）');
+    });
+
+    it('translates the single issue title on first render', () => {
+      l10n.configureL10n(sampleBundle);
+
+      showAuditOverlay(editor, [linkIssue(1)]);
+
+      expect(document.querySelector('.audit-overlay-title')?.textContent).toBe(
+        '文档审核（1 项问题）'
+      );
+    });
+
+    it('translates labels written inside the HTML template and escapes them', () => {
+      l10n.configureL10n({ ...sampleBundle, Close: '关闭 "x" <b>' });
+
+      showAuditOverlay(editor, [linkIssue(1)]);
+
+      const closeBtn = document.querySelector('.audit-overlay-close') as HTMLElement;
+      expect(closeBtn.getAttribute('aria-label')).toBe('关闭 "x" <b>');
+      expect(closeBtn.querySelector('b')).toBeNull();
+    });
+
+    it('translates the row buttons, input placeholder and Browse button', () => {
+      l10n.configureL10n(sampleBundle);
+
+      showAuditOverlay(editor, [linkIssue(1)]);
+
+      const nav = document.querySelector('.audit-issue-nav-btn') as HTMLButtonElement;
+      expect(nav.getAttribute('aria-label')).toBe('转到问题');
+      expect(nav.title).toBe('跳转到问题');
+      expect((document.querySelector('.audit-manual-input') as HTMLInputElement).placeholder).toBe(
+        '修复链接...'
+      );
+      expect(document.querySelector('.audit-fix-button')?.textContent).toBe('Fix');
+      const browse = document.querySelector('.audit-browse-btn') as HTMLButtonElement;
+      expect(browse.textContent?.trim()).toBe('浏览…');
+      expect(browse.title).toBe('打开文件选择器以选择正确的文件');
+      expect(browse.querySelector('.codicon-folder')).not.toBeNull();
+    });
+
+    it('translates the Browse button while waiting for the picker', () => {
+      l10n.configureL10n(sampleBundle);
+      showAuditOverlay(editor, [linkIssue(1)]);
+
+      const browse = document.querySelector('.audit-browse-btn') as HTMLButtonElement;
+      browse.click();
+
+      expect(browse.textContent?.trim()).toBe('等待中…');
+      expect(browse.querySelector('.codicon-clock')).not.toBeNull();
+    });
+
+    it('translates the heading hint', () => {
+      l10n.configureL10n(sampleBundle);
+
+      showAuditOverlay(editor, [
+        {
+          type: 'heading',
+          message: 'Heading anchor not found: #introduction',
+          target: 'introduction',
+          suggestions: ['introductin'],
+          pos: 1,
+          nodeSize: 1,
+        },
+      ]);
+
+      expect(document.querySelector('.audit-heading-hint')?.textContent).toBe(
+        '标题名称略有变化，请选择更新后的标题：'
+      );
+    });
+
+    it('translates the hint on an older-form link', () => {
+      l10n.configureL10n(sampleBundle);
+      showAuditOverlay(editor, [
+        {
+          type: 'heading',
+          message: 'Link works in this editor but not on GitHub: #ber-uns',
+          target: 'ber-uns',
+          suggestions: ['über-uns'],
+          olderFormAnchor: true,
+          pos: 1,
+          nodeSize: 1,
+        },
+      ]);
+
+      expect(document.querySelector('.audit-heading-hint')?.textContent).toBe(
+        '请将链接更新为 GitHub 使用的锚点：'
+      );
+    });
+
+    it('translates the healthy toast and the all fixed message', () => {
+      l10n.configureL10n(sampleBundle);
+
+      showAuditOverlay(editor, []);
+      expect(document.querySelector('.toast-message')?.textContent).toBe(
+        '文档状态良好，未发现问题！'
+      );
+
+      showAuditOverlay(editor, [linkIssue(1)]);
+      (document.querySelector('.audit-fix-button.manual-fix') as HTMLButtonElement).click();
+      expect(document.querySelector('.audit-overlay-list')?.textContent).toBe('全部修复！🎉');
+    });
+
+    it('translates the suggestion preview headers and texts', () => {
+      l10n.configureL10n(sampleBundle);
+      showAuditOverlay(editor, [
+        {
+          type: 'link',
+          message: 'Linked file not found: missing.md',
+          target: 'missing.md',
+          suggestions: ['docs/guide.md'],
+          pos: 1,
+          nodeSize: 1,
+        },
+        {
+          type: 'image',
+          message: 'Image file not found: missing.png',
+          target: 'missing.png',
+          suggestions: ['images/found.png'],
+          pos: 2,
+          nodeSize: 1,
+        },
+      ]);
+      const [filePill, imagePill] = Array.from(
+        document.querySelectorAll<HTMLElement>('.audit-suggestion-pill')
+      );
+
+      filePill.dispatchEvent(new Event('mouseover', { bubbles: true }));
+      expect(document.querySelector('.audit-preview-header')?.textContent).toBe('文件预览');
+
+      imagePill.dispatchEvent(new Event('mouseover', { bubbles: true }));
+      return Promise.resolve().then(() => {
+        expect(document.querySelector('.audit-preview-header')?.textContent).toBe('无法预览');
+        expect(document.querySelector('.audit-preview-empty')?.textContent).toBe(
+          '此路径无法预览图片。'
+        );
+      });
+    });
+  });
 });
 
 describe('Toast Notifications', () => {
@@ -626,6 +825,25 @@ describe('Toast Notifications', () => {
     }, 50);
   });
 
+  it('renders host error text literally instead of parsing it as markup (#93)', () => {
+    const payload = '<img src=https://x/y>';
+    const toastId = showToast(payload, 'info');
+
+    const toast = document.getElementById(toastId);
+    expect(toast?.querySelector('img')).toBeNull();
+    expect(toast?.querySelector('.toast-message')?.textContent).toBe(payload);
+  });
+
+  it('renders a first keyed Feedback error literally as well', () => {
+    const payload = 'Draft failed: <b id="injected">bad</b>';
+    const toastId = showToast(payload, 'info', { dedupeKey: 'feedback-local-error' });
+
+    const toast = document.getElementById(toastId);
+    expect(toast?.querySelector('#injected')).toBeNull();
+    expect(toast?.querySelector('.toast-message')?.textContent).toBe(payload);
+    expect(toast?.querySelector('.toast-icon.codicon-info')).not.toBeNull();
+  });
+
   it('shows an info toast', () => {
     const toastId = showToast('Info message', 'info');
 
@@ -633,6 +851,40 @@ describe('Toast Notifications', () => {
     expect(toast).not.toBeNull();
     expect(toast?.classList.contains('toast-info')).toBe(true);
     expect(toast?.textContent).toContain('Info message');
+  });
+
+  it('coalesces one keyed Feedback error and refreshes its dismissal lifetime', () => {
+    jest.useFakeTimers();
+
+    const firstId = showToast('Could not start Feedback.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+    jest.advanceTimersByTime(2_000);
+    const secondId = showToast('Could not start Feedback.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+
+    expect(secondId).toBe(firstId);
+    expect(document.querySelectorAll('.toast-info')).toHaveLength(1);
+
+    jest.advanceTimersByTime(2_999);
+    expect(document.getElementById(firstId)).not.toBeNull();
+    jest.advanceTimersByTime(201);
+    expect(document.getElementById(firstId)).toBeNull();
+  });
+
+  it('replaces the message in an existing keyed Feedback error toast', () => {
+    const firstId = showToast('First Feedback error.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+    const secondId = showToast('Newest Feedback error.', 'info', {
+      dedupeKey: 'feedback-local-error',
+    });
+
+    expect(secondId).toBe(firstId);
+    expect(document.querySelectorAll('.toast-info')).toHaveLength(1);
+    expect(document.getElementById(firstId)?.textContent).toContain('Newest Feedback error.');
+    expect(document.getElementById(firstId)?.textContent).not.toContain('First Feedback error.');
   });
 
   it('success toast auto-dismisses', done => {

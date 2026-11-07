@@ -6,7 +6,13 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from '@tiptap/markdown';
 import { CustomImage } from '../../webview/extensions/customImage';
-import { runAudit, handleAuditPickFileResult } from '../../webview/features/auditDocument';
+import { PreservedMarkdownLiteral } from '../../webview/extensions/preservedMarkdownLiteral';
+import {
+  runAudit,
+  handleAuditPickFileResult,
+  handleAuditUrlCheckResult,
+} from '../../webview/features/auditDocument';
+import * as l10n from '../../webview/l10n';
 import { installBlankLineLexerNormalizer } from '../../webview/utils/markedLexerNormalizer';
 
 describe('Audit Document Feature', () => {
@@ -27,6 +33,7 @@ describe('Audit Document Feature', () => {
       extensions: [
         StarterKit,
         CustomImage,
+        PreservedMarkdownLiteral,
         Markdown.configure({
           markedOptions: {
             gfm: true,
@@ -132,6 +139,82 @@ describe('Audit Document Feature', () => {
       message: 'Heading anchor not found: #missing-heading',
       target: 'missing-heading',
     });
+  });
+
+  it.each(['#über-uns', '#%C3%BCber-uns', '#ÜBER-UNS'])(
+    'should not report a link to a heading with an umlaut written as %s',
+    async anchor => {
+      editor.commands.setContent(`# Über uns\n\n[link](${anchor})`, { contentType: 'markdown' });
+
+      expect(await runAudit(editor)).toHaveLength(0);
+    }
+  );
+
+  it('should report an older-form link with the current anchor as its fix', async () => {
+    editor.commands.setContent('# Über uns\n\n[link](#ber-uns)', { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      type: 'heading',
+      message: 'Link works in this editor but not on GitHub: #ber-uns',
+      target: 'ber-uns',
+      suggestions: ['über-uns'],
+      olderFormAnchor: true,
+    });
+  });
+
+  it('should not mark a missing anchor as an older form', async () => {
+    editor.commands.setContent('# Über uns\n\n[link](#über-unss)', { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].message).toBe('Heading anchor not found: #über-unss');
+    expect(results[0].olderFormAnchor).toBeUndefined();
+  });
+
+  it('should suggest the GitHub form of a heading anchor', async () => {
+    editor.commands.setContent('# Setup & Config\n\n[link](#setup-configs)', {
+      contentType: 'markdown',
+    });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].suggestions).toEqual(['setup--config']);
+  });
+
+  it.each([
+    ['# 日本語　見出し', '#日本語見出し'],
+    ['# ΟΔΟΣ', '#οδοσ'],
+    ['# Area in m²', '#area-in-m'],
+    ['# My Project ![CI](b.svg)', '#my-project-'],
+  ])('should not report the GitHub anchor of %s', async (heading, anchor) => {
+    editor.commands.setContent(`${heading}\n\n[link](${anchor})`, { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results.filter(issue => issue.type === 'heading')).toHaveLength(0);
+  });
+
+  it('should still accept a bare # written for a heading with no ASCII letters', async () => {
+    editor.commands.setContent('# 日本語\n\n[link](#)', { contentType: 'markdown' });
+
+    expect(await runAudit(editor)).toHaveLength(0);
+  });
+
+  it('should not report a bare # when no heading has that older anchor', async () => {
+    editor.commands.setContent('# Foo\n\n[link](#)', { contentType: 'markdown' });
+
+    expect(await runAudit(editor)).toHaveLength(0);
+  });
+
+  it('should not offer a heading with no anchor as a suggestion', async () => {
+    editor.commands.setContent('# 🚀\n\n[link](#ab)', { contentType: 'markdown' });
+
+    const results = await runAudit(editor);
+
+    expect(results[0].suggestions).toBeUndefined();
   });
 
   it('should not report issues for valid heading anchor', async () => {
@@ -319,5 +402,86 @@ describe('Audit Document Feature', () => {
 
     await pickPromise;
     expect(resolvedPath).toBe('./images/new-image.png');
+  });
+
+  describe('localization', () => {
+    // Leaves out "Link is empty." on purpose, to exercise the fallback to English.
+    const sampleBundle: Record<string, string> = {
+      'Image has no source path.': '图片没有源路径。',
+      'Image file not found: {0}': '找不到图片文件: {0}',
+      'Heading anchor not found: #{0}': '找不到标题锚点: #{0}',
+      'Broken link URL: {0}': '链接地址已失效: {0}',
+      'Link works in this editor but not on GitHub: #{0}':
+        '链接在此编辑器中有效，但在 GitHub 上无效：#{0}',
+    };
+
+    afterEach(() => {
+      l10n.resetL10n();
+    });
+
+    it('shows English when no bundle is loaded', async () => {
+      editor.commands.setContent('![]()', { contentType: 'markdown' });
+
+      const results = await runAudit(editor);
+
+      expect(results[0].message).toBe('Image has no source path.');
+    });
+
+    it('translates a message without arguments', async () => {
+      l10n.configureL10n(sampleBundle);
+      editor.commands.setContent('![]()', { contentType: 'markdown' });
+
+      const results = await runAudit(editor);
+
+      expect(results[0].message).toBe('图片没有源路径。');
+    });
+
+    it('translates the older-form link message', async () => {
+      l10n.configureL10n(sampleBundle);
+      editor.commands.setContent('# Über uns\n\n[link](#ber-uns)', { contentType: 'markdown' });
+
+      const results = await runAudit(editor);
+
+      expect(results[0].message).toBe('链接在此编辑器中有效，但在 GitHub 上无效：#ber-uns');
+    });
+
+    it('translates a message that carries the target', async () => {
+      l10n.configureL10n(sampleBundle);
+      editor.commands.setContent('![alt text](missing-image.png)', { contentType: 'markdown' });
+      mockVscodeApi.postMessage.mockImplementation((message: any) => {
+        if (message.type === 'auditCheckFile') {
+          setTimeout(() => {
+            import('../../webview/features/auditDocument').then(({ handleAuditCheckResult }) => {
+              handleAuditCheckResult(message.requestId, false);
+            });
+          }, 10);
+        }
+      });
+
+      const results = await runAudit(editor);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].message).toBe('找不到图片文件: missing-image.png');
+      expect(results[0].target).toBe('missing-image.png');
+    });
+
+    it('translates a heading anchor message and a broken URL message', async () => {
+      l10n.configureL10n(sampleBundle);
+      editor.commands.setContent('[jump](#missing-section) and [web](https://example.com/gone)', {
+        contentType: 'markdown',
+      });
+      mockVscodeApi.postMessage.mockImplementation((message: any) => {
+        if (message.type === 'auditCheckUrl') {
+          setTimeout(() => handleAuditUrlCheckResult(message.requestId, false), 10);
+        }
+      });
+
+      const results = await runAudit(editor);
+
+      expect(results.map(issue => issue.message).sort()).toEqual([
+        '找不到标题锚点: #missing-section',
+        '链接地址已失效: https://example.com/gone',
+      ]);
+    });
   });
 });

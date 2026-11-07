@@ -201,8 +201,15 @@ if (isGapCursorSelection(selection)) {
 
 ## Success Criteria
 
-- [ ] Gap cursor before inline image + Enter inserts paragraph before containing block
-- [ ] Gap cursor after inline image + Enter inserts paragraph after containing block
-- [ ] ArrowLeft → Enter flow works correctly
-- [ ] ArrowRight → Enter flow works correctly
-- [ ] All existing tests pass
+- [x] Gap cursor before inline image + Enter inserts paragraph before containing block
+- [x] Gap cursor after inline image + Enter inserts paragraph after containing block
+- [x] ArrowLeft → Enter flow works correctly
+- [x] ArrowRight → Enter flow works correctly
+- [x] All existing tests pass
+
+## Follow-up (2026-10-01)
+
+The original ship marked this plan completed, but the live Enter handler still used
+`selection.head` and failed `canInsertParagraphAtDocPos` for inline images. The
+document-level before/after mapping (and direction-aware text-caret fallback) was
+re-applied with dedicated regression tests in `imageEnterSpacing.test.ts`.

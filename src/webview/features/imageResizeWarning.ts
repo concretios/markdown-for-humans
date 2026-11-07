@@ -12,6 +12,8 @@
  * - Opt out of future warnings ("Never ask again")
  */
 
+import * as l10n from '../l10n';
+
 export interface ImageResizeWarningOptions {
   confirmed: boolean;
   neverAskAgain: boolean;
@@ -54,17 +56,17 @@ export async function showImageResizeWarning(): Promise<ImageResizeWarningOption
 
     dialog.innerHTML = `
       <h3 style="margin: 0 0 16px 0; color: var(--vscode-foreground);">
-        ⚠️ Resize Image
+        ⚠️ ${l10n.html('Resize Image')}
       </h3>
 
       <p style="margin: 0 0 20px 0; color: var(--vscode-foreground); line-height: 1.5;">
-        Markdown for Humans will reduce the resolution of this image to fit the size. This action cannot be undone, but a backup will be created.
+        ${l10n.html('Markdown Editor for Humans will reduce the resolution of this image to fit the size. This action cannot be undone, but a backup will be created.')}
       </p>
 
       <div style="margin-bottom: 20px;">
         <label style="display: flex; align-items: center; color: var(--vscode-foreground); cursor: pointer;">
           <input type="checkbox" id="never-ask-again" style="margin-right: 8px;">
-          Never ask again
+          ${l10n.html('Never ask again')}
         </label>
       </div>
 
@@ -77,7 +79,7 @@ export async function showImageResizeWarning(): Promise<ImageResizeWarningOption
           border-radius: 3px;
           cursor: pointer;
           font-family: var(--vscode-font-family);
-        ">Cancel</button>
+        ">${l10n.html('Cancel')}</button>
         <button id="resize-btn" style="
           padding: 6px 14px;
           background: var(--vscode-button-background);
@@ -87,7 +89,7 @@ export async function showImageResizeWarning(): Promise<ImageResizeWarningOption
           cursor: pointer;
           font-family: var(--vscode-font-family);
           font-weight: 500;
-        ">Resize</button>
+        ">${l10n.html('Resize')}</button>
       </div>
     `;
 

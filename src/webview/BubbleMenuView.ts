@@ -12,21 +12,72 @@
  * @module BubbleMenuView
  */
 
+import * as l10n from './l10n';
 import { MERMAID_TEMPLATES } from './mermaidTemplates';
+import { fitFeedbackToolbarLabels } from './utils/fitFeedbackToolbarLabels';
 import { showTableInsertDialog } from './features/tableInsert';
 import { showLinkDialog } from './features/linkDialog';
 import { showImageInsertDialog } from './features/imageInsertDialog';
+import { parseFenceInfo, replaceFenceLanguage } from './highlighting/fenceInfo';
+import { resolveGrammar } from './highlighting/languageRegistry';
 import type { Editor } from '@tiptap/core';
+import { Selection } from '@tiptap/pm/state';
 import type { Transaction } from '@tiptap/pm/state';
 
 // Store reference to refresh function so it can be called externally
 let toolbarRefreshFunction: (() => void) | null = null;
+let feedbackToolbarRenderFunction: ((state: FeedbackToolbarState) => void) | null = null;
+
+/** Visual and accessible disclosure state for the Feedback comments surface. */
+export type FeedbackCommentsState = 'hidden' | 'collapsed' | 'expanded';
+
+/** Local UI phase for the pointer-enhanced Feedback area capture. */
+export type FeedbackCaptureUiState = 'idle' | 'armed' | 'rasterizing';
+
+/** Stable target for saved-comment markers that disclose detail cards. */
+export const FEEDBACK_COMMENTS_PANEL_ID = 'feedback-comments-panel';
+/** Stable target for the toolbar control that shows or hides the comments rail. */
+export const FEEDBACK_COMMENTS_RAIL_ID = 'feedback-comments-rail';
+
+/**
+ * Resolve the positioning context for the Feedback overflow menu.
+ *
+ * @param trigger - Current More feedback actions control, when mounted.
+ * @param fallback - Toolbar used before or outside the grouped Feedback layout.
+ * @returns The dedicated menu host, centered Feedback group, or toolbar fallback.
+ */
+export function getFeedbackToolbarMenuHost(
+  trigger: HTMLElement | null,
+  fallback: HTMLElement
+): HTMLElement {
+  return (
+    trigger?.closest<HTMLElement>('[data-feedback-menu-host]') ??
+    trigger?.closest<HTMLElement>('[data-feedback-toolbar-group]') ??
+    fallback
+  );
+}
+
+export interface FeedbackToolbarState {
+  active: boolean;
+  count?: number;
+  commentsState?: FeedbackCommentsState;
+  commentsLocked?: boolean;
+  /** @deprecated Pass commentsState so collapsed and expanded remain distinct. */
+  commentsVisible?: boolean;
+  invalidated?: boolean;
+  starting?: boolean;
+  closing?: boolean;
+  captureState?: FeedbackCaptureUiState;
+}
+
+let feedbackToolbarState: FeedbackToolbarState = { active: false };
 
 /**
  * Normalize selection and create a code block
  *
  * Strips all formatting (marks) from the selection, extracts plain text,
- * and replaces it with a single code block node.
+ * and replaces it with a single code block node. Existing code blocks keep their
+ * authored fence metadata when the language changes.
  *
  * @param editor - TipTap editor instance
  * @param language - Programming language for syntax highlighting
@@ -35,9 +86,25 @@ function setCodeBlockNormalized(editor: Editor, language: string): void {
   const { state } = editor;
   const { from, to, empty } = state.selection;
 
-  // If already in a code block, just update the language
+  // Metadata belongs to the authored fence, so changing its language must retain it.
   if (editor.isActive('codeBlock')) {
-    editor.chain().focus().updateAttributes('codeBlock', { language }).run();
+    editor
+      .chain()
+      .focus()
+      .command(({ tr, dispatch }) => {
+        if (dispatch) {
+          tr.doc.nodesBetween(tr.selection.from, tr.selection.to, (node, pos) => {
+            if (node.type.name !== 'codeBlock') return;
+            tr.setNodeMarkup(pos, undefined, {
+              ...node.attrs,
+              language: replaceFenceLanguage(node.attrs.language, language),
+            });
+            return false;
+          });
+        }
+        return true;
+      })
+      .run();
     return;
   }
 
@@ -77,6 +144,16 @@ function setCodeBlockNormalized(editor: Editor, language: string): void {
 let isEditorFocused = false;
 let focusChangeListener: ((e: Event) => void) | null = null;
 
+// Whether GitHub Copilot can take document context. The host reports it; the
+// Add to GitHub Copilot button is shown only while it is true.
+let copilotChatAvailable = false;
+
+/** Show or hide the GitHub Copilot actions, per the host's availability report. */
+export function setToolbarCopilotVisible(visible: boolean): void {
+  copilotChatAvailable = visible;
+  updateToolbarStates();
+}
+
 type ToolbarIcon = {
   name?: string;
   // Inline SVG markup. When set it takes precedence over `name`/`fallback` and
@@ -86,13 +163,23 @@ type ToolbarIcon = {
   svg?: string;
   fallback: string;
   badge?: string;
+  // Set when a language replaces a letter glyph with its own letter, which is then
+  // drawn bold, italic or struck through so it still shows what the button does.
+  letterStyle?: LetterStyle;
 };
+
+type LetterStyle = 'bold' | 'italic' | 'strikethrough';
 
 // Custom "√x" radical glyph for the Math toolbar button. A codicon (previously
 // `symbol-numeric`) read as Slack-like and not obviously math; this stroke path
 // inherits the toolbar colour via `currentColor`, stays crisp at 16px, and is
 // visually distinct from every other toolbar icon.
 const MATH_RADICAL_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><polyline points="2,12 5,12 8,20 12,4 23,4"></polyline><line x1="14.5" y1="10.5" x2="20" y2="16.5"></line><line x1="20" y1="10.5" x2="14.5" y2="16.5"></line></svg>`;
+
+// Picture / mountain-sun glyph for Insert image. `codicon-file-media` reads as a
+// dog-eared document with an upload badge next to link and chart icons; this
+// conventional framed landscape uses `currentColor` so it stays theme-aware.
+const INSERT_IMAGE_ICON_SVG = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21,15 16,10 5,21"></polyline></svg>`;
 
 type ToolbarActionButton = {
   type: 'button';
@@ -108,6 +195,11 @@ type ToolbarActionButton = {
   // runs against an unfocused editor. Buttons that read live editor state
   // (selection, focus) at click time should set this to true.
   preserveEditorFocus?: boolean;
+  // Whether the button is shown at all, e.g. because its feature needs another
+  // extension. Hidden buttons are removed from the layout and the tab order.
+  isVisible?: () => boolean;
+  visibleText?: string;
+  feedbackData?: 'start';
 };
 
 type ToolbarDropdownItem = {
@@ -115,6 +207,7 @@ type ToolbarDropdownItem = {
   action: () => void;
   icon?: ToolbarIcon;
   isEnabled?: () => boolean; // Function to check if item should be enabled
+  isActive?: () => boolean;
 };
 
 type ToolbarDropdown = {
@@ -183,12 +276,32 @@ function createIconElement(icon: ToolbarIcon | undefined, baseClass: string): HT
     }
   }
 
+  if (icon.letterStyle) {
+    span.classList.add(`toolbar-letter-${icon.letterStyle}`);
+  }
+
   if (icon.badge) {
     span.classList.add('heading-icon');
     span.setAttribute('data-badge', icon.badge);
   }
 
   return span;
+}
+
+/**
+ * Icon for a button whose glyph is a letter, such as B for Bold.
+ *
+ * The icon font draws the English letter. A language that prints another
+ * letter on that button gets it as text; every other language keeps the glyph.
+ *
+ * @param name - Codicon name of the English glyph, also the style a text letter is drawn in
+ * @param english - The letter the glyph shows
+ * @param localized - The letter for the display language
+ */
+function letterIcon(name: LetterStyle, english: string, localized: string): ToolbarIcon {
+  return localized === english
+    ? { name, fallback: english }
+    : { fallback: localized, letterStyle: name };
 }
 
 function closeAllDropdowns() {
@@ -211,6 +324,30 @@ export function updateToolbarStates() {
 }
 
 /**
+ * Swap the formatting toolbar between normal editing and the focused Feedback
+ * action set. Normal controls are detached, not merely visually hidden, so
+ * they cannot receive focus or be announced during a frozen review.
+ *
+ * @param state - Current Feedback session, count, and comments disclosure state.
+ */
+export function setFeedbackToolbarState(state: FeedbackToolbarState): void {
+  const commentsState =
+    state.commentsState ?? (state.commentsVisible === false ? 'hidden' : 'collapsed');
+  feedbackToolbarState = {
+    active: state.active,
+    count: Math.max(0, state.count ?? 0),
+    commentsState,
+    commentsLocked: state.commentsLocked ?? false,
+    commentsVisible: commentsState !== 'hidden',
+    invalidated: state.invalidated ?? false,
+    starting: state.starting ?? false,
+    closing: state.closing ?? false,
+    captureState: state.captureState ?? 'idle',
+  };
+  feedbackToolbarRenderFunction?.(feedbackToolbarState);
+}
+
+/**
  * Create compact formatting toolbar with clean, minimal design.
  *
  * @param editor - TipTap editor instance
@@ -228,9 +365,50 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
   const buttons: ToolbarItem[] = [
     {
       type: 'button',
-      label: 'Bold',
-      title: `Toggle bold (${modKeyLabel}+B)`,
-      icon: { name: 'bold', fallback: 'B' },
+      label: l10n.t('Start feedback'),
+      title: l10n.t('Log feedback for an LLM'),
+      icon: { name: 'comment-discussion-sparkle', fallback: '✦' },
+      feedbackData: 'start',
+      className: 'feedback-start-button',
+      action: () => {
+        window.dispatchEvent(new CustomEvent('feedbackStartRequested'));
+      },
+    },
+    {
+      type: 'button',
+      label: l10n.t('Copy AI reference'),
+      title: l10n.t({
+        message: 'Copy reference for AI ({0})',
+        args: ['@file#L10-14'],
+        comment: 'Toolbar tooltip. {0} is an example of the copied text, such as @file#L10-14',
+      }),
+      icon: { name: 'mention', fallback: '@' },
+      action: () => {
+        window.dispatchEvent(new CustomEvent('copyReferenceForAi'));
+      },
+      isActive: () => false,
+      className: 'copy-reference-button',
+    },
+    {
+      type: 'button',
+      label: l10n.t('Add to GitHub Copilot'),
+      title: l10n.t('Add to GitHub Copilot'),
+      icon: { name: 'copilot', fallback: 'GH' },
+      action: () => {
+        window.dispatchEvent(new CustomEvent('addToCopilot'));
+      },
+      isActive: () => false,
+      className: 'copilot-add-button',
+      // GitHub Copilot takes the context only when it is installed and its
+      // chat is there, so the button appears only then.
+      isVisible: () => copilotChatAvailable,
+    },
+    { type: 'separator' },
+    {
+      type: 'button',
+      label: l10n.t('Bold'),
+      title: l10n.t('Toggle bold ({0}+B)', modKeyLabel),
+      icon: letterIcon('bold', 'B', l10n.t({ message: 'B', comment: 'Bold button letter' })),
       action: () => editor.chain().focus().toggleBold().run(),
       isActive: () => editor.isActive('bold'),
       className: 'bold',
@@ -238,9 +416,9 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Italic',
-      title: `Toggle italic (${modKeyLabel}+I)`,
-      icon: { name: 'italic', fallback: 'I' },
+      label: l10n.t('Italic'),
+      title: l10n.t('Toggle italic ({0}+I)', modKeyLabel),
+      icon: letterIcon('italic', 'I', l10n.t({ message: 'I', comment: 'Italic button letter' })),
       action: () => editor.chain().focus().toggleItalic().run(),
       isActive: () => editor.isActive('italic'),
       className: 'italic',
@@ -248,9 +426,13 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Strikethrough',
-      title: 'Toggle strikethrough',
-      icon: { name: 'strikethrough', fallback: 'S' },
+      label: l10n.t('Strikethrough'),
+      title: l10n.t('Toggle strikethrough'),
+      icon: letterIcon(
+        'strikethrough',
+        'S',
+        l10n.t({ message: 'S', comment: 'Strikethrough button letter' })
+      ),
       action: () => editor.chain().focus().toggleStrike().run(),
       isActive: () => editor.isActive('strike'),
       className: 'strike',
@@ -258,8 +440,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Inline code',
-      title: 'Toggle inline code',
+      label: l10n.t('Inline code'),
+      title: l10n.t('Toggle inline code'),
       icon: { name: 'code', fallback: '<>' },
       action: () => editor.chain().focus().toggleCode().run(),
       isActive: () => editor.isActive('code'),
@@ -268,48 +450,48 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Heading 1',
-      title: 'Toggle Heading 1',
-      icon: { fallback: 'H1' },
+      label: l10n.t('Heading 1'),
+      title: l10n.t('Toggle Heading 1'),
+      icon: { fallback: l10n.t({ message: 'H1', comment: 'Heading 1 button text' }) },
       action: () => editor.chain().focus().toggleHeading({ level: 1 }).run(),
       isActive: () => editor.isActive('heading', { level: 1 }),
       requiresFocus: true,
     },
     {
       type: 'button',
-      label: 'Heading 2',
-      title: 'Toggle Heading 2',
-      icon: { fallback: 'H2' },
+      label: l10n.t('Heading 2'),
+      title: l10n.t('Toggle Heading 2'),
+      icon: { fallback: l10n.t({ message: 'H2', comment: 'Heading 2 button text' }) },
       action: () => editor.chain().focus().toggleHeading({ level: 2 }).run(),
       isActive: () => editor.isActive('heading', { level: 2 }),
       requiresFocus: true,
     },
     {
       type: 'button',
-      label: 'Heading 3',
-      title: 'Toggle Heading 3',
-      icon: { fallback: 'H3' },
+      label: l10n.t('Heading 3'),
+      title: l10n.t('Toggle Heading 3'),
+      icon: { fallback: l10n.t({ message: 'H3', comment: 'Heading 3 button text' }) },
       action: () => editor.chain().focus().toggleHeading({ level: 3 }).run(),
       isActive: () => editor.isActive('heading', { level: 3 }),
       requiresFocus: true,
     },
     {
       type: 'dropdown',
-      label: 'More headings',
-      title: 'More heading levels',
+      label: l10n.t('More headings'),
+      title: l10n.t('More heading levels'),
       icon: { name: 'text-size', fallback: 'H+' },
       requiresFocus: true,
       items: [
         {
-          label: 'Heading 4 (H4)',
+          label: l10n.t('Heading 4 (H4)'),
           action: () => editor.chain().focus().toggleHeading({ level: 4 }).run(),
         },
         {
-          label: 'Heading 5 (H5)',
+          label: l10n.t('Heading 5 (H5)'),
           action: () => editor.chain().focus().toggleHeading({ level: 5 }).run(),
         },
         {
-          label: 'Heading 6 (H6)',
+          label: l10n.t('Heading 6 (H6)'),
           action: () => editor.chain().focus().toggleHeading({ level: 6 }).run(),
         },
       ],
@@ -317,8 +499,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     { type: 'separator' },
     {
       type: 'button',
-      label: 'Bullet list',
-      title: 'Toggle bullet list',
+      label: l10n.t('Bullet list'),
+      title: l10n.t('Toggle bullet list'),
       icon: { name: 'list-unordered', fallback: '•' },
       action: () => editor.chain().focus().toggleBulletList().run(),
       isActive: () => editor.isActive('bulletList'),
@@ -326,8 +508,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Numbered list',
-      title: 'Toggle numbered list',
+      label: l10n.t('Numbered list'),
+      title: l10n.t('Toggle numbered list'),
       icon: { name: 'list-ordered', fallback: '1.' },
       action: () => editor.chain().focus().toggleOrderedList().run(),
       isActive: () => editor.isActive('orderedList'),
@@ -335,8 +517,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Task list',
-      title: 'Toggle task list (checkboxes)',
+      label: l10n.t('Task list'),
+      title: l10n.t('Toggle task list (checkboxes)'),
       icon: { name: 'tasklist', fallback: '☐' },
       action: () => editor.chain().focus().toggleTaskList().run(),
       isActive: () => editor.isActive('taskList'),
@@ -345,56 +527,56 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     { type: 'separator' },
     {
       type: 'dropdown',
-      label: 'Table',
-      title: 'Insert and edit table',
+      label: l10n.t('Table'),
+      title: l10n.t('Insert and edit table'),
       icon: { name: 'table', fallback: 'Tbl' },
       requiresFocus: true,
       isActive: () => editor.isActive('table'),
       items: [
         {
-          label: 'Insert Table',
+          label: l10n.t('Insert Table'),
           icon: { name: 'add', fallback: '+' },
           action: () => showTableInsertDialog(editor),
           isEnabled: () => !editor.isActive('table'), // Only enabled when NOT in a table
         },
         {
-          label: 'Add Column Before',
+          label: l10n.t('Add Column Before'),
           icon: { name: 'arrow-left', fallback: '←' },
           action: () => editor.chain().focus().addColumnBefore().run(),
           isEnabled: () => editor.isActive('table'), // Only enabled when in a table
         },
         {
-          label: 'Add Column After',
+          label: l10n.t('Add Column After'),
           icon: { name: 'arrow-right', fallback: '→' },
           action: () => editor.chain().focus().addColumnAfter().run(),
           isEnabled: () => editor.isActive('table'),
         },
         {
-          label: 'Delete Column',
+          label: l10n.t('Delete Column'),
           icon: { name: 'remove', fallback: '×' },
           action: () => editor.chain().focus().deleteColumn().run(),
           isEnabled: () => editor.isActive('table'),
         },
         {
-          label: 'Add Row Before',
+          label: l10n.t('Add Row Before'),
           icon: { name: 'arrow-up', fallback: '↑' },
           action: () => editor.chain().focus().addRowBefore().run(),
           isEnabled: () => editor.isActive('table'),
         },
         {
-          label: 'Add Row After',
+          label: l10n.t('Add Row After'),
           icon: { name: 'arrow-down', fallback: '↓' },
           action: () => editor.chain().focus().addRowAfter().run(),
           isEnabled: () => editor.isActive('table'),
         },
         {
-          label: 'Delete Row',
+          label: l10n.t('Delete Row'),
           icon: { name: 'trash', fallback: '–' },
           action: () => editor.chain().focus().deleteRow().run(),
           isEnabled: () => editor.isActive('table'),
         },
         {
-          label: 'Delete Table',
+          label: l10n.t('Delete Table'),
           icon: { name: 'trash', fallback: '✕' },
           action: () => editor.chain().focus().deleteTable().run(),
           isEnabled: () => editor.isActive('table'),
@@ -403,8 +585,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Quote',
-      title: 'Toggle block quote',
+      label: l10n.t('Quote'),
+      title: l10n.t('Toggle block quote'),
       icon: { name: 'quote', fallback: '"' },
       action: () => editor.chain().focus().toggleBlockquote().run(),
       isActive: () => editor.isActive('blockquote'),
@@ -412,14 +594,14 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'dropdown',
-      label: 'Alert',
-      title: 'Insert GitHub alert',
+      label: l10n.t('Alert'),
+      title: l10n.t('Insert GitHub alert'),
       icon: { name: 'info', fallback: '!' },
       requiresFocus: true,
       isActive: () => editor.isActive('githubAlert'),
       items: [
         {
-          label: ' Note',
+          label: ` ${l10n.t('Note')}`,
           icon: { name: 'info', fallback: 'ℹ' },
           action: () => {
             editor
@@ -430,14 +612,14 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
           },
         },
         {
-          label: ' Tip',
+          label: ` ${l10n.t('Tip')}`,
           icon: { name: 'lightbulb', fallback: '💡' },
           action: () => {
             editor.chain().focus().insertContent(`> [!TIP]\n> `, { contentType: 'markdown' }).run();
           },
         },
         {
-          label: ' Important',
+          label: ` ${l10n.t('Important')}`,
           icon: { name: 'megaphone', fallback: '📢' },
           action: () => {
             editor
@@ -448,7 +630,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
           },
         },
         {
-          label: ' Warning',
+          label: ` ${l10n.t('Warning')}`,
           icon: { name: 'warning', fallback: '⚠' },
           action: () => {
             editor
@@ -459,7 +641,7 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
           },
         },
         {
-          label: ' Caution',
+          label: ` ${l10n.t('Caution')}`,
           icon: { name: 'error', fallback: '🛑' },
           action: () => {
             editor
@@ -473,70 +655,40 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'dropdown',
-      label: 'Code block',
-      title: 'Insert code block',
+      label: l10n.t('Code block'),
+      title: l10n.t('Insert code block'),
       icon: { name: 'code', fallback: '{}' },
       requiresFocus: true,
       isActive: () => editor.isActive('codeBlock'),
       items: [
-        {
-          label: 'Plain Text',
-          action: () => setCodeBlockNormalized(editor, 'plaintext'),
-        },
-        {
-          label: 'JavaScript',
-          action: () => setCodeBlockNormalized(editor, 'javascript'),
-        },
-        {
-          label: 'TypeScript',
-          action: () => setCodeBlockNormalized(editor, 'typescript'),
-        },
-        {
-          label: 'Python',
-          action: () => setCodeBlockNormalized(editor, 'python'),
-        },
-        {
-          label: 'Bash',
-          action: () => setCodeBlockNormalized(editor, 'bash'),
-        },
-        {
-          label: 'JSON',
-          action: () => setCodeBlockNormalized(editor, 'json'),
-        },
-        {
-          label: 'Markdown',
-          action: () => setCodeBlockNormalized(editor, 'markdown'),
-        },
-        {
-          label: 'CSS',
-          action: () => setCodeBlockNormalized(editor, 'css'),
-        },
-        {
-          label: 'HTML',
-          action: () => setCodeBlockNormalized(editor, 'html'),
-        },
-        {
-          label: 'SQL',
-          action: () => setCodeBlockNormalized(editor, 'sql'),
-        },
-        {
-          label: 'Java',
-          action: () => setCodeBlockNormalized(editor, 'java'),
-        },
-        {
-          label: 'Go',
-          action: () => setCodeBlockNormalized(editor, 'go'),
-        },
-        {
-          label: 'Rust',
-          action: () => setCodeBlockNormalized(editor, 'rust'),
-        },
-      ],
+        [l10n.t('Plain Text'), 'plaintext'],
+        ['JavaScript', 'javascript'],
+        ['TypeScript', 'typescript'],
+        ['Python', 'python'],
+        ['Bash', 'bash'],
+        ['JSON', 'json'],
+        ['Markdown', 'markdown'],
+        ['CSS', 'css'],
+        ['HTML', 'html'],
+        ['SQL', 'sql'],
+        ['Java', 'java'],
+        ['C#', 'csharp'],
+        ['Go', 'go'],
+        ['Rust', 'rust'],
+        ['ABAP', 'abap'],
+      ].map(([label, language]) => ({
+        label,
+        action: () => setCodeBlockNormalized(editor, language),
+        isActive: () =>
+          editor.isActive('codeBlock') &&
+          resolveGrammar(parseFenceInfo(editor.getAttributes('codeBlock').language).language) ===
+            resolveGrammar(language),
+      })),
     },
     {
       type: 'button',
-      label: 'Link',
-      title: `Insert/edit link (${modKeyLabel}+K)`,
+      label: l10n.t('Link'),
+      title: l10n.t('Insert/edit link ({0}+K {0}+L)', modKeyLabel),
       icon: { name: 'link', fallback: '🔗' },
       action: () => showLinkDialog(editor),
       isActive: () => editor.isActive('link'),
@@ -544,9 +696,9 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Image',
-      title: 'Insert image',
-      icon: { name: 'file-media', fallback: '📷' },
+      label: l10n.t('Image'),
+      title: l10n.t('Insert image'),
+      icon: { svg: INSERT_IMAGE_ICON_SVG, fallback: '📷' },
       action: () => {
         // Get vscode API from window (set in editor.ts)
         const vscodeApi = window.vscode;
@@ -564,8 +716,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'dropdown',
-      label: 'Mermaid',
-      title: 'Insert Mermaid diagram',
+      label: 'Mermaid', // l10n-ignore: product name
+      title: l10n.t('Insert Mermaid diagram'),
       icon: { name: 'pie-chart', fallback: 'Mer' },
       requiresFocus: true,
       items: MERMAID_TEMPLATES.map(template => ({
@@ -583,21 +735,21 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'dropdown',
-      label: 'Math',
-      title: `Insert math equation (${modKeyLabel}+Shift+E for display math)`,
+      label: l10n.t('Math'),
+      title: l10n.t('Insert math equation ({0}+Shift+E for display math)', modKeyLabel),
       icon: { svg: MATH_RADICAL_ICON_SVG, fallback: '√x' },
       requiresFocus: true,
       isActive: () => editor.isActive('mathBlock') || editor.isActive('inlineMath'),
       items: [
         {
-          label: 'Display equation ($$…$$)',
+          label: l10n.t('Display equation ($$…$$)'),
           icon: { fallback: '∑' },
           action: () => {
             window.dispatchEvent(new CustomEvent('insertMath', { detail: { mode: 'block' } }));
           },
         },
         {
-          label: 'Inline equation ($…$)',
+          label: l10n.t('Inline equation ($…$)'),
           icon: { fallback: '𝑥' },
           action: () => {
             window.dispatchEvent(new CustomEvent('insertMath', { detail: { mode: 'inline' } }));
@@ -608,8 +760,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     { type: 'separator' },
     {
       type: 'button',
-      label: 'Outline',
-      title: 'Toggle Document Outline (TOC)',
+      label: l10n.t('Outline'),
+      title: l10n.t('Toggle Document Outline (TOC)'),
       icon: { name: 'list-tree', fallback: 'TOC' },
       action: () => {
         window.dispatchEvent(new CustomEvent('toggleTocOutline'));
@@ -619,8 +771,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Source',
-      title: 'Open source view (split)',
+      label: l10n.t('Source'),
+      title: l10n.t('Open source view (split)'),
       icon: { name: 'split-horizontal', fallback: '</>' },
       action: () => {
         window.dispatchEvent(new CustomEvent('openSourceView'));
@@ -631,9 +783,9 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     { type: 'separator' },
     {
       type: 'button',
-      label: 'Copy MD',
-      title: 'Copy selection as Markdown',
-      icon: { name: 'copy', fallback: 'Copy' },
+      label: l10n.t('Copy MD'),
+      title: l10n.t('Copy selection as Markdown'),
+      icon: { name: 'copy', fallback: l10n.t('Copy') },
       action: () => {
         window.dispatchEvent(new CustomEvent('copyAsMarkdown'));
       },
@@ -641,34 +793,19 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       className: 'copy-button',
     },
     {
-      type: 'button',
-      label: 'Copy AI Ref',
-      title: 'Copy as AI Context',
-      icon: { name: 'sparkle', fallback: '✨' },
-      action: () => {
-        window.dispatchEvent(new CustomEvent('copyAiContextRef'));
-      },
-      isActive: () => false,
-      className: 'copy-ai-ref-button',
-      // The handler reads `editor.isFocused` synchronously to decide whether to
-      // include a line range. Without this, clicking the button blurs the
-      // editor first and we'd always emit a filename-only ref.
-      preserveEditorFocus: true,
-    },
-    {
       type: 'dropdown',
-      label: 'Export',
-      title: 'Export document',
-      icon: { name: 'export', fallback: 'Export' },
+      label: l10n.t('Export'),
+      title: l10n.t('Export document'),
+      icon: { name: 'export', fallback: l10n.t('Export') },
       items: [
         {
-          label: 'Export as PDF',
+          label: l10n.t('Export as PDF'),
           action: () => {
             window.dispatchEvent(new CustomEvent('exportDocument', { detail: { format: 'pdf' } }));
           },
         },
         {
-          label: 'Export as Word',
+          label: l10n.t('Export as Word'),
           action: () => {
             window.dispatchEvent(new CustomEvent('exportDocument', { detail: { format: 'docx' } }));
           },
@@ -678,8 +815,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     { type: 'separator' },
     {
       type: 'button',
-      label: 'Audit',
-      title: 'Audit document for broken links and images',
+      label: l10n.t('Audit'),
+      title: l10n.t('Audit document for broken links and images'),
       icon: { name: 'shield', fallback: '🛡️' },
       action: () => {
         window.dispatchEvent(new CustomEvent('auditDocument'));
@@ -692,8 +829,8 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     },
     {
       type: 'button',
-      label: 'Export settings',
-      title: 'Export settings',
+      label: l10n.t('Extension settings'),
+      title: l10n.t('Extension settings'),
       icon: { name: 'gear', fallback: '⚙' },
       action: () => {
         window.dispatchEvent(new CustomEvent('openExtensionSettings'));
@@ -708,21 +845,31 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
   const dropdownItems: Array<{ config: ToolbarDropdownItem; element: HTMLButtonElement }> = [];
 
   const refreshActiveStates = () => {
+    const feedbackTransitionLocked = Boolean(feedbackToolbarState.starting);
+
     // Update action buttons active and enabled states
     actionButtons.forEach(({ config, element }) => {
       const active = config.isActive ? config.isActive() : false;
       element.classList.toggle('active', Boolean(active));
       element.setAttribute('aria-pressed', String(Boolean(active)));
 
+      // Capability-gated buttons are absent until their feature is available.
+      element.hidden = config.isVisible ? !config.isVisible() : false;
+
       // Check if button requires focus
-      const enabled = config.requiresFocus ? isEditorFocused : true;
+      const enabled = !feedbackTransitionLocked && (config.requiresFocus ? isEditorFocused : true);
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
 
       // Update title to explain why disabled
-      if (!enabled && config.requiresFocus) {
-        element.title = (config.title || config.label) + ' (Click in document to edit)';
+      if (feedbackTransitionLocked) {
+        element.title = l10n.t(
+          '{0} (Feedback transition in progress)',
+          config.title || config.label
+        );
+      } else if (!enabled && config.requiresFocus) {
+        element.title = l10n.t('{0} (Click in document to edit)', config.title || config.label);
       } else {
         element.title = config.title || config.label;
       }
@@ -734,25 +881,35 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       element.classList.toggle('active', Boolean(active));
       element.setAttribute('aria-pressed', String(Boolean(active)));
 
-      const enabled = config.requiresFocus ? isEditorFocused : true;
+      const enabled = !feedbackTransitionLocked && (config.requiresFocus ? isEditorFocused : true);
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
 
       // Update title to explain why disabled
-      if (!enabled && config.requiresFocus) {
-        element.title = (config.title || config.label) + ' (Click in document to edit)';
+      if (feedbackTransitionLocked) {
+        element.title = l10n.t(
+          '{0} (Feedback transition in progress)',
+          config.title || config.label
+        );
+      } else if (!enabled && config.requiresFocus) {
+        element.title = l10n.t('{0} (Click in document to edit)', config.title || config.label);
       } else {
         element.title = config.title || config.label;
       }
     });
 
-    // Update dropdown item disabled states
+    // Language choices expose their selected grammar to both sighted and screen-reader users.
     dropdownItems.forEach(({ config, element }) => {
-      const enabled = config.isEnabled ? config.isEnabled() : true;
+      const enabled = !feedbackTransitionLocked && (config.isEnabled ? config.isEnabled() : true);
       element.disabled = !enabled;
       element.classList.toggle('disabled', !enabled);
       element.setAttribute('aria-disabled', String(!enabled));
+      if (config.isActive) {
+        const active = config.isActive();
+        element.classList.toggle('active', active);
+        element.setAttribute('aria-pressed', String(active));
+      }
     });
   };
 
@@ -859,6 +1016,15 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     const icon = createIconElement(btn.icon, 'toolbar-icon');
 
     button.append(icon);
+    if (btn.visibleText) {
+      const text = document.createElement('span');
+      text.className = 'toolbar-button-label';
+      text.textContent = btn.visibleText;
+      button.append(text);
+    }
+    if (btn.feedbackData === 'start') {
+      button.setAttribute('data-feedback-start', '');
+    }
 
     if (btn.preserveEditorFocus) {
       // Suppress the default mousedown blur so the editor stays focused while
@@ -878,6 +1044,224 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
     actionButtons.push({ config: btn, element: button });
     toolbar.appendChild(button);
   });
+
+  const normalToolbarNodes = Array.from(toolbar.childNodes);
+  const createFeedbackAction = (options: {
+    label: string;
+    visibleLabel?: string;
+    eventName: string;
+    icon: ToolbarIcon;
+    dataName: 'finish' | 'capture' | 'comments' | 'more' | 'discard';
+    disabled?: boolean;
+    pressed?: boolean;
+    expanded?: boolean;
+    controls?: string;
+    active?: boolean;
+    busy?: boolean;
+    commentsState?: FeedbackCommentsState;
+  }): HTMLButtonElement => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `toolbar-button feedback-toolbar-button feedback-${options.dataName}-button`;
+    button.classList.toggle('active', Boolean(options.active));
+    button.setAttribute('data-feedback-action', '');
+    button.setAttribute('data-feedback-control', options.dataName);
+    button.setAttribute(`data-feedback-${options.dataName}`, '');
+    button.setAttribute('aria-label', options.label);
+    button.title = options.label;
+    button.disabled = Boolean(options.disabled);
+    button.setAttribute('aria-disabled', String(Boolean(options.disabled)));
+    if (options.busy !== undefined) {
+      button.setAttribute('aria-busy', String(options.busy));
+    }
+    if (options.dataName === 'more') {
+      button.setAttribute('aria-haspopup', 'menu');
+      button.setAttribute('aria-expanded', 'false');
+    }
+    if (options.pressed !== undefined) {
+      button.setAttribute('aria-pressed', String(options.pressed));
+    }
+    if (options.expanded !== undefined) {
+      button.setAttribute('aria-expanded', String(options.expanded));
+    }
+    if (options.controls) {
+      button.setAttribute('aria-controls', options.controls);
+    }
+    if (options.commentsState) {
+      button.setAttribute('data-feedback-comments-state', options.commentsState);
+    }
+
+    const icon = createIconElement(options.icon, 'toolbar-icon');
+    const label = document.createElement('span');
+    label.className = 'toolbar-button-label';
+    label.textContent = options.visibleLabel ?? options.label;
+    button.append(icon, label);
+    button.addEventListener('click', () => {
+      if (!button.disabled) {
+        window.dispatchEvent(new CustomEvent(options.eventName));
+      }
+    });
+    return button;
+  };
+
+  let feedbackControlsMounted = false;
+  feedbackToolbarRenderFunction = state => {
+    if (!state.active) {
+      if (feedbackControlsMounted) {
+        toolbar.replaceChildren(...normalToolbarNodes);
+        feedbackControlsMounted = false;
+      }
+      toolbar.classList.remove('feedback-toolbar-active');
+      fitFeedbackToolbarLabels(toolbar);
+      const starting = Boolean(state.starting);
+      toolbar.setAttribute('aria-busy', String(starting));
+      refreshActiveStates();
+      const start = toolbar.querySelector<HTMLButtonElement>('[data-feedback-start]');
+      if (start) {
+        start.disabled = starting;
+        start.setAttribute('aria-disabled', String(starting));
+        start.setAttribute('aria-busy', String(starting));
+      }
+      return;
+    }
+
+    const invalidated = Boolean(state.invalidated);
+    const closing = Boolean(state.closing);
+    const captureState = state.captureState ?? 'idle';
+    const captureArmed = captureState === 'armed';
+    const captureRasterizing = captureState === 'rasterizing';
+    const toolbarBusy = closing || captureRasterizing;
+    toolbar.setAttribute('aria-busy', String(toolbarBusy));
+    const count = Math.max(0, state.count ?? 0);
+    const commentsState =
+      state.commentsState ?? (state.commentsVisible === false ? 'hidden' : 'collapsed');
+    const commentsVisible = commentsState !== 'hidden';
+    const commentsExpanded = commentsState === 'expanded';
+    const commentsLocked = commentsExpanded && Boolean(state.commentsLocked);
+    const commentsLabel = l10n.t('Comments · {0}', count);
+    const commentsDescription = commentsLocked
+      ? l10n.t('Comments remain open while adding feedback, {0} saved', count)
+      : commentsState === 'hidden'
+        ? l10n.t('Show comments, {0} saved', count)
+        : commentsExpanded
+          ? l10n.t('Hide expanded comments, {0} saved', count)
+          : l10n.t('Hide comments rail, {0} saved', count);
+    const commentsIcon: ToolbarIcon =
+      commentsState === 'hidden'
+        ? { name: 'layout-sidebar-right-off', fallback: '◌' }
+        : { name: 'comment-discussion-sparkle', fallback: commentsExpanded ? '●' : '○' };
+    const focusedControl =
+      document.activeElement instanceof HTMLButtonElement &&
+      toolbar.contains(document.activeElement)
+        ? document.activeElement.getAttribute('data-feedback-control')
+        : null;
+    const startHadFocus =
+      document.activeElement instanceof HTMLButtonElement &&
+      toolbar.contains(document.activeElement) &&
+      document.activeElement.hasAttribute('data-feedback-start');
+    const controls = [
+      createFeedbackAction({
+        label: l10n.t('Finish & copy'),
+        eventName: 'feedbackFinishRequested',
+        icon: { name: 'check', fallback: '✓' },
+        dataName: 'finish',
+        // An unfinished comment is redirectable: the controller reveals it and
+        // explains how to finish it. Native disabling would swallow that click.
+        disabled: invalidated || closing || captureState !== 'idle',
+      }),
+      createFeedbackAction({
+        label: captureArmed
+          ? l10n.t('Cancel area capture')
+          : captureRasterizing
+            ? l10n.t('Preparing capture…')
+            : l10n.t('Capture area'),
+        visibleLabel: captureArmed
+          ? l10n.t('Cancel capture')
+          : captureRasterizing
+            ? l10n.t('Preparing capture…')
+            : l10n.t('Capture area'),
+        eventName: captureArmed ? 'feedbackCaptureCancelRequested' : 'feedbackCaptureRequested',
+        icon: captureArmed
+          ? { name: 'close', fallback: '×' }
+          : { name: 'screen-full', fallback: '▣' },
+        dataName: 'capture',
+        disabled: invalidated || closing || captureRasterizing,
+        pressed: captureArmed,
+        active: captureArmed,
+        busy: captureRasterizing,
+      }),
+      createFeedbackAction({
+        label: commentsDescription,
+        visibleLabel: commentsLabel,
+        eventName: 'feedbackCommentsToggleRequested',
+        icon: commentsIcon,
+        dataName: 'comments',
+        pressed: commentsVisible,
+        expanded: commentsExpanded,
+        controls: FEEDBACK_COMMENTS_RAIL_ID,
+        active: commentsExpanded,
+        commentsState,
+        disabled: closing || captureState !== 'idle',
+      }),
+      createFeedbackAction({
+        label: l10n.t('More feedback actions'),
+        eventName: 'feedbackMoreRequested',
+        icon: { name: 'ellipsis', fallback: '…' },
+        dataName: 'more',
+        disabled: closing || captureState !== 'idle',
+      }),
+      createFeedbackAction({
+        label: l10n.t('Discard Feedback draft (moves it to Trash)'),
+        visibleLabel: l10n.t('Discard draft…'),
+        eventName: 'feedbackDiscardRequested',
+        icon: { name: 'trash', fallback: '×' },
+        dataName: 'discard',
+        disabled: closing || captureState !== 'idle',
+      }),
+    ];
+
+    const feedbackGroup = document.createElement('div');
+    feedbackGroup.className = 'feedback-toolbar-group';
+    feedbackGroup.setAttribute('data-feedback-toolbar-group', '');
+    feedbackGroup.setAttribute('role', 'group');
+    feedbackGroup.setAttribute('aria-label', l10n.t('Feedback session actions'));
+    feedbackGroup.setAttribute('aria-busy', String(toolbarBusy));
+    const moreMenuHost = document.createElement('div');
+    moreMenuHost.className = 'feedback-more-menu-host';
+    moreMenuHost.setAttribute('data-feedback-menu-host', '');
+    moreMenuHost.append(controls[3]);
+
+    const discardDivider = document.createElement('div');
+    discardDivider.className = 'feedback-toolbar-divider';
+    discardDivider.setAttribute('data-feedback-toolbar-divider', '');
+    discardDivider.setAttribute('role', 'separator');
+    discardDivider.setAttribute('aria-orientation', 'vertical');
+
+    feedbackGroup.append(...controls.slice(0, 3), moreMenuHost, discardDivider, controls[4]);
+    toolbar.replaceChildren(feedbackGroup);
+    toolbar.classList.add('feedback-toolbar-active');
+    fitFeedbackToolbarLabels(toolbar);
+    feedbackControlsMounted = true;
+    if (focusedControl) {
+      toolbar
+        .querySelector<HTMLButtonElement>(`[data-feedback-control="${focusedControl}"]`)
+        ?.focus({ preventScroll: true });
+    } else if (startHadFocus) {
+      toolbar.querySelector<HTMLButtonElement>('[data-feedback-finish]')?.focus({
+        preventScroll: true,
+      });
+    }
+  };
+
+  feedbackToolbarRenderFunction(feedbackToolbarState);
+
+  // The room for the Feedback labels changes with the editor width (split
+  // editors, side panels), not only when the toolbar is rendered.
+  const feedbackLabelFit =
+    typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(() => fitFeedbackToolbarLabels(toolbar));
+  feedbackLabelFit?.observe(toolbar);
 
   toolbarRefreshFunction = refreshActiveStates;
 
@@ -933,6 +1317,10 @@ export function createFormattingToolbar(editor: Editor): HTMLElement {
       editor.off('transaction', refreshForEditorEvent);
       editor.off('selectionUpdate', refreshForEditorEvent);
     }
+    if (feedbackToolbarRenderFunction) {
+      feedbackToolbarRenderFunction = null;
+    }
+    feedbackLabelFit?.disconnect();
   });
 
   refreshActiveStates();
@@ -970,6 +1358,34 @@ export function positionBubbleMenu(menu: HTMLElement) {
 }
 
 /**
+ * Put the caret in the table cell that was right-clicked.
+ *
+ * The table menu acts on the current selection, so the selection has to be in the
+ * clicked cell before the menu opens. A text selection already inside that cell is
+ * left alone.
+ *
+ * @returns true when `target` is inside a cell of this editor's table
+ */
+export function selectTableCellAtTarget(editor: Editor, target: HTMLElement): boolean {
+  const cell = target.closest('td, th');
+  if (!cell || !editor.view.dom.contains(cell)) return false;
+
+  const { state, view } = editor;
+  const $inCell = state.doc.resolve(view.posAtDOM(cell, 0));
+  const cellStart = $inCell.before();
+  const cellEnd = $inCell.after();
+  // A multi-cell selection is a set of ranges, so test every range; from/to alone
+  // describes only one of them.
+  const selectionTouchesCell = state.selection.ranges.some(
+    range => range.$from.pos < cellEnd && range.$to.pos > cellStart
+  );
+  if (!selectionTouchesCell) {
+    view.dispatch(state.tr.setSelection(Selection.near($inCell)));
+  }
+  return editor.isActive('table');
+}
+
+/**
  * Create table context menu for row/column operations.
  *
  * @param editor - TipTap editor instance
@@ -988,33 +1404,33 @@ export function createTableMenu(editor: Editor): HTMLElement {
       }
   > = [
     {
-      label: 'Add Row Before',
+      label: l10n.t('Add Row Before'),
       action: () => editor.chain().focus().addRowBefore().run(),
     },
     {
-      label: 'Add Row After',
+      label: l10n.t('Add Row After'),
       action: () => editor.chain().focus().addRowAfter().run(),
     },
     {
-      label: 'Delete Row',
+      label: l10n.t('Delete Row'),
       action: () => editor.chain().focus().deleteRow().run(),
     },
     { separator: true },
     {
-      label: 'Add Column Before',
+      label: l10n.t('Add Column Before'),
       action: () => editor.chain().focus().addColumnBefore().run(),
     },
     {
-      label: 'Add Column After',
+      label: l10n.t('Add Column After'),
       action: () => editor.chain().focus().addColumnAfter().run(),
     },
     {
-      label: 'Delete Column',
+      label: l10n.t('Delete Column'),
       action: () => editor.chain().focus().deleteColumn().run(),
     },
     { separator: true },
     {
-      label: 'Delete Table',
+      label: l10n.t('Delete Table'),
       action: () => editor.chain().focus().deleteTable().run(),
     },
   ];

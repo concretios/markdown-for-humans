@@ -8,6 +8,7 @@ import { Extension, type Editor } from '@tiptap/core';
 import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 import { type EditorView } from '@tiptap/pm/view';
 import { Node as ProsemirrorNode } from '@tiptap/pm/model';
+import * as l10n from '../l10n';
 
 // ─── Type augmentation ────────────────────────────────────────────────────────
 
@@ -261,8 +262,8 @@ class DragHandleController {
     this.handle = document.createElement('div');
     this.handle.className = 'drag-block-handle';
     this.handle.setAttribute('role', 'button');
-    this.handle.setAttribute('aria-label', 'Drag to move block');
-    this.handle.setAttribute('title', 'Drag to move block');
+    this.handle.setAttribute('aria-label', l10n.t('Drag to move block'));
+    this.handle.setAttribute('title', l10n.t('Drag to move block'));
     this.handle.innerHTML = `<svg width="12" height="18" viewBox="0 0 12 18" fill="currentColor" aria-hidden="true"><circle cx="3" cy="3" r="1.8"/><circle cx="9" cy="3" r="1.8"/><circle cx="3" cy="9" r="1.8"/><circle cx="9" cy="9" r="1.8"/><circle cx="3" cy="15" r="1.8"/><circle cx="9" cy="15" r="1.8"/></svg>`;
     document.body.appendChild(this.handle);
 

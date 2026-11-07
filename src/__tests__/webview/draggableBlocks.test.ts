@@ -5,6 +5,7 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { DraggableBlocks, isDraggableBlock } from '../../webview/extensions/draggableBlocks';
+import * as l10n from '../../webview/l10n';
 
 describe('DraggableBlocks Extension', () => {
   let editor: Editor;
@@ -268,8 +269,7 @@ describe('DraggableBlocks Extension', () => {
       const ext = editor.extensionManager.extensions.find(e => e.name === 'draggableBlocks');
       expect(ext).toBeDefined();
       const addKeyboardShortcuts = ext?.config.addKeyboardShortcuts as
-        | ((this: { editor: Editor }) => Record<string, unknown>)
-        | undefined;
+        ((this: { editor: Editor }) => Record<string, unknown>) | undefined;
       expect(addKeyboardShortcuts).toBeDefined();
       const shortcuts = addKeyboardShortcuts?.call({ editor });
       expect(shortcuts).toBeDefined();
@@ -352,6 +352,21 @@ describe('DraggableBlocks Extension', () => {
 
       expect(dropInsertPos === draggedPos + draggedSize).toBe(true);
       expect(editor.getHTML()).toBe(before);
+    });
+  });
+
+  describe('Localization', () => {
+    afterEach(() => {
+      l10n.resetL10n();
+    });
+
+    it('shows the translated label and tooltip on the drag handle', () => {
+      l10n.configureL10n({ 'Drag to move block': '拖动以移动块' });
+      editor = createEditor('<p>Block 1</p>');
+
+      const handle = document.querySelector('.drag-block-handle');
+      expect(handle?.getAttribute('aria-label')).toBe('拖动以移动块');
+      expect(handle?.getAttribute('title')).toBe('拖动以移动块');
     });
   });
 });

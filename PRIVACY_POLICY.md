@@ -4,7 +4,7 @@
 
 ## Introduction
 
-Concret.io ("we," "our," or "us") respects your privacy and is committed to protecting your personal information. This Privacy Policy explains how we handle information when you use the Markdown for Humans extension ("Extension") for Visual Studio Code.
+Concret.io ("we," "our," or "us") respects your privacy and is committed to protecting your personal information. This Privacy Policy explains how we handle information when you use the Markdown Editor for Humans extension ("Extension") for Visual Studio Code.
 
 **This Privacy Policy complies with the Information Technology Act, 2000 of India and applicable data protection laws.**
 

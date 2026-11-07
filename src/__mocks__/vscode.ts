@@ -94,6 +94,14 @@ export const workspace = {
 export const commands = {
   registerCommand: jest.fn(() => ({ dispose: jest.fn() })),
   executeCommand: jest.fn(),
+  getCommands: jest.fn(async () => [] as string[]),
+};
+
+// Mock extensions API
+export const extensions = {
+  getExtension: jest.fn(),
+  onDidChange: jest.fn(() => ({ dispose: jest.fn() })),
+  all: [] as unknown[],
 };
 
 // Mock Uri
@@ -111,6 +119,29 @@ export const Uri = {
 // Mock env API
 export const env = {
   openExternal: jest.fn(),
+  language: 'en',
+  clipboard: {
+    writeText: jest.fn(async () => undefined),
+    readText: jest.fn(async () => ''),
+  },
+};
+
+// Mock l10n API: English, as when VS Code has loaded no bundle
+export const l10n = {
+  t: jest.fn(
+    (
+      message: string | { message: string; args?: Array<string | number | boolean> },
+      ...rest: Array<string | number | boolean>
+    ) => {
+      const text = typeof message === 'string' ? message : message.message;
+      const args = typeof message === 'string' ? rest : (message.args ?? []);
+      return text.replace(/\{(\d+)\}/g, (placeholder, index: string) =>
+        args[Number(index)] === undefined ? placeholder : String(args[Number(index)])
+      );
+    }
+  ),
+  bundle: undefined as Record<string, string> | undefined,
+  uri: undefined,
 };
 
 // Mock ConfigurationTarget enum
@@ -221,6 +252,8 @@ export default {
   window,
   workspace,
   commands,
+  extensions,
+  l10n,
   Uri,
   StatusBarAlignment,
   ProgressLocation,

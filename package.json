@@ -1,8 +1,8 @@
 {
   "name": "markdown-for-humans",
-  "displayName": "Markdown for Humans: WYSIWYG Editor",
-  "description": "A full-featured WYSIWYG Markdown editor with visual table editing, drag-and-drop images, Mermaid diagrams, and distraction-free writing—all inside VS Code.",
-  "version": "0.3.0",
+  "displayName": "Markdown Editor for Humans",
+  "description": "WYSIWYG Markdown editor with AI review comments, visual tables, Mermaid and image resizing.",
+  "version": "0.4.6",
   "publisher": "concretio",
   "author": {
     "name": "Abhinav",
@@ -23,8 +23,20 @@
   },
   "homepage": "https://github.com/concretios/markdown-for-humans#readme",
   "engines": {
-    "vscode": "^1.85.0",
-    "node": ">=22"
+    "vscode": "^1.98.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Markdown Editor for Humans currently requires a disk-backed workspace for document-adjacent images, exports, and Feedback drafts."
+    },
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Trust is required because the extension reads, writes, renders, and exports workspace content."
+    }
   },
   "categories": [
     "Other",
@@ -32,42 +44,125 @@
   ],
   "keywords": [
     "markdown",
-    "editor",
-    "wysiwyg",
-    "preview",
-    "visual",
     "md",
+    "editor",
+    "markdown-editor",
+    "wysiwyg",
+    "viewer",
+    "markdown-viewer",
+    "reader",
+    "preview",
+    "markdown-preview",
     "table",
-    "tables",
+    "table-editor",
     "mermaid",
     "diagram",
-    "image",
-    "drag-drop",
-    "github-flavored-markdown",
-    "gfm",
+    "katex",
+    "math",
+    "typora",
+    "obsidian",
+    "notion",
     "notion-like",
-    "writing",
-    "documentation",
+    "rich-text",
+    "gfm",
     "readme",
-    "formatting",
-    "syntax-highlighting",
-    "live-preview",
-    "full-screen",
-    "distraction-free",
-    "cover-images",
-    "image-resizing",
-    "export",
-    "html",
+    "documentation",
+    "writing",
     "pdf",
     "docx",
-    "human-friendly"
+    "image",
+    "image-resizing",
+    "ai"
   ],
+  "l10n": "./l10n",
   "main": "./dist/extension.js",
   "contributes": {
+    "colors": [
+      {
+        "id": "markdownForHumans.codeKeyword",
+        "description": "%color.codeKeyword.description%",
+        "defaults": {
+          "light": "#a31545",
+          "dark": "#c586c0",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeString",
+        "description": "%color.codeString.description%",
+        "defaults": {
+          "light": "#a31515",
+          "dark": "#ce9178",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeValue",
+        "description": "%color.codeValue.description%",
+        "defaults": {
+          "light": "#0451a5",
+          "dark": "#b5cea8",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeFunction",
+        "description": "%color.codeFunction.description%",
+        "defaults": {
+          "light": "#6f42c1",
+          "dark": "#dcdcaa",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeType",
+        "description": "%color.codeType.description%",
+        "defaults": {
+          "light": "#00695c",
+          "dark": "#4ec9b0",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeComment",
+        "description": "%color.codeComment.description%",
+        "defaults": {
+          "light": "#57606a",
+          "dark": "#a3a3a3",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeAddition",
+        "description": "%color.codeAddition.description%",
+        "defaults": {
+          "light": "#116329",
+          "dark": "#7ee787",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.codeDeletion",
+        "description": "%color.codeDeletion.description%",
+        "defaults": {
+          "light": "#a40e26",
+          "dark": "#ffa198",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      }
+    ],
     "customEditors": [
       {
         "viewType": "markdownForHumans.editor",
-        "displayName": "Markdown for Humans",
+        "displayName": "%customEditor.editor.displayName%",
         "selector": [
           {
             "filenamePattern": "*.md",
@@ -92,56 +187,111 @@
     "commands": [
       {
         "command": "markdownForHumans.openFile",
-        "title": "Open with Markdown for Humans"
+        "title": "%command.openFile.title%"
       },
       {
         "command": "markdownForHumans.outline.revealCurrent",
-        "title": "Outline: Reveal Current Heading",
+        "title": "%command.outline.revealCurrent.title%",
         "icon": "$(target)"
       },
       {
         "command": "markdownForHumans.outline.filter",
-        "title": "Outline: Filter Headings",
+        "title": "%command.outline.filter.title%",
         "icon": "$(search)"
       },
       {
         "command": "markdownForHumans.outline.clearFilter",
-        "title": "Outline: Clear Filter",
+        "title": "%command.outline.clearFilter.title%",
         "icon": "$(close)"
       },
       {
-        "command": "markdownForHumans.copyAiContextRef",
-        "title": "Markdown for Humans: Copy AI Context Reference (@file#lines)"
+        "command": "markdownForHumans.toggleFormattingShortcuts",
+        "title": "%command.toggleFormattingShortcuts.title%"
       },
       {
-        "command": "markdownForHumans.toggleFormattingShortcuts",
-        "title": "Markdown for Humans: Toggle Formatting Shortcuts (Cmd/Ctrl+B/I/U)"
+        "command": "markdownForHumans.copyReferenceForAi",
+        "title": "%command.copyReferenceForAi.title%",
+        "enablement": "activeCustomEditorId == 'markdownForHumans.editor'"
+      },
+      {
+        "command": "markdownForHumans.pastePlainText",
+        "title": "%command.pastePlainText.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.start",
+        "title": "%command.feedback.start.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.commentSelection",
+        "title": "%command.feedback.commentSelection.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.chooseScope",
+        "title": "%command.feedback.chooseScope.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.captureArea",
+        "title": "%command.feedback.captureArea.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.captureSelectedBlocks",
+        "title": "%command.feedback.captureSelectedBlocks.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.toggleComments",
+        "title": "%command.feedback.toggleComments.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.next",
+        "title": "%command.feedback.next.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.previous",
+        "title": "%command.feedback.previous.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.finish",
+        "title": "%command.feedback.finish.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.reveal",
+        "title": "%command.feedback.reveal.title%"
+      },
+      {
+        "command": "markdownForHumans.feedback.discard",
+        "title": "%command.feedback.discard.title%"
       }
     ],
     "keybindings": [
-      {
-        "command": "markdownForHumans.copyAiContextRef",
-        "key": "alt+c",
-        "mac": "alt+c",
-        "when": "activeCustomEditorId == 'markdownForHumans.editor'"
-      },
       {
         "command": "markdownForHumans.toggleFormattingShortcuts",
         "key": "ctrl+alt+b",
         "mac": "cmd+alt+b",
         "when": "activeCustomEditorId == 'markdownForHumans.editor'"
+      },
+      {
+        "command": "markdownForHumans.pastePlainText",
+        "key": "ctrl+shift+v",
+        "mac": "cmd+shift+v",
+        "when": "activeCustomEditorId == 'markdownForHumans.editor' && !terminalFocus && !inputFocus"
       }
     ],
     "views": {
       "explorer": [
         {
           "id": "markdownForHumansOutline",
-          "name": "Markdown for Humans: Outline",
+          "name": "%view.outline.name%",
           "when": "markdownForHumans.isActive"
         }
       ]
     },
     "menus": {
+      "commandPalette": [
+        {
+          "command": "markdownForHumans.copyReferenceForAi",
+          "when": "activeCustomEditorId == 'markdownForHumans.editor'"
+        }
+      ],
       "explorer/context": [
         {
           "command": "markdownForHumans.openFile",
@@ -175,12 +325,12 @@
       ]
     },
     "configuration": {
-      "title": "Markdown for Humans",
+      "title": "%configuration.title%",
       "properties": {
         "markdownForHumans.imagePath": {
           "type": "string",
           "default": "images",
-          "description": "Folder path for saved images. Interpreted relative to markdownForHumans.imagePathBase."
+          "description": "%configuration.imagePath.description%"
         },
         "markdownForHumans.imagePathBase": {
           "type": "string",
@@ -189,22 +339,25 @@
             "workspaceFolder"
           ],
           "default": "relativeToDocument",
-          "description": "Controls whether Image Path is relative to the current markdown file folder or the workspace folder."
+          "description": "%configuration.imagePathBase.description%"
         },
         "markdownForHumans.chromePath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to Google Chrome or Chromium executable for PDF export. Leave empty to auto-detect.\n\n**Download Chrome:**\n- [Windows/Mac/Linux](https://www.google.com/chrome/)\n- [Chromium (open source)](https://www.chromium.org/getting-involved/download-chromium/)\n\n**Common paths:**\n- **Mac:** `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`\n- **Windows:** `C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe`\n- **Linux:** `/usr/bin/google-chrome` or `/usr/bin/chromium`"
+          "markdownDescription": "%configuration.chromePath.markdownDescription%"
         },
         "markdownForHumans.imageResize.skipWarning": {
           "type": "boolean",
           "default": false,
-          "description": "Skip the warning dialog when resizing images. When enabled, images will be resized immediately without confirmation."
+          "description": "%configuration.imageResize.skipWarning.description%"
         },
-        "markdownForHumans.copyAiContextRef.skipSaveWarning": {
-          "type": "boolean",
-          "default": false,
-          "description": "Skip the warning dialog when 'Copy AI Context Reference' needs to save the file first. When enabled, the document is saved silently before copying the reference."
+        "markdownForHumans.feedback.handoffPromptTemplate": {
+          "type": "string",
+          "default": "Implement the sealed feedback bundle at {{feedbackFile}}. First verify the source SHA-256. Inspect every referenced image. Edit the workspace files required by the feedback, but do not modify or delete the feedback bundle. Address every feedback ID, run appropriate checks, report the outcome per ID, and stop if the source hash differs.",
+          "markdownDescription": "%configuration.feedback.handoffPromptTemplate.markdownDescription%",
+          "scope": "resource",
+          "editPresentation": "multilineText",
+          "maxLength": 16384
         },
         "markdownForHumans.blankLines.mode": {
           "type": "string",
@@ -213,12 +366,12 @@
             "strip"
           ],
           "default": "strip",
-          "description": "Controls whether extra blank lines are preserved or removed in the editor and saved file."
+          "description": "%configuration.blankLines.mode.description%"
         },
         "markdownForHumans.imagePreview.hover.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable the image hover overlay that shades images and displays metadata (resolution, file size, etc.) on hover.",
+          "description": "%configuration.imagePreview.hover.enabled.description%",
           "scope": "application"
         },
         "markdownForHumans.paragraph.spacingBefore": {
@@ -226,7 +379,7 @@
           "default": 0,
           "minimum": 0,
           "maximum": 72,
-          "description": "Space before paragraphs in points (margin-top). Default: 0pt",
+          "description": "%configuration.paragraph.spacingBefore.description%",
           "scope": "application"
         },
         "markdownForHumans.paragraph.spacingAfter": {
@@ -234,7 +387,7 @@
           "default": 0,
           "minimum": 0,
           "maximum": 72,
-          "description": "Space after paragraphs in points (margin-bottom). Default: 0pt",
+          "description": "%configuration.paragraph.spacingAfter.description%",
           "scope": "application"
         },
         "markdownForHumans.zoom": {
@@ -242,18 +395,63 @@
           "default": 100,
           "minimum": 50,
           "maximum": 200,
-          "description": "Zoom level for the editor as a percentage. 100 = default size, 150 = 50% larger, etc.",
+          "description": "%configuration.zoom.description%",
+          "scope": "application"
+        },
+        "markdownForHumans.font.family": {
+          "type": "string",
+          "default": "",
+          "maxLength": 1024,
+          "markdownDescription": "%configuration.font.family.markdownDescription%",
+          "scope": "application"
+        },
+        "markdownForHumans.font.weight": {
+          "type": "number",
+          "default": 400,
+          "minimum": 100,
+          "maximum": 900,
+          "markdownDescription": "%configuration.font.weight.markdownDescription%",
+          "scope": "application"
+        },
+        "markdownForHumans.font.lineHeight": {
+          "type": "number",
+          "default": 1.58,
+          "minimum": 1,
+          "maximum": 3,
+          "markdownDescription": "%configuration.font.lineHeight.markdownDescription%",
+          "scope": "application"
+        },
+        "markdownForHumans.font.letterSpacing": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 0.5,
+          "markdownDescription": "%configuration.font.letterSpacing.markdownDescription%",
+          "scope": "application"
+        },
+        "markdownForHumans.font.wordSpacing": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 1,
+          "markdownDescription": "%configuration.font.wordSpacing.markdownDescription%",
+          "scope": "application"
+        },
+        "markdownForHumans.font.useEditorFont": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "%configuration.font.useEditorFont.markdownDescription%",
           "scope": "application"
         },
         "markdownForHumans.enableMath": {
           "type": "boolean",
           "default": true,
-          "description": "Render LaTeX math expressions using KaTeX. Use $...$ for inline math and $$...$$ for display math. Toggling this setting requires reopening the editor."
+          "description": "%configuration.enableMath.description%"
         },
         "markdownForHumans.formattingShortcuts.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "When enabled, Cmd/Ctrl+B, +I, and +U toggle bold/italic/underline inside the editor. Disable this if you rely on VS Code keybindings that use the same chords (e.g. a sidebar toggle rebound to Cmd+B) and want them to keep working while a markdown file is open in this editor.",
+          "description": "%configuration.formattingShortcuts.enabled.description%",
           "scope": "application"
         }
       }
@@ -273,27 +471,37 @@
     "watch:webview:debug": "node scripts/build-webview.js --watch",
     "lint": "eslint src --ext ts --max-warnings 0",
     "lint:fix": "eslint src --ext ts --fix",
+    "typecheck": "tsc --noEmit -p .",
     "test": "jest",
+    "l10n:extract": "node scripts/l10n-extract.js",
+    "test:integration": "npm run build:release && vscode-test",
+    "test:feedback-capture": "node scripts/feedback-capture-fixture/run.mjs",
+    "test:svg-browser": "node scripts/svg-image-fixture/run.mjs",
+    "test:feedback-annotations": "node --test scripts/feedback-annotation-fixture/verification.test.mjs && node scripts/feedback-annotation-fixture/run.mjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "precommit": "npm run lint && npm run test",
     "validate": "npm run lint && npm run test && npm run build:debug",
     "package:release": "vsce package",
-    "publish:release": "vsce publish",
-    "publish:ovsx:release": "npm run build:release && ovsx publish",
     "install-hooks": "bash ./scripts/install-git-hooks.sh"
   },
   "devDependencies": {
+    "@babel/core": "7.29.7",
+    "@babel/plugin-transform-modules-commonjs": "7.29.7",
     "@eslint/eslintrc": "^3.3.3",
-    "@types/image-size": "^0.7.0",
+    "@eslint/js": "^9.39.5",
     "@types/jest": "^30.0.0",
-    "@types/node": "^20.10.6",
-    "@types/vscode": "^1.85.0",
-    "@typescript-eslint/eslint-plugin": "^8.48.1",
-    "@typescript-eslint/parser": "^8.48.1",
-    "@vscode/vsce": "^3.9.2",
-    "concurrently": "^8.2.2",
-    "esbuild": "^0.28.1",
+    "@types/markdown-it": "14.2.0",
+    "@types/node": "20.17.58",
+    "@types/vscode": "1.98.0",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
+    "@vscode/test-cli": "0.0.15",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "^4.0.0",
+    "babel-jest": "30.4.1",
+    "concurrently": "^9.2.4",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
@@ -304,24 +512,35 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
-    "@tiptap/core": "^3.0.0",
-    "@tiptap/extension-code-block-lowlight": "^3.0.0",
-    "@tiptap/extension-image": "^3.0.0",
-    "@tiptap/extension-link": "^3.0.0",
-    "@tiptap/extension-list": "^3.0.0",
-    "@tiptap/extension-table": "^3.0.0",
-    "@tiptap/markdown": "^3.0.0",
-    "@tiptap/pm": "^3.0.0",
-    "@tiptap/starter-kit": "^3.0.0",
+    "@tiptap/core": "3.31.4",
+    "@tiptap/extension-code": "3.31.4",
+    "@tiptap/extension-code-block": "3.31.4",
+    "@tiptap/extension-image": "3.31.4",
+    "@tiptap/extension-link": "3.31.4",
+    "@tiptap/extension-list": "3.31.4",
+    "@tiptap/extension-paragraph": "3.31.4",
+    "@tiptap/extension-table": "3.31.4",
+    "@tiptap/markdown": "3.31.4",
+    "@tiptap/pm": "3.31.4",
+    "@tiptap/starter-kit": "3.31.4",
     "@types/turndown": "^5.0.4",
     "cheerio": "^1.1.2",
     "docx": "^9.5.1",
     "highlight.js": "^11.11.1",
-    "image-size": "^2.0.2",
+    "highlightjs-sap-abap": "^0.3.0",
     "katex": "^0.16.9",
     "lowlight": "^2.9.0",
     "markdown-it": "^14.0.0",
-    "mermaid": "^11.16.0",
+    "mermaid": "^11.17.2",
+    "modern-screenshot": "4.7.0",
     "turndown": "^7.1.2"
+  },
+  "overrides": {
+    "@vscode/test-cli": {
+      "mocha": {
+        "diff": "8.0.3",
+        "serialize-javascript": "7.1.0"
+      }
+    }
   }
 }

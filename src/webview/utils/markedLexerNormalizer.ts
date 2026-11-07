@@ -24,6 +24,14 @@
 
 type RawToken = { type?: string; raw?: string } & Record<string, unknown>;
 
+export const PRESERVED_MARKDOWN_LITERAL_TOKEN = 'preservedMarkdownLiteral';
+
+/** Token and node name for a comment-only HTML block. */
+export const HTML_COMMENT_TOKEN = 'htmlComment';
+
+/** Token and node name for a comment inside a line of text. */
+export const HTML_COMMENT_INLINE_TOKEN = 'htmlCommentInline';
+
 /**
  * Detect link/image inline tokens whose VISIBLE text is empty.
  *
@@ -35,10 +43,10 @@ type RawToken = { type?: string; raw?: string } & Record<string, unknown>;
  * (`[]()`), next to a soft break (`Even deeper.\n[]()`), in the middle of
  * other text (`foo []() bar`), or inside a list item / blockquote.
  *
- * We catch each empty link/image at the lexer layer and rewrite it to a
- * literal-text token carrying its own raw markdown. The text node round-trips
- * losslessly: on save it serialises back to its original raw form and
- * re-lexing routes through this same normaliser to keep the cycle stable.
+ * We catch each empty link/image at the lexer layer and rewrite it to a token
+ * handled by PreservedMarkdownLiteral. The resulting text remains visible in
+ * the editor, but TipTap does not escape its already-validated raw markdown on
+ * save. Re-lexing routes through this same normaliser to keep the cycle stable.
  */
 function isInlineRenderEmpty(tok: RawToken | undefined): boolean {
   if (!tok || typeof tok.type !== 'string') return true;
@@ -87,19 +95,29 @@ function isEmptyLinkLike(tok: RawToken): boolean {
 }
 
 /**
+ * Marked emits a few empty-link-shaped forms as plain text rather than link or
+ * image tokens. Preserve only the exact forms the editor historically kept;
+ * ordinary text remains subject to TipTap 3.30's Markdown escaping.
+ */
+function isPlainEmptyLinkLike(tok: RawToken): boolean {
+  if (tok.type !== 'text' || typeof tok.raw !== 'string') return false;
+  return /^(?:\[\]|\[\]\[\]|!\[\]\(\s*\))$/.test(tok.raw);
+}
+
+/**
  * Walk a paragraph's inline-token array and replace every empty link/image
- * with a literal-text token carrying that link's raw markdown. Mutates the
- * array in place. Returns whether any rewrite happened.
+ * with an internal raw-literal token. Mutates the array in place. Returns
+ * whether any rewrite happened.
  */
 function rewriteEmptyInlines(inlines: RawToken[]): boolean {
   let changed = false;
   for (let i = 0; i < inlines.length; i++) {
     const tok = inlines[i];
     if (!tok) continue;
-    if (isEmptyLinkLike(tok)) {
+    if (isEmptyLinkLike(tok) || isPlainEmptyLinkLike(tok)) {
       const raw = typeof tok.raw === 'string' ? tok.raw : '';
       if (raw.length > 0) {
-        inlines[i] = { type: 'text', raw, text: raw } as RawToken;
+        inlines[i] = { type: PRESERVED_MARKDOWN_LITERAL_TOKEN, raw, text: raw } as RawToken;
         changed = true;
       }
     }
@@ -175,6 +193,8 @@ const MERGEABLE_CONTAINER_TAGS = new Set([
   'blockquote',
   'figure',
   'div',
+  'center',
+  'p',
 ]);
 
 /** Elements that never have a closing tag, so they must not open a scope. */
@@ -251,6 +271,159 @@ function tokenRawText(token: RawToken): string {
 const STRUCTURAL_MARKUP =
   /<!--[\s\S]*?(?:-->|$)|<!doctype[^>]*>|<\/?(?:html|head|body)\b[^>]*>|<title\b[^>]*>[\s\S]*?<\/title\s*>|<(?:meta|link|base)\b[^>]*>/gi;
 
+/** One or more HTML comments with nothing else on their lines. */
+const COMMENTS_ONLY = /^\s*(?:<!--[\s\S]*?-->\s*)+$/;
+
+/**
+ * Turn a comment-only `html` block into an `htmlComment` token.
+ *
+ * Comments render nothing, but dropping them with the other scaffolding below
+ * deleted them from the file on the next save. The HtmlComment node keeps them.
+ */
+function toHtmlCommentToken(token: RawToken): RawToken {
+  // A reference definition (`[0.2.1]: https://…`) renders nothing, so no block was
+  // made for it and saving deleted it while the text above still linked to it.
+  // The marked lexer has already resolved the links; only the source line is kept.
+  if (token?.type === 'def') return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
+  if (token?.type !== 'html' || !COMMENTS_ONLY.test(tokenRawText(token))) return token;
+  return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
+}
+
+/** One whole comment, as marked's inline `html` rule emits it. */
+const INLINE_COMMENT = /^<!--[\s\S]*-->$/;
+
+/** Block tokens whose `tokens` hold the inline content of one line of text. */
+const INLINE_CONTAINER_TYPES = new Set(['paragraph', 'heading', 'text']);
+
+/**
+ * Turn each inline comment in a line of text into an `htmlCommentInline` token.
+ *
+ * Only direct children are rewritten. Inside a link or emphasis the comment
+ * would become a node the surrounding mark cannot cover, splitting the link or
+ * emphasis in two on save, so those comments stay `html` and are dropped.
+ */
+function toInlineCommentTokens(inlines: RawToken[] | undefined): void {
+  if (!Array.isArray(inlines)) return;
+  inlines.forEach((token, index) => {
+    const raw = tokenRawText(token);
+    if (token?.type === 'html' && token.block !== true && INLINE_COMMENT.test(raw)) {
+      inlines[index] = { type: HTML_COMMENT_INLINE_TOKEN, raw, text: raw } as RawToken;
+    }
+  });
+}
+
+/**
+ * Keep comments that sit below the top level or inside a line of text.
+ *
+ * TipTap parses list items and blockquotes from the child tokens marked's own
+ * lexer produced, so the top-level pass never sees a comment there, and
+ * @tiptap/markdown turns an inline comment into nothing. Either way the
+ * comment was deleted on save. Nested comment-only blocks become `htmlComment`
+ * tokens and inline comments become `htmlCommentInline` tokens. Top-level
+ * `html` blocks are left for mergeSplitHtmlBlocks and toHtmlCommentToken.
+ */
+function normalizeHtmlCommentsDeep(tokens: RawToken[] | undefined, nested: boolean): void {
+  if (!Array.isArray(tokens)) return;
+  tokens.forEach((token, index) => {
+    if (!token || typeof token.type !== 'string') return;
+    if (nested && token.type === 'html' && token.block === true) {
+      tokens[index] = toHtmlCommentToken(token);
+      return;
+    }
+    if (INLINE_CONTAINER_TYPES.has(token.type)) {
+      toInlineCommentTokens((token as { tokens?: RawToken[] }).tokens);
+      return;
+    }
+    if (token.type === 'taskItem') {
+      // TipTap's task list tokenizer keeps the item's own line inline in
+      // `tokens` and its child blocks in `nestedTokens`.
+      toInlineCommentTokens((token as { tokens?: RawToken[] }).tokens);
+      normalizeHtmlCommentsDeep((token as { nestedTokens?: RawToken[] }).nestedTokens, true);
+      return;
+    }
+    if (token.type === 'table') {
+      const { header, rows } = token as { header?: RawToken[]; rows?: RawToken[][] };
+      [header ?? [], ...(rows ?? [])].forEach(row =>
+        row.forEach(cell => toInlineCommentTokens((cell as { tokens?: RawToken[] }).tokens))
+      );
+      return;
+    }
+    normalizeHtmlCommentsDeep((token as { items?: RawToken[] }).items, true);
+    normalizeHtmlCommentsDeep((token as { tokens?: RawToken[] }).tokens, true);
+  });
+}
+
+/** A `<summary>` line is label text for its `<details>`, not content of the wrapper. */
+const SUMMARY_ELEMENT = /<summary\b[^>]*>[\s\S]*?<\/summary\s*>/gi;
+
+/**
+ * Keep the opening and closing tags of an HTML wrapper that has Markdown inside.
+ *
+ * Marked ends an HTML block at a blank line, so
+ *
+ *     <div align="center">
+ *
+ *     **bold**
+ *
+ *     </div>
+ *
+ * lexes as an `html` token, a paragraph, and an `html` token. Neither tag
+ * fragment parses to a block, so both vanished and the next save rewrote the file
+ * without its wrapper. Each fragment that is only wrapper tags becomes an
+ * `htmlComment` token, which shows a muted marker and saves its source unchanged.
+ *
+ * An opener is always kept. A closer is kept only when it closes an opener kept
+ * earlier, so a stray `</p>` from pasted HTML still falls through to
+ * `isContentFreeHtmlToken` and is dropped as before.
+ */
+function keepWrapperTags(tokens: RawToken[]): RawToken[] {
+  const open: string[] = [];
+
+  return tokens.map(token => {
+    if (token?.type !== 'html') return token;
+
+    const scannable = tokenRawText(token).replace(SUMMARY_ELEMENT, '');
+    // Anything left once the tags are gone is content, so this is not a bare fragment.
+    // It keeps its own rendering, but a wrapper it opens still needs its closer kept.
+    if (scannable.replace(TAG_PATTERN, '').trim() !== '') {
+      open.push(...trackOpenContainers(tokenRawText(token), []));
+      return token;
+    }
+
+    const trial = [...open];
+    let floor = open.length;
+    let closesEarlier = false;
+    let sawTag = false;
+
+    TAG_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = TAG_PATTERN.exec(scannable)) !== null) {
+      const tagName = match[2].toLowerCase();
+      if (!MERGEABLE_CONTAINER_TAGS.has(tagName) || match[3] === '/') return token;
+      sawTag = true;
+      if (match[1] === '/') {
+        // Close down to the matching opener; an unmatched closer is left alone.
+        const openIndex = trial.lastIndexOf(tagName);
+        if (openIndex === -1) return token;
+        if (openIndex < floor) {
+          closesEarlier = true;
+          floor = openIndex;
+        }
+        trial.length = openIndex;
+      } else {
+        trial.push(tagName);
+      }
+    }
+    if (!sawTag) return token;
+    // A block that opens and closes its own tags is whole content, not a fragment.
+    if (trial.length === open.length && !closesEarlier) return token;
+
+    open.length = 0;
+    open.push(...trial);
+    return { ...token, type: HTML_COMMENT_TOKEN } as RawToken;
+  });
+}
+
 /** A run made up only of closing tags can never contribute content. */
 const CLOSING_TAGS_ONLY = /^(?:\s*<\/[a-zA-Z][a-zA-Z0-9-]*\s*>\s*)+$/;
 
@@ -260,9 +433,10 @@ const CLOSING_TAGS_ONLY = /^(?:\s*<\/[a-zA-Z][a-zA-Z0-9-]*\s*>\s*)+$/;
  * `@tiptap/markdown` runs each HTML token through `generateJSON`, and a
  * fragment with no renderable content still yields a doc holding one empty
  * paragraph — which lands in the document as a blank line. So `<!DOCTYPE html>`,
- * the `<html><head>…<body>` wrapper, `</body></html>`, an HTML comment, or a
- * stray `</p>` each inserted a visible gap. Dropping the token removes the gap
- * without disturbing the blocks either side, which keep their own separators.
+ * the `<html><head>…<body>` wrapper, `</body></html>`, or a stray `</p>` each
+ * inserted a visible gap. Dropping the token removes the gap without disturbing
+ * the blocks either side, which keep their own separators. Comment-only blocks
+ * never reach this check: toHtmlCommentToken keeps them first.
  */
 function isContentFreeHtmlToken(token: RawToken): boolean {
   if (token.type !== 'html') return false;
@@ -346,6 +520,7 @@ const GREEDY_BLOCK_TYPES = new Set([
   'list',
   'blockquote',
   'html',
+  HTML_COMMENT_TOKEN,
 ]);
 
 function splitTrailingNewlines(token: RawToken): RawToken[] {
@@ -376,14 +551,18 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
   // Rewrite empty link/image inlines at every depth before the greedy-newline
   // split runs — that way both whole-empty paragraphs (`[]()`) and mixed
   // paragraphs (`Even deeper.\n[]()`) carry the original markdown forward as
-  // literal text instead of letting the inline get stripped on parse.
+  // preserved text instead of letting the inline get stripped on parse.
   normalizeEmptyInlinesDeep(tokens);
+  normalizeHtmlCommentsDeep(tokens, false);
 
   // Re-join HTML blocks marked cut at a blank line before the greedy-newline
   // split runs, so a merged block still gets its own trailing space token.
-  // Then drop scaffolding-only fragments, which would each render as a blank
-  // line. Merging first means a fragment is only judged once it is whole.
-  const merged = mergeSplitHtmlBlocks(tokens).filter(token => !isContentFreeHtmlToken(token));
+  // Then keep comments as their own tokens and drop the remaining scaffolding,
+  // which would each render as a blank line. Merging first means a fragment is
+  // only judged once it is whole.
+  const merged = keepWrapperTags(mergeSplitHtmlBlocks(tokens))
+    .map(toHtmlCommentToken)
+    .filter(token => !isContentFreeHtmlToken(token));
 
   const out: RawToken[] = [];
   for (const token of merged) {
@@ -394,6 +573,15 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
     }
   }
 
+  // A comment's block ends on its `-->` line, so the next block may follow with
+  // no blank line. Record that so saving keeps the authored layout.
+  out.forEach((token, index) => {
+    if (token?.type !== HTML_COMMENT_TOKEN) return;
+    const next = out[index + 1];
+    (token as RawToken & { tightAfter?: boolean }).tightAfter =
+      next !== undefined && next.type !== 'space';
+  });
+
   // Preserve the `links` side-channel that marked attaches to the tokens array.
   const links = (tokens as unknown as { links?: unknown }).links;
   if (links !== undefined) {
@@ -403,23 +591,101 @@ export function normalizeBlankLineGreedyTokens<T extends RawToken[]>(tokens: T):
   return out as T;
 }
 
+interface DefinitionTokenizer {
+  def?: (src: string) => RawToken | undefined;
+  lexer?: { tokens?: { links?: Record<string, unknown> } };
+}
+
+const definitionKeepingTokenizers = new WeakSet<object>();
+let repeatedDefinitionCount = 0;
+
 /**
- * Wrap a marked instance's `lexer` function so every parse pass routes
- * through `normalizeBlankLineGreedyTokens`. Idempotent: re-installing on the
- * same instance is a no-op.
+ * Make marked emit a token for a definition whose label is already defined.
+ *
+ * Marked consumes such a line and emits nothing (`[a]: one` then `[a]: two`,
+ * or `[docs]` then `[DOCS]`), so it had no marker block and the next save
+ * deleted it. The repeated definition gets a label no reference can use: marked
+ * then emits its token, and the first definition still decides where links go,
+ * as CommonMark requires.
+ *
+ * @param tokenizer - The tokenizer of the lexer about to run; patched once
+ */
+function keepRepeatedDefinitions(tokenizer: DefinitionTokenizer | undefined): void {
+  if (!tokenizer || typeof tokenizer.def !== 'function') return;
+  if (definitionKeepingTokenizers.has(tokenizer)) return;
+  definitionKeepingTokenizers.add(tokenizer);
+
+  const original = tokenizer.def;
+  tokenizer.def = function keepingDef(this: DefinitionTokenizer, src: string) {
+    const token = original.call(this, src);
+    const links = this.lexer?.tokens?.links;
+    if (token && typeof token.tag === 'string' && links?.[token.tag]) {
+      repeatedDefinitionCount += 1;
+      token.tag = `${token.tag}\u0000${repeatedDefinitionCount}`;
+    }
+    return token;
+  };
+}
+
+/**
+ * Wrap a marked instance's lexer entry points so every parse pass routes
+ * through `normalizeBlankLineGreedyTokens`. TipTap 3.30 constructs `Lexer`
+ * directly for top-level parsing and calls `lexer()` for nested reparses, so
+ * both public paths are covered. Idempotent on the same marked instance.
  */
 export function installBlankLineLexerNormalizer(markedInstance: unknown): void {
+  interface LexerInstance {
+    lex(src: string): RawToken[];
+    inlineTokens(src: string, tokens?: RawToken[]): RawToken[];
+  }
+  type LexerConstructor = new (options?: unknown) => LexerInstance;
+
   const inst = markedInstance as {
+    Lexer?: LexerConstructor;
     lexer?: (src: string, options?: unknown) => RawToken[];
     __mdh_blankLineNormalizerInstalled?: boolean;
   };
-  if (!inst || typeof inst.lexer !== 'function') return;
+  if (!inst) return;
   if (inst.__mdh_blankLineNormalizerInstalled) return;
 
-  const original = inst.lexer.bind(inst);
-  inst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
-    const tokens = original(src, options);
-    return normalizeBlankLineGreedyTokens(tokens);
-  };
-  inst.__mdh_blankLineNormalizerInstalled = true;
+  let installed = false;
+
+  if (typeof inst.Lexer === 'function') {
+    const OriginalLexer = inst.Lexer;
+    inst.Lexer = class NormalizingLexer extends OriginalLexer {
+      private inlineDepth = 0;
+
+      lex(src: string): RawToken[] {
+        keepRepeatedDefinitions((this as { tokenizer?: DefinitionTokenizer }).tokenizer);
+        return normalizeBlankLineGreedyTokens(super.lex(src));
+      }
+
+      // TipTap also lexes some lines on their own after `lex` has returned,
+      // such as a task item split out of a mixed list. Only the outermost call
+      // holds a line's direct children; deeper calls are link or emphasis text.
+      inlineTokens(src: string, tokens?: RawToken[]): RawToken[] {
+        this.inlineDepth++;
+        try {
+          const inlines = super.inlineTokens(src, tokens);
+          if (this.inlineDepth === 1) toInlineCommentTokens(inlines);
+          return inlines;
+        } finally {
+          this.inlineDepth--;
+        }
+      }
+    };
+    installed = true;
+  }
+
+  if (typeof inst.lexer === 'function') {
+    const original = inst.lexer.bind(inst);
+    inst.lexer = function patchedLexer(src: string, options?: unknown): RawToken[] {
+      return normalizeBlankLineGreedyTokens(original(src, options));
+    };
+    installed = true;
+  }
+
+  if (installed) {
+    inst.__mdh_blankLineNormalizerInstalled = true;
+  }
 }

@@ -30,15 +30,18 @@ The workflow is:
 
 ```
 src/__tests__/
-├── features/           # Extension-side feature tests
-│   ├── wordCount.test.ts
-│   └── imageDragDrop.test.ts
-├── webview/            # Webview utility tests
-│   ├── pasteHandler.test.ts
-│   ├── copyMarkdown.test.ts
-│   ├── tocOverlay.test.ts
-│   └── imageConfirmation.test.ts
-└── setup.ts            # Jest setup and custom matchers
+├── editor/             # Extension host: provider, sync, Feedback services
+├── extension/          # Activation, commands, manifest policy
+├── features/           # Outline, export, word count
+├── webview/            # TipTap editor, serialization, *.realEditor.test.ts round trips
+├── shared/             # Protocols shared by host and webview
+├── l10n/               # Translation bundle and hardcoded-text guards
+├── release/            # Release docs guard
+├── audit/              # Source fidelity audit corpus
+├── fixtures/, helpers/
+├── setup.ts            # Jest setup and custom matchers
+└── setup-after-env.ts
+test/integration/       # Extension Development Host suite (*.extHost.test.cjs)
 ```
 
 ---
@@ -72,7 +75,27 @@ it.todo('shows overlay when toggled');
 npm test              # Run all tests
 npm run test:watch    # Watch mode for development
 npm run test:coverage # Generate coverage report
+npm run test:integration # Build release bundles and run against VS Code stable
 ```
+
+The Extension Development Host suite lives in `test/integration/`. CI runs it
+on Ubuntu and Windows against VS Code 1.98.0 and current stable. To select a
+host version locally, set `VSCODE_TEST_VERSION` before running
+`npm run test:integration`; the default is `stable`.
+
+Every run uses a fresh VS Code profile. Before any suite loads,
+`test/integration/support/warmWebviewRuntime.cjs` (a Mocha global setup wired in
+`.vscode-test.mjs`) opens one rich editor and waits for its renderer. That
+installs VS Code's webview service worker the way a real profile's first editor
+does. Without it, VS Code 1.98 can leave a webview blank forever when editors
+are opened and closed within milliseconds of each other on a cold profile. Do
+not open editors from a `require`d file before this setup has run, and do not
+replace it with a sleep.
+
+CI runs Jest with coverage and parallel workers. Do not assert physical elapsed
+budgets inside that suite: instrumentation and runner contention change timing.
+For scanner complexity, keep the deterministic loop/slice work-budget tests and
+their output parity checks. Record actual latency separately on relevant hardware.
 
 ---
 
@@ -126,6 +149,7 @@ Current minimum thresholds (see `jest.config.js`):
 | Test Type | When to Use | Location |
 |-----------|-------------|----------|
 | **Unit tests** | Pure functions, algorithms, utilities | `__tests__/` |
+| **Extension Host integration** | Activation, custom-editor registration, split views, `WorkspaceEdit`, save, and disposal | `test/integration/` |
 | **`it.todo()`** | DOM/browser features, integration behaviors | `__tests__/` |
 | **Manual testing** | Full UX flows, visual verification | UX checklist |
 

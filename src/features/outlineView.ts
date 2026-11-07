@@ -26,7 +26,7 @@ class OutlineTreeItem extends vscode.TreeItem {
     collapsible?: vscode.TreeItemCollapsibleState
   ) {
     // Use TreeItemLabel for bold effect on active/ancestor items
-    const labelText = node.text || '(Untitled)';
+    const labelText = node.text || vscode.l10n.t('(Untitled)');
     super(
       ancestorState !== 'none'
         ? { label: labelText, highlights: [[0, labelText.length]] }
@@ -36,10 +36,10 @@ class OutlineTreeItem extends vscode.TreeItem {
           ? vscode.TreeItemCollapsibleState.Collapsed
           : vscode.TreeItemCollapsibleState.None)
     );
-    this.description = `H${node.level}`;
+    this.description = vscode.l10n.t('H{0}', node.level);
     this.command = {
       command: 'markdownForHumans.navigateToHeading',
-      title: 'Go to heading',
+      title: vscode.l10n.t('Go to heading'),
       arguments: [node.pos],
     };
     if (ancestorState === 'active') {
@@ -136,7 +136,9 @@ export class OutlineViewProvider implements vscode.TreeDataProvider<OutlineTreeI
 
     // Use QuickPick for live filtering
     this.filterQuickPick = vscode.window.createQuickPick();
-    this.filterQuickPick.placeholder = 'Type to filter headings... (X to clear, Esc to close)';
+    this.filterQuickPick.placeholder = vscode.l10n.t(
+      'Type to filter headings... (X to clear, Esc to close)'
+    );
     this.filterQuickPick.value = this.filterText;
 
     this.filterQuickPick.onDidChangeValue(value => {

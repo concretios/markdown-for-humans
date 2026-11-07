@@ -11,13 +11,17 @@
  * - data-placeholder-id for tracking images being saved
  * - base64 preview during upload
  * - Automatic URI resolution for relative paths
- * - Resize handles for image resizing
+ * - Responsive decoded image dimensions, load errors and SVG display sizing
+ * - Column-width layout for SVGs that have no concrete intrinsic width
+ * - Source-preserving HTML image dimensions
  * - Proper atomic node behavior for reliable selection/deletion
  */
 
 import Image, { type ImageOptions } from '@tiptap/extension-image';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import type { JSONContent, MarkdownRendererHelpers, RenderContext } from '@tiptap/core';
+import { createPendingImageDestination } from '../../shared/pendingImageProtocol';
+import * as l10n from '../l10n';
 import {
   createImageMenuButton,
   createImageMenu,
@@ -27,10 +31,55 @@ import {
   observeNarrowImageLayout,
 } from '../features/imageMenu';
 import { showImageMetadataFooter, hideImageMetadataFooter } from '../features/imageMetadata';
+import {
+  HtmlImageSource,
+  imageDimension,
+  imageSourceKey,
+  escapeImageAttribute,
+} from './htmlImageSource';
+import { isSvgImageSource } from '../../shared/imageSource';
+import { formatMarkdownDestination } from './markdownCompatibilityMarks';
 
 const INDENT_PIXELS_PER_LEVEL = 30;
 const INDENT_SPACES_PER_LEVEL = 4;
 const MAX_INDENT_PIXELS = 240;
+/** Wide enough that a 300×150 default-object SVG cannot fill it by accident. */
+const SVG_COLUMN_PROBE_WIDTH_PX = 800;
+
+/**
+ * A viewBox-only or percentage SVG lays out at the probe column, while Chrome
+ * still reports naturalWidth as the default object size. A concrete width lays
+ * out at that intrinsic size, so the two differ by more than a subpixel.
+ *
+ * @param naturalWidth - Decoded `naturalWidth` in CSS pixels
+ * @param laidOutWidth - Width used in an unconstrained column probe
+ * @returns Whether the image should fill the reading column
+ */
+export function svgFillsReadingColumn(naturalWidth: number, laidOutWidth: number): boolean {
+  return naturalWidth > 0 && laidOutWidth > naturalWidth + 1;
+}
+
+/**
+ * Measure the width Chrome gives this image in a normal block, outside the
+ * shrink-to-fit wrapper. Returns 0 when layout is unavailable.
+ *
+ * @param image - Decoded image element
+ * @returns Laid-out CSS width in the probe column
+ */
+function measureImageWidthInColumn(image: HTMLImageElement): number {
+  const probe = document.createElement('div');
+  probe.setAttribute('data-svg-size-probe', 'true');
+  probe.style.cssText = `position:absolute;left:-10000px;top:0;width:${SVG_COLUMN_PROBE_WIDTH_PX}px;visibility:hidden;pointer-events:none;`;
+  const parent = image.parentNode;
+  const next = image.nextSibling;
+  probe.appendChild(image);
+  document.body.appendChild(probe);
+  const width = image.getBoundingClientRect().width;
+  if (parent) parent.insertBefore(image, next);
+  else probe.removeChild(image);
+  probe.remove();
+  return width;
+}
 
 type CustomImageOptions = ImageOptions & {
   getShowImageHoverOverlay: () => boolean;
@@ -112,6 +161,10 @@ export const CustomImage = Image.extend({
   // Since inline is true, images belong to 'inline' group
   group: 'inline',
 
+  addExtensions() {
+    return [HtmlImageSource];
+  },
+
   addOptions(): CustomImageOptions {
     const parentOpts = (this.parent?.() ?? {}) as Partial<ImageOptions>;
     return {
@@ -162,6 +215,17 @@ export const CustomImage = Image.extend({
   addAttributes() {
     return {
       ...this.parent?.(),
+      width: {
+        default: null,
+        parseHTML: element => imageDimension(element.getAttribute('width')),
+      },
+      height: {
+        default: null,
+        parseHTML: element => imageDimension(element.getAttribute('height')),
+      },
+      'html-source': { default: null, rendered: false },
+      'html-source-key': { default: null, rendered: false },
+      'html-source-prefix': { default: null, rendered: false },
       'data-placeholder-id': {
         default: null,
         parseHTML: element => element.getAttribute('data-placeholder-id'),
@@ -196,11 +260,15 @@ export const CustomImage = Image.extend({
       'indent-prefix': {
         default: null,
       },
+      // The link around a linked image (`[![alt](src)](href)`). TipTap applies
+      // link marks to text only, so the image keeps its link here instead.
+      'link-href': { default: null, rendered: false },
+      'link-title': { default: null, rendered: false },
     };
   },
 
   addNodeView() {
-    return ({ node, HTMLAttributes, editor, extension }) => {
+    return ({ node, HTMLAttributes, editor, extension, getPos }) => {
       const isHoverOverlayEnabled = () =>
         extension?.options?.getShowImageHoverOverlay?.() !== false;
 
@@ -216,6 +284,66 @@ export const CustomImage = Image.extend({
 
       const dom = document.createElement('img');
       dom.className = HTMLAttributes.class || 'markdown-image';
+      let destroyed = false;
+      let isImageLoaded = false;
+      const authoredWidth = imageDimension(node.attrs.width);
+      const authoredHeight = imageDimension(node.attrs.height);
+      if (authoredWidth) dom.setAttribute('width', String(authoredWidth));
+      if (authoredHeight) dom.setAttribute('height', String(authoredHeight));
+      if (authoredWidth && authoredHeight) {
+        dom.style.aspectRatio = `${authoredWidth} / ${authoredHeight}`;
+      }
+      if (node.attrs.title) dom.title = node.attrs.title;
+
+      const errorLabel = document.createElement('span');
+      errorLabel.className = 'image-load-error';
+      errorLabel.hidden = true;
+      errorLabel.setAttribute('role', 'status');
+      const onError = () => {
+        if (destroyed) return;
+        isImageLoaded = false;
+        dom.removeAttribute('data-loading');
+        errorLabel.textContent = l10n.t(
+          'Unable to load image: {0}',
+          node.attrs['markdown-src'] || node.attrs.src || ''
+        );
+        errorLabel.hidden = false;
+        wrapper.classList.add('image-load-failed');
+      };
+      const onLoad = () => {
+        if (destroyed) return;
+        isImageLoaded = true;
+        dom.removeAttribute('data-loading');
+        errorLabel.hidden = true;
+        wrapper.classList.remove('image-load-failed');
+        // fit-content plus max-width:100% collapses an SVG that has no concrete
+        // intrinsic width. Chrome's preview lays that image out at the column
+        // and only reports the 300×150 default object size as naturalWidth.
+        // Stamping naturalWidth is what made those diagrams tiny. The attribute
+        // below is view-only and is never written back to the document.
+        if (!authoredWidth && dom.naturalWidth > 0) {
+          if (authoredHeight && dom.naturalHeight > 0) {
+            dom.setAttribute(
+              'width',
+              String((authoredHeight * dom.naturalWidth) / dom.naturalHeight)
+            );
+            return;
+          }
+          const source = String(node.attrs['markdown-src'] || node.attrs.src || '');
+          if (isSvgImageSource(source) && dom.naturalHeight > 0) {
+            const laidOutWidth = measureImageWidthInColumn(dom);
+            if (svgFillsReadingColumn(dom.naturalWidth, laidOutWidth)) {
+              dom.style.aspectRatio = `${dom.naturalWidth} / ${dom.naturalHeight}`;
+              wrapper.classList.add('image-fluid-svg');
+              return;
+            }
+          }
+          dom.setAttribute('width', String(dom.naturalWidth));
+        }
+      };
+      dom.addEventListener('load', onLoad);
+      dom.addEventListener('error', onError);
+      dom.setAttribute('data-loading', 'true');
 
       // Set alt text
       if (node.attrs.alt) {
@@ -230,7 +358,7 @@ export const CustomImage = Image.extend({
       // Handle src - resolve if relative path
       // Use markdown-src if available (preserves original path), otherwise use src
       // markdown-src is the source of truth for the actual file path in markdown
-      const originalSrc = node.attrs['markdown-src'] || node.attrs.src;
+      const originalSrc = node.attrs['markdown-src'] || node.attrs.src || '';
       const src = node.attrs.src;
       const cacheBustTimestamp =
         typeof originalSrc === 'string' && originalSrc.length > 0
@@ -243,10 +371,11 @@ export const CustomImage = Image.extend({
 
       // Use markdown-src for resolution if available (it's the actual file path)
       // Otherwise fall back to src
-      const pathToResolve = originalSrc || src;
+      const pathToResolve = originalSrc || src || '';
 
       if (
         pathToResolve.startsWith('data:') ||
+        pathToResolve.startsWith('blob:') ||
         pathToResolve.startsWith('http://') ||
         pathToResolve.startsWith('https://') ||
         pathToResolve.startsWith('vscode-webview://')
@@ -256,19 +385,26 @@ export const CustomImage = Image.extend({
       } else {
         // Relative path - needs resolution
         // Show loading state
-        dom.alt = `Loading: ${pathToResolve}`;
 
         // Request resolution (needs vscode API access)
         // This will be done via a global function
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if ((window as any).resolveImagePath) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (window as any).resolveImagePath(pathToResolve).then((webviewUri: string) => {
-            dom.src = applyCacheBust(webviewUri, cacheBustTimestamp);
-            if (node.attrs.alt) {
-              dom.alt = node.attrs.alt;
-            }
-          });
+          (window as any)
+            .resolveImagePath(pathToResolve)
+            .then((webviewUri: string) => {
+              if (destroyed) return;
+              if (!webviewUri) {
+                onError();
+                return;
+              }
+              dom.src = applyCacheBust(webviewUri, cacheBustTimestamp);
+              if (node.attrs.alt) {
+                dom.alt = node.attrs.alt;
+              }
+            })
+            .catch(onError);
         } else {
           // Fallback: try using the relative path as-is
           dom.src = applyCacheBust(pathToResolve, cacheBustTimestamp);
@@ -277,7 +413,7 @@ export const CustomImage = Image.extend({
 
       // Create three-dots menu button (shown on hover)
       const menuButton = createImageMenuButton();
-      menuButton.setAttribute('title', 'Image options');
+      menuButton.setAttribute('title', l10n.t('Image options'));
 
       // Check if this is an external image (hide menu for external images)
       const imageSrc = node.attrs['markdown-src'] || node.attrs.src;
@@ -285,23 +421,8 @@ export const CustomImage = Image.extend({
       const isLocal = !isExternal;
 
       // Create dropdown menu (pass isLocal to conditionally show file location options)
-      const menu = createImageMenu(isLocal);
-
-      // Track if image is loaded
-      let isImageLoaded = dom.complete;
-
-      // Update loaded state when image loads
-      if (!isImageLoaded) {
-        dom.addEventListener(
-          'load',
-          () => {
-            isImageLoaded = true;
-            dom.removeAttribute('data-loading');
-          },
-          { once: true }
-        );
-        dom.setAttribute('data-loading', 'true');
-      }
+      const menu = createImageMenu(isLocal, isSvgImageSource(imageSrc));
+      if (dom.complete && dom.naturalWidth > 0) onLoad();
 
       // Only show menu button on hover if image is loaded and not external
       const handleMouseEnter = () => {
@@ -356,7 +477,7 @@ export const CustomImage = Image.extend({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const vscodeApi = (window as any).vscode;
         if (menu.style.display === 'none') {
-          showImageMenu(menu, menuButton, dom, editor, vscodeApi);
+          showImageMenu(menu, menuButton, dom, editor, vscodeApi, getPos);
         } else {
           hideImageMenu(menu);
         }
@@ -364,6 +485,7 @@ export const CustomImage = Image.extend({
 
       // Append menu as sibling of button (not child) for correct positioning
       wrapper.appendChild(dom);
+      wrapper.appendChild(errorLabel);
       wrapper.appendChild(menuButton);
       wrapper.appendChild(menu);
 
@@ -375,6 +497,9 @@ export const CustomImage = Image.extend({
       return {
         dom: wrapper,
         destroy: () => {
+          destroyed = true;
+          dom.removeEventListener('load', onLoad);
+          dom.removeEventListener('error', onError);
           stopNarrowLayoutObserver();
         },
       };
@@ -391,19 +516,64 @@ export const CustomImage = Image.extend({
     _helpers: MarkdownRendererHelpers,
     _context: RenderContext
   ) => {
-    const src = node.attrs?.['markdown-src'] || node.attrs?.src || '';
-    const alt = node.attrs?.alt || '';
-    const indentPrefix =
-      typeof node.attrs?.['indent-prefix'] === 'string' ? node.attrs['indent-prefix'] : '';
-    const destination = typeof src === 'string' ? src : '';
-    const formattedDestination = /\s/.test(destination) ? `<${destination}>` : destination;
-
-    // Use markdown-src if available (preserves original path with dimensions after resize)
-    // Fall back to src if markdown-src is not set
-    return `${indentPrefix}![${alt}](${formattedDestination})`;
+    const image = renderImageMarkdown(node);
+    const href = node.attrs?.['link-href'];
+    if (typeof href !== 'string' || href.length === 0) return image.markdown;
+    const linkTitle = node.attrs?.['link-title'];
+    const title =
+      typeof linkTitle === 'string' && linkTitle
+        ? ` "${linkTitle.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+        : '';
+    return `${image.prefix}[${image.markdown.slice(image.prefix.length)}](${formatMarkdownDestination(href)}${title})`;
   }) as unknown as (
     node: JSONContent,
     _helpers: MarkdownRendererHelpers,
     ctx: RenderContext
   ) => string,
 });
+
+/**
+ * Markdown for the image itself, without any surrounding link. `prefix` is
+ * the leading indentation or HTML prefix, which belongs outside a link.
+ */
+function renderImageMarkdown(node: JSONContent): { markdown: string; prefix: string } {
+  const placeholderId = node.attrs?.['data-placeholder-id'];
+  const src =
+    typeof placeholderId === 'string' && placeholderId.length > 0
+      ? createPendingImageDestination(placeholderId)
+      : node.attrs?.['markdown-src'] || node.attrs?.src || '';
+  const alt = node.attrs?.alt || '';
+  const indentPrefix =
+    typeof node.attrs?.['indent-prefix'] === 'string' ? node.attrs['indent-prefix'] : '';
+  const destination = typeof src === 'string' ? src : '';
+  const attrs = node.attrs || {};
+  const width = imageDimension(attrs.width);
+  const height = imageDimension(attrs.height);
+  const sourcePrefix =
+    typeof attrs['html-source-prefix'] === 'string' ? attrs['html-source-prefix'] : '';
+  if (!placeholderId && (width || height || attrs['html-source'])) {
+    if (attrs['html-source'] && attrs['html-source-key'] === imageSourceKey(attrs)) {
+      return { markdown: sourcePrefix + attrs['html-source'], prefix: sourcePrefix };
+    }
+    const title =
+      typeof attrs.title === 'string' && attrs.title
+        ? ` title="${escapeImageAttribute(attrs.title)}"`
+        : '';
+    return {
+      markdown: `${sourcePrefix}${indentPrefix}<img src="${escapeImageAttribute(destination)}" alt="${escapeImageAttribute(alt)}"${title}${width ? ` width="${width}"` : ''}${height ? ` height="${height}"` : ''} />`,
+      prefix: sourcePrefix + indentPrefix,
+    };
+  }
+  const formattedDestination = formatMarkdownDestination(destination);
+
+  // Use markdown-src if available (preserves original path with dimensions after resize)
+  // Fall back to src if markdown-src is not set
+  const title =
+    typeof attrs.title === 'string' && attrs.title
+      ? ` "${attrs.title.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+      : '';
+  return {
+    markdown: `${indentPrefix}![${alt}](${formattedDestination}${title})`,
+    prefix: indentPrefix,
+  };
+}

@@ -10,12 +10,14 @@ import {
   type MarkdownParseHelpers,
   type MarkdownToken,
 } from '@tiptap/core';
+import { parseHtmlImageAttributes } from './htmlImageSource';
 
 type ParsedImageLine = {
   indentPrefix: string;
   alt: string;
   src: string;
   title: string | null;
+  htmlAttributes?: Record<string, unknown>;
 };
 
 const INDENTED_IMAGE_LINE_REGEX =
@@ -23,7 +25,17 @@ const INDENTED_IMAGE_LINE_REGEX =
 
 function parseIndentedImageLine(rawLine: string): ParsedImageLine | null {
   const match = rawLine.match(INDENTED_IMAGE_LINE_REGEX);
-  if (!match) return null;
+  if (!match) {
+    const htmlAttributes = parseHtmlImageAttributes(rawLine);
+    if (!htmlAttributes) return null;
+    return {
+      indentPrefix: String(htmlAttributes['indent-prefix'] || ''),
+      alt: String(htmlAttributes.alt || ''),
+      src: String(htmlAttributes.src || ''),
+      title: typeof htmlAttributes.title === 'string' ? htmlAttributes.title : null,
+      htmlAttributes,
+    };
+  }
 
   const indentPrefix = match[1] ?? '';
   const alt = match[2] ?? '';
@@ -58,6 +70,11 @@ function buildIndentedImagesParagraph(
       content.push(helpers.createNode('hardBreak'));
     }
 
+    if (line.htmlAttributes) {
+      content.push(helpers.createNode('image', line.htmlAttributes));
+      continue;
+    }
+
     const imageAttrs: {
       src: string;
       alt: string;
@@ -80,14 +97,15 @@ function buildIndentedImagesParagraph(
 }
 
 /**
- * Converts indented code blocks that contain ONLY markdown images into real image nodes.
+ * Converts indented code blocks containing only standalone Markdown or supported
+ * HTML images into real image nodes. Sized SVG images use the HTML representation.
  *
  * marked.js treats lines indented with 4+ spaces or tabs as code blocks. That breaks
  * common copy/paste flows where images are accidentally indented (or intentionally
  * aligned), making images render as `<pre><code>`.
  *
  * We only intercept *indented* code blocks (not fenced) and only when every non-empty
- * line is a standalone image.
+ * line is a standalone image. Mixed HTML/code and fenced examples remain code.
  */
 export const IndentedImageCodeBlock = Extension.create({
   name: 'indentedImageCodeBlock',

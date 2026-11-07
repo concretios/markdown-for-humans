@@ -13,7 +13,7 @@
 2. **Subtlety Over Flash** - Apple-like polish means clear but unobtrusive feedback
 3. **State Hierarchy** - Understand CSS specificity and state priority
 4. **Smooth Transitions** - 0.15s ease transitions for state changes
-5. **Test in All Themes** - Light, dark, and high-contrast must all work
+5. **Test in All Themes** - Light, dark, high-contrast dark, and high-contrast light must all work
 
 ---
 
@@ -53,19 +53,98 @@
 ### Theme Detection
 
 ```css
-/* Light theme (default) */
+/* Base colors follow whichever theme is active. */
 .element {
-  /* Styles for light theme */
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
 }
 
-/* Dark theme */
-.vscode-dark .element,
-.vscode-high-contrast .element {
-  /* Override styles for dark/high-contrast */
+/* Both high-contrast kinds may need stronger boundaries. */
+.vscode-high-contrast .element,
+.vscode-high-contrast-light .element {
+  border-color: var(--vscode-contrastBorder);
 }
 ```
 
-**Pattern:** Define base styles for light theme, then override for dark/high-contrast.
+Prefer shared variable-based styles. Use theme classes for deliberate visual
+differences, such as contrast boundaries, without assuming a high-contrast theme
+has a dark background.
+
+### Reader Typography
+
+Body text typography is the reader's to change (`markdownForHumans.font.*`:
+family, weight, line height, letter spacing, word spacing). The webview sets a
+`--md-*` custom property on `<html>` only while a setting differs from its
+default; `editor.css` reads it with the built-in value as the fallback.
+
+```css
+/* Good: the reader's value when set, the built-in look otherwise */
+.markdown-editor p {
+  line-height: var(--md-line-height, 1.58);
+}
+
+/* Bad: a fixed body value the reader cannot change */
+.markdown-editor p {
+  line-height: 1.58;
+}
+```
+
+| Property | Fallback | Set on |
+|----------|----------|--------|
+| `--md-font-family` | `var(--vscode-font-family)` | `.markdown-editor` |
+| `--md-font-weight` | `var(--vscode-font-weight)` | `.markdown-editor` |
+| `--md-line-height` | `1.58` | root, `p`, `li`, `blockquote`, `.github-alert` |
+| `--md-letter-spacing` | `-0.003em` | `.markdown-editor` |
+| `--md-word-spacing` | `normal` | `.markdown-editor` |
+| `--md-code-text-spacing` | `inherit` | `pre`, `code`, `.katex`, `.md4h-html-comment` |
+| `--md-editor-font-size` | `var(--vscode-editor-font-size, 14px)` | `--md-base-size` and zoom |
+
+- New prose elements inherit the family and spacing from `.markdown-editor`. Use
+  `var(--md-line-height, 1.58)` for a body line height; never a literal.
+- Elements with their own metrics declare them and stay out: code and comment
+  markers (monospace, standard weight), KaTeX, and Mermaid, whose labels are
+  measured before the SVG enters the editor.
+- User values never go into a stylesheet or markup. They pass through
+  `src/shared/typographySettings.ts`, which clamps numbers and rewrites a font
+  list as quoted names, and are applied with `style.setProperty` in
+  `src/webview/utils/typographyStyles.ts`.
+- `typographyStyles.test.ts` holds the fallbacks to the values the editor had
+  before the settings existed. Changing a fallback changes the look for everyone.
+
+### Code Blocks and Syntax Tokens
+
+`package.json` contributes eight `markdownForHumans.code*` color IDs: `codeKeyword`,
+`codeString`, `codeValue`, `codeFunction`, `codeType`, `codeComment`, `codeAddition`
+and `codeDeletion`. Their defaults cover all four theme kinds. Theme authors and
+users can override these IDs through `workbench.colorCustomizations`.
+
+```css
+.code-block-highlighted [data-highlight-scope~="keyword"] {
+  color: var(--vscode-markdownForHumans-codeKeyword, var(--vscode-editor-foreground));
+}
+```
+
+Keep palette defaults in the manifest and consume the generated variables in CSS.
+Token classes retain flattened ancestor scopes for diagnostics; color selectors
+use `data-highlight-scope` so an ancestor string, parameter or tag cannot override
+the innermost token. Weight and emphasis can still inherit across those scopes.
+VS Code does not expose arbitrary TextMate token colors as webview CSS variables;
+these contributed defaults do not promise exact native-editor token-theme parity.
+Both high-contrast defaults use `editor.foreground`, with bold keywords/titles and
+italic comments for additional cues. Punctuation uses the editor foreground.
+
+Keep code surface, font and border styles separate from token classes. In
+`editor.css`, `.code-block-wrapper > pre` owns the margin and 48 px copy-button
+clearance; `.code-block-highlighted` must not change geometry when colors arrive.
+The fallback status belongs below the block in normal flow, outside `contentDOM`,
+and remains hidden until needed. Neither fallback explanations nor copy feedback
+may enter copied or serialized code.
+
+`codeHighlightAppearance.test.ts` checks palette contrast against reference theme
+backgrounds, layout independence and status visibility. Native VS Code checks must
+also verify actual computed colors, color overrides, copy controls and 100/150/200%
+zoom in all four theme kinds. Reference-color tests alone do not establish contrast
+for every installed theme.
 
 ---
 
@@ -327,11 +406,12 @@ Use `:not()` to create conditional styles:
 
 ## Testing Checklist
 
-- [ ] All themes (light/dark/high-contrast) - colors visible
+- [ ] All four themes (light/dark/high-contrast dark/high-contrast light) - colors visible
 - [ ] All states (hover/focus/active/selected) - no conflicts
 - [ ] Transitions smooth, reduced motion respected
 - [ ] No redundant borders/outlines
 - [ ] CSS variables only (no hard-coded colors)
+- [ ] Body typography through `--md-*` fallbacks; code, math and diagrams unaffected by `markdownForHumans.font.*`
 - [ ] Manual read test (3000+ words, 10+ minutes)
 
 ---
@@ -346,4 +426,3 @@ Use `:not()` to create conditional styles:
 - Document complex selectors inline
 
 ---
-

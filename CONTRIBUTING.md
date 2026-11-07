@@ -1,4 +1,4 @@
-# Contributing to Markdown for Humans
+# Contributing to Markdown Editor for Humans
 
 Welcome! This guide will help you set up the project, understand its architecture, and start contributing.
 
@@ -46,14 +46,14 @@ npm run watch:debug
 |-------------|---------|-------|
 | **Node.js** | 22+ LTS | Required for build tooling |
 | **npm** | 10+ | Comes with Node.js |
-| **VS Code** | 1.85.0+ | Extension host for development |
+| **VS Code** | 1.98.0+ | Minimum supported extension host |
 | **Git** | Latest | Version control |
 
 **Verify your setup:**
 ```bash
 node --version   # Should be v22+
 npm --version    # Should be 10+
-code --version   # Should be 1.85+
+code --version   # Should be 1.98+
 ```
 
 ---
@@ -84,11 +84,11 @@ npm run watch:debug
 2. Press **F5** (or Run → Start Debugging)
 3. A new VS Code window opens with the extension loaded
 4. Open any `.md` file
-5. Right-click → **"Open with Markdown for Humans"**
+5. Right-click → **"Open with Markdown Editor for Humans"**
 
 ### 4. View Logs and Debug
 
-- **Extension logs**: View → Output → select "Markdown for Humans"
+- **Extension errors**: Help → Toggle Developer Tools → Console
 - **Webview DevTools**: In the Extension Development Host, run command `Developer: Open Webview Developer Tools`
 - **Breakpoints**: Set breakpoints in `src/` files; they work in both extension and webview code
 
@@ -206,9 +206,17 @@ npm test -- --coverage
 
 ```
 src/__tests__/
-├── editor/           # Extension-side tests
-├── webview/          # Webview/TipTap tests
-└── fixtures/         # Test fixtures
+├── editor/           # Extension host: provider, sync, Feedback services
+├── extension/        # Activation, commands, manifest policy
+├── features/         # Outline, export, word count
+├── webview/          # TipTap editor, serialization, real-editor round trips
+├── shared/           # Protocols shared by host and webview
+├── l10n/             # Translation bundle and hardcoded-text guards
+├── release/          # Release docs guard (README table, CHANGELOG, KNOWN_ISSUES)
+├── audit/            # Source fidelity audit corpus
+├── fixtures/         # Markdown fixtures
+└── helpers/          # Test helpers
+test/integration/     # Extension Development Host suite (npm run test:integration)
 ```
 
 ### Writing Tests
@@ -258,7 +266,7 @@ After packaging, install the `.vsix` file locally to test:
 
 **Via Command Line:**
 ```bash
-code --install-extension markdown-for-humans-0.1.0.vsix
+code --install-extension markdown-for-humans-<x.y.z>.vsix
 ```
 
 **Via VS Code UI:**
@@ -309,8 +317,11 @@ npm run lint:fix
 # Check for linting issues
 npm run lint
 
-# Prettier runs automatically on save (VS Code)
+# Check types (CI runs this; the bundler and Jest do not check every file)
+npm run typecheck
 ```
+
+Prettier runs through ESLint (`plugin:prettier/recommended`), so `npm run lint:fix` formats the code.
 
 ### Commit Messages
 
@@ -337,6 +348,17 @@ git commit -m "fix: resolve cursor jump after image insert"
 ---
 
 ## How to Contribute
+
+### 🌍 Translate or Review a Language
+
+You do not need to write code to help here.
+
+- **Review a language you read natively.** Open the file for your language in [`l10n/`](./l10n) and tell us what reads wrong, in an issue or a pull request.
+- **Add a language.** Follow the steps in [`l10n/README.md`](./l10n/README.md): copy the English file, translate the values, open a pull request that changes only files in `l10n/`.
+- Automated checks make sure a translation cannot break the editor (placeholders kept, no markup, no stale entries). A second native reader, or a maintainer reading a back-translation, checks the meaning.
+- A language ships only when it is complete. Until then it stays in `l10n/drafts/` and users see English.
+
+Writing code? Every text a user can read must be translatable. See [`vibe-coding-rules/localization.md`](./vibe-coding-rules/localization.md).
 
 ### 🐛 Report Bugs
 
@@ -372,7 +394,7 @@ We use a **planning-first approach** where features are planned before implement
    - The template includes placeholders and hints to guide you
 
 2. **If your tool has a plan feature** (like Cursor):
-   - Use it — plans are typically created in tool-specific locations (e.g., `.cursor/plans/`)
+   - Use it: plans are typically created in tool-specific locations (e.g., `.cursor/plans/`)
    - Move to pipeline when ready: `git mv [source]/[name].md roadmap/pipeline/[name].md`
 
 3. **If your tool doesn't have a plan mode:**
@@ -403,9 +425,10 @@ See [roadmap/README.md](./roadmap/README.md) for detailed planning workflow.
 
 ### Pull Request Checklist
 
-- [ ] Tests added/updated and passing
-- [ ] Linting passes (`npm run lint`)
+- [ ] Tests added/updated and passing (write the failing test first)
+- [ ] Linting passes (`npm run lint`) and types check (`npm run typecheck`)
 - [ ] Build succeeds (`npm run build:release`)
+- [ ] New or changed UI text is translatable and `npm run l10n:extract` was run (see [`vibe-coding-rules/localization.md`](./vibe-coding-rules/localization.md))
 - [ ] Documentation updated if needed
 - [ ] Commit messages follow conventions
 - [ ] PR description explains changes

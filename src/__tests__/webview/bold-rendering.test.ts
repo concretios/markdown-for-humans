@@ -7,6 +7,7 @@ import { Markdown } from '@tiptap/markdown';
 import { ListKit } from '@tiptap/extension-list';
 import { MarkdownParagraph } from '../../webview/extensions/markdownParagraph';
 import { OrderedListMarkdownFix } from '../../webview/extensions/orderedListMarkdownFix';
+import { MarkdownListItem } from '../../webview/extensions/markdownListItem';
 
 function createTestEditor(): Editor {
   const element = document.createElement('div');
@@ -38,11 +39,13 @@ function createTestEditor(): Editor {
       }),
       // Match the real editor which registers ListKit alongside StarterKit.
       ListKit.configure({
+        listItem: false,
         orderedList: false,
         taskItem: {
           nested: true,
         },
       }),
+      MarkdownListItem,
       OrderedListMarkdownFix,
     ],
     editorProps: {

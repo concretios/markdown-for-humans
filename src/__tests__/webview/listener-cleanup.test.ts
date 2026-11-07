@@ -76,30 +76,4 @@ describe('listener cleanup on editor destroy', () => {
       expect(windowRemoveEventListenerSpy).toHaveBeenCalledWith('dragleave', handleWindowDragLeave);
     });
   });
-
-  describe('editor global listeners', () => {
-    it('should remove contextmenu, click, keydown listeners on destroy', () => {
-      const contextMenuHandler = jest.fn();
-      const documentClickHandler = jest.fn();
-      const keydownHandler = jest.fn();
-
-      // Simulate editor initialization
-      document.addEventListener('contextmenu', contextMenuHandler);
-      document.addEventListener('click', documentClickHandler);
-      document.addEventListener('keydown', keydownHandler);
-
-      expect(addEventListenerSpy).toHaveBeenCalledWith('contextmenu', contextMenuHandler);
-      expect(addEventListenerSpy).toHaveBeenCalledWith('click', documentClickHandler);
-      expect(addEventListenerSpy).toHaveBeenCalledWith('keydown', keydownHandler);
-
-      // Simulate editor destroy cleanup
-      document.removeEventListener('contextmenu', contextMenuHandler);
-      document.removeEventListener('click', documentClickHandler);
-      document.removeEventListener('keydown', keydownHandler);
-
-      expect(removeEventListenerSpy).toHaveBeenCalledWith('contextmenu', contextMenuHandler);
-      expect(removeEventListenerSpy).toHaveBeenCalledWith('click', documentClickHandler);
-      expect(removeEventListenerSpy).toHaveBeenCalledWith('keydown', keydownHandler);
-    });
-  });
 });

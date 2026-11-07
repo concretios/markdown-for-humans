@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 180" font-family="Helvetica, Arial, sans-serif">
+  <rect width="760" height="180" rx="12" fill="#f7f9fc"/>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a5568"/>
+    </marker>
+  </defs>
+  <g font-size="15" text-anchor="middle">
+    <rect x="20" y="55" width="150" height="70" rx="10" fill="#e3edff" stroke="#3b6fd8" stroke-width="2"/>
+    <text x="95" y="86" fill="#1a365d">WYSIWYG</text><text x="95" y="106" fill="#1a365d">editor</text>
+    <rect x="215" y="55" width="150" height="70" rx="10" fill="#e6f6ec" stroke="#2f855a" stroke-width="2"/>
+    <text x="290" y="86" fill="#22543d">Serializer</text><text x="290" y="106" fill="#22543d">(source kept)</text>
+    <rect x="410" y="55" width="150" height="70" rx="10" fill="#fff4e0" stroke="#c05621" stroke-width="2"/>
+    <text x="485" y="86" fill="#7b341e">VS Code</text><text x="485" y="106" fill="#7b341e">TextDocument</text>
+    <rect x="605" y="55" width="135" height="70" rx="10" fill="#f3e8ff" stroke="#6b46c1" stroke-width="2"/>
+    <text x="672" y="96" fill="#44337a">File on disk</text>
+  </g>
+  <g stroke="#4a5568" stroke-width="2" marker-end="url(#arrow)">
+    <line x1="170" y1="90" x2="213" y2="90"/><line x1="365" y1="90" x2="408" y2="90"/><line x1="560" y1="90" x2="603" y2="90"/>
+  </g>
+  <text x="380" y="160" font-size="13" text-anchor="middle" fill="#4a5568">Unedited blocks keep their exact Markdown on save</text>
+</svg>

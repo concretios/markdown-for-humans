@@ -2,6 +2,13 @@ import { MarkdownEditorProvider } from '../../editor/MarkdownEditorProvider';
 import * as vscode from 'vscode';
 
 jest.mock('vscode', () => ({
+  l10n: {
+    t: (message: string, ...args: unknown[]) =>
+      message.replace(/\{(\d+)\}/g, (m, i) =>
+        args[Number(i)] === undefined ? m : String(args[Number(i)])
+      ),
+    bundle: undefined,
+  },
   window: {
     showErrorMessage: jest.fn(),
     showInformationMessage: jest.fn(),

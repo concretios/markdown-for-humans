@@ -19,6 +19,7 @@ import {
   createMockTextDocument,
   createMockTextEditor,
   mockStatusBarItem,
+  Selection,
 } from '../../__mocks__/vscode';
 
 describe('calculateStats', () => {
@@ -150,6 +151,60 @@ describe('calculateStats', () => {
     });
   });
 
+  describe('text written without spaces between words', () => {
+    // Word processors count one per Chinese or Japanese character, plus the other words.
+    it('counts each Chinese character', () => {
+      expect(calculateStats('我喜欢吃苹果，你喜欢吃什么水果？').words).toBe(14);
+    });
+
+    it('counts each Japanese character, kana and kanji alike', () => {
+      expect(calculateStats('今日は天気がいいので、公園を散歩しましょう。').words).toBe(20);
+      // The long vowel mark is part of the word, as in エディター.
+      expect(calculateStats('このエディターはマークダウンファイルを開きます。').words).toBe(23);
+    });
+
+    it('adds the spaced words of mixed text to the characters', () => {
+      expect(calculateStats('使用 VS Code 打开 Markdown 文件，然后点击 Export 按钮。').words).toBe(
+        16
+      );
+      expect(calculateStats('VS Code で Markdown ファイルを開きます。').words).toBe(13);
+    });
+
+    it('finds Latin words that touch Chinese characters without a space', () => {
+      expect(calculateStats('打开Markdown文件').words).toBe(5);
+      expect(calculateStats('共有3个文件').words).toBe(6);
+    });
+
+    it('does not count punctuation or Markdown markers around the characters', () => {
+      expect(calculateStats('**你好**，世界！').words).toBe(4);
+      expect(calculateStats('「こんにちは」').words).toBe(5);
+    });
+
+    it('still counts Korean by its spaces', () => {
+      expect(calculateStats('오늘은 날씨가 좋아서 공원에 갑니다.').words).toBe(5);
+    });
+
+    it.each([
+      ['A well-known, state-of-the-art approach', 4],
+      ['See https://example.com/docs/page?id=1 for details', 4],
+      ['**bold** and *italic* with `code` and [a link](http://x.y)', 8],
+      ['const x = foo.bar(baz); // done', 6],
+      ['mail a.b@c.com or open src/app/main.ts', 5],
+      ['Сегодня хорошая погода, пойдём гулять.', 5],
+    ])('leaves the count of spaced text unchanged: %s', (text, expected) => {
+      expect(calculateStats(text).words).toBe(expected);
+    });
+
+    it('estimates reading time at 500 characters a minute, added to the time for other words', () => {
+      expect(calculateStats('字'.repeat(400)).readingTime).toBe(1);
+      expect(calculateStats('字'.repeat(1000)).readingTime).toBe(2);
+      // 200 words (1 minute) plus 500 characters (1 minute)
+      const mixed = `${Array(200).fill('word').join(' ')} ${'字'.repeat(500)}`;
+      expect(calculateStats(mixed).readingTime).toBe(2);
+      expect(calculateStats(`${mixed} ${'字'.repeat(10)}`).readingTime).toBe(3);
+    });
+  });
+
   describe('reading time calculation', () => {
     it('should calculate 1 minute for short text', () => {
       const stats = calculateStats('A short sentence.');
@@ -238,6 +293,44 @@ describe('formatStatsTooltip', () => {
     expect(tooltip).toContain('100 lines');
     expect(tooltip).toContain('25 paragraphs');
     expect(tooltip).toContain('~6 min read');
+  });
+
+  it('groups digits the way the display language does', () => {
+    const env = vscode.env as unknown as { language?: string };
+    const original = env.language;
+    env.language = 'de';
+    try {
+      const tooltip = formatStatsTooltip({
+        words: 1234,
+        characters: 5678,
+        charactersNoSpaces: 4444,
+        lines: 100,
+        paragraphs: 25,
+        readingTime: 6,
+      });
+      expect(tooltip).toContain('5.678 characters');
+    } finally {
+      env.language = original;
+    }
+  });
+
+  it('uses the singular for a count of exactly one', () => {
+    const tooltip = formatStatsTooltip({
+      words: 1,
+      characters: 1,
+      charactersNoSpaces: 1,
+      lines: 1,
+      paragraphs: 1,
+      readingTime: 1,
+    });
+
+    expect(tooltip.split('\n')).toEqual([
+      '1 character',
+      '1 character (no spaces)',
+      '1 line',
+      '1 paragraph',
+      '~1 min read',
+    ]);
   });
 
   it('should handle zero values', () => {
@@ -399,6 +492,16 @@ describe('WordCountFeature', () => {
       expect(window.showInformationMessage).toHaveBeenCalledWith('No markdown document open');
     });
 
+    it('should show the translated message when VS Code has one', () => {
+      window.activeTextEditor = undefined;
+      (vscode.l10n.t as jest.Mock).mockReturnValueOnce('没有打开的 Markdown 文档');
+
+      feature.showDetailedStats();
+
+      expect(vscode.l10n.t).toHaveBeenCalledWith('No markdown document open');
+      expect(window.showInformationMessage).toHaveBeenCalledWith('没有打开的 Markdown 文档');
+    });
+
     it('should show stats for markdown document', () => {
       const doc = createMockTextDocument('Hello world test', 'markdown');
       window.activeTextEditor = createMockTextEditor(doc);
@@ -419,5 +522,81 @@ describe('WordCountFeature', () => {
 
       expect(mockStatusBarItem.dispose).toHaveBeenCalled();
     });
+  });
+});
+
+describe('WordCountFeature localization', () => {
+  const translate = vscode.l10n.t as jest.Mock;
+  const englishTranslate = translate.getMockImplementation();
+  // Leaves out "Lines: {0}" on purpose, to exercise the fallback to English.
+  const sampleBundle: Record<string, string> = {
+    '{0} words': '{0} 个词',
+    '{0} words selected': '已选中 {0} 个词',
+    '{0} characters': '{0} 个字符',
+    '{0} characters (no spaces)': '{0} 个字符（不含空格）',
+    '{0} lines': '{0} 行',
+    '{0} paragraphs': '{0} 段',
+    '~{0} min read': '约 {0} 分钟阅读',
+    'Selected:\n{0}': '已选中：\n{0}',
+    '📊 Document Statistics': '📊 文档统计',
+    'Words: {0}': '词数：{0}',
+    'Characters: {0}': '字符数：{0}',
+    'Paragraphs: {0}': '段落数：{0}',
+    'Reading time: ~{0} min': '阅读时间：约 {0} 分钟',
+  };
+  let feature: WordCountFeature;
+  const mockContext = { subscriptions: { push: jest.fn() } } as unknown as vscode.ExtensionContext;
+
+  beforeEach(() => {
+    translate.mockImplementation((message: string, ...args: Array<string | number | boolean>) =>
+      (sampleBundle[message] ?? message).replace(/\{(\d+)\}/g, (placeholder, index: string) =>
+        args[Number(index)] === undefined ? placeholder : String(args[Number(index)])
+      )
+    );
+    feature = new WordCountFeature();
+  });
+
+  afterEach(() => {
+    feature.dispose();
+    translate.mockImplementation(englishTranslate);
+    window.activeTextEditor = undefined;
+  });
+
+  it('shows the translated count and tooltip, keeping the icon prefix', () => {
+    const doc = createMockTextDocument('Hello world foo bar', 'markdown');
+    window.activeTextEditor = createMockTextEditor(doc);
+
+    feature.activate(mockContext);
+
+    expect(mockStatusBarItem.text).toBe('$(pencil) 4 个词');
+    expect(mockStatusBarItem.tooltip).toContain('19 个字符');
+    expect(mockStatusBarItem.tooltip).toContain('约 1 分钟阅读');
+  });
+
+  it('shows the translated selection count and tooltip', () => {
+    const doc = createMockTextDocument('Hello world foo bar', 'markdown');
+    window.activeTextEditor = createMockTextEditor(
+      doc,
+      new Selection({ line: 0, character: 0 }, { line: 0, character: 5 })
+    );
+    feature.activate(mockContext);
+    const onSelectionChange = (window.onDidChangeTextEditorSelection as jest.Mock).mock
+      .calls[0][0] as () => void;
+
+    onSelectionChange();
+
+    expect(mockStatusBarItem.text).toBe('$(pencil) 已选中 4 个词');
+    expect(String(mockStatusBarItem.tooltip).startsWith('已选中：\n19 个字符')).toBe(true);
+  });
+
+  it('shows the translated detailed statistics', () => {
+    const doc = createMockTextDocument('Hello world test', 'markdown');
+    window.activeTextEditor = createMockTextEditor(doc);
+
+    feature.showDetailedStats();
+
+    expect(window.showInformationMessage).toHaveBeenCalledWith(
+      '📊 文档统计 | 词数：3 | 字符数：16 | Lines: 1 | 段落数：1 | 阅读时间：约 1 分钟'
+    );
   });
 });

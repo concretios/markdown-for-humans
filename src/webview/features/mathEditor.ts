@@ -17,6 +17,7 @@
 
 import katex from 'katex';
 import { preserveProseSpaces } from '../utils/preserveProseSpaces';
+import * as l10n from '../l10n';
 
 interface MathEditOptions {
   initialLatex: string;
@@ -51,34 +52,79 @@ interface MathTemplate {
   title?: string;
 }
 
-const MATH_TEMPLATES: MathTemplate[] = [
-  // Text — preserves spaces (math mode collapses them). Select words first to
-  // wrap them, or click to drop an empty \text{} and type inside.
-  {
-    label: 'Text',
-    wrap: { before: '\\text{', after: '}' },
-    title: 'Wrap words in \\text{ } so spaces are preserved',
-  },
-  // Building blocks
-  { label: 'Fraction', latex: '\\frac{a}{b}' },
-  { label: 'Power xⁿ', latex: 'x^{2}' },
-  { label: 'Subscript xᵢ', latex: 'x_{i}' },
-  { label: 'Root', latex: '\\sqrt{x}' },
-  // Calculus
-  { label: 'Sum', latex: '\\sum_{i=1}^{n} i' },
-  { label: 'Integral', latex: '\\int_{a}^{b} f(x)\\,dx' },
-  { label: 'Limit', latex: '\\lim_{x \\to \\infty} f(x)' },
-  { label: 'Derivative', latex: '\\frac{d}{dx} f(x)' },
-  // Algebra / linear algebra
-  { label: 'Quadratic', latex: 'x = \\frac{-b \\pm \\sqrt{b^{2} - 4ac}}{2a}' },
-  { label: 'Matrix', latex: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}' },
-  // Statistics
-  { label: 'Mean x̄', latex: '\\bar{x} = \\frac{1}{n} \\sum_{i=1}^{n} x_i' },
-  { label: 'Std dev σ', latex: '\\sigma = \\sqrt{\\frac{1}{n} \\sum_{i=1}^{n} (x_i - \\mu)^{2}}' },
-  // Physics / Greek
-  { label: 'E=mc²', latex: 'E = mc^{2}' },
-  { label: 'Greek', latex: '\\alpha\\,\\beta\\,\\gamma\\,\\pi\\,\\theta' },
-];
+// Built per dialog, not at import, so the labels follow the display language.
+function getMathTemplates(): MathTemplate[] {
+  return [
+    // Text: preserves spaces (math mode collapses them). Select words first to
+    // wrap them, or click to drop an empty \text{} and type inside.
+    {
+      label: l10n.t({
+        message: 'Text',
+        comment: 'Math template button that wraps words as plain text inside a formula',
+      }),
+      wrap: { before: '\\text{', after: '}' },
+      title: l10n.t('Wrap words in {0} so spaces are preserved', '\\text{ }'),
+    },
+    // Building blocks
+    { label: l10n.t('Fraction'), latex: '\\frac{a}{b}' },
+    { label: l10n.t('Power xⁿ'), latex: 'x^{2}' },
+    { label: l10n.t('Subscript xᵢ'), latex: 'x_{i}' },
+    {
+      label: l10n.t({
+        message: 'Root',
+        comment: 'Math template button that inserts a square root',
+      }),
+      latex: '\\sqrt{x}',
+    },
+    // Calculus
+    {
+      label: l10n.t({
+        message: 'Sum',
+        comment: 'Math template button that inserts a summation formula',
+      }),
+      latex: '\\sum_{i=1}^{n} i',
+    },
+    { label: l10n.t('Integral'), latex: '\\int_{a}^{b} f(x)\\,dx' },
+    {
+      label: l10n.t({
+        message: 'Limit',
+        comment: 'Math template button that inserts a calculus limit',
+      }),
+      latex: '\\lim_{x \\to \\infty} f(x)',
+    },
+    { label: l10n.t('Derivative'), latex: '\\frac{d}{dx} f(x)' },
+    // Algebra / linear algebra
+    {
+      label: l10n.t({
+        message: 'Quadratic',
+        comment: 'Math template button that inserts the quadratic formula',
+      }),
+      latex: 'x = \\frac{-b \\pm \\sqrt{b^{2} - 4ac}}{2a}',
+    },
+    { label: l10n.t('Matrix'), latex: '\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}' },
+    // Statistics
+    {
+      label: l10n.t({
+        message: 'Mean x̄',
+        comment: 'Math template button that inserts the formula for the average of a sample',
+      }),
+      latex: '\\bar{x} = \\frac{1}{n} \\sum_{i=1}^{n} x_i',
+    },
+    {
+      label: l10n.t('Std dev σ'),
+      latex: '\\sigma = \\sqrt{\\frac{1}{n} \\sum_{i=1}^{n} (x_i - \\mu)^{2}}',
+    },
+    // Physics / Greek
+    { label: 'E=mc²', latex: 'E = mc^{2}' }, // l10n-ignore: formula, not words
+    {
+      label: l10n.t({
+        message: 'Greek',
+        comment: 'Math template button that inserts Greek letters, not the language',
+      }),
+      latex: '\\alpha\\,\\beta\\,\\gamma\\,\\pi\\,\\theta',
+    },
+  ];
+}
 
 export async function showMathEditor(options: MathEditOptions): Promise<MathEditResult> {
   return new Promise(resolve => {
@@ -123,7 +169,9 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
       justify-content: space-between;
       align-items: center;
     `;
-    const titleText = options.displayMode ? 'Edit Display Math' : 'Edit Inline Math';
+    const titleText = options.displayMode
+      ? l10n.html('Edit Display Math')
+      : l10n.html('Edit Inline Math');
     header.innerHTML = `
       <h3 style="margin: 0; color: var(--vscode-foreground); font-size: 14px; font-weight: 600;">
         ${titleText}
@@ -133,7 +181,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
           color: var(--vscode-textLink-foreground);
           font-size: 12px;
           text-decoration: none;
-        " title="Open KaTeX supported functions reference">KaTeX docs</a>
+        " title="${l10n.html('Open KaTeX supported functions reference')}">${l10n.html('KaTeX docs')}</a>
         <button id="close-btn" style="
           background: none;
           border: none;
@@ -144,7 +192,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
           padding: 0;
           width: 24px;
           height: 24px;
-        " title="Close (Esc)" aria-label="Close">×</button>
+        " title="${l10n.html('Close (Esc)')}" aria-label="${l10n.html('Close')}">×</button>
       </div>
     `;
 
@@ -166,7 +214,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
     `;
 
     const editorLabel = document.createElement('div');
-    editorLabel.textContent = 'LaTeX source';
+    editorLabel.textContent = l10n.t('LaTeX source');
     editorLabel.style.cssText = `
       padding: 8px 16px;
       font-size: 11px;
@@ -183,8 +231,11 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
     // Contextual examples so the expected format is obvious at a glance. Display
     // math leans on multi-part expressions; inline math shows compact snippets.
     textarea.placeholder = options.displayMode
-      ? 'e.g.   \\sum_{i=1}^{n} i        \\int_{a}^{b} f(x)\\,dx        x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}'
-      : 'e.g.   x^{2}        \\frac{a}{b}        \\sqrt{x}        a + b';
+      ? l10n.t(
+          'e.g. {0}',
+          '  \\sum_{i=1}^{n} i        \\int_{a}^{b} f(x)\\,dx        x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}'
+        )
+      : l10n.t('e.g. {0}', '  x^{2}        \\frac{a}{b}        \\sqrt{x}        a + b');
     textarea.style.cssText = `
       flex: 1;
       padding: 16px 20px;
@@ -211,7 +262,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
     `;
 
     const previewLabel = document.createElement('div');
-    previewLabel.textContent = 'Preview';
+    previewLabel.textContent = l10n.t('Preview');
     previewLabel.style.cssText = `
       padding: 8px 16px;
       font-size: 11px;
@@ -271,7 +322,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
       <span style="
         color: var(--vscode-descriptionForeground);
         font-size: 12px;
-      ">Cmd/Ctrl+S to save · Esc to cancel</span>
+      ">${l10n.html('Cmd/Ctrl+S to save · Esc to cancel')}</span>
       <div style="display: flex; gap: 8px;">
         <button id="cancel-btn" style="
           padding: 6px 14px;
@@ -282,7 +333,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
           cursor: pointer;
           font-family: var(--vscode-font-family);
           font-size: 13px;
-        ">Cancel</button>
+        ">${l10n.html('Cancel')}</button>
         <button id="save-btn" style="
           padding: 6px 14px;
           background: var(--vscode-button-background);
@@ -293,7 +344,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
           font-family: var(--vscode-font-family);
           font-weight: 500;
           font-size: 13px;
-        ">Save</button>
+        ">${l10n.html('Save')}</button>
       </div>
     `;
 
@@ -323,8 +374,7 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
       const latex = textarea.value;
 
       if (!latex.trim()) {
-        previewBox.innerHTML =
-          '<span style="color: var(--vscode-descriptionForeground); font-style: italic;">Type LaTeX to see the preview…</span>';
+        previewBox.innerHTML = `<span style="color: var(--vscode-descriptionForeground); font-style: italic;">${l10n.html('Type LaTeX to see the preview…')}</span>`;
         errorBox.style.display = 'none';
         errorBox.textContent = '';
         return;
@@ -340,9 +390,8 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
         errorBox.style.display = 'none';
         errorBox.textContent = '';
       } catch (err) {
-        previewBox.innerHTML =
-          '<span style="color: var(--vscode-descriptionForeground); font-style: italic;">Preview unavailable — see error below.</span>';
-        const message = err instanceof Error ? err.message : 'KaTeX render error';
+        previewBox.innerHTML = `<span style="color: var(--vscode-descriptionForeground); font-style: italic;">${l10n.html('Preview unavailable. See error below.')}</span>`;
+        const message = err instanceof Error ? err.message : l10n.t('KaTeX render error');
         errorBox.style.display = 'block';
         errorBox.textContent = message;
       }
@@ -391,9 +440,9 @@ export async function showMathEditor(options: MathEditOptions): Promise<MathEdit
     templateBar.className = 'math-template-bar';
     const templateBarLabel = document.createElement('span');
     templateBarLabel.className = 'math-template-label';
-    templateBarLabel.textContent = 'Templates';
+    templateBarLabel.textContent = l10n.t('Templates');
     templateBar.appendChild(templateBarLabel);
-    MATH_TEMPLATES.forEach(template => {
+    getMathTemplates().forEach(template => {
       const chip = document.createElement('button');
       chip.type = 'button';
       chip.className = 'math-template-chip';

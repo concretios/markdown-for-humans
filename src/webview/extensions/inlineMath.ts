@@ -28,6 +28,7 @@ import { Node, mergeAttributes } from '@tiptap/core';
 import type { JSONContent, MarkdownRendererHelpers, MarkdownToken } from '@tiptap/core';
 import katex from 'katex';
 import { preserveProseSpaces } from '../utils/preserveProseSpaces';
+import * as l10n from '../l10n';
 
 interface InlineMathToken {
   type: string;
@@ -145,8 +146,8 @@ export const InlineMath = Node.create({
       const render = () => {
         span.setAttribute('data-latex', currentLatex);
         span.title = currentLatex
-          ? `${currentLatex} (double-click to edit)`
-          : 'Empty math (double-click to edit)';
+          ? l10n.t('{0} (double-click to edit)', currentLatex)
+          : l10n.t('Empty math (double-click to edit)');
         span.classList.remove('md4h-math-error');
 
         if (!currentLatex.trim()) {
@@ -167,7 +168,7 @@ export const InlineMath = Node.create({
         } catch (err) {
           span.classList.add('md4h-math-error');
           span.textContent = `$${currentLatex}$`;
-          span.title = err instanceof Error ? err.message : 'KaTeX render error';
+          span.title = err instanceof Error ? err.message : l10n.t('KaTeX render error');
         }
       };
 

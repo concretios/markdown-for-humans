@@ -5,6 +5,7 @@
  */
 
 import { showMermaidEditor } from '../../webview/features/mermaidEditor';
+import * as l10n from '../../webview/l10n';
 
 describe('Mermaid Modal Editor', () => {
   it('should return edited code when saved', async () => {
@@ -71,5 +72,43 @@ describe('Mermaid Modal Editor', () => {
     const result = await showMermaidEditor(initialCode);
 
     expect(result.wasSaved).toBe(false);
+  });
+});
+
+describe('Mermaid Modal Editor localization', () => {
+  const sampleBundle: Record<string, string> = {
+    'Edit Mermaid Diagram': '编辑 Mermaid 图表',
+    'Close (Esc)': '关闭 (Esc)',
+    Close: '关闭',
+    Cancel: '取消',
+  };
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    l10n.resetL10n();
+  });
+
+  it('shows English when no bundle is loaded', () => {
+    const pending = showMermaidEditor('graph TD');
+
+    expect(document.querySelector('h3')?.textContent?.trim()).toBe('Edit Mermaid Diagram');
+    expect(document.querySelector('#save-btn')?.textContent).toBe('Save');
+    (document.querySelector('#cancel-btn') as HTMLButtonElement).click();
+    return pending;
+  });
+
+  it('shows the translated title, buttons and tooltips', async () => {
+    l10n.configureL10n(sampleBundle);
+    const pending = showMermaidEditor('graph TD');
+
+    const closeBtn = document.querySelector('#close-btn') as HTMLButtonElement;
+    expect(document.querySelector('h3')?.textContent?.trim()).toBe('编辑 Mermaid 图表');
+    expect(closeBtn.title).toBe('关闭 (Esc)');
+    expect(closeBtn.getAttribute('aria-label')).toBe('关闭');
+    expect(document.querySelector('#cancel-btn')?.textContent).toBe('取消');
+    // Not in the bundle: falls back to English.
+    expect(document.querySelector('#save-btn')?.textContent).toBe('Save');
+    closeBtn.click();
+    await pending;
   });
 });

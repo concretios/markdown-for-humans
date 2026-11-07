@@ -7,6 +7,7 @@
 import { Editor } from '@tiptap/core';
 import { buildOutlineFromEditor } from '../utils/outline';
 import { scrollToHeading } from '../utils/scrollToHeading';
+import * as l10n from '../l10n';
 
 /**
  * TOC Overlay state
@@ -24,7 +25,7 @@ export function createTocOverlay(editor: Editor): HTMLElement {
   const overlay = document.createElement('div');
   overlay.className = 'toc-overlay';
   overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-label', 'Document outline');
+  overlay.setAttribute('aria-label', l10n.t('Document outline'));
   overlay.setAttribute('aria-modal', 'true');
 
   // Create backdrop
@@ -40,8 +41,8 @@ export function createTocOverlay(editor: Editor): HTMLElement {
   const header = document.createElement('div');
   header.className = 'toc-overlay-header';
   header.innerHTML = `
-    <h2 class="toc-overlay-title">Document Outline</h2>
-    <button class="toc-overlay-close" aria-label="Close outline" title="Close (Esc)">×</button>
+    <h2 class="toc-overlay-title">${l10n.html('Document Outline')}</h2>
+    <button class="toc-overlay-close" aria-label="${l10n.html('Close outline')}" title="${l10n.html('Close (Esc)')}">×</button>
   `;
 
   const closeBtn = header.querySelector('.toc-overlay-close') as HTMLElement;
@@ -83,9 +84,10 @@ function renderTocList(editor: Editor, listContainer: HTMLElement): void {
     // Show empty state message
     const emptyMessage = document.createElement('div');
     emptyMessage.className = 'toc-overlay-empty';
+    const headingSample = '<code># Heading</code>'; // Markdown syntax, not text to translate
     emptyMessage.innerHTML = `
-      <p>No headings yet.</p>
-      <p class="toc-overlay-empty-hint">Add <code># Heading</code> to see your document outline.</p>
+      <p>${l10n.html('No headings yet.')}</p>
+      <p class="toc-overlay-empty-hint">${l10n.html('Add {0} to see your document outline.').replace('{0}', headingSample)}</p>
     `;
     listContainer.appendChild(emptyMessage);
     return;
@@ -102,7 +104,7 @@ function renderTocList(editor: Editor, listContainer: HTMLElement): void {
     // Create text content
     const textContent = document.createElement('span');
     textContent.className = 'toc-overlay-item-text';
-    textContent.textContent = entry.text || '(Untitled)';
+    textContent.textContent = entry.text || l10n.t('(Untitled)');
 
     // Append text content only (no level indicator)
     item.appendChild(textContent);

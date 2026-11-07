@@ -36,6 +36,13 @@ jest.mock('vscode', () => ({
     executeCommand: jest.fn(),
     registerCommand: jest.fn(() => ({ dispose: jest.fn() })),
   },
+  l10n: {
+    t: (message: string, ...args: unknown[]) =>
+      message.replace(/\{(\d+)\}/g, (m, i) =>
+        args[Number(i)] === undefined ? m : String(args[Number(i)])
+      ),
+    bundle: undefined,
+  },
   window: {
     showInformationMessage: jest.fn(),
     showErrorMessage: jest.fn(),
@@ -67,10 +74,7 @@ jest.mock('vscode', () => ({
   },
   TreeItem: class TreeItem {
     public iconPath:
-      | vscode.Uri
-      | { light: vscode.Uri; dark: vscode.Uri }
-      | vscode.ThemeIcon
-      | undefined;
+      vscode.Uri | { light: vscode.Uri; dark: vscode.Uri } | vscode.ThemeIcon | undefined;
     public description?: string;
     public command?: vscode.Command;
     public contextValue?: string;
@@ -307,6 +311,54 @@ describe('MarkdownEditorProvider - In-Memory File Support', () => {
   });
 
   describe('resolveCustomTextEditor - localResourceRoots', () => {
+    it('does not expose the workspace parent to a workspace webview', async () => {
+      const document = createMockTextDocument('content');
+      document.uri = {
+        scheme: 'file',
+        fsPath: '/projects/notes/docs/guide.md',
+        toString: () => 'file:///projects/notes/docs/guide.md',
+      } as unknown as vscode.Uri;
+      const workspaceFolder = {
+        uri: { fsPath: '/projects/notes', scheme: 'file' } as vscode.Uri,
+      } as vscode.WorkspaceFolder;
+      const webviewPanel = {
+        webview: mockWebview as unknown as vscode.Webview,
+        onDidChangeViewState: jest.fn(),
+        onDidDispose: jest.fn(),
+      } as unknown as vscode.WebviewPanel;
+      (vscode.workspace.getWorkspaceFolder as jest.Mock).mockReturnValue(workspaceFolder);
+
+      await getProviderInternals().resolveCustomTextEditor(
+        document as unknown as vscode.TextDocument,
+        webviewPanel,
+        { isCancellationRequested: false } as vscode.CancellationToken
+      );
+
+      const roots = webviewPanel.webview.options.localResourceRoots as vscode.Uri[];
+      expect(roots).toContainEqual(expect.objectContaining({ fsPath: '/projects/notes' }));
+      expect(roots).not.toContainEqual(expect.objectContaining({ fsPath: '/projects' }));
+    });
+
+    it('does not initialize a custom editor after resolution is cancelled', async () => {
+      const document = createMockTextDocument('content');
+      const webviewPanel = {
+        webview: mockWebview as unknown as vscode.Webview,
+        onDidChangeViewState: jest.fn(),
+        onDidDispose: jest.fn(),
+      } as unknown as vscode.WebviewPanel;
+
+      await getProviderInternals().resolveCustomTextEditor(
+        document as unknown as vscode.TextDocument,
+        webviewPanel,
+        { isCancellationRequested: true } as vscode.CancellationToken
+      );
+
+      expect(webviewPanel.webview.options).toEqual({});
+      expect(mockWebview.onDidReceiveMessage).not.toHaveBeenCalled();
+      expect(webviewPanel.onDidChangeViewState).not.toHaveBeenCalled();
+      expect(webviewPanel.onDidDispose).not.toHaveBeenCalled();
+    });
+
     it('should include workspace folder for untitled file in workspace', async () => {
       const document = createMockTextDocument('content');
       document.uri = {

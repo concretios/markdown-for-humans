@@ -6,6 +6,15 @@
 
 import { Node, mergeAttributes } from '@tiptap/core';
 import mermaid from 'mermaid';
+import * as l10n from '../l10n';
+
+const MERMAID_RENDER_STATE_ATTRIBUTE = 'data-md4h-mermaid-state';
+type MermaidRenderState = 'pending' | 'ready' | 'error';
+
+function setMermaidRenderState(container: HTMLElement, state: MermaidRenderState): void {
+  container.setAttribute(MERMAID_RENDER_STATE_ATTRIBUTE, state);
+  container.setAttribute('aria-busy', state === 'pending' ? 'true' : 'false');
+}
 
 /**
  * Detect if VS Code is in dark mode by checking CSS variables
@@ -43,6 +52,41 @@ function initializeMermaid() {
 
 // Initialize on load
 initializeMermaid();
+
+/**
+ * Re-render callbacks of mounted diagrams. Mermaid bakes the theme into the
+ * SVG, so a VS Code theme switch leaves old colors until each diagram renders
+ * again.
+ */
+const themeRerenderers = new Set<() => void>();
+let themeObserver: MutationObserver | null = null;
+let lastDarkMode = false;
+
+/**
+ * Watch the body class, which VS Code's webview host rewrites together with
+ * the --vscode-* variables on a theme switch. Re-render only when the
+ * light/dark result flips: Feedback and save also toggle body classes.
+ */
+function registerThemeRerender(rerender: () => void): () => void {
+  themeRerenderers.add(rerender);
+  if (!themeObserver) {
+    lastDarkMode = isDarkMode();
+    themeObserver = new MutationObserver(() => {
+      const dark = isDarkMode();
+      if (dark === lastDarkMode) return;
+      lastDarkMode = dark;
+      themeRerenderers.forEach(callback => callback());
+    });
+    themeObserver.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  }
+  return () => {
+    themeRerenderers.delete(rerender);
+    if (themeRerenderers.size === 0) {
+      themeObserver?.disconnect();
+      themeObserver = null;
+    }
+  };
+}
 
 export const Mermaid = Node.create({
   name: 'mermaid',
@@ -143,6 +187,7 @@ export const Mermaid = Node.create({
     return ({ node, getPos, editor }) => {
       const container = document.createElement('div');
       container.classList.add('mermaid-wrapper');
+      setMermaidRenderState(container, 'pending');
 
       const codeElement = document.createElement('pre');
       codeElement.classList.add('mermaid-source');
@@ -163,12 +208,19 @@ export const Mermaid = Node.create({
       container.appendChild(renderElement);
       container.appendChild(zoomButton);
 
+      let renderGeneration = 0;
+      let destroyed = false;
+
       // Render mermaid diagram
       const renderDiagram = async () => {
+        const generation = ++renderGeneration;
+        setMermaidRenderState(container, 'pending');
         const content = codeElement.textContent?.trim() || '';
         if (!content) {
-          renderElement.innerHTML =
-            '<div class="mermaid-placeholder">Enter Mermaid diagram code</div>';
+          renderElement.innerHTML = `<div class="mermaid-placeholder">${l10n.html('Enter Mermaid diagram code')}</div>`;
+          if (!destroyed && generation === renderGeneration) {
+            setMermaidRenderState(container, 'ready');
+          }
           zoomButton.hidden = true;
           return;
         }
@@ -181,38 +233,45 @@ export const Mermaid = Node.create({
             securityLevel: 'strict',
             fontFamily: 'inherit',
           });
-          // Clear previous content to prevent duplicates
-          renderElement.innerHTML = '';
+          // Keep the previous SVG until the new one is ready; innerHTML below
+          // replaces it. Clearing first collapsed the diagram mid-render and
+          // shifted the page, most visibly when a theme switch re-renders all.
 
           // Use timestamp to ensure truly unique IDs and prevent caching
           const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
           const { svg } = await mermaid.render(id, content);
+          if (destroyed || generation !== renderGeneration) return;
           renderElement.innerHTML = svg;
           renderElement.classList.add('rendered');
           codeElement.classList.add('hidden');
+          setMermaidRenderState(container, 'ready');
           zoomButton.hidden = false;
         } catch (error) {
+          if (destroyed || generation !== renderGeneration) return;
           console.error('Mermaid rendering error:', error);
-          const errorMsg = error instanceof Error ? error.message : 'Invalid diagram syntax';
+          const errorMsg =
+            error instanceof Error ? error.message : l10n.t('Invalid diagram syntax');
           renderElement.textContent = '';
           const errorDiv = document.createElement('div');
           errorDiv.className = 'mermaid-error';
-          errorDiv.textContent = `Diagram Error: ${errorMsg}`;
+          errorDiv.textContent = l10n.t('Diagram Error: {0}', errorMsg);
           renderElement.appendChild(errorDiv);
           renderElement.classList.remove('rendered');
           codeElement.classList.remove('hidden');
+          setMermaidRenderState(container, 'error');
           zoomButton.hidden = true;
         }
       };
 
       renderDiagram();
+      const unregisterThemeRerender = registerThemeRerender(() => void renderDiagram());
 
       // Create tooltip element
       const tooltip = document.createElement('div');
       tooltip.classList.add('mermaid-tooltip');
       tooltip.setAttribute('role', 'tooltip');
       tooltip.setAttribute('id', `mermaid-tooltip-${Math.random().toString(36).slice(2, 11)}`);
-      tooltip.textContent = 'Double-click to edit';
+      tooltip.textContent = l10n.t('Double-click to edit');
       tooltip.style.display = 'none';
       container.appendChild(tooltip);
 
@@ -331,6 +390,9 @@ export const Mermaid = Node.create({
           return true;
         },
         destroy: () => {
+          destroyed = true;
+          renderGeneration += 1;
+          unregisterThemeRerender();
           // Clean up document listener to prevent memory leaks
           document.removeEventListener('click', handleDocumentClick);
         },

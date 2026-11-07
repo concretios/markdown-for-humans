@@ -14,6 +14,120 @@ type OrderedListToken = MarkdownToken & {
   items?: MarkdownToken[];
 };
 
+type OrderedListItemToken = MarkdownToken & {
+  type: 'list_item';
+  task?: boolean;
+  checked?: boolean;
+  text?: string;
+  tokens?: MarkdownToken[];
+};
+
+/**
+ * Marked's GFM list tokenizer lifts `[ ]`/`[x]` into `task`/`checked` (and a
+ * leading `checkbox` child) for numbered items. TipTap's `isTaskItem` only
+ * recognizes `- [ ]` bullet tasks, and ListItem.parseMarkdown drops the
+ * checkbox token — so `1. [x] done` silently became `1. done`. Re-prefix the
+ * marker into the item text before ListItem parses, keeping a plain ordered
+ * list (taskItem cannot nest under orderedList in the schema).
+ */
+function restoreOrderedTaskCheckboxPrefix(item: MarkdownToken): MarkdownToken {
+  if (item.type !== 'list_item') return item;
+  const listItem = item as OrderedListItemToken;
+  if (!listItem.task) return item;
+
+  const checked = Boolean(listItem.checked);
+  const prefix = checked ? '[x] ' : '[ ] ';
+  const withoutCheckbox = Array.isArray(listItem.tokens)
+    ? listItem.tokens.filter(child => child.type !== 'checkbox')
+    : [];
+  const bodyText = typeof listItem.text === 'string' ? listItem.text : '';
+  const text = `${prefix}${bodyText}`;
+
+  const first = withoutCheckbox[0] as
+    | (MarkdownToken & {
+        type?: string;
+        text?: string;
+        raw?: string;
+        tokens?: MarkdownToken[];
+      })
+    | undefined;
+
+  // Tight items: first child is an inline `text` token — merge the checkbox
+  // prefix into that token so ListItem.parseMarkdown keeps a single paragraph.
+  if (first && first.type === 'text') {
+    const mergedRaw = `${prefix}${first.raw || first.text || ''}`;
+    const mergedText = `${prefix}${first.text || ''}`;
+    const mergedInline: MarkdownToken[] = [
+      { type: 'text', raw: prefix, text: prefix, escaped: false },
+      ...(Array.isArray(first.tokens) ? first.tokens : []),
+    ];
+    return {
+      ...listItem,
+      task: false,
+      checked: undefined,
+      text,
+      tokens: [
+        { ...first, raw: mergedRaw, text: mergedText, tokens: mergedInline },
+        ...withoutCheckbox.slice(1),
+      ],
+    };
+  }
+
+  // Loose items: first child is a `paragraph` (or other block). Prefix the
+  // existing first paragraph's inline content instead of inserting another
+  // copy of the whole item text (which would duplicate on serialize).
+  if (first && first.type === 'paragraph' && Array.isArray(first.tokens)) {
+    const paragraphChildren = first.tokens;
+    const leading = paragraphChildren[0] as
+      | (MarkdownToken & { type?: string; text?: string; raw?: string; tokens?: MarkdownToken[] })
+      | undefined;
+    let prefixedParagraph: MarkdownToken;
+    if (leading && leading.type === 'text') {
+      const mergedRaw = `${prefix}${leading.raw || leading.text || ''}`;
+      const mergedText = `${prefix}${leading.text || ''}`;
+      const mergedInline: MarkdownToken[] = [
+        { type: 'text', raw: prefix, text: prefix, escaped: false },
+        ...(Array.isArray(leading.tokens) ? leading.tokens : []),
+      ];
+      prefixedParagraph = {
+        ...first,
+        tokens: [
+          { ...leading, raw: mergedRaw, text: mergedText, tokens: mergedInline },
+          ...paragraphChildren.slice(1),
+        ],
+      };
+    } else {
+      prefixedParagraph = {
+        ...first,
+        tokens: [{ type: 'text', raw: prefix, text: prefix, escaped: false }, ...paragraphChildren],
+      };
+    }
+    return {
+      ...listItem,
+      task: false,
+      checked: undefined,
+      text,
+      tokens: [prefixedParagraph, ...withoutCheckbox.slice(1)],
+    };
+  }
+
+  // No children yet — emit a single prefixed text token.
+  return {
+    ...listItem,
+    task: false,
+    checked: undefined,
+    text,
+    tokens: [
+      {
+        type: 'text',
+        raw: text,
+        text,
+        tokens: [{ type: 'text', raw: text, text, escaped: false }],
+      },
+    ],
+  };
+}
+
 /**
  * OrderedList markdown parsing fix.
  *
@@ -26,8 +140,22 @@ type OrderedListToken = MarkdownToken & {
  *
  * Fix: delegate list item parsing to the ListItem extension via `helpers.parseChildren(items)`,
  * which correctly parses inline marks for both `1.` and `1)` list styles.
+ * Numeric lists use marked's built-in tokenizer: TipTap 3.30.5's custom
+ * tokenizer strips too little continuation indentation and detaches ordered
+ * grandchildren from intervening bullet items. Keep its nonnumeric handling.
  */
 export const OrderedListMarkdownFix = OrderedList.extend({
+  markdownTokenizer: {
+    name: 'orderedList',
+    level: 'block',
+    start: () => -1,
+    tokenize: (source, tokens, lexer) => {
+      // Returning undefined lets marked's CommonMark list tokenizer retain the
+      // entire nested structure, fenced code whitespace and task item tokens.
+      if (/^[ \t]*\d+[.)](?:[ \t\n]|$)/.test(source)) return undefined;
+      return OrderedList.config.markdownTokenizer?.tokenize(source, tokens, lexer);
+    },
+  },
   parseMarkdown: (
     token: MarkdownToken,
     helpers: MarkdownParseHelpers
@@ -43,7 +171,9 @@ export const OrderedListMarkdownFix = OrderedList.extend({
 
     const start =
       typeof listToken.start === 'number' && Number.isFinite(listToken.start) ? listToken.start : 1;
-    const items = Array.isArray(listToken.items) ? listToken.items : [];
+    const items = Array.isArray(listToken.items)
+      ? listToken.items.map(restoreOrderedTaskCheckboxPrefix)
+      : [];
     const content =
       items.length > 0 && typeof helpers.parseChildren === 'function'
         ? helpers.parseChildren(items)

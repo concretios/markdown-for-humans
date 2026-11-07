@@ -4,7 +4,7 @@
 
 ## Agreement to Terms
 
-By installing, copying, or using the Markdown for Humans extension ("Extension") for Visual Studio Code, you agree to be bound by the terms of this End User License Agreement ("Agreement"). If you do not agree to these terms, do not install or use the Extension.
+By installing, copying, or using the Markdown Editor for Humans extension ("Extension") for Visual Studio Code, you agree to be bound by the terms of this End User License Agreement ("Agreement"). If you do not agree to these terms, do not install or use the Extension.
 
 ## License Grant
 

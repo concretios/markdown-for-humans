@@ -7,9 +7,10 @@
 import { Editor } from '@tiptap/core';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
+import * as l10n from '../l10n';
 
 /**
- * Search Overlay - In-document search for Markdown for Humans
+ * Search Overlay - In-document search for Markdown Editor for Humans
  *
  * Provides a search experience with:
  * - Real-time match highlighting
@@ -227,11 +228,11 @@ function updateMatchCounter(searchInput: HTMLInputElement) {
   if (!counter) return;
 
   if (currentMatches.length === 0 && currentQuery.length > 0) {
-    counter.textContent = 'No results';
+    counter.textContent = l10n.t('No results');
     counter.classList.add('no-results');
     searchInput.classList.add('no-results');
   } else if (currentMatches.length > 0) {
-    counter.textContent = `${currentMatchIndex + 1} of ${currentMatches.length}`;
+    counter.textContent = l10n.t('{0} of {1}', currentMatchIndex + 1, currentMatches.length);
     counter.classList.remove('no-results');
     searchInput.classList.remove('no-results');
   } else {
@@ -308,7 +309,7 @@ export function createSearchOverlay(editor: Editor): HTMLElement {
   const overlay = document.createElement('div');
   overlay.className = 'search-overlay';
   overlay.setAttribute('role', 'dialog');
-  overlay.setAttribute('aria-label', 'Find in document');
+  overlay.setAttribute('aria-label', l10n.t('Find in document'));
   overlay.setAttribute('aria-modal', 'false');
 
   // Create panel (positioned at top)
@@ -328,8 +329,8 @@ export function createSearchOverlay(editor: Editor): HTMLElement {
   const searchInput = document.createElement('input');
   searchInput.type = 'text';
   searchInput.className = 'search-overlay-input';
-  searchInput.placeholder = 'Find in document...';
-  searchInput.setAttribute('aria-label', 'Search query');
+  searchInput.placeholder = l10n.t('Find in document...');
+  searchInput.setAttribute('aria-label', l10n.t('Search query'));
   searchInput.spellcheck = false;
 
   // Match counter
@@ -349,8 +350,8 @@ export function createSearchOverlay(editor: Editor): HTMLElement {
   const prevBtn = document.createElement('button');
   prevBtn.className = 'search-overlay-btn';
   prevBtn.innerHTML = '<span class="codicon codicon-arrow-up"></span>';
-  prevBtn.title = 'Previous match (Shift+Enter)';
-  prevBtn.setAttribute('aria-label', 'Previous match');
+  prevBtn.title = l10n.t('Previous match (Shift+Enter)');
+  prevBtn.setAttribute('aria-label', l10n.t('Previous match'));
   prevBtn.onclick = e => {
     e.preventDefault();
     goToPreviousMatch(editor);
@@ -361,8 +362,8 @@ export function createSearchOverlay(editor: Editor): HTMLElement {
   const nextBtn = document.createElement('button');
   nextBtn.className = 'search-overlay-btn';
   nextBtn.innerHTML = '<span class="codicon codicon-arrow-down"></span>';
-  nextBtn.title = 'Next match (Enter)';
-  nextBtn.setAttribute('aria-label', 'Next match');
+  nextBtn.title = l10n.t('Next match (Enter)');
+  nextBtn.setAttribute('aria-label', l10n.t('Next match'));
   nextBtn.onclick = e => {
     e.preventDefault();
     goToNextMatch(editor);
@@ -373,8 +374,8 @@ export function createSearchOverlay(editor: Editor): HTMLElement {
   const closeBtn = document.createElement('button');
   closeBtn.className = 'search-overlay-btn search-overlay-close';
   closeBtn.innerHTML = '<span class="codicon codicon-close"></span>';
-  closeBtn.title = 'Close (Escape)';
-  closeBtn.setAttribute('aria-label', 'Close search');
+  closeBtn.title = l10n.t('Close (Escape)');
+  closeBtn.setAttribute('aria-label', l10n.t('Close search'));
   closeBtn.onclick = () => hideSearchOverlay(editor);
 
   buttonWrapper.appendChild(prevBtn);
@@ -536,7 +537,11 @@ export function showSearchOverlay(editor: Editor): void {
 }
 
 /**
- * Hide the search overlay
+ * Hide Find and clear its highlights. Pass false when another UI owns focus:
+ * Feedback entry must retain its invoking control and current reading position.
+ *
+ * @param editor - Editor whose search decorations should be cleared.
+ * @param restorePosition - Restore editor focus and, when appropriate, selection.
  */
 export function hideSearchOverlay(editor: Editor, restorePosition = true): void {
   if (!searchOverlayElement) return;
@@ -584,7 +589,7 @@ export function hideSearchOverlay(editor: Editor, restorePosition = true): void 
     }
   }
 
-  focusEditor(editor, shouldPreventFocusScroll);
+  if (restorePosition) focusEditor(editor, shouldPreventFocusScroll);
   savedSelection = null;
   savedScrollPosition = null;
 }

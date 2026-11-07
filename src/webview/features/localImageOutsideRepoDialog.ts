@@ -14,6 +14,7 @@
  */
 
 import { getRememberedFolder, setRememberedFolder, getDefaultImagePath } from './imageConfirmation';
+import * as l10n from '../l10n';
 
 /**
  * Options for handling local image outside repo
@@ -68,28 +69,26 @@ export async function showLocalImageOutsideRepoDialog(
       <div style="display: flex; align-items: center; margin-bottom: 16px;">
         <span style="font-size: 24px; margin-right: 12px;">📁</span>
         <h3 style="margin: 0; color: var(--vscode-foreground);">
-          Image Outside Workspace
+          ${l10n.html('Image Outside Workspace')}
         </h3>
       </div>
 
       <p style="margin: 0 0 16px 0; color: var(--vscode-foreground); line-height: 1.5;">
-        This image is on your local disk but outside the current workspace. How would you like to proceed?
+        ${l10n.html('This image is on your local disk but outside the current workspace. How would you like to proceed?')}
       </p>
 
       <div style="margin-bottom: 12px; padding: 8px; background: var(--vscode-textBlockQuote-background); border-left: 3px solid var(--vscode-textBlockQuote-border); border-radius: 3px;">
-        <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;">Image Path:</div>
-        <div style="font-size: 12px; color: var(--vscode-foreground); word-break: break-all; font-family: var(--vscode-editor-font-family, monospace);">
-          ${imagePath}
-        </div>
+        <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 4px;">${l10n.html('Image Path:')}</div>
+        <div id="local-image-path" style="font-size: 12px; color: var(--vscode-foreground); word-break: break-all; font-family: var(--vscode-editor-font-family, monospace);"></div>
       </div>
 
       <div style="margin-bottom: 20px;">
         <label style="display: flex; align-items: flex-start; padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; margin-bottom: 8px; cursor: pointer; background: var(--vscode-list-hoverBackground);">
           <input type="radio" name="local-image-action" value="edit-in-place" checked style="margin-right: 12px; margin-top: 2px;">
           <div style="flex: 1;">
-            <div style="font-weight: 500; color: var(--vscode-foreground); margin-bottom: 4px;">Edit in Place</div>
+            <div style="font-weight: 500; color: var(--vscode-foreground); margin-bottom: 4px;">${l10n.html('Edit in Place')}</div>
             <div style="font-size: 11px; color: var(--vscode-descriptionForeground);">
-              Resize the original image file directly. The image will be modified at its current location.
+              ${l10n.html('Resize the original image file directly. The image will be modified at its current location.')}
             </div>
           </div>
         </label>
@@ -97,15 +96,14 @@ export async function showLocalImageOutsideRepoDialog(
         <label style="display: flex; align-items: flex-start; padding: 12px; border: 1px solid var(--vscode-panel-border); border-radius: 4px; cursor: pointer;">
           <input type="radio" name="local-image-action" value="copy-to-repo" style="margin-right: 12px; margin-top: 2px;">
           <div style="flex: 1;">
-            <div style="font-weight: 500; color: var(--vscode-foreground); margin-bottom: 4px;">Copy to Workspace & Edit</div>
+            <div style="font-weight: 500; color: var(--vscode-foreground); margin-bottom: 4px;">${l10n.html('Copy to Workspace & Edit')}</div>
             <div style="font-size: 11px; color: var(--vscode-descriptionForeground); margin-bottom: 8px;">
-              Copy the image to your workspace first, then resize it. The original file remains unchanged.
+              ${l10n.html('Copy the image to your workspace first, then resize it. The original file remains unchanged.')}
             </div>
             <div id="copy-folder-input-container" style="display: none; margin-top: 8px;">
               <input
                 type="text"
                 id="copy-image-folder-input"
-                value="${targetFolder}"
                 style="
                   width: 100%;
                   padding: 6px 8px;
@@ -116,10 +114,10 @@ export async function showLocalImageOutsideRepoDialog(
                   font-family: var(--vscode-font-family);
                   font-size: 12px;
                 "
-                placeholder="e.g., images, assets/img"
+                placeholder="${l10n.html('e.g., images, assets/img')}"
               />
               <small style="display: block; margin-top: 4px; color: var(--vscode-descriptionForeground); font-size: 11px;">
-                Relative to current markdown file
+                ${l10n.html('Relative to current markdown file')}
               </small>
             </div>
           </div>
@@ -129,7 +127,7 @@ export async function showLocalImageOutsideRepoDialog(
       <div style="margin-bottom: 20px;">
         <label style="display: flex; align-items: center; color: var(--vscode-foreground); cursor: pointer;">
           <input type="checkbox" id="remember-local-choice" style="margin-right: 8px;">
-          Remember for this session
+          ${l10n.html('Remember for this session')}
         </label>
       </div>
 
@@ -142,7 +140,7 @@ export async function showLocalImageOutsideRepoDialog(
           border-radius: 3px;
           cursor: pointer;
           font-family: var(--vscode-font-family);
-        ">Cancel</button>
+        ">${l10n.html('Cancel')}</button>
         <button id="confirm-local-image" style="
           padding: 6px 14px;
           background: var(--vscode-button-background);
@@ -152,7 +150,7 @@ export async function showLocalImageOutsideRepoDialog(
           cursor: pointer;
           font-family: var(--vscode-font-family);
           font-weight: 500;
-        ">Continue</button>
+        ">${l10n.html('Continue')}</button>
       </div>
     `;
 
@@ -166,6 +164,9 @@ export async function showLocalImageOutsideRepoDialog(
     const copyToRepoRadio = dialog.querySelector('input[value="copy-to-repo"]') as HTMLInputElement;
     const copyFolderContainer = dialog.querySelector('#copy-folder-input-container') as HTMLElement;
     const copyFolderInput = dialog.querySelector('#copy-image-folder-input') as HTMLInputElement;
+    // Host path and folder are file-system/settings text, never markup.
+    (dialog.querySelector('#local-image-path') as HTMLElement).textContent = imagePath;
+    copyFolderInput.value = targetFolder;
     const rememberCheckbox = dialog.querySelector('#remember-local-choice') as HTMLInputElement;
     const cancelBtn = dialog.querySelector('#cancel-local-image') as HTMLButtonElement;
     const confirmBtn = dialog.querySelector('#confirm-local-image') as HTMLButtonElement;
