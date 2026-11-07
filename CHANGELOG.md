@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Zoom and pan for Mermaid diagrams.** A rendered diagram is sized to the reading column, so a dense flowchart or sequence diagram could shrink until its labels were too small to read. Hover a diagram and click the magnifier in its top right corner (or Tab to it and press Enter) to open it in a viewer that fills the editor pane, fitted and centred. Zoom with the mouse wheel or trackpad, the `+` and `-` buttons or keys, pan by dragging, press `0` or the fit button to fit it again, and close with Escape, the close button or a click on empty space. The diagram stays sharp at any zoom because it is re-rendered vector, not a scaled picture. Viewing never changes the document: single click still selects the diagram and double click still opens its source. The viewer's labels were translated by AI for the five shipped languages. Thanks to [@yonatoasis](https://github.com/yonatoasis) for the contribution ([#78](https://github.com/concretios/markdown-for-humans/pull/78)).
+
 ### Fixed
 
 - The details shown when you hover an image now update as soon as a resize finishes: width, height, file size and modified date. Before, the box kept the old values while the pointer stayed on the image, and the file size and date stayed stale even after hovering again.
