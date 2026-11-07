@@ -4,10 +4,10 @@
 
 - **Task name:** Marketplace discoverability: display name, description, keywords
 - **Slug:** marketplace-discoverability
-- **Status:** in-progress
+- **Status:** shipped in 0.4.3 (2026-10-10); the rank sampling in section 7 is the only open thread
 - **Created:** 2026-10-09
 - **Last updated:** 2026-10-09
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-10 (0.4.3)
 
 ---
 

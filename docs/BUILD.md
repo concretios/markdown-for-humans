@@ -134,7 +134,7 @@ const CRITICAL_FEATURES = {
 npm run package:release
 
 # Install and test locally
-code --install-extension markdown-for-humans-0.3.0.vsix
+code --install-extension markdown-for-humans-<x.y.z>.vsix
 ```
 
 **Note:** `npm run package:release` always creates a **release build** via the `vscode:prepublish` hook. This ensures:
@@ -144,64 +144,14 @@ code --install-extension markdown-for-humans-0.3.0.vsix
 - ✅ Minified and optimized for production
 - ✅ Verified before packaging
 
-### Publish to VS Code Marketplace
+### Publishing
 
-**Recommended approach (publish the exact vsix you tested):**
+The release process (version bump PR, Entra sign-in, publishing one vsix to the VS Code Marketplace and Open VSX, the GitHub release) lives in one place: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). This file does not repeat it, so the two cannot drift.
 
-Full steps and failure checks: [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). Publishing uses Microsoft Entra, not a PAT.
+Two rules worth knowing while building:
 
-```bash
-# Sign in with Microsoft Entra (one-time per session; the account must be a publisher member)
-az login --tenant concret.io --allow-no-subscriptions
-
-# Bump the version on a release branch first (npm version <x.y.z> --no-git-tag-version), merge, then from main:
-npx vsce package
-npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
-```
-
-**Do not use `vsce publish patch|minor|major`.** It bumps the version at publish time, so the published build is not the vsix you tested.
-
-**npm script (rebuilds, so it is not the tested vsix):**
-
-```bash
-npm run publish:release  # Runs: vsce publish --azure-credential (current version)
-```
-
-### Publish to Open VSX Registry (For Cursor, Devin Desktop, VSCodium & More)
-
-Open VSX is an open-source marketplace used by multiple VS Code-compatible editors.
-
-**Setup (one-time):**
-
-```bash
-# Install ovsx CLI globally
-npm install -g ovsx
-
-# Get personal access token from https://open-vsx.org/user-settings/tokens
-
-# Create namespace (first publish only)
-ovsx create-namespace concretio -p <your-token>
-```
-
-**Publish:**
-
-```bash
-# Publish current version (must already be built)
-ovsx publish -p <your-token>
-
-# Verify
-# https://open-vsx.org/extension/concretio/markdown-for-humans
-```
-
-**Result:** Extension becomes available in:
-
-- ✅ **VS Code** (from VS Code Marketplace)
-- ✅ **Cursor** (from Open VSX)
-- ✅ **Devin Desktop**, formerly Windsurf (from Open VSX)
-- ✅ **VSCodium** (from Open VSX)
-- ✅ **Gitpod** (from Open VSX)
-- ✅ **Eclipse Theia** (from Open VSX)
-- ✅ **Other Open VSX-compatible IDEs**
+- The vsix you tested is the vsix that ships. `vsce publish --packagePath` and `ovsx publish <file>` take that file; `vsce publish patch|minor|major` bumps the version at publish time and is not used. There is no npm publish script on purpose: one would rebuild at publish time.
+- Marketplace publishing signs in with Microsoft Entra (`az login`), never a PAT.
 
 ## Build Architecture
 
@@ -509,7 +459,7 @@ ls -lh dist/
 # Compare to guidelines:
 # extension.js: 1-3 MB
 # webview.js: 3-6 MB
-# webview.css: 50-100 KB
+# webview.css: 100-250 KB
 ```
 
 **Common causes**:
@@ -549,7 +499,7 @@ ls -lh dist/
 
    ```bash
    npm run package:release
-   code --install-extension markdown-for-humans-0.3.0.vsix
+   code --install-extension markdown-for-humans-<x.y.z>.vsix
    ```
 
 2. Check browser console in webview (Help > Toggle Developer Tools)
@@ -563,7 +513,7 @@ ls -lh dist/
 ```bash
 # Download your published .vsix
 # Extract and check bundle
-unzip markdown-for-humans-0.3.0.vsix
+unzip markdown-for-humans-<x.y.z>.vsix
 grep "myBrokenFeature" extension/dist/webview.js
 ```
 
@@ -575,15 +525,8 @@ grep "myBrokenFeature" extension/dist/webview.js
 npm run build:debug
 npm run verify-build
 
-# Bump patch version
-npm version patch
-
-# Package and test locally
-npm run package:release
-code --install-extension markdown-for-humans-0.1.1.vsix
-
-# Test thoroughly, then publish
-npm run publish:release
+# Then follow docs/RELEASE_CHECKLIST.md: bump the version in a release PR,
+# package once from merged main, test the vsix, publish that same file.
 ```
 
 #### Step 3: Post-mortem
@@ -622,7 +565,7 @@ If you're still stuck:
 
 - `extension.js`: 1-3 MB (Node.js dependencies included)
 - `webview.js`: 3-6 MB (includes TipTap, syntax highlighting, etc.)
-- `webview.css`: 50-100 KB
+- `webview.css`: 100-250 KB
 
 Sizes larger than these ranges may indicate bundling issues.
 
@@ -698,41 +641,11 @@ Test these features manually:
 
 ### 4. Publish
 
-```bash
-# Sign in with Microsoft Entra (publisher member account)
-az login --tenant concret.io --allow-no-subscriptions
+Follow [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). The git tag is created by publishing the GitHub release, not by hand.
 
-# Publish the vsix you just tested (see RELEASE_CHECKLIST.md)
-npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
+## CI
 
-# AFTER publishing, create git tag
-git tag v$(node -p "require('./package.json').version")
-git push origin --tags
-```
-
-## CI/CD Integration
-
-For automated builds, add to your CI pipeline:
-
-```yaml
-# Example GitHub Actions
-steps:
-  - uses: actions/checkout@v3
-  - uses: actions/setup-node@v3
-    with:
-      node-version: '18'
-  - run: npm ci
-  - run: npm run lint
-  - run: npm test
-  - run: npm run build:release # Build and verify
-  - run: npm run package:release # vscode:prepublish runs build:release again, then packages
-```
-
-**Note:**
-
-- `npm run package:release` automatically runs `vscode:prepublish` which executes `build:release`
-- This ensures CI always tests the exact build that will be published
-- The build happens twice (once explicitly, once via hook) but ensures consistency
+`.github/workflows/ci.yml` runs lint, typecheck, Jest with coverage, the SVG browser fixture, the release build, the deterministic performance gate on Ubuntu and Windows, the Extension Host suite on both operating systems against VS Code 1.98.0 and stable, and `npm run package:release` (which runs `build:release` again through the `vscode:prepublish` hook and uploads the vsix as an artifact). Branch protection on `main` requires `package`, `test (22.x)` and `test (24.x)`.
 
 ## Quick Reference
 
@@ -751,20 +664,15 @@ npm run test:coverage      # With coverage
 # Packaging
 npm run package:release    # Release package (via vscode:prepublish hook)
 
-# Publishing
-az login --tenant concret.io --allow-no-subscriptions  # Entra sign-in, once per session
-npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix  # Publish to VS Code Marketplace
-npm run publish:release    # Alternative: rebuilds and publishes current version (runs vsce publish --azure-credential)
-npm run publish:ovsx:release  # Publish to Open VSX (for Cursor & Devin Desktop)
-                           # First time: ovsx create-namespace concretio -p <token>
+# Publishing: see RELEASE_CHECKLIST.md (one vsix, published as-is to both stores)
 ```
 
 ### Expected Bundle Sizes
 
 ```
-dist/extension.js:  1-3 MB    (Node.js backend)
-dist/webview.js:    3-6 MB    (TipTap + deps)
-dist/webview.css:   50-100 KB (All styles)
+dist/extension.js:  1-3 MB     (Node.js backend)
+dist/webview.js:    3-6 MB     (TipTap + deps)
+dist/webview.css:   100-250 KB (All styles)
 ```
 
 If significantly larger: investigate duplicate dependencies or inlined assets.

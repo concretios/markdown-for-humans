@@ -4,10 +4,10 @@
 
 - **Task name:** Localization (translation) support
 - **Slug:** localization
-- **Status:** merged in PR 155 (2026-10-11); release and issue replies open, see section 9
+- **Status:** shipped in 0.4.4 (2026-10-12); the follow-ups in section 9 were the release and the issue replies
 - **Created:** 2026-10-11
 - **Last updated:** 2026-10-11
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-12 (0.4.4)
 - **Issues:** [#55](https://github.com/concretios/markdown-for-humans/issues/55) (Chinese Simplified, suggests `vscode-nls`, offers to review), [#77](https://github.com/concretios/markdown-for-humans/issues/77) (translate the extension, "including icons with a letter such as B for bold")
 
 **Recommendation in one paragraph.** Do the invisible groundwork now (Phase 0, 1.5 working days, English only), not the full conversion. Full translation is about 16.5 working days for one locale; the smallest translated release that reads as finished is about 12. Demand today is two issues, both self-rated "Low - Nice to have", with no comments. Phase 0 stops the string debt from growing while three feature branches add more text, and costs nothing visible. Schedule the area conversions as small pull requests between features, and switch a language on only when the gate in section 6 passes.

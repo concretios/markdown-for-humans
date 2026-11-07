@@ -4,9 +4,9 @@
 
 The editor's promise is that a Markdown file comes back from the rich view unchanged except for what the user edited. Six months of fixes (HTML comments, wrapper tags, `<kbd>`, link definitions, Feedback refusals) were all the same bug in different shapes. This audit measures the whole class at once and names where it comes from, so the next fix is structural.
 
-**Since this audit (same day):** the two repeated-definition shapes of class A are fixed (`task-fix-duplicate-link-definitions.md`), and the loss guard of section 6 item 3 is built (`task-html-loss-guard.md`). The numbers below are from before both.
+**Since this audit (same day):** the two repeated-definition shapes of class A are fixed (`../shipped/task-fix-duplicate-link-definitions.md`), and the loss guard of section 6 item 3 is built (`../shipped/task-html-loss-guard.md`). The numbers below are from before both.
 
-Related: `html-loss-findings-2026-10.md` (the HTML subset, measured first), `task-fix-feedback-link-definitions.md`.
+Related: `html-loss-findings-2026-10.md` (the HTML subset, measured first), `../shipped/task-fix-feedback-link-definitions.md`.
 
 ---
 

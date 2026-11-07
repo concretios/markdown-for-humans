@@ -4,10 +4,10 @@
 
 - **Task name:** Count words correctly in Chinese and Japanese
 - **Slug:** cjk-word-count
-- **Status:** merged in PR 155 (2026-10-11); not released yet
+- **Status:** shipped in 0.4.4 (2026-10-12)
 - **Created:** 2026-10-11
 - **Last updated:** 2026-10-11
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-12 (0.4.4)
 
 ---
 
