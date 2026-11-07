@@ -83,6 +83,14 @@ on Ubuntu and Windows against VS Code 1.98.0 and current stable. To select a
 host version locally, set `VSCODE_TEST_VERSION` before running
 `npm run test:integration`; the default is `stable`.
 
+On Linux without a display (CI runners, cloud agents) wrap the run the way CI
+does: `xvfb-run -a npm run test:integration`. The first run downloads VS Code
+into the gitignored `.vscode-test/` folder.
+
+The performance gate has no npm script. CI runs
+`node --test scripts/feedback-performance-fixture/verification.test.mjs` and then
+`node scripts/feedback-performance-fixture/run.mjs`.
+
 Every run uses a fresh VS Code profile. Before any suite loads,
 `test/integration/support/warmWebviewRuntime.cjs` (a Mocha global setup wired in
 `.vscode-test.mjs`) opens one rich editor and waits for its renderer. That
