@@ -46,7 +46,7 @@ Fixes #
 <!-- Describe the testing you've done -->
 
 - [ ] All existing tests pass (`npm test`)
-- [ ] Linting passes with no errors (`npm run lint:fix`)
+- [ ] Linting passes with no errors (`npm run lint`) and types check (`npm run typecheck`)
 - [ ] Build succeeds (`npm run build:release`)
 - [ ] Extension can be packaged (`npm run package:release`)
 - [ ] Manually tested in VS Code Extension Development Host
@@ -56,9 +56,9 @@ Fixes #
 
 ### Test Environment
 
-- OS: <!-- e.g., macOS 13, Windows 11, Ubuntu 22.04 -->
-- VS Code Version: <!-- e.g., 1.85.0 -->
-- Node Version: <!-- e.g., 20.x -->
+- OS: <!-- e.g., macOS 15, Windows 11, Ubuntu 24.04 -->
+- VS Code Version: <!-- e.g., 1.98.0 (the minimum) or current stable -->
+- Node Version: <!-- e.g., 22.x or 24.x (the CI versions) -->
 
 ## Documentation
 

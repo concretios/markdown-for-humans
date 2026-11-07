@@ -1,6 +1,8 @@
 # Release Checklist
 
-Quick checklist for publishing Markdown Editor for Humans to VS Code Marketplace.
+Checklist for publishing Markdown Editor for Humans to the VS Code Marketplace, Open VSX and GitHub Releases.
+
+**Releases are done by the repository owner only.** Contributors do not publish, tag or create releases; they open PRs. An agent runs a release step only when the owner asks for that step in the same session, one step at a time, and never from a routine, scheduled task or CI. Before the first publish step, run the Open VSX dry run (`ovsx verify-pat concretio`, command below) and `az account show` so a bad credential surfaces before anything is uploaded.
 
 ---
 
@@ -14,8 +16,8 @@ Quick checklist for publishing Markdown Editor for Humans to VS Code Marketplace
 # Format: What's New, Fixed, Changed, Technical Improvements
 # ⚠️  NEVER create separate RELEASE_NOTES_*.md files
 
-# 2. Run full test suite
-npm run lint:fix && npm test && npm run build:release
+# 2. Run the same checks CI runs
+npm run lint && npm run typecheck && npm test && npm run build:release
 
 # 3. Test locally
 npm run package:release
@@ -25,12 +27,15 @@ code --install-extension markdown-for-humans-*.vsix
 # 4. Bump the version and date the CHANGELOG on a branch, open a PR, merge when CI is green
 npm version <x.y.z> --no-git-tag-version
 # Move [Unreleased] under [x.y.z] - YYYY-MM-DD; update the KNOWN_ISSUES.md version lines
+# src/__tests__/release/releaseDocs.test.ts fails the PR if any of those is stale
+# Branch protection requires an up-to-date branch: if another PR merges first, merge origin/main into the release branch and push, or auto-merge stays stuck
 
-# 5. From merged main, build ONE vsix and publish that same file everywhere
+# 5. From merged main, in the main checkout (not a worktree), build ONE vsix and publish that same file everywhere
+git checkout main && git pull
 npx vsce package
 az login --tenant concret.io --allow-no-subscriptions             # Entra sign-in, once per session (needs publisher membership)
 npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix   # VS Code Marketplace
-npx ovsx publish markdown-for-humans-<x.y.z>.vsix                 # Open VSX (needs OVSX_PAT or -p <token>)
+OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx publish markdown-for-humans-<x.y.z>.vsix   # Open VSX (token read from the owner's macOS Keychain; run only on the owner's explicit go)
 # NEVER use `vsce publish patch|minor|major`: it bumps the version at publish time
 
 # 6. Draft the GitHub release with the vsix attached (tag is created when you publish it)
@@ -55,7 +60,8 @@ Set the version with `npm version <x.y.z> --no-git-tag-version`, never at publis
 ## Pre-Release
 
 ### Code Quality
-- [ ] Fix linting issues: `npm run lint:fix`
+- [ ] Lint is clean: `npm run lint`
+- [ ] Types check: `npm run typecheck` (CI runs it; Jest alone misses files no test imports)
 - [ ] All tests pass: `npm test`
 - [ ] Build succeeds: `npm run build:release`
 
@@ -65,12 +71,13 @@ Set the version with `npm version <x.y.z> --no-git-tag-version`, never at publis
 - [ ] Use CHANGELOG.md content for GitHub releases (copy/polish as needed)
 - [ ] ⚠️ **Never create separate RELEASE_NOTES_*.md files** - they become stale
 - [ ] Bump `package.json` and `package-lock.json` in the release PR (`npm version <x.y.z> --no-git-tag-version`)
+- [ ] `src/__tests__/release/releaseDocs.test.ts` passes: it checks the CHANGELOG section is dated, the KNOWN_ISSUES version lines match, every setting is in the README table and the l10n status table matches the shipped bundles
 
 ### Package & Test
 - [ ] Create package: `npm run package:release`
 - [ ] Verify `.vsix` file created and size < 10MB
 - [ ] Test local installation: `code --install-extension markdown-for-humans-<version>.vsix`
-- [ ] Test core features in Extension Development Host:
+- [ ] Test core features in that VS Code window (the installed vsix, not an F5 host):
   - [ ] WYSIWYG editing
   - [ ] Tables (create, resize, context menu)
   - [ ] Images (drag-drop, paste, resize)
@@ -80,11 +87,11 @@ Set the version with `npm version <x.y.z> --no-git-tag-version`, never at publis
   - [ ] Toolbar formatting
 
 ### Documentation Review
-- [ ] README.md - badges, links, features accurate; the Configuration table lists every setting in `package.json`
+- [ ] README.md - badges (Open VSX only, the Marketplace badges were retired on purpose), links and features accurate; the Configuration table lists every setting in `package.json` (the release docs test checks this)
 - [ ] KNOWN_ISSUES.md - version line current, limits of new features added, fixed entries removed
 - [ ] l10n/README.md - status table matches the shipped languages
 - [ ] CHANGELOG.md - version section complete, format correct
-- [ ] Legal docs - "Last Updated" dates current (PRIVACY_POLICY, TERMS_OF_USE, EULA)
+- [ ] Legal docs - the "Last Updated" date matches the last change to each text (PRIVACY_POLICY, TERMS_OF_USE, EULA); it does not move with releases
 
 ### Assets Review
 - [ ] `icon.png` - 128x128 or 256x256, looks good on light/dark backgrounds
@@ -110,7 +117,7 @@ Marketplace publishing uses Microsoft Entra sign-in. Do NOT create, paste or use
 ### Publish to VS Code Marketplace
 
 **Recommended: publish the exact vsix you tested**
-- [ ] Merge the release PR, then from main: `npx vsce package`
+- [ ] Merge the release PR, then from main in the main checkout: `npx vsce package` (one attempt in a scratch worktree failed with "Extension entrypoint(s) missing" on 2026-11-06, cause unknown; the main checkout is the known-good place)
 - [ ] Confirm Entra sign-in (see Marketplace Account above)
 - [ ] Publish: `npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix`
 - [ ] Do not use `vsce publish patch|minor|major`; it changes the version at publish time
@@ -138,12 +145,16 @@ Marketplace publishing uses Microsoft Entra sign-in. Do NOT create, paste or use
 **One-Time Setup (First Publish Only):**
 - [ ] Install ovsx CLI: `npm install -g ovsx`
 - [ ] Get token from https://open-vsx.org/user-settings/tokens
+- [ ] Store it in the macOS Keychain, never in a dotfile: `security add-generic-password -a "$USER" -s ovsx-pat-concretio -w` (prompts for the value; nothing echoes)
+  - Verify without printing it: `security find-generic-password -a "$USER" -s ovsx-pat-concretio -w >/dev/null && echo ok`
+  - Dry run: `OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx verify-pat concretio` checks the token against the namespace without publishing; expect "PAT valid to publish at concretio"
 - [ ] Create namespace: `ovsx create-namespace concretio -p <your-token>`
   - ⚠️ **Required before first publish** - namespace must match publisher in package.json
   - Only needed once per publisher
 
 **Every Release:**
-- [ ] Publish the same vsix: `npx ovsx publish markdown-for-humans-<x.y.z>.vsix` (token from `OVSX_PAT` or `-p <token>`)
+- [ ] Dry run: `OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx verify-pat concretio` checks the token against the namespace without publishing; expect "PAT valid to publish at concretio"
+- [ ] Publish the same vsix, reading the token from the Keychain: `OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx publish markdown-for-humans-<x.y.z>.vsix`. Like the Marketplace publish, only on the owner's explicit go
 - [ ] Open VSX takes about 10 minutes (pre-publish scan) before the new version shows
 - [ ] Verify at https://open-vsx.org/extension/concretio/markdown-for-humans
 
@@ -177,12 +188,13 @@ Marketplace publishing uses Microsoft Entra sign-in. Do NOT create, paste or use
 **Quick Commands:**
 ```bash
 # Full test cycle before the release PR
-npm run lint && npm test && npm run build:release
+npm run lint && npm run typecheck && npm test && npm run build:release
 
-# After merge, from main
+# After merge, from main in the main checkout
+git checkout main && git pull
 npx vsce package
 npx vsce publish --azure-credential --packagePath markdown-for-humans-<x.y.z>.vsix
-npx ovsx publish markdown-for-humans-<x.y.z>.vsix
+OVSX_PAT="$(security find-generic-password -a "$USER" -s ovsx-pat-concretio -w)" npx ovsx publish markdown-for-humans-<x.y.z>.vsix
 
 # After both stores show the version
 gh release edit v<x.y.z> --draft=false --latest

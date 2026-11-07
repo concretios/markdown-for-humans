@@ -36,8 +36,7 @@ Desktop.ini
 temp/
 test-docs/
 
-# AI coding assistant context files (symlinks to prompts/vibe-coding-guide.md)
-CLAUDE.md
+# AI coding assistant local files. CLAUDE.md is tracked: it only imports AGENTS.md.
 .agent/rules
 .windsurf/
 .a4drules/

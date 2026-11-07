@@ -135,7 +135,7 @@ ls -lh dist/
 # Compare to guidelines:
 # extension.js: 1-3 MB
 # webview.js: 3-6 MB
-# webview.css: 50-100 KB
+# webview.css: 100-250 KB
 ```
 
 **Common causes**:
@@ -172,7 +172,7 @@ ls -lh dist/
 1. Always test the actual .vsix file before publishing:
    ```bash
    npm run package:release
-   code --install-extension markdown-for-humans-0.1.0.vsix
+   code --install-extension markdown-for-humans-<x.y.z>.vsix
    ```
 
 2. Check browser console in webview (Help > Toggle Developer Tools)
@@ -186,7 +186,7 @@ ls -lh dist/
 ```bash
 # Download your published .vsix
 # Extract and check bundle
-unzip markdown-for-humans-0.1.0.vsix
+unzip markdown-for-humans-<x.y.z>.vsix
 grep "myBrokenFeature" extension/dist/webview.js
 ```
 
@@ -197,15 +197,8 @@ grep "myBrokenFeature" extension/dist/webview.js
 # Rebuild with verification (verify-build runs as part of build:release)
 npm run build:release
 
-# Bump patch version
-npm version patch
-
-# Package and test locally
-npm run package:release
-code --install-extension markdown-for-humans-0.1.1.vsix
-
-# Test thoroughly, then publish that same vsix (see RELEASE_CHECKLIST.md; sign in first with az login)
-npx vsce publish --azure-credential --packagePath markdown-for-humans-0.1.1.vsix
+# Then follow RELEASE_CHECKLIST.md: bump the version in a release PR,
+# package once from merged main, test the vsix, publish that same file.
 ```
 
 ### Step 3: Post-mortem

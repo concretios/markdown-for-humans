@@ -256,7 +256,7 @@ Ways to contribute:
 
 This extension is written with AI coding agents. The first working version took minutes. What makes it safe to trust with your files is the testing, and that is where the time goes:
 
-- **Automated tests on every change.** More than 4,000 tests run on each pull request, including tests inside a real VS Code Extension Host on Windows and Linux, on the oldest supported VS Code and the current one. Performance budgets are checked on every change too.
+- **Automated tests on every change.** More than 5,000 tests run on each pull request, including tests inside a real VS Code Extension Host on Windows and Linux, on the oldest supported VS Code and the current one. Performance budgets are checked on every change too.
 - **AI agents that use the editor like a person.** Before a release, an agent installs the packaged extension into a real VS Code window and drives it with computer use: it opens files, edits, saves, and compares the saved file with the original.
 - **Human testers.** People run a manual QA pass before major releases, following the [QA Manual](./docs/QA_MANUAL.md).
 

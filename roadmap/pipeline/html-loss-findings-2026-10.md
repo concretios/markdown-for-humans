@@ -129,7 +129,7 @@ Effort figures are rough guesses.
 - [ ] Owner picks an option.
 - [ ] Check `<video>`, the standalone `<a name>` anchor and `<figure>` in a real Extension Development Host before any public wording.
 - [ ] `KNOWN_ISSUES.md` has no entry for this yet. Add one once the list is confirmed in a real window.
-- [ ] If B: plan file `task-html-loss-guard.md`, failing tests from section 7, UX wording approved before building.
+- [ ] If B: plan file `../shipped/task-html-loss-guard.md` (built and shipped in 0.4.4), failing tests from section 7, UX wording approved before building.
 
 ---
 

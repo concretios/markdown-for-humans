@@ -27,7 +27,6 @@ The 03 and 07 CSS conflict was resolved on the release branch: the out-of-sync b
 
 **Open work (pipeline only):**
 - **Chunk 01 (remainder):** `task-fix-postmerge-01-markdown-roundtrip.md` — R2 to R5, decision #3 (hard-break source forms), escape and paste work. Carries 1 HIGH (clipboard HTML → literal-mark attrs on disk), 6 medium, 11 low. Recommendation: split decision #3 onto its own branch.
-- **Chunk 08:** `task-fix-postmerge-08-ai-review-ci.md` — AI reviewer CI coverage.
 - **Follow-ups:** `task-followups-postmerge.md` (FU1 symlink containment; FU1b task item data loss are priorities).
 - **Pending decisions:** (a) split decision #3 out of chunk 01; (b) make the editor read-only while out of sync so edits typed after the banner cannot be lost on Reload.
 
@@ -69,9 +68,9 @@ Each chunk is sized to be one branch and one PR. TDD applies: write the failing 
 | 05 | `shipped/task-fix-postmerge-05-feedback-session.md` | Discard on remote, stuck saves, locks | shipped 0.4.0 | #93 |
 | 06 | `shipped/task-fix-postmerge-06-feedback-capture.md` | Area capture stuck, blank screenshots, perf | shipped 0.4.0 | #93 |
 | 07 | `shipped/task-fix-postmerge-07-feedback-entry-ux.md` | Start refused with TOC open, stale notices, focus | shipped 0.4.0 | #93, #100 |
-| 08 | `pipeline/task-fix-postmerge-08-ai-review-ci.md` | Reviewer coverage and silent skips | **dropped** (reviewer removed 2026-10-11) | #97, #102 |
+| 08 | removed (last copy: `git show 49a314b:roadmap/pipeline/task-fix-postmerge-08-ai-review-ci.md`) | Reviewer coverage and silent skips | **dropped** (reviewer removed 2026-10-11) | #97, #102 |
 
-**Suggested order for remaining work:** 01 remainder, then 08, then followups.
+**Suggested order for remaining work:** 01 remainder, then followups.
 
 **Confidence labels used in chunk files:**
 - **confirmed:** reproduced, or traced end to end in code

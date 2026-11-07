@@ -4,10 +4,10 @@
 
 - **Task name:** Warn before a save drops source the editor cannot keep
 - **Slug:** html-loss-guard
-- **Status:** in-progress (built and committed on the task branch; not pushed, no PR yet)
+- **Status:** shipped in 0.4.4 (2026-10-12)
 - **Created:** 2026-10-11
 - **Last updated:** 2026-10-11
-- **Shipped:** _(pending)_
+- **Shipped:** 2026-10-12 (0.4.4)
 
 ---
 

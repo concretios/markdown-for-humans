@@ -1,7 +1,7 @@
 # Localization
 
 > Every text a user can read goes through VS Code's translation mechanism. Load this guide before adding or changing any UI text.
-> Plan and background: `roadmap/pipeline/task-localization.md`.
+> Plan and background: `roadmap/shipped/task-localization.md`.
 
 ## The three places text lives
 

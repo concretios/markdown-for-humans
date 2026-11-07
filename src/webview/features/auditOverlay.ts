@@ -429,7 +429,10 @@ function buildIssueItem(issue: AuditIssue): HTMLElement {
     const bestMatch = issue.suggestions[0];
     const distance = getLevenshteinDistance(targetSlug, bestMatch);
 
-    if (distance === 1) {
+    // An older-form link is not a typo and its heading was not renamed, whatever the distance.
+    if (issue.olderFormAnchor) {
+      hintEl.textContent = l10n.t('Update the link to the anchor GitHub uses:');
+    } else if (distance === 1) {
       hintEl.textContent = l10n.t('Heading name changed slightly. Pick the updated one:');
     } else if (distance <= 3) {
       hintEl.textContent = l10n.t('Seems these headings were renamed. Pick the updated one:');
@@ -790,16 +793,14 @@ function wireItemHandlers(
           const pos = parseInt(item.getAttribute('data-pos') ?? '0', 10);
           const typeStr = item.getAttribute('data-type');
           applyFix(pos, typeStr, selected, item, allIssues, editor, overlay);
-        } else {
-          // User cancelled – restore button with folder icon
-          browseBtn.disabled = false;
-          browseBtn.innerHTML = `<span class="codicon codicon-folder" aria-hidden="true"></span> ${l10n.html('Browse…')}`;
         }
       } catch {
-        // Error – restore button with folder icon
-        browseBtn.disabled = false;
-        browseBtn.innerHTML = `<span class="codicon codicon-folder" aria-hidden="true"></span> ${l10n.html('Browse…')}`;
+        // Picker error: nothing to apply.
       }
+
+      // Cancelled, failed or a fix that changed nothing: the row is still there.
+      browseBtn.disabled = false;
+      browseBtn.innerHTML = `<span class="codicon codicon-folder" aria-hidden="true"></span> ${l10n.html('Browse…')}`;
     });
   }
 
@@ -867,7 +868,7 @@ function navigateToIssue(item: HTMLElement, editor: Editor): void {
 
 /**
  * Apply a path fix to the document, then remove the issue from the overlay.
- * Dispatcher: routes to image attribute update or link mark update.
+ * Dispatcher: updates an image's attributes or rewrites a link's text run.
  */
 function applyFix(
   pos: number,
@@ -891,7 +892,13 @@ function applyFix(
   const fixTr = editor.state.tr;
   if (typeStr === 'image') {
     const node = editor.state.doc.nodeAt(pos);
-    if (node && (node.type.name === 'image' || node.type.name === 'customImage')) {
+    // The file holds markdown-src or src. Setting markdown-src to that same address would
+    // change the document but not the file, and the row would be reported as fixed.
+    if (
+      node &&
+      (node.type.name === 'image' || node.type.name === 'customImage') &&
+      (node.attrs['markdown-src'] || node.attrs.src) !== suggestion
+    ) {
       fixTr.setNodeMarkup(pos, undefined, {
         ...node.attrs,
         src: suggestion,
@@ -906,9 +913,28 @@ function applyFix(
           : `#${suggestion}`
         : suggestion;
 
-    // Use a custom link mark update that works with the transaction
-    const linkMark = editor.schema.marks.link.create({ href });
-    fixTr.addMark(pos, pos + nodeSize, linkMark);
+    // Rewrite the run's link instead of calling addMark: a new link mark would replace the old
+    // one and drop its title. The rewrite keeps the title and the run's other marks, code
+    // included. A position inside a text node means
+    // an earlier fix merged this run with its neighbour, so the row no longer describes it.
+    if (node && editor.state.doc.resolve(pos).textOffset === 0) {
+      const marks = node.marks.map(mark =>
+        mark.type.name === 'link' ? mark.type.create({ ...mark.attrs, href }) : mark
+      );
+      fixTr.replaceWith(pos, pos + nodeSize, node.mark(marks));
+      // The autolink plugin treats a replaced run as typed, and would unlink a trailing space.
+      fixTr.setMeta('preventAutolink', true);
+      // replaceWith moves the caret to the end of the run. The run keeps its size, so put it back.
+      fixTr.setSelection(editor.state.selection.getBookmark().resolve(fixTr.doc));
+    }
+  }
+
+  // Nothing changed, so keep the row: reporting this as fixed would be false.
+  if (fixTr.doc.eq(editor.state.doc)) {
+    showToast(l10n.t('Could not apply this fix. The document was not changed.'), 'info', {
+      dedupeKey: 'audit-fix-no-change',
+    });
+    return;
   }
 
   // Now map all remaining issues to their new positions

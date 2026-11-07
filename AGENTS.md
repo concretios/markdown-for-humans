@@ -2,12 +2,14 @@
 
 > **Project:** VS Code WYSIWYG Markdown Editor (medium.com-style reading/writing experience)
 >
-> **Status:** MVP ~85% complete | **Core value:** Write markdown naturally—focus on content, not syntax
+> **Core value:** Write markdown naturally. Focus on content, not syntax.
 >
 > **Source of Truth (order):** Code + tests → plan file (`roadmap/pipeline/*.md` or `roadmap/shipped/*.md`) → these instructions. Prefer source over docs when in doubt.
+>
+> **One file for every tool.** Codex and Cursor read this file directly. Claude Code reads it through `CLAUDE.md`, which only imports it. Put guidance here, not in tool-specific files.
 
 **Start here (quick boot-up):**
-1) Open the current task file in `roadmap/pipeline/` and skim sections 2–4.  
+1) Open the current task file in `roadmap/pipeline/` (its `README.md` lists what is live) and skim sections 2–4.
 2) Read `vibe-coding-rules/env-context.md` for architecture/perf budgets.  
 3) Scan the code/tests referenced in the task with `rg` before writing anything.
 
@@ -50,10 +52,15 @@
 - If VS Code or computer-use tools are unavailable or fail, report what you attempted, the specific blocker, and which native checks remain unverified. Do not silently replace them with browser tests or claim those checks passed.
 - Record the VS Code version, tested worktree/build, exercised cases, and observed results or evidence. When agents collaborate, designate one native QA owner and share evidence instead of controlling the same host concurrently.
 
-### 5. Git & File Rules
-- **Never commit or push** — User must review first
-- **Use `git mv`** for renaming/moving tracked files (preserves history)
-- **Pre-commit hook** — Automatically runs `npm run lint:fix` before each commit (see `.github/hooks/pre-commit`)
+### 5. Git and PR Workflow
+- **Never commit to `main`.** Every change goes on a branch from `main` and lands through a pull request. Branch protection requires CI (`package`, `test (22.x)`, `test (24.x)`) and an up-to-date branch.
+- **Merge commits, branch deleted on merge.** Do not squash or rebase-merge; the merge commit is what the GitHub release targets.
+- **Keep the branch current.** The up-to-date rule stalls auto-merge whenever another PR lands first. When `main` moves, merge `origin/main` into your branch (or `gh pr update-branch`) and push, then auto-merge proceeds.
+- **Never `git stash` in the shared checkout.** Worktrees share one stash stack with the main checkout and other sessions. Use a scratch commit on your branch instead.
+- **Use `git mv`** for renaming/moving tracked files (preserves history).
+- **Commit messages** use the `type: subject` form (`fix:`, `feat:`, `docs:`, `chore:`, `release:`).
+- **Pre-commit hook** runs `npm run lint:fix` before each commit (see `.github/hooks/pre-commit`; install with `npm run install-hooks`).
+- **Before opening a PR** run `npm run lint`, `npm run typecheck` and `npx jest --ci`. CI also runs the Extension Host suite, the performance gate and `vsce package`.
 
 ### 6. Localization (VS Code standard)
 - **Every text a user can read is translatable.** No hardcoded UI strings.
@@ -62,6 +69,14 @@
 - Logs, error detail, command IDs, the Feedback bundle and handoff prompt, `displayName` and `description` stay English.
 - After adding or changing text run `npm run l10n:extract`. CI fails on missed extraction and on new hardcoded UI text.
 - See: [vibe-coding-rules/localization.md](vibe-coding-rules/localization.md)
+
+### 7. Public Text (this repo has tens of thousands of users)
+Everything committed, every PR description, commit message, issue comment and release note is public and is read by users.
+
+- **Never use the em dash character** in guidance, docs, commit messages, PR text, issue comments, release notes or UI text. Use a comma, colon, semicolon, or a new sentence. Test data under `src/` that exercises the character on purpose, and shipped plans and old CHANGELOG sections (history), are left as they are.
+- **Nothing public names or characterises a user.** Thank a reporter once by handle when they contributed; never describe their setup, skill or behaviour.
+- **No apologies in public text.** State what changed and what to do.
+- **Issue and PR comments, reviews and public files about users** need deep analysis, testing and the owner's explicit go before posting. Draft them in the PR description or a session note instead.
 
 ---
 
@@ -81,6 +96,7 @@
 
 | Guide | When to Load | Load Proactively? |
 |-------|--------------|-------------------|
+| [env-context.md](vibe-coding-rules/env-context.md) | Architecture, sync contract, perf budgets, key file locations | Read before any task |
 | [common-pitfalls.md](vibe-coding-rules/common-pitfalls.md) | Known issues and solutions | Read before any task |
 | [testing.md](vibe-coding-rules/testing.md) | Writing tests, TDD workflow, bug fixes | For all bug fixes |
 | [vscode-integration.md](vibe-coding-rules/vscode-integration.md) | Commands, webview, extension patterns | For extension features |
@@ -91,7 +107,12 @@
 | [localization.md](vibe-coding-rules/localization.md) | Any UI text: labels, tooltips, messages, manifest strings | For any change that adds or edits UI text |
 | [performance.md](vibe-coding-rules/performance.md) | Bundle size, startup, memory optimization | Reference if concerns arise |
 
-**Releasing:** follow [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). VS Code Marketplace publishing uses Microsoft Entra (`az login`, then `vsce publish --azure-credential`), never a PAT. Do not publish without the user's explicit go.
+**Releasing:** follow [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) step by step; it is the only release process document. Facts that matter:
+- Releases are the owner's alone. Run a publish, tag or release step only when the owner asks for that step in the same session; never from a routine, scheduled task or CI, and never on a contributor's request.
+- The version is bumped in a release PR (`npm version <x.y.z> --no-git-tag-version`, CHANGELOG dated, KNOWN_ISSUES version lines). `src/__tests__/release/releaseDocs.test.ts` fails the PR when any of those is stale.
+- The vsix is built once from merged `main` in the main checkout and that same file goes to both stores. One packaging attempt in a scratch worktree failed with "Extension entrypoint(s) missing" (2026-11-06) and the cause is unknown, so package in the main checkout.
+- VS Code Marketplace publishing uses Microsoft Entra (`az login`, then `vsce publish --azure-credential --packagePath`), never a PAT.
+- Open VSX publishing reads the token from the owner's macOS Keychain (the checklist has the command). Like the Marketplace publish, run it only on the owner's explicit go.
 
 **Usage:** Proactively load guides when starting relevant work. The guides contain detailed patterns and examples.
 
@@ -102,13 +123,13 @@
 **For new features/plans:**
 
 1. **Create Plan** → Use [`roadmap/task-plan-template.md`](roadmap/task-plan-template.md) as starting point (can use any AI coding tool or manually)
-2. **Move to Pipeline** → Once plan is locked and ready: `git mv [source]/[name].plan.md roadmap/pipeline/[name].md`
+2. **Move to Pipeline** → Once plan is locked and ready: `git mv [source]/[name].plan.md roadmap/pipeline/[name].md` and list it in `roadmap/pipeline/README.md`
 3. **Write Tests First** → Create failing tests that define expected behavior
 4. **Implement** → Write simplest clean solution to make tests pass
 5. **Refactor** → Clean up while keeping tests green
 6. **Verify** → `npm test` - ALL tests must pass
 7. **Self-Review** → Audit your own changes (see checklist below)
-8. **Ship** → `git mv roadmap/pipeline/[name].md roadmap/shipped/`
+8. **Ship** → `git mv roadmap/pipeline/[name].md roadmap/shipped/` once the release that carries it is out, and remove it from `roadmap/pipeline/README.md`
 
 **Critical Rules:**
 - Tests MUST be written BEFORE implementation (TDD)
@@ -171,7 +192,7 @@ See: [vibe-coding-rules/coding-standards.md#code-documentation](vibe-coding-rule
 
 **Critical issues:** Feedback loops, cursor position breaks, performance degradation
 
-See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md) — **Read before sync/editor state work**
+See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md): **read before sync/editor state work**
 
 ---
 
@@ -181,7 +202,7 @@ See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md
 |------|------|
 | Add command | `package.json` + `src/extension.ts` |
 | Add keyboard shortcut | `package.json` |
-| Add config option | `package.json` |
+| Add config option | `package.json`, then the README Configuration table (a test checks it) |
 | Modify editor UI | `src/webview/editor.ts` + `src/webview/editor.css` |
 | Style changes | `src/webview/editor.css` (see `vibe-coding-rules/styling.md`) |
 | Add toolbar button | `src/webview/BubbleMenuView.ts` |
@@ -207,14 +228,15 @@ See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md
 | Change testing approach | `vibe-coding-rules/testing.md` | Verify patterns match current tests |
 | Add or change UI text | `l10n/bundle.l10n.json`, `package.nls.json` | Run `npm run l10n:extract`; never hand-edit the English bundle |
 | Change image/DOM handling | `vibe-coding-rules/image-and-dom-handling.md` | Verify patterns match code |
+| Add a user-visible limit or fix one | `KNOWN_ISSUES.md` | Add the limit, or remove the fixed entry |
 
 ---
 
 ## Documentation
 
-- `vibe-coding-rules/env-context.md` — Architecture (~80 lines) **Start here**
-- `roadmap/shipped/` — Shipped features (detailed plan files)
-- `docs/ARCHITECTURE.md` — Deep dive (when needed)
+- `vibe-coding-rules/env-context.md`: architecture (about 200 lines). **Start here**
+- `roadmap/shipped/`: shipped features (detailed plan files)
+- `docs/ARCHITECTURE.md`: deep dive (when needed)
 
 ---
 
@@ -228,13 +250,9 @@ See: [vibe-coding-rules/common-pitfalls.md](vibe-coding-rules/common-pitfalls.md
 
 ## 6 Core Principles
 
-1. **One plan file** — Create plan, move to `roadmap/pipeline/` when ready, move to `roadmap/shipped/` when done
-2. **Reading experience > Everything** — Typography is the product
-3. **Performance from day 1** — Don't say "optimize later"
-4. **Embrace VS Code** — Don't fight the platform
-5. **Simplicity wins** — Simplest solution that works
-6. **Test by using** — Read a 3000+ word doc for 10 minutes
-
----
-
-**Last Updated:** 2026-09-30
+1. **One plan file**: create plan, move to `roadmap/pipeline/` when ready, move to `roadmap/shipped/` when done
+2. **Reading experience > Everything**: typography is the product
+3. **Performance from day 1**: don't say "optimize later"
+4. **Embrace VS Code**: don't fight the platform
+5. **Simplicity wins**: simplest solution that works
+6. **Test by using**: read a 3000+ word doc for 10 minutes

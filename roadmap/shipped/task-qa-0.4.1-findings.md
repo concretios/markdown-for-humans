@@ -2,7 +2,7 @@
 
 **Source:** real VS Code 1.140.0 Extension Host run on 2026-10-04, 207 cases, 192 pass, 15 fail. The 15 failures reduce to the 10 findings below plus 5 already in `KNOWN_ISSUES.md`.
 
-**Status:** hotfix branch `hotfix/qa-0.4.1-findings`. F1 to F6, F8, F9 and the later findings F12 to F15 are fixed with regression tests; F7 and F10 are documented in `KNOWN_ISSUES.md`; F11 was retracted (not reproducible). One open decision remains, host-driven undo (see the end). Ordered by severity. Each item has a repro, expected vs actual, where to look first (suspected, not verified), and the test that caught it.
+**Status:** shipped in 0.4.2 (2026-10-06) from the hotfix branch `hotfix/qa-0.4.1-findings`. F1 to F6, F8, F9 and the later findings F12 to F15 are fixed with regression tests; F7 and F10 are documented in `KNOWN_ISSUES.md`; F11 was retracted (not reproducible). One open decision remains, host-driven undo (see the end). Ordered by severity. Each item has a repro, expected vs actual, where to look first (suspected, not verified), and the test that caught it.
 
 **How to read this file:** it is a record of bugs found in **0.4.1** (the code on `main` before this PR). Wherever a section says what the editor "does" or "now does", it describes 0.4.1 behavior, before the fix. Each heading says whether this PR fixes it, and the regression test that proves it is named in the section. Nothing in this list is behavior introduced by this PR.
 

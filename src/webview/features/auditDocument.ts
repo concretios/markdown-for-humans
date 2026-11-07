@@ -2,6 +2,15 @@ import { Editor, Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import { getLevenshteinDistance } from './levenshtein';
+import {
+  buildHeadingAnchors,
+  generateHeadingSlug,
+  headingAnchorText,
+  resolveHeadingAnchor,
+  toFragmentKey,
+  type HeadingTexts,
+  type SeenSlugs,
+} from '../utils/headingSlug';
 import * as l10n from '../l10n';
 
 export type AuditIssueType = 'link' | 'image' | 'heading';
@@ -16,6 +25,8 @@ export interface AuditIssue {
   nodeSize: number;
   target: string;
   suggestions?: string[];
+  /** A heading link in a form earlier versions wrote: it jumps here, but is dead on GitHub. */
+  olderFormAnchor?: boolean;
 }
 
 export interface FileCheckResult {
@@ -82,14 +93,17 @@ export async function runAudit(editor: Editor): Promise<AuditIssue[]> {
   const issues: AuditIssue[] = [];
   const { doc } = editor.state;
 
-  const existingSlugs = new Set<string>();
+  const existingSlugs: SeenSlugs = new Map();
+  const headings: HeadingTexts[] = [];
+  const currentAnchors: string[] = [];
   const fileChecks: Promise<void>[] = [];
   const headingLinks: { slug: string; pos: number; nodeSize: number }[] = [];
 
   doc.descendants((node, pos) => {
     if (node.type.name === 'heading') {
-      const text = node.textContent;
-      generateHeadingSlug(text, existingSlugs);
+      const anchorText = headingAnchorText(node);
+      currentAnchors.push(generateHeadingSlug(anchorText, existingSlugs));
+      headings.push({ text: node.textContent, anchorText });
     }
 
     // Truly-empty image syntax `![]()` is rewritten to literal text by the
@@ -235,9 +249,21 @@ export async function runAudit(editor: Editor): Promise<AuditIssue[]> {
 
   await Promise.all(fileChecks);
 
+  const anchors = buildHeadingAnchors(headings);
+  const currentAnchorKeys = new Map(
+    currentAnchors.map((anchor, index) => [toFragmentKey(anchor), index])
+  );
   headingLinks.forEach(link => {
-    if (!existingSlugs.has(link.slug)) {
-      const suggestions = findBestMatches(link.slug, Array.from(existingSlugs));
+    // A bare # is the top of the page on GitHub, and an older link to a heading with no
+    // ASCII letters here. The file cannot tell the two apart, and neither is broken.
+    if (!link.slug) return;
+
+    const headingIndex = resolveHeadingAnchor(anchors, link.slug);
+    if (headingIndex === undefined) {
+      const suggestions = findBestMatches(
+        toFragmentKey(link.slug),
+        Array.from(existingSlugs.keys()).filter(Boolean)
+      );
       issues.push({
         type: 'heading',
         message: l10n.t('Heading anchor not found: #{0}', link.slug),
@@ -245,6 +271,21 @@ export async function runAudit(editor: Editor): Promise<AuditIssue[]> {
         nodeSize: link.nodeSize,
         target: link.slug,
         suggestions: suggestions.length > 0 ? suggestions : undefined,
+      });
+    } else if (
+      // It reached a heading, but only through a form earlier versions wrote. GitHub has no
+      // such id. Compare by resolving, so every spelling of a current anchor stays clean.
+      currentAnchors[headingIndex] &&
+      resolveHeadingAnchor(currentAnchorKeys, link.slug) === undefined
+    ) {
+      issues.push({
+        type: 'heading',
+        message: l10n.t('Link works in this editor but not on GitHub: #{0}', link.slug),
+        pos: link.pos,
+        nodeSize: link.nodeSize,
+        target: link.slug,
+        suggestions: [currentAnchors[headingIndex]],
+        olderFormAnchor: true,
       });
     }
   });
@@ -392,26 +433,6 @@ function checkUrlStatus(url: string): Promise<UrlCheckResult> {
   });
 }
 
-function generateHeadingSlug(text: string, existingSlugs: Set<string>): string {
-  const slug = text
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, '-')
-    .replace(/[^\w-]/g, '')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-
-  let finalSlug = slug;
-  let counter = 1;
-  while (existingSlugs.has(finalSlug)) {
-    finalSlug = `${slug}-${counter}`;
-    counter++;
-  }
-
-  existingSlugs.add(finalSlug);
-  return finalSlug;
-}
-
 export const auditPluginKey = new PluginKey('auditDocument');
 
 const auditPlugin = new Plugin({
@@ -425,7 +446,10 @@ const auditPlugin = new Plugin({
       if (issues) {
         const decos = issues.map((issue: AuditIssue) => {
           return Decoration.inline(issue.pos, issue.pos + issue.nodeSize, {
-            class: 'validation-error-highlight',
+            // An older-form link works here, so it is a warning, not an error.
+            class: issue.olderFormAnchor
+              ? 'validation-error-highlight validation-older-anchor'
+              : 'validation-error-highlight',
             title: issue.message,
           });
         });
