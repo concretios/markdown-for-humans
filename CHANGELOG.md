@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-11-07
+
 ### Fixed
 
 - Links to headings with non-English letters or punctuation now jump to the heading. `[Über uns](#über-uns)` and `[Setup](#setup--config)` did nothing on Cmd/Ctrl+click and **Document Audit** reported them as broken, because the editor worked out a different anchor from GitHub's. Percent-encoded links and links in a different case also work.
