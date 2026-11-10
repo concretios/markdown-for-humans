@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 
 - The details shown when you hover an image now update as soon as a resize finishes: width, height, file size and modified date. Before, the box kept the old values while the pointer stayed on the image, and the file size and date stayed stale even after hovering again.
+- Resizing an image to a width larger than the editor column no longer stretches it. The picture was shown at the column width but kept the height of the size you chose, so it looked squashed, both in the Resize preview and after the resize finished. The picture now keeps its proportions in both places. The Markdown file is unchanged.
 
 ---
 
