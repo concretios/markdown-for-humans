@@ -480,8 +480,6 @@
     "test:feedback-annotations": "node --test scripts/feedback-annotation-fixture/verification.test.mjs && node scripts/feedback-annotation-fixture/run.mjs",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
-    "precommit": "npm run lint && npm run test",
-    "validate": "npm run lint && npm run test && npm run build:debug",
     "package:release": "vsce package",
     "install-hooks": "bash ./scripts/install-git-hooks.sh"
   },
