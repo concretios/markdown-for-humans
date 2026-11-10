@@ -141,18 +141,3 @@ Diagrams that fail conversion in the webview may not appear correctly in PDF/Wor
 |---------|------------|
 | “Open with Markdown Editor for Humans” fails | Right-click the editor tab → **Reopen Editor With...** → **Visual Editor** (Markdown Editor for Humans) |
 | Theme colors look wrong | Reload Window; check VS Code theme settings |
-
----
-
-## Recently fixed
-
-Fixed in 0.4.4; see [CHANGELOG.md](CHANGELOG.md) for the full list.
-
-- **Feedback and link reference definitions:** Feedback starts on a document that has `[label]: https://...` definitions.
-- **Duplicate link reference definitions** are no longer deleted on save.
-- **Word export** keeps code blocks and block math, and shows checklist items as ☐ and ☑.
-- **Links to other Markdown files** open in this editor, including links with a section (`guide.md#install`) or encoded characters.
-
----
-
-**Agents:** Prefer [CHANGELOG.md](CHANGELOG.md) Known Issues for the current release. Do not treat this file as a roadmap or metrics dashboard. Active work: [`roadmap/pipeline/`](roadmap/pipeline/). Shipped plans: [`roadmap/shipped/`](roadmap/shipped/).
