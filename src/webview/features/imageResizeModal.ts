@@ -52,6 +52,8 @@ interface ImageResizeState {
   originalHeight: number;
   history: ResizeHistoryEntry[];
   historyIndex: number; // Current position in history (-1 = no history)
+  /** Size shown by the modal's live preview; becomes the history entry's new size. */
+  previewSize?: { width: number; height: number };
 }
 
 /**
@@ -90,6 +92,16 @@ function getResizeState(img: HTMLImageElement): ImageResizeState {
     imageResizeStates.set(img, state);
   }
   return state;
+}
+
+/**
+ * Remove the sizing the modal's preview wrote onto an image, so it lays out from its
+ * file again (`max-width: 100%; height: auto`).
+ */
+function clearInlineSize(img: HTMLImageElement): void {
+  img.style.width = '';
+  img.style.height = '';
+  img.style.aspectRatio = '';
 }
 
 /**
@@ -907,9 +919,13 @@ function showResizeModalForLocalImage(
     widthInput.disabled = width >= originalWidth;
     heightInput.disabled = height >= originalHeight;
 
-    // Update image display
+    // Update image display. The column clamps the width (max-width: 100%) but not a px
+    // height, so a px height distorts a picture wider than the column. Size by width and
+    // aspect ratio instead; the height then follows whatever width the column allows.
     currentImage.style.width = `${width}px`;
-    currentImage.style.height = `${height}px`;
+    currentImage.style.height = '';
+    currentImage.style.aspectRatio = `${width} / ${height}`;
+    getResizeState(currentImage).previewSize = { width, height };
 
     // Disable resize button if at original size or trying to upscale
     if (width >= originalWidth && height >= originalHeight) {
@@ -971,8 +987,8 @@ function showResizeModalForLocalImage(
   // Cancel - restore original size and close
   const handleCancel = () => {
     if (currentImage) {
-      currentImage.style.width = '';
-      currentImage.style.height = '';
+      clearInlineSize(currentImage);
+      getResizeState(currentImage).previewSize = undefined;
     }
     hideImageResizeModal();
   };
@@ -1298,8 +1314,8 @@ export function handleImageResized(backupPath: string, img: HTMLImageElement): v
     backupPath,
     originalWidth: state.originalWidth,
     originalHeight: state.originalHeight,
-    newWidth: parseInt(img.style.width) || img.width,
-    newHeight: parseInt(img.style.height) || img.height,
+    newWidth: state.previewSize?.width ?? (parseInt(img.style.width) || img.width),
+    newHeight: state.previewSize?.height ?? (parseInt(img.style.height) || img.height),
     imageData: typeof pendingResizeDataUrl === 'string' ? pendingResizeDataUrl : img.src,
   };
 
@@ -1310,6 +1326,12 @@ export function handleImageResized(backupPath: string, img: HTMLImageElement): v
 
   state.history.push(historyEntry);
   state.historyIndex = state.history.length - 1;
+
+  // The reloaded file now has the new size, so drop the preview's inline sizing. Left
+  // in place, its width is clamped to the column but its height is not, and the picture
+  // shows stretched.
+  clearInlineSize(img);
+  state.previewSize = undefined;
 
   // Limit history to 10 entries
   if (state.history.length > 10) {
