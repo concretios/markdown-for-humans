@@ -1227,6 +1227,12 @@
     z-index: 11;
   }
 
+  /* display: flex above would otherwise override the hidden attribute, and the
+     button would show on a diagram that failed to render */
+  .mermaid-zoom-btn[hidden] {
+    display: none;
+  }
+
   .mermaid-wrapper:hover .mermaid-zoom-btn,
   .mermaid-zoom-btn:focus-visible {
     opacity: 1;

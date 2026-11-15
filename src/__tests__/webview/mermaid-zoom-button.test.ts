@@ -6,6 +6,8 @@
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import mermaid from 'mermaid';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { Mermaid } from '../../webview/extensions/mermaid';
 
 describe('Mermaid zoom button', () => {
@@ -127,5 +129,25 @@ describe('Mermaid zoom button: lightbox fails to load', () => {
     process.off('unhandledRejection', unhandled);
     logged.mockRestore();
     localEditor.destroy();
+  });
+});
+
+describe('Mermaid zoom button: stylesheet', () => {
+  // jsdom applies no stylesheet unless one is added, so the hidden attribute
+  // alone passed the tests while editor.css showed the button anyway.
+  it('keeps a hidden zoom button out of view even though the button uses display: flex', () => {
+    const style = document.createElement('style');
+    style.textContent = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
+    document.head.appendChild(style);
+    const button = document.createElement('button');
+    button.className = 'mermaid-zoom-btn';
+    document.body.appendChild(button);
+
+    expect(getComputedStyle(button).display).toBe('flex');
+    button.hidden = true;
+    expect(getComputedStyle(button).display).toBe('none');
+
+    style.remove();
+    button.remove();
   });
 });
