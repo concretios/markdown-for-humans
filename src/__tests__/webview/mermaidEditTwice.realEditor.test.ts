@@ -108,9 +108,13 @@ describe('editing a Mermaid diagram through the code dialog', () => {
     await settle();
     await settle();
 
-    expect(editor.state.doc.toJSON().content.some(
-      (n: { type: string; content?: unknown[] }) => n.type === 'mermaid' && !n.content
-    )).toBe(true);
+    expect(
+      editor.state.doc
+        .toJSON()
+        .content.some(
+          (n: { type: string; content?: unknown[] }) => n.type === 'mermaid' && !n.content
+        )
+    ).toBe(true);
     expect(errors).toEqual([]);
   });
 });
