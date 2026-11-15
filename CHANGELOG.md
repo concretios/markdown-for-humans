@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- The **Feedback locked** dialog has a **Copy path** button that copies only the bundle path, so you can name several bundles in one message to an agent. The automatic copy of the full handoff prompt is unchanged ([#180](https://github.com/concretios/markdown-for-humans/issues/180)).
+
+### Fixed
+
+- When **Log feedback for an LLM** cannot match a block to the saved file, the message now names the block's line or lines, and it is translated. A placeholder in plain text such as `T<N>` still stops Feedback from starting; write it as inline code, `` `T<N>` ``, to review that document now ([#179](https://github.com/concretios/markdown-for-humans/issues/179)).
+
 ## [0.4.7] - 2026-11-15
 
 ### Added

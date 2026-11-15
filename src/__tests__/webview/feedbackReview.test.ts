@@ -3263,6 +3263,89 @@ describe('Feedback review controller', () => {
     }
   });
 
+  it('copies only the bundle path from the locked dialog (issue 180)', async () => {
+    const legacyConfirm = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = jest.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    let controller: ReturnType<typeof createFeedbackReviewController> | undefined;
+    try {
+      const editor = createEditorFixture();
+      controller = createFeedbackReviewController({ editor, host });
+      controller.activate({
+        sessionId: 'session-1',
+        source: 'docs/guide.md',
+        sourceSha256: 'b'.repeat(64),
+        round: 'round-1',
+        feedbackFile: '.md4h/feedback/docs/guide.md--round-1/feedback.md',
+        items: createSavedFeedbackItems(1),
+      });
+      controller.finish();
+      document.querySelector<HTMLButtonElement>('[data-feedback-completion-confirm]')?.click();
+      const finish = (host.postMessage as jest.Mock).mock.calls
+        .map(call => call[0] as FeedbackWebviewMessage)
+        .find(message => message.type === 'feedback.finish') as {
+        type: 'feedback.finish';
+        requestId: string;
+        sessionId: string;
+      };
+      const prompt =
+        'Review `.md4h/feedback/docs/guide.md--round-1/feedback.md`.\n' +
+        'Use our team workflow, keep {{round}} literal, and report every ID.';
+      controller.handleHostMessage({
+        type: 'feedback.finished',
+        requestId: finish.requestId,
+        sessionId: 'session-1',
+        feedbackFile: '.md4h/feedback/docs/guide.md--round-1/feedback.md',
+        itemCount: 1,
+        prompt,
+        promptCopied: false,
+      });
+      controller.applyCloseSync(
+        {
+          type: 'feedback.close.sync',
+          requestId: finish.requestId,
+          sessionId: 'session-1',
+          revision: 1,
+          content: '# Current source\n',
+        },
+        () => true
+      );
+      controller.handleHostMessage({
+        type: 'feedback.close.release',
+        requestId: finish.requestId,
+        sessionId: 'session-1',
+        revision: 1,
+      });
+      expect(controller.completeClose('session-1')).toBe(true);
+
+      const copyPath = document.querySelector<HTMLButtonElement>(
+        '[data-feedback-completion-copy-path]'
+      );
+      expect(copyPath?.textContent).toBe('Copy path');
+      copyPath?.click();
+      await Promise.resolve();
+
+      expect(writeText).toHaveBeenCalledWith('.md4h/feedback/docs/guide.md--round-1/feedback.md');
+      expect(writeText).not.toHaveBeenCalledWith(prompt);
+      expect(document.querySelector('[data-feedback-completion-status]')?.textContent).toBe(
+        'Path copied'
+      );
+      expect(legacyConfirm).not.toHaveBeenCalled();
+    } finally {
+      controller?.deactivate();
+      legacyConfirm.mockRestore();
+      if (originalClipboard) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, 'clipboard');
+      }
+    }
+  });
+
   it('hands focus to reachable close recovery when source restoration fails', () => {
     const editor = createEditorFixture();
     const controller = createFeedbackReviewController({ editor, host });

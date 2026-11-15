@@ -2650,7 +2650,23 @@ export function createFeedbackReviewController(options: {
       });
       actions.append(copyAgain);
     }
-    actions.append(done);
+    // Copies only the bundle path so several bundles can go in one agent message (issue 180).
+    const copyPath = createElement('button', 'feedback-secondary-button', l10n.t('Copy path'));
+    copyPath.type = 'button';
+    copyPath.setAttribute('data-feedback-completion-copy-path', '');
+    copyPath.addEventListener('click', () => {
+      void (async () => {
+        try {
+          if (!navigator.clipboard) throw new Error('Clipboard API is unavailable');
+          await navigator.clipboard.writeText(summary.feedbackFile);
+          status.textContent = l10n.t('Path copied');
+        } catch (error) {
+          console.error('[MD4H] Feedback path copy failed:', error);
+          status.textContent = l10n.t('Could not copy the path. Try again.');
+        }
+      })();
+    });
+    actions.append(copyPath, done);
     surface.append(title, explanation, count, pathLabel, path, status, actions);
     dialog.append(surface);
     containCompletionPointerScroll(dialog, surface);

@@ -635,7 +635,17 @@ export class FeedbackSnapshotService {
       if (canonicalFingerprint === null) {
         return failure(
           'block-content-mismatch',
-          'Canonical block content does not match the saved source snapshot.'
+          // Name the block so the author can find it in a long document (issue 179).
+          anchor.startLine === anchor.endLine
+            ? vscode.l10n.t(
+                'Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.',
+                anchor.startLine
+              )
+            : vscode.l10n.t(
+                'Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.',
+                anchor.startLine,
+                anchor.endLine
+              )
         );
       }
 

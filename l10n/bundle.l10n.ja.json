@@ -910,5 +910,10 @@
   "Saved the file and added {0} to GitHub Copilot (context {1})": "ファイルを保存し、{0} を GitHub Copilot に追加しました (コンテキスト {1})",
   "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "このドキュメントは GitHub Copilot に添付できません。代わりに {0} をクリップボードにコピーしました。",
   "Link works in this editor but not on GitHub: #{0}": "リンクはこのエディターでは動作しますが、GitHub では動作しません: #{0}",
-  "Update the link to the anchor GitHub uses:": "リンクを GitHub が使用するアンカーに更新してください:"
+  "Update the link to the anchor GitHub uses:": "リンクを GitHub が使用するアンカーに更新してください:",
+  "Copy path": "パスをコピー",
+  "Could not copy the path. Try again.": "パスをコピーできませんでした。もう一度お試しください。",
+  "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "{0} 行目のブロックが保存済みのファイルと一致しないため、フィードバックは開始されませんでした。ファイルは変更されていません。",
+  "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "{0} 行目から {1} 行目のブロックが保存済みのファイルと一致しないため、フィードバックは開始されませんでした。ファイルは変更されていません。",
+  "Path copied": "パスをコピーしました"
 }
