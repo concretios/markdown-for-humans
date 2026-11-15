@@ -1014,6 +1014,9 @@ export function createLinkDialog(): HTMLElement {
     } else if (currentMode === 'headings' && currentEditor) {
       handleHeadingExtraction(currentEditor, urlInput.value.trim(), urlInput);
     } else {
+      // A typed URL replaces the existing link's href, which OK would
+      // otherwise prefer over the field and keep.
+      actualLinkPath = null;
       closeAutocomplete();
     }
   });

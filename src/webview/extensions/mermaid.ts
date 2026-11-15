@@ -298,11 +298,18 @@ export const Mermaid = Node.create({
 
           const { tr } = editor.state;
 
-          // Create new mermaid node with updated text content
-          const newNode = node.type.create(node.attrs, editor.schema.text(result.code));
+          // Measure the node as it is now. The `node` this view was created
+          // with goes stale once update() accepts new content, and replacing
+          // its old size left a stray block or threw RangeError.
+          const current = tr.doc.nodeAt(pos);
+          if (!current || current.type !== node.type) return;
 
-          // Replace the old node with the new one
-          tr.replaceWith(pos, pos + node.nodeSize, newNode);
+          const newNode = current.type.create(
+            current.attrs,
+            result.code ? editor.schema.text(result.code) : undefined
+          );
+
+          tr.replaceWith(pos, pos + current.nodeSize, newNode);
 
           editor.view.dispatch(tr);
 
