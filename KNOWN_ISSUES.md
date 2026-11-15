@@ -1,8 +1,8 @@
 # Known Issues
 
-Living list of open limitations for **Markdown Editor for Humans 0.4.6**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
+Living list of open limitations for **Markdown Editor for Humans 0.4.7**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
-**Status:** 0.4.6 (2026-11-07) · **Last updated:** 2026-11-07
+**Status:** 0.4.7 (2026-11-15) · **Last updated:** 2026-11-15
 
 ---
 
@@ -90,6 +90,9 @@ Comments are kept on their own lines, inside lists and blockquotes, and inside a
 
 ### Loose / ordered list markers
 In a list you edit, loose lists can round-trip as tight lists and `1)` markers may become `1.`. Unedited lists keep their source.
+
+### Letter and roman numeral list markers
+Lines that start with `a.`, `B.` or `ii.` are paragraphs, not list items, as in standard Markdown and on GitHub. Use `1.` for a numbered list.
 
 ### Blank line added next to a block you edit
 Blocks you do not edit keep the exact layout they had, including a heading, label or paragraph that sits directly above a list, code fence or text with no blank line. When you edit one of two such neighbors, saving puts a blank line between them (for example after an edited bold label above its list, or after an edited heading above text). The rendered result is the same; only the source layout changes.
