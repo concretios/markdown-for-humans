@@ -9,12 +9,11 @@
 /**
  * A paragraph that opens with a one or two letter word and a period
  * ("No. That is the answer.") is plain text in CommonMark. TipTap's ordered
- * list tokenizer, reached through OrderedListMarkdownFix for every
- * non-numeric line, reads that word as an alphabetic or roman list marker.
- *
- * The editor then shows a numbered list, Feedback refuses to start
+ * list tokenizer reads that word as a letter or roman list marker, so the
+ * editor once showed a numbered list, Feedback refused to start
  * (block-kind-mismatch: list in the editor, paragraph in the saved file), and
- * an edit to the paragraph saves "1." in place of the word.
+ * an edit to the paragraph saved "1." in place of the word.
+ * OrderedListMarkdownFix now leaves every ordered list to marked.
  */
 
 import type { Editor } from '@tiptap/core';

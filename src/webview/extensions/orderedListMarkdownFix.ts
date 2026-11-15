@@ -142,19 +142,22 @@ function restoreOrderedTaskCheckboxPrefix(item: MarkdownToken): MarkdownToken {
  * which correctly parses inline marks for both `1.` and `1)` list styles.
  * Numeric lists use marked's built-in tokenizer: TipTap 3.30.5's custom
  * tokenizer strips too little continuation indentation and detaches ordered
- * grandchildren from intervening bullet items. Keep its nonnumeric handling.
+ * grandchildren from intervening bullet items.
+ * Letter and roman markers (`a.`, `ii.`) are not lists in CommonMark, so they
+ * are not parsed as lists here either.
  */
 export const OrderedListMarkdownFix = OrderedList.extend({
   markdownTokenizer: {
     name: 'orderedList',
     level: 'block',
     start: () => -1,
-    tokenize: (source, tokens, lexer) => {
-      // Returning undefined lets marked's CommonMark list tokenizer retain the
-      // entire nested structure, fenced code whitespace and task item tokens.
-      if (/^[ \t]*\d+[.)](?:[ \t\n]|$)/.test(source)) return undefined;
-      return OrderedList.config.markdownTokenizer?.tokenize(source, tokens, lexer);
-    },
+    // Always defer to marked's CommonMark list tokenizer. It keeps the entire
+    // nested structure, fenced code whitespace and task item tokens of numeric
+    // lists. TipTap's tokenizer also reads one or two letters or a roman
+    // numeral before ". " as a marker, which turned a paragraph such as
+    // "No. That is the answer." into a numbered list: the word was hidden,
+    // an edit saved "1." in its place, and Feedback refused the document.
+    tokenize: () => undefined,
   },
   parseMarkdown: (
     token: MarkdownToken,
