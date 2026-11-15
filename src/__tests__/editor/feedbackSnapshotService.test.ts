@@ -241,6 +241,49 @@ describe('FeedbackSnapshotService', () => {
     expect(result).toMatchObject({ ok: false, error: { reason: 'block-content-mismatch' } });
   });
 
+  it('names the line range of the block that does not match the saved file (issue 179)', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText = '# Title\n\nTake T<N> from the queue.\n';
+    const source = requirePrepared(service, sourceText);
+    const result = service.finalize({
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+      descriptors: {
+        revision: 3,
+        blocks: [
+          block(0, 'heading', '# Title'),
+          block(1, 'paragraph', 'Take T&lt;N> from the queue.'),
+        ],
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { reason: 'block-content-mismatch' } });
+    if (result.ok) throw new Error('expected a block-content mismatch');
+    expect(result.error.detail).toMatch(/\bline 3\b/);
+    expect(result.error.detail).not.toMatch(/Canonical block content/);
+  });
+
+  it('names a multi-line block by its first and last line', () => {
+    const service = new FeedbackSnapshotService();
+    const sourceText = '*An italic first line\ncontinues here.*\n';
+    const source = requirePrepared(service, sourceText);
+    const result = service.finalize({
+      source,
+      currentDocumentVersion: 7,
+      splitReports: [splitReport(sourceText)],
+      renderer: rendererReport(sourceText),
+      descriptors: {
+        revision: 3,
+        blocks: [block(0, 'paragraph', '*An italic first line*  \ncontinues here.')],
+      },
+    });
+
+    if (result.ok) throw new Error('expected a block-content mismatch');
+    expect(result.error.detail).toMatch(/\blines 1 to 2\b/);
+  });
+
   it('tells the user how to recover when the editor splits a mixed plain/task list in two', () => {
     const service = new FeedbackSnapshotService();
     const sourceText = '- note\n- [ ] todo\n';

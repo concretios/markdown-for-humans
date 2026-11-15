@@ -910,5 +910,10 @@
   "Saved the file and added {0} to GitHub Copilot (context {1})": "O arquivo foi salvo e {0} foi adicionado ao GitHub Copilot (contexto {1})",
   "This document cannot be attached to GitHub Copilot. Copied {0} to the clipboard instead.": "Este documento não pode ser anexado ao GitHub Copilot. {0} foi copiado para a área de transferência.",
   "Link works in this editor but not on GitHub: #{0}": "O link funciona neste editor, mas não no GitHub: #{0}",
-  "Update the link to the anchor GitHub uses:": "Atualize o link para a âncora usada pelo GitHub:"
+  "Update the link to the anchor GitHub uses:": "Atualize o link para a âncora usada pelo GitHub:",
+  "Copy path": "Copiar caminho",
+  "Could not copy the path. Try again.": "Não foi possível copiar o caminho. Tente novamente.",
+  "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "O Feedback não foi iniciado porque o bloco na linha {0} não corresponde ao arquivo salvo. O arquivo não foi alterado.",
+  "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "O Feedback não foi iniciado porque o bloco nas linhas {0} a {1} não corresponde ao arquivo salvo. O arquivo não foi alterado.",
+  "Path copied": "Caminho copiado"
 }

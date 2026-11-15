@@ -162,6 +162,7 @@
   "Copy code block": "Copy code block",
   "Copy diagnostics": "Copy diagnostics",
   "Copy failed": "Copy failed",
+  "Copy path": "Copy path",
   "Copy reference for AI ({0})/Toolbar tooltip. {0} is an example of the copied text, such as @file#L10-14": {
     "message": "Copy reference for AI ({0})",
     "comment": [
@@ -184,6 +185,7 @@
   "Could not copy a reference for AI.": "Could not copy a reference for AI.",
   "Could not copy code block": "Could not copy code block",
   "Could not copy the agent handoff. Try again.": "Could not copy the agent handoff. Try again.",
+  "Could not copy the path. Try again.": "Could not copy the path. Try again.",
   "Could not flush the latest editor changes, so feedback did not start.": "Could not flush the latest editor changes, so feedback did not start.",
   "Could not load the preview. Collapse and reopen to try again.": "Could not load the preview. Collapse and reopen to try again.",
   "Could not load this screenshot. Retake it to try again.": "Could not load this screenshot. Retake it to try again.",
@@ -300,6 +302,8 @@
   "Feedback could not start because the rendered Markdown differs from the saved file.": "Feedback could not start because the rendered Markdown differs from the saved file.",
   "Feedback details": "Feedback details",
   "Feedback diagnostics copied.": "Feedback diagnostics copied.",
+  "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.",
+  "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.",
   "Feedback draft available": "Feedback draft available",
   "Feedback draft discarded.": "Feedback draft discarded.",
   "Feedback draft discarded. Restoring the latest source before editing resumes.": "Feedback draft discarded. Restoring the latest source before editing resumes.",
@@ -567,6 +571,7 @@
   "Paste as Markdown": "Paste as Markdown",
   "Paste as code": "Paste as code",
   "Paste as plain text": "Paste as plain text",
+  "Path copied": "Path copied",
   "Pen": "Pen",
   "Pen tool": "Pen tool",
   "Pie Chart": "Pie Chart",
