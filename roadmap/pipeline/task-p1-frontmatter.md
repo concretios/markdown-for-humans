@@ -327,25 +327,41 @@ See the [contribution workflow](../../CONTRIBUTING.md#-submit-code), [VS Code we
 
 ## 5. Technical Plan
 
-_(To be filled during task refinement)_
+For Guided YAML and Properties:
+
+- The [extension host](../../src/editor/MarkdownEditorProvider.ts) shares the style setting with open editors and identifies wrapped frontmatter. The save path checks the source before removing a synthetic fence, so a leading authored YAML example retains its own fence.
+- The [frontmatter plugin](../../src/webview/frontmatter/plugin.ts) adds decorations to the existing code block. [Properties controls](../../src/webview/frontmatter/controls.ts) sit outside the editable content and reveal that same code block. Export and Feedback use the source block.
+- A [dedicated worker](../../src/webview/frontmatter/worker.ts) uses the `yaml` parser to produce display data and source ranges. It starts on demand after a 120 ms edit pause. Parsing is capped at 16,384 source characters, with limits on display nodes and nesting. Stale work is cancelled. Unsupported YAML and worker failures fall back to the code block.
 
 ---
 
 ## 6. Work Breakdown
 
-_(To be filled during task refinement)_
+- [x] Compare designs and select Guided YAML, Properties, and the Teal & Coral palette.
+- [x] Add parser, live editor, and host save tests. Verify the failure cases before implementing the corresponding fixes.
+- [x] Wire the live setting, worker, shared YAML editor, and theme colors. Update the README, localizations, and license notices.
+- [x] Run Jest, lint, typecheck, release build, and VSIX packaging.
+- [x] Verify the feature in the VS Code Extension Development Host and attach light and dark screenshots to the PR.
+- [ ] Record and attach a screen recording of the feature.
+- [ ] Complete the continuous ten-minute reading pass with a 3,000-word or longer document.
 
 ---
 
 ## 7. Implementation Log
 
-_(To be filled during implementation)_
+### 2026-11-15
+
+- Drafted the scope before implementation and reviewed light and dark design mockups. The implementation uses two opt-in views and leaves the current code block as the default.
+- Verified YAML collections and multiline scalars, exact serialization across style changes, source-only export, and preservation of authored YAML fences. All 5,906 executed Jest tests passed. Lint, typecheck, release build, and VSIX packaging also passed.
+- Tested the release build in VS Code 1.146.0 on macOS with the fixture described above. Opened [draft PR #198](https://github.com/concretios/markdown-for-humans/pull/198) with four screenshots from the development host.
 
 ---
 
 ## 8. Decisions & Tradeoffs
 
-_(To be filled during implementation)_
+- **One editable source.** Properties is a reading view. Edit YAML uses the existing code block so edits go through the established save and undo paths. Structured form editing remains follow-up work.
+- **An opt-in setting.** Readers can choose Guided YAML or Properties without changing their files. The default preserves the original presentation.
+- **Bounded display data.** Aliases appear as references. Large or unsupported YAML stays editable as source. The separate worker keeps parsing off the editor thread.
 
 ---
 
@@ -354,7 +370,7 @@ _(To be filled during implementation)_
 - TOML and JSON frontmatter support
 - Frontmatter autocomplete (suggest existing tags)
 - Frontmatter inheritance (from parent directories)
-- Advanced YAML features (anchors, multi-line strings)
+- Rich presentation of YAML anchors and aliases
 - Frontmatter templates (blog post, documentation, etc.)
 - Frontmatter validation schemas (JSON Schema)
 - Frontmatter-based file organization (sort by date, filter by tag)
