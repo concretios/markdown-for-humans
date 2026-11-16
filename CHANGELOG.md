@@ -11,11 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Added
 
 - The **Feedback locked** dialog has a **Copy path** button that copies only the bundle path, so you can name several bundles in one message to an agent. The automatic copy of the full handoff prompt is unchanged ([#180](https://github.com/concretios/markdown-for-humans/issues/180)).
+- **Two optional views for YAML frontmatter.** Set `markdownForHumans.frontmatter.style` to `"guided"` for color-coded YAML with indentation guides, or to `"properties"` for a readable list of fields with an **Edit YAML** button. The default, `"current"`, keeps the existing code block. Saving, undo and the source view work as before in every style, and YAML that cannot be read falls back to the plain block. The YAML parser loads only when one of the views is on. Thanks to [@TheLinuxGuy](https://github.com/TheLinuxGuy) for the contribution ([#198](https://github.com/concretios/markdown-for-humans/pull/198)).
 
 ### Fixed
 
 - When **Log feedback for an LLM** cannot match a block to the saved file, the message now names the block's line or lines, and it is translated. A placeholder in plain text such as `T<N>` still stops Feedback from starting; write it as inline code, `` `T<N>` ``, to review that document now ([#179](https://github.com/concretios/markdown-for-humans/issues/179)).
-- With the frontmatter style set to **properties**, undo or redo that puts the caret back in the frontmatter now shows the YAML at once. Before, the YAML stayed hidden until the next keystroke.
+- A document that opens with a ```` ```yaml ```` example block containing `---` lines keeps that block on save. Before, editing the prose and saving rewrote the example as real frontmatter.
 
 ## [0.4.7] - 2026-11-15
 
