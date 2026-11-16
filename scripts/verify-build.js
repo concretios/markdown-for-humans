@@ -91,6 +91,10 @@ const CRITICAL_FEATURES = {
     file: 'dist/highlighting-worker.js',
     required: ['md4h.highlight.request', 'md4h.highlight.result'],
   },
+  frontmatterWorkerJs: {
+    file: 'dist/frontmatter-worker.js',
+    required: ['md4h.frontmatter.request', 'md4h.frontmatter.result'],
+  },
   webviewCss: {
     file: 'dist/webview.css',
     required: [
@@ -142,7 +146,7 @@ for (const [bundleName, config] of Object.entries(CRITICAL_FEATURES)) {
   // This lexical guard complements the worker's bundled IIFE build format.
   // The supported worker must not require CSP exceptions for dynamic code.
   if (
-    bundleName === 'highlightingWorkerJs' &&
+    bundleName.endsWith('WorkerJs') &&
     /\b(?:importScripts|import|eval)\s*\(|\bnew\s+Function\s*\(/.test(content)
   ) {
     console.error(
@@ -208,7 +212,7 @@ for (const check of sizeChecks) {
   }
 }
 
-const webviewJavaScriptFiles = ['dist/webview.js', 'dist/highlighting-worker.js'];
+const webviewJavaScriptFiles = ['dist/webview.js', 'dist/highlighting-worker.js', 'dist/frontmatter-worker.js'];
 const totalWebviewJavaScriptBytes = webviewJavaScriptFiles.reduce((bytes, file) => {
   const filePath = path.join(process.cwd(), file);
   return bytes + (fs.existsSync(filePath) ? fs.statSync(filePath).size : 0);

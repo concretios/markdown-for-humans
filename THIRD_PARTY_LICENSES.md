@@ -64,6 +64,13 @@ This document lists the third-party open source software components used in Mark
 - **Repository:** https://github.com/markdown-it/markdown-it
 - **License URL:** https://github.com/markdown-it/markdown-it/blob/master/LICENSE
 
+### yaml
+
+- **License:** ISC
+- **Copyright:** Eemeli Aro
+- **Repository:** https://github.com/eemeli/yaml
+- **License URL:** https://github.com/eemeli/yaml/blob/v2.9.1/LICENSE
+
 ### mermaid
 - **License:** MIT
 - **Copyright:** © 2024 Mermaid contributors

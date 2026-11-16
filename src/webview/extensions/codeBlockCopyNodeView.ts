@@ -5,10 +5,11 @@
  */
 
 import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
-import type { NodeView } from '@tiptap/pm/view';
+import type { Decoration, NodeView } from '@tiptap/pm/view';
 import { parseFenceInfo } from '../highlighting/fenceInfo';
 import { resolveGrammar } from '../highlighting/languageRegistry';
 import * as l10n from '../l10n';
+import { createFrontmatterControls } from '../frontmatter/controls';
 
 const COPY_FEEDBACK_MS = 1500;
 
@@ -75,7 +76,12 @@ async function copyCodeText(text: string): Promise<boolean> {
 export function createCodeBlockCopyNodeView(
   initialNode: ProseMirrorNode,
   htmlAttributes: CodeBlockHtmlAttributes,
-  languageClassPrefix = 'language-'
+  languageClassPrefix = 'language-',
+  frontmatter?: {
+    decorations: readonly Decoration[];
+    edit: () => void;
+    focusBody: () => boolean;
+  }
 ): NodeView {
   let currentNode = initialNode;
   let feedbackTimer: number | null = null;
@@ -166,6 +172,14 @@ export function createCodeBlockCopyNodeView(
   wrapper.appendChild(tooltip);
   wrapper.appendChild(button);
 
+  // Create controls only for host-confirmed frontmatter. Editable YAML stays
+  // inside ProseMirror even while the properties reading view is visible.
+  const controls =
+    currentNode.attrs.frontmatter && frontmatter
+      ? createFrontmatterControls(wrapper, frontmatter.edit, frontmatter.focusBody)
+      : undefined;
+  controls?.update(frontmatter?.decorations ?? []);
+
   const highlightStatus = document.createElement('span');
   highlightStatus.className = 'code-block-highlight-status';
   highlightStatus.contentEditable = 'false';
@@ -187,18 +201,23 @@ export function createCodeBlockCopyNodeView(
   return {
     dom: wrapper,
     contentDOM: code,
-    update: updatedNode => {
-      if (updatedNode.type !== currentNode.type) {
+    update: (updatedNode, decorations) => {
+      if (
+        updatedNode.type !== currentNode.type ||
+        updatedNode.attrs.frontmatter !== currentNode.attrs.frontmatter
+      ) {
         return false;
       }
 
       currentNode = updatedNode;
       updateLanguageClass(currentNode);
+      controls?.update(decorations);
       return true;
     },
     stopEvent: event =>
       button.contains(event.target as globalThis.Node) ||
-      tooltip.contains(event.target as globalThis.Node),
+      tooltip.contains(event.target as globalThis.Node) ||
+      controls?.dom.contains(event.target as globalThis.Node) === true,
     ignoreMutation: mutation => !code.contains(mutation.target) && mutation.target !== code,
     destroy: () => {
       statusObserver.disconnect();

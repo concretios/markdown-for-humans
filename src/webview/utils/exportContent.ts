@@ -39,6 +39,14 @@ export async function collectExportContent(editor: Editor): Promise<ExportConten
   // Comment and wrapper-tag markers are source shown for editing, not document content.
   clonedContent.querySelectorAll('.md4h-html-comment').forEach(marker => marker.remove());
 
+  // The properties panel mirrors the source for reading. Export the YAML once.
+  clonedContent.querySelectorAll('.md4h-frontmatter-properties').forEach(panel => panel.remove());
+  clonedContent.querySelectorAll('[data-frontmatter-style]').forEach(block => {
+    block.removeAttribute('data-frontmatter-style');
+    block.removeAttribute('data-frontmatter-ready');
+    block.removeAttribute('data-frontmatter-editing');
+  });
+
   // Find all Mermaid diagrams
   const mermaidWrappers = clonedContent.querySelectorAll('.mermaid-wrapper');
   const mermaidImages: ExportContent['mermaidImages'] = [];

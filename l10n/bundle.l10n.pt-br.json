@@ -915,5 +915,8 @@
   "Could not copy the path. Try again.": "Não foi possível copiar o caminho. Tente novamente.",
   "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "O Feedback não foi iniciado porque o bloco na linha {0} não corresponde ao arquivo salvo. O arquivo não foi alterado.",
   "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "O Feedback não foi iniciado porque o bloco nas linhas {0} a {1} não corresponde ao arquivo salvo. O arquivo não foi alterado.",
-  "Path copied": "Caminho copiado"
+  "Path copied": "Caminho copiado",
+  "Edit YAML": "Editar YAML",
+  "Frontmatter": "Metadados",
+  "Show properties": "Mostrar propriedades"
 }

@@ -915,5 +915,8 @@
   "Could not copy the path. Try again.": "パスをコピーできませんでした。もう一度お試しください。",
   "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "{0} 行目のブロックが保存済みのファイルと一致しないため、フィードバックは開始されませんでした。ファイルは変更されていません。",
   "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "{0} 行目から {1} 行目のブロックが保存済みのファイルと一致しないため、フィードバックは開始されませんでした。ファイルは変更されていません。",
-  "Path copied": "パスをコピーしました"
+  "Path copied": "パスをコピーしました",
+  "Edit YAML": "YAML を編集",
+  "Frontmatter": "フロントマター",
+  "Show properties": "プロパティを表示"
 }

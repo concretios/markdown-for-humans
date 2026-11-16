@@ -6,16 +6,20 @@
 
 import CodeBlock, { type CodeBlockOptions } from '@tiptap/extension-code-block';
 import { mergeAttributes } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 import { parsePreservedCodeBlock, renderPreservedCodeBlock } from './preservedCodeBlock';
 import { createCodeBlockCopyNodeView } from './codeBlockCopyNodeView';
 import { createCodeHighlightingPlugin } from '../highlighting/plugin';
 import { createHighlightService } from '../highlighting/client';
+import { createFrontmatterPlugin, type FrontmatterStyle } from '../frontmatter/plugin';
+import type { ReadFrontmatter } from '../frontmatter/reader';
 import { getSingleLineEditorCopy } from '../utils/pasteHandler';
 import { insertPlainText } from '../utils/plainTextPaste';
 
 interface HighlightedCodeBlockOptions extends CodeBlockOptions {
   workerUri: string;
+  frontmatterStyle: FrontmatterStyle;
+  readFrontmatter: ReadFrontmatter;
 }
 
 /**
@@ -24,7 +28,11 @@ interface HighlightedCodeBlockOptions extends CodeBlockOptions {
  */
 export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
   addOptions() {
-    return { ...this.parent?.(), workerUri: '' } as HighlightedCodeBlockOptions;
+    return {
+      ...this.parent?.(),
+      workerUri: '',
+      frontmatterStyle: 'current',
+    } as HighlightedCodeBlockOptions;
   },
 
   addProseMirrorPlugins() {
@@ -44,6 +52,7 @@ export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
         },
       }),
       ...(this.parent?.() ?? []),
+      createFrontmatterPlugin(this.options.frontmatterStyle, this.options.readFrontmatter),
       createCodeHighlightingPlugin(() => createHighlightService(this.options.workerUri)),
     ];
   },
@@ -51,6 +60,7 @@ export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
   addAttributes() {
     return {
       ...this.parent?.(),
+      frontmatter: { default: false, rendered: false },
       'indent-prefix': {
         default: null,
         parseHTML: element => element.getAttribute('data-indent-prefix'),
@@ -76,11 +86,33 @@ export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
   },
 
   addNodeView() {
-    return ({ node, HTMLAttributes, extension }) =>
+    return ({ node, HTMLAttributes, extension, decorations, editor, getPos }) =>
       createCodeBlockCopyNodeView(
         node,
         mergeAttributes(extension.options.HTMLAttributes, HTMLAttributes),
-        extension.options.languageClassPrefix as string
+        extension.options.languageClassPrefix as string,
+        {
+          decorations,
+          edit: () => {
+            const pos = getPos();
+            if (typeof pos === 'number' && editor.isEditable) {
+              editor.commands.focus(pos + 1, { scrollIntoView: false });
+            }
+          },
+          focusBody: () => {
+            const pos = getPos();
+            const block = typeof pos === 'number' ? editor.state.doc.nodeAt(pos) : null;
+            if (typeof pos !== 'number' || !block || !editor.isEditable) return false;
+            const next = Selection.findFrom(
+              editor.state.doc.resolve(pos + block.nodeSize),
+              1,
+              true
+            );
+            if (!next) return false;
+            editor.commands.focus(next.from, { scrollIntoView: false });
+            return true;
+          },
+        }
       );
   },
 

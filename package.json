@@ -79,6 +79,56 @@
   "contributes": {
     "colors": [
       {
+        "id": "markdownForHumans.frontmatterKey",
+        "description": "%color.frontmatter.key%",
+        "defaults": {
+          "light": "#00605a",
+          "dark": "#7cd1c4",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.frontmatterLiteral",
+        "description": "%color.frontmatter.literal%",
+        "defaults": {
+          "light": "#983e36",
+          "dark": "#f1a398",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.frontmatterNumber",
+        "description": "%color.frontmatter.number%",
+        "defaults": {
+          "light": "#175ba3",
+          "dark": "#91c2fa",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.frontmatterDate",
+        "description": "%color.frontmatter.date%",
+        "defaults": {
+          "light": "#64518b",
+          "dark": "#c5b4e8",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
+        "id": "markdownForHumans.frontmatterPunctuation",
+        "description": "%color.frontmatter.punctuation%",
+        "defaults": {
+          "light": "#77514a",
+          "dark": "#c9b19b",
+          "highContrast": "editor.foreground",
+          "highContrastLight": "editor.foreground"
+        }
+      },
+      {
         "id": "markdownForHumans.codeKeyword",
         "description": "%color.codeKeyword.description%",
         "defaults": {
@@ -359,6 +409,21 @@
           "editPresentation": "multilineText",
           "maxLength": 16384
         },
+        "markdownForHumans.frontmatter.style": {
+          "type": "string",
+          "enum": [
+            "current",
+            "guided",
+            "properties"
+          ],
+          "enumDescriptions": [
+            "%configuration.frontmatter.current%",
+            "%configuration.frontmatter.guided%",
+            "%configuration.frontmatter.properties%"
+          ],
+          "default": "current",
+          "description": "%configuration.frontmatter.description%"
+        },
         "markdownForHumans.blankLines.mode": {
           "type": "string",
           "enum": [
@@ -531,7 +596,8 @@
     "markdown-it": "^14.0.0",
     "mermaid": "^11.17.2",
     "modern-screenshot": "4.7.0",
-    "turndown": "^7.1.2"
+    "turndown": "^7.1.2",
+    "yaml": "2.9.1"
   },
   "overrides": {
     "@vscode/test-cli": {

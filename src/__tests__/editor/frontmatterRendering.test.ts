@@ -41,6 +41,7 @@ describe('MarkdownEditorProvider frontmatter rendering', () => {
     expect(webview.postMessage).toHaveBeenCalledTimes(1);
     const payload = (webview.postMessage as jest.Mock).mock.calls[0][0];
     expect(payload.type).toBe('update');
+    expect(payload.hasFrontmatter).toBe(true);
 
     const wrapped = payload.content as string;
     expect(wrapped.startsWith('```yaml')).toBe(true);
@@ -48,6 +49,33 @@ describe('MarkdownEditorProvider frontmatter rendering', () => {
     expect(wrapped).toContain('slug: example');
     expect(wrapped).toContain('```');
     expect(wrapped.trimEnd()).toContain('# Heading');
+  });
+
+  it('keeps a leading authored YAML fence intact when the prose is edited', async () => {
+    const provider = new MarkdownEditorProvider({} as ExtensionContext);
+    const fence = ['```yaml', '---', 'title: Example', '---', '```'].join('\n');
+    const original = fence + '\n\nOriginal text.\n';
+    const edited = fence + '\n\nEdited text.\n';
+    const document = createDocument(original) as unknown as TextDocument;
+    const webview = { postMessage: jest.fn() };
+    const internal = provider as unknown as {
+      updateWebview: (doc: TextDocument, target: typeof webview) => void;
+      applyEdit: (content: string, doc: TextDocument) => Promise<boolean>;
+    };
+
+    internal.updateWebview(document, webview);
+    expect(webview.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: original, hasFrontmatter: false })
+    );
+
+    let savedText = '';
+    (workspace.applyEdit as jest.Mock).mockImplementationOnce(async (edit: WorkspaceEdit) => {
+      savedText = (edit as unknown as { replaces: Array<{ text: string }> }).replaces[0].text;
+      return true;
+    });
+
+    expect(await internal.applyEdit(edited, document)).toBe(true);
+    expect(savedText).toBe(edited);
   });
 
   it('restores YAML delimiters when saving an edited fenced block', async () => {

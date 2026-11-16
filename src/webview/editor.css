@@ -6348,3 +6348,215 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
   color: var(--vscode-editorHoverWidget-foreground);
   user-select: none;
 }
+
+/* Frontmatter views share one editable code block. The properties are derived
+ * DOM, outside contentDOM, and the raw code stays visible during Feedback. */
+/* Both styles share this palette. Use foreground in high contrast, where
+ * punctuation, indentation guides, and the panel layout still show structure. */
+.code-block-wrapper[data-frontmatter-style] {
+  --md4h-frontmatter-key: var(--vscode-markdownForHumans-frontmatterKey, var(--vscode-editor-foreground));
+  --md4h-frontmatter-literal: var(--vscode-markdownForHumans-frontmatterLiteral, var(--vscode-editor-foreground));
+  --md4h-frontmatter-number: var(--vscode-markdownForHumans-frontmatterNumber, var(--vscode-editor-foreground));
+  --md4h-frontmatter-date: var(--vscode-markdownForHumans-frontmatterDate, var(--vscode-editor-foreground));
+  --md4h-frontmatter-punctuation: var(--vscode-markdownForHumans-frontmatterPunctuation, var(--vscode-editor-foreground));
+  --md4h-frontmatter-surface: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+  --md4h-frontmatter-border: var(--vscode-editorWidget-border, var(--vscode-editor-foreground));
+  --md4h-frontmatter-divider: color-mix(in srgb, var(--md4h-frontmatter-border) 55%, var(--md4h-frontmatter-surface));
+}
+
+.md4h-frontmatter-properties[hidden],
+.md4h-frontmatter-properties [hidden],
+.feedback-review-active .md4h-frontmatter-properties,
+.code-block-wrapper[data-frontmatter-style="properties"][data-frontmatter-ready]:not([data-frontmatter-editing]) > pre {
+  display: none;
+}
+
+.feedback-review-active .code-block-wrapper[data-frontmatter-style="properties"] > pre {
+  display: block;
+}
+
+.code-block-wrapper[data-frontmatter-style] > pre > code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--vscode-editor-foreground);
+}
+
+/* Lowlight still provides general YAML scopes. Override its colors only inside
+ * this frontmatter block so text inside values stays neutral, as in the mock. */
+.code-block-wrapper[data-frontmatter-ready] .code-block-highlighted :is([data-highlight-scope], [class*="md4h-yaml-"]) {
+  color: var(--md4h-frontmatter-token, var(--vscode-editor-foreground));
+}
+
+.code-block-wrapper[data-frontmatter-style] [data-highlight-scope~="comment"] {
+  --md4h-frontmatter-token: var(--vscode-markdownForHumans-codeComment, var(--vscode-editor-foreground));
+}
+
+.code-block-wrapper[data-frontmatter-style] .md4h-yaml-key {
+  --md4h-frontmatter-token: var(--md4h-frontmatter-key);
+}
+
+.code-block-wrapper[data-frontmatter-style] .md4h-yaml-punctuation {
+  --md4h-frontmatter-token: var(--md4h-frontmatter-punctuation);
+}
+
+.code-block-wrapper[data-frontmatter-style] .md4h-yaml-date {
+  --md4h-frontmatter-token: var(--md4h-frontmatter-date);
+}
+
+.code-block-wrapper[data-frontmatter-style] .md4h-yaml-literal {
+  --md4h-frontmatter-token: var(--md4h-frontmatter-literal);
+}
+
+.code-block-wrapper[data-frontmatter-style] .md4h-yaml-number {
+  --md4h-frontmatter-token: var(--md4h-frontmatter-number);
+}
+
+.code-block-wrapper[data-frontmatter-style] .md4h-yaml-indent {
+  box-shadow: inset 1px 0 var(--vscode-editorIndentGuide-background1, var(--md4h-frontmatter-border));
+}
+
+.code-block-wrapper[data-frontmatter-style] .md4h-yaml-multiline {
+  background: color-mix(in srgb, var(--md4h-frontmatter-literal) 9%, var(--md4h-frontmatter-surface));
+}
+
+.md4h-frontmatter-properties {
+  border: 1px solid var(--vscode-contrastBorder, var(--md4h-frontmatter-border));
+  border-radius: 6px;
+  color: var(--vscode-editor-foreground);
+  background: var(--md4h-frontmatter-surface);
+}
+
+.code-block-wrapper[data-frontmatter-style="properties"][data-frontmatter-editing] > .md4h-frontmatter-properties {
+  border-radius: 6px 6px 0 0;
+}
+
+.code-block-wrapper[data-frontmatter-style="properties"][data-frontmatter-editing] > pre {
+  border-top: 0;
+  border-radius: 0 0 6px 6px;
+}
+
+.feedback-review-active .code-block-wrapper[data-frontmatter-style="properties"][data-frontmatter-editing] > pre {
+  border-top: 1px solid var(--vscode-contrastBorder, var(--md4h-frontmatter-border));
+  border-radius: 6px;
+}
+
+.md4h-frontmatter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 48px 8px 12px;
+}
+
+.md4h-frontmatter-header button {
+  font: inherit;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-contrastBorder, var(--md4h-frontmatter-divider));
+  color: var(--md4h-frontmatter-key);
+  background: transparent;
+  cursor: pointer;
+}
+
+.md4h-frontmatter-header button:disabled {
+  color: var(--vscode-disabledForeground, var(--vscode-editor-foreground));
+  cursor: default;
+}
+
+.md4h-frontmatter-header button:not(:disabled):hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.md4h-frontmatter-header button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.md4h-frontmatter-fields {
+  margin: 0;
+  padding: 0 12px;
+  border-top: 1px solid var(--md4h-frontmatter-divider);
+  font-size: 0.94em;
+}
+
+.md4h-frontmatter-fields > div {
+  display: grid;
+  /* Keep room for a typical key so narrow panes do not split words like "reviewers". */
+  grid-template-columns: minmax(min(10em, 40%), 1fr) minmax(0, 3fr);
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.md4h-frontmatter-fields > div + div {
+  border-top: 1px solid var(--md4h-frontmatter-divider);
+}
+
+.md4h-frontmatter-fields .md4h-frontmatter-fields {
+  border: 0;
+  border-inline-start: 1px solid var(--md4h-frontmatter-border);
+  padding: 0 0 0 8px;
+  font-size: inherit;
+}
+
+.md4h-frontmatter-fields .md4h-frontmatter-fields > div {
+  grid-template-columns: fit-content(45%) minmax(0, 1fr);
+  border: 0;
+  gap: 6px;
+  padding: 0;
+}
+
+.md4h-frontmatter-fields > .md4h-frontmatter-summary {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 8px 0 12px;
+}
+
+.md4h-frontmatter-title > dd {
+  font-weight: 600;
+}
+
+.md4h-frontmatter-fields dt {
+  color: var(--md4h-frontmatter-key);
+  font-family: var(--vscode-editor-font-family);
+  overflow-wrap: break-word;
+}
+
+.md4h-frontmatter-fields dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.md4h-frontmatter-fields [data-frontmatter-tone="literal"] {
+  color: var(--md4h-frontmatter-literal);
+}
+
+.md4h-frontmatter-fields [data-frontmatter-tone="number"] {
+  color: var(--md4h-frontmatter-number);
+}
+
+.md4h-frontmatter-fields [data-frontmatter-tone="date"] {
+  color: var(--md4h-frontmatter-date);
+}
+
+.md4h-frontmatter-fields dd > ul {
+  margin: 0;
+  padding-inline-start: 1.2em;
+}
+
+.md4h-frontmatter-fields dd > .md4h-frontmatter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  padding: 0;
+}
+
+.md4h-frontmatter-chip {
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  color: var(--md4h-frontmatter-key);
+  background: color-mix(in srgb, var(--md4h-frontmatter-key) 14%, var(--md4h-frontmatter-surface));
+}

@@ -915,5 +915,8 @@
   "Could not copy the path. Try again.": "无法复制路径。请重试。",
   "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "第 {0} 行的块与已保存的文件不一致，因此反馈未开始。文件未被更改。",
   "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "第 {0} 至 {1} 行的块与已保存的文件不一致，因此反馈未开始。文件未被更改。",
-  "Path copied": "已复制路径"
+  "Path copied": "已复制路径",
+  "Edit YAML": "编辑 YAML",
+  "Frontmatter": "前置元数据",
+  "Show properties": "显示属性"
 }

@@ -915,5 +915,8 @@
   "Could not copy the path. Try again.": "No se pudo copiar la ruta. Vuelva a intentarlo.",
   "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "La revisión no se inició porque el bloque de la línea {0} no coincide con el archivo guardado. El archivo no se modificó.",
   "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "La revisión no se inició porque el bloque de las líneas {0} a {1} no coincide con el archivo guardado. El archivo no se modificó.",
-  "Path copied": "Ruta copiada"
+  "Path copied": "Ruta copiada",
+  "Edit YAML": "Editar YAML",
+  "Frontmatter": "Metadatos",
+  "Show properties": "Mostrar propiedades"
 }

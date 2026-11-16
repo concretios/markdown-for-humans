@@ -23,6 +23,8 @@ import { MathBlock } from './extensions/mathBlock';
 import { MathSlashCommand } from './extensions/mathSlashCommand';
 import { IndentedImageCodeBlock } from './extensions/indentedImageCodeBlock';
 import { CodeBlockWithCopy } from './extensions/codeBlockWithCopy';
+import { frontmatterKey, isFrontmatterStyle, type FrontmatterStyle } from './frontmatter/plugin';
+import { createFrontmatterReader } from './frontmatter/reader';
 import { SpaceFriendlyImagePaths } from './extensions/spaceFriendlyImagePaths';
 import { TabIndentation } from './extensions/tabIndentation';
 import { GitHubAlerts } from './extensions/githubAlerts';
@@ -188,6 +190,7 @@ let formattingToolbar: HTMLElement;
 let tableMenu: HTMLElement;
 let documentSyncController: DocumentSyncController | null = null;
 let lastUserEditTime = 0; // Track when user last edited
+let pendingInitialFrontmatter = false;
 let pendingInitialContent: string | null = null; // Content from host before editor is ready
 let hasSentReadySignal = false;
 let isDomReady = document.readyState !== 'loading';
@@ -572,6 +575,7 @@ let blankLineMode: BlankLineMode = 'strip';
 // editor stops intercepting Cmd/Ctrl+B/I/U so those chords reach VS Code's own
 // keybindings instead of toggling bold/italic/underline in-editor.
 let formattingShortcutsEnabled = true;
+let frontmatterStyle: FrontmatterStyle = 'current';
 
 /** True when this rich view is frozen locally or by a sibling split owner. */
 function isFeedbackEditingLocked(): boolean {
@@ -864,7 +868,7 @@ function setupCodeBlockLanguageBadges(editorInstance: Editor) {
 /**
  * Initialize TipTap editor with error handling
  */
-function initializeEditor(initialContent: string) {
+function initializeEditor(initialContent: string, hasFrontmatter = false) {
   try {
     if (editor) {
       console.warn('[MD4H] Editor already initialized, skipping re-init');
@@ -925,6 +929,10 @@ function initializeEditor(initialContent: string) {
         MarkdownCode,
         PreservedMarkdownLiteral,
         CodeBlockWithCopy.configure({
+          frontmatterStyle,
+          readFrontmatter: createFrontmatterReader(
+            document.body.dataset.frontmatterWorkerUri ?? ''
+          ),
           workerUri: document.body.dataset.highlightingWorkerUri ?? '',
           HTMLAttributes: {
             class: 'code-block-highlighted',
@@ -1094,7 +1102,10 @@ function initializeEditor(initialContent: string) {
       // Unedited blocks save with their authored Markdown, not TipTap's canonical form.
       // Opening the file is not an edit, so Undo must not be able to step back past it.
       sourceLossGuard.beforeLoad();
-      setMarkdownContentPreservingSource(editor, initialContent, { addToHistory: false });
+      setMarkdownContentPreservingSource(editor, initialContent, {
+        addToHistory: false,
+        hasFrontmatter,
+      });
       sourceLossGuard.documentLoaded(initialContent);
       isUpdating = false;
     }
@@ -1570,9 +1581,10 @@ window.addEventListener('message', async (event: MessageEvent) => {
         // Initialize editor with first payload to seed undo history correctly
         if (!editor) {
           if (isDomReady) {
-            initializeEditor(message.content);
+            initializeEditor(message.content, message.hasFrontmatter === true);
           } else {
             pendingInitialContent = message.content;
+            pendingInitialFrontmatter = message.hasFrontmatter === true;
           }
           return;
         }
@@ -1589,7 +1601,8 @@ window.addEventListener('message', async (event: MessageEvent) => {
         }
         const hostUpdateApplied = updateEditorContentFromHost(
           message.content,
-          message.force === true
+          message.force === true,
+          typeof message.hasFrontmatter === 'boolean' ? message.hasFrontmatter : undefined
         );
         if (hostUpdateApplied) {
           hostContentDeferred = false;
@@ -2336,7 +2349,7 @@ function postFeedbackDeliveryStatus(
 /**
  * Update editor content from document with cursor preservation
  */
-function updateEditorContent(markdown: string): boolean {
+function updateEditorContent(markdown: string, hasFrontmatter?: boolean): boolean {
   if (!editor) {
     console.error('[MD4H] Editor not initialized');
     return false;
@@ -2374,7 +2387,11 @@ function updateEditorContent(markdown: string): boolean {
 
     // Skip if content is already in sync
     const currentMarkdown = getEditorMarkdownForSync(editor, blankLineMode);
-    if (currentMarkdown === markdown) {
+    const previouslyHadFrontmatter = editor.state.doc.firstChild?.attrs?.frontmatter === true;
+    if (
+      currentMarkdown === markdown &&
+      (hasFrontmatter === undefined || hasFrontmatter === previouslyHadFrontmatter)
+    ) {
       console.log('[MD4H] Update skipped (content unchanged)');
       return true;
     }
@@ -2387,7 +2404,9 @@ function updateEditorContent(markdown: string): boolean {
     // A replacement the editor rejects leaves the guard off until the host's
     // reconciliation loads content again.
     sourceLossGuard?.beforeLoad();
-    const setContentResult = setMarkdownContentPreservingSource(editor, markdown);
+    const setContentResult = setMarkdownContentPreservingSource(editor, markdown, {
+      hasFrontmatter: hasFrontmatter ?? previouslyHadFrontmatter,
+    });
     if (setContentResult !== false) sourceLossGuard?.documentLoaded(markdown);
     if (setContentResult === false) {
       console.error('[MD4H] Editor rejected host content replacement');
@@ -2428,7 +2447,11 @@ function updateEditorContent(markdown: string): boolean {
 }
 
 /** Apply host-authoritative content, optionally bypassing ordinary echo guards. */
-function updateEditorContentFromHost(markdown: string, force = false): boolean {
+function updateEditorContentFromHost(
+  markdown: string,
+  force = false,
+  hasFrontmatter?: boolean
+): boolean {
   const peerController = feedbackPeerLockController;
   const peerLocked = peerController?.isLocked() === true;
   if (force || peerLocked) {
@@ -2439,9 +2462,9 @@ function updateEditorContentFromHost(markdown: string, force = false): boolean {
     allowNextHostSyncDespiteRecentEdit = true;
   }
   if (peerLocked && peerController) {
-    return peerController.runHostUpdate(() => updateEditorContent(markdown));
+    return peerController.runHostUpdate(() => updateEditorContent(markdown, hasFrontmatter));
   }
-  return updateEditorContent(markdown);
+  return updateEditorContent(markdown, hasFrontmatter);
 }
 
 /**
@@ -2552,7 +2575,7 @@ if (document.readyState === 'loading') {
     signalReady();
 
     if (!editor && pendingInitialContent !== null) {
-      initializeEditor(pendingInitialContent);
+      initializeEditor(pendingInitialContent, pendingInitialFrontmatter);
       pendingInitialContent = null;
     }
   });
@@ -2560,7 +2583,7 @@ if (document.readyState === 'loading') {
   isDomReady = true;
   signalReady();
   if (!editor && pendingInitialContent !== null) {
-    initializeEditor(pendingInitialContent);
+    initializeEditor(pendingInitialContent, pendingInitialFrontmatter);
     pendingInitialContent = null;
   }
 }
@@ -2965,6 +2988,15 @@ function shouldSuppressFormattingShortcut(
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function applyEditorSettings(message: Record<string, any>) {
+  if (
+    isFrontmatterStyle(message.frontmatterStyle) &&
+    message.frontmatterStyle !== frontmatterStyle
+  ) {
+    frontmatterStyle = message.frontmatterStyle;
+    if (editor) {
+      editor.view.dispatch(editor.state.tr.setMeta(frontmatterKey, { style: frontmatterStyle }));
+    }
+  }
   if (typeof message.paragraphSpacingBefore === 'number') {
     document.documentElement.style.setProperty(
       '--md-paragraph-spacing-before',
