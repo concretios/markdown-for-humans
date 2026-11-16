@@ -43,6 +43,13 @@ describe('frontmatter styles in the live editor', () => {
     }
   }
 
+  beforeAll(() => {
+    // Undo scrolls the selection into view, which measures a DOM Range. jsdom
+    // implements neither Range measurement method.
+    Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
+  });
+
   afterEach(() => {
     editor.destroy();
     document.body.replaceChildren();
@@ -114,6 +121,39 @@ describe('frontmatter styles in the live editor', () => {
 
     expect(button?.textContent).toBe('Edit YAML');
     expect(document.activeElement).toBe(button);
+  });
+
+  it('reveals the YAML at once when undo puts the caret back in it', async () => {
+    open(true);
+    await setStyle('properties');
+    const wrapper = editor.view.dom.querySelector<HTMLElement>('[data-frontmatter-style]');
+    const button = wrapper?.querySelector<HTMLButtonElement>('.md4h-frontmatter-properties button');
+    const mouseClick = () =>
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+    const waitForPresentation = async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if (frontmatterKey.getState(editor.state)?.result) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    };
+
+    mouseClick();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    editor.commands.insertContentAt(5, 'X');
+    await waitForPresentation();
+    mouseClick();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(wrapper?.hasAttribute('data-frontmatter-editing')).toBe(false);
+    expect(document.activeElement).toBe(editor.view.dom);
+
+    editor.commands.undo();
+    expect(editor.state.selection.$head.parent).toBe(editor.state.doc.firstChild);
+    await waitForPresentation();
+
+    // The caret is in the YAML, so the YAML must be visible without another keystroke.
+    expect(wrapper?.hasAttribute('data-frontmatter-ready')).toBe(true);
+    expect(wrapper?.hasAttribute('data-frontmatter-editing')).toBe(true);
   });
 
   it('wraps property keys at word boundaries, not mid-word', () => {

@@ -62,11 +62,11 @@ function revealSelectedYaml(view: EditorView): false {
   const node = frontmatterNode(view.state.doc);
   if (node && view.state.selection.$head.parent === node) {
     const wrapper = view.nodeDOM(0);
+    // No [data-frontmatter-ready] check: undo or redo into the YAML lands while it is
+    // re-parsed, and the properties view would hide the caret once the parse returns.
     if (
       wrapper instanceof HTMLElement &&
-      wrapper.matches(
-        '[data-frontmatter-style="properties"][data-frontmatter-ready]:not([data-frontmatter-editing])'
-      )
+      wrapper.matches('[data-frontmatter-style="properties"]:not([data-frontmatter-editing])')
     ) {
       wrapper.dispatchEvent(new Event(REVEAL_FRONTMATTER));
     }
