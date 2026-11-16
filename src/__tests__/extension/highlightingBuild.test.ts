@@ -57,6 +57,10 @@ describe('release verifier includes the worker', () => {
     directory = mkdtempSync(path.join(tmpdir(), 'md4h-worker-build-'));
     mkdirSync(path.join(directory, 'dist'));
     writeFileSync(
+      path.join(directory, 'dist/frontmatter-worker.js'),
+      '(()=>{self.onmessage=()=>self.postMessage({type:"md4h.frontmatter.result",request:"md4h.frontmatter.request"});})();'
+    );
+    writeFileSync(
       path.join(directory, 'dist/webview.js'),
       'setupImageResize image-resize-modal neverAskAgain skipResizeWarning resizeImage copyLocalImageToWorkspace'
     );

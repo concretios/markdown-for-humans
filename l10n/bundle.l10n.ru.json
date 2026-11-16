@@ -915,5 +915,8 @@
   "Could not copy the path. Try again.": "Не удалось скопировать путь. Повторите попытку.",
   "Feedback did not start because the block on line {0} does not match the saved file. The file was not changed.": "Режим замечаний не запущен: блок в строке {0} не совпадает с сохранённым файлом. Файл не изменён.",
   "Feedback did not start because the block on lines {0} to {1} does not match the saved file. The file was not changed.": "Режим замечаний не запущен: блок в строках с {0} по {1} не совпадает с сохранённым файлом. Файл не изменён.",
-  "Path copied": "Путь скопирован"
+  "Path copied": "Путь скопирован",
+  "Edit YAML": "Редактировать YAML",
+  "Frontmatter": "Метаданные",
+  "Show properties": "Показать свойства"
 }

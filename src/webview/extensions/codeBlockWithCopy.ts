@@ -11,11 +11,15 @@ import { parsePreservedCodeBlock, renderPreservedCodeBlock } from './preservedCo
 import { createCodeBlockCopyNodeView } from './codeBlockCopyNodeView';
 import { createCodeHighlightingPlugin } from '../highlighting/plugin';
 import { createHighlightService } from '../highlighting/client';
+import { createFrontmatterPlugin, type FrontmatterStyle } from '../frontmatter/plugin';
+import type { ReadFrontmatter } from '../frontmatter/reader';
 import { getSingleLineEditorCopy } from '../utils/pasteHandler';
 import { insertPlainText } from '../utils/plainTextPaste';
 
 interface HighlightedCodeBlockOptions extends CodeBlockOptions {
   workerUri: string;
+  frontmatterStyle: FrontmatterStyle;
+  readFrontmatter: ReadFrontmatter;
 }
 
 /**
@@ -24,7 +28,11 @@ interface HighlightedCodeBlockOptions extends CodeBlockOptions {
  */
 export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
   addOptions() {
-    return { ...this.parent?.(), workerUri: '' } as HighlightedCodeBlockOptions;
+    return {
+      ...this.parent?.(),
+      workerUri: '',
+      frontmatterStyle: 'current',
+    } as HighlightedCodeBlockOptions;
   },
 
   addProseMirrorPlugins() {
@@ -44,6 +52,7 @@ export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
         },
       }),
       ...(this.parent?.() ?? []),
+      createFrontmatterPlugin(this.options.frontmatterStyle, this.options.readFrontmatter),
       createCodeHighlightingPlugin(() => createHighlightService(this.options.workerUri)),
     ];
   },
@@ -51,6 +60,7 @@ export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
   addAttributes() {
     return {
       ...this.parent?.(),
+      frontmatter: { default: false, rendered: false },
       'indent-prefix': {
         default: null,
         parseHTML: element => element.getAttribute('data-indent-prefix'),
@@ -76,11 +86,20 @@ export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
   },
 
   addNodeView() {
-    return ({ node, HTMLAttributes, extension }) =>
+    return ({ node, HTMLAttributes, extension, decorations, editor, getPos }) =>
       createCodeBlockCopyNodeView(
         node,
         mergeAttributes(extension.options.HTMLAttributes, HTMLAttributes),
-        extension.options.languageClassPrefix as string
+        extension.options.languageClassPrefix as string,
+        {
+          decorations,
+          edit: () => {
+            const pos = getPos();
+            if (typeof pos === 'number' && editor.isEditable) {
+              editor.commands.focus(pos + 1, { scrollIntoView: false });
+            }
+          },
+        }
       );
   },
 

@@ -196,6 +196,7 @@ Click the gear in the editor toolbar, or open Settings (`Ctrl+,` / `Cmd+,`) and 
 | `markdownForHumans.font.wordSpacing` | `0` | Extra space between words, from 0 to 1 of the font size |
 | `markdownForHumans.font.useEditorFont` | `false` | Use your VS Code editor font, weight and size for body text, including `"[markdown]"` overrides |
 | `markdownForHumans.paragraph.spacingBefore`, `.spacingAfter` | `0`, `0` | Space before and after paragraphs, in points, from 0 to 72 |
+| `markdownForHumans.frontmatter.style` | `"current"` | Show YAML frontmatter as it appears today, as color-coded YAML with indentation guides (`"guided"`), or as readable fields with an Edit YAML button (`"properties"`) |
 | `markdownForHumans.blankLines.mode` | `"strip"` | Remove extra blank lines, or keep them (`"preserve"`), in the editor and the saved file |
 | `markdownForHumans.enableMath` | `true` | Render LaTeX math with KaTeX. Reopen the editor after changing it |
 | `markdownForHumans.formattingShortcuts.enabled` | `true` | Let `Ctrl/Cmd+B`, `I` and `U` format text in the editor. Turn off to keep VS Code keybindings on those keys; `Ctrl+Alt+B` (`Cmd+Alt+B` on macOS) toggles it |

@@ -64,6 +64,7 @@ function extractIndentPrefix(raw: string): string {
   return match ? match[1] : '    ';
 }
 
+/** Parse a preserved code block and carry host frontmatter identity in editor state. */
 export function parsePreservedCodeBlock(
   token: MarkdownToken,
   helpers: MarkdownParseHelpers
@@ -91,6 +92,7 @@ export function parsePreservedCodeBlock(
 
   const attrs: Record<string, unknown> = {
     language: language || null,
+    frontmatter: token.frontmatter === true,
   };
   if (indentPrefix) {
     attrs['indent-prefix'] = indentPrefix;

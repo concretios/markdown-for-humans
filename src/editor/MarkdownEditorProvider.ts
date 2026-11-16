@@ -503,6 +503,8 @@ const FEEDBACK_FLUSH_ACK_TIMEOUT_MS = 2_000;
 const MARKDOWN_LANGUAGE_SCOPE: vscode.ConfigurationScope = { languageId: 'markdown' };
 const MARKDOWN_EDITOR_FONT_KEYS = ['fontFamily', 'fontWeight', 'fontSize'] as const;
 
+const LEADING_YAML_FRONTMATTER = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/;
+
 function isFeedbackHostErrorCode(value: unknown): value is FeedbackHostErrorCode {
   return typeof value === 'string' && FEEDBACK_HOST_ERROR_CODES.has(value);
 }
@@ -1278,6 +1280,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         e.affectsConfiguration('markdownForHumans.imagePathBase') ||
         e.affectsConfiguration('markdownForHumans.imagePreview.hover.enabled') ||
         e.affectsConfiguration('markdownForHumans.blankLines.mode') ||
+        e.affectsConfiguration('markdownForHumans.frontmatter.style') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingBefore') ||
         e.affectsConfiguration('markdownForHumans.paragraph.spacingAfter') ||
         e.affectsConfiguration('markdownForHumans.zoom') ||
@@ -1330,6 +1333,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         }
         panelWebview.postMessage({
           type: 'settingsUpdate',
+          frontmatterStyle: config.get('markdownForHumans.frontmatter.style', 'current'),
           skipResizeWarning: skipWarning,
           imagePath: imagePath,
           imagePathBase: imagePathBase,
@@ -1509,6 +1513,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       protocolVersion: DOCUMENT_SYNC_PROTOCOL_VERSION,
       documentVersion: this.getDocumentVersion(document),
       content: transformedContent,
+      hasFrontmatter: transformedContent !== currentContent,
+      frontmatterStyle: config.get('markdownForHumans.frontmatter.style', 'current'),
       ...(force ? { force: true } : {}),
       ...(savePolicyEcho ? { savePolicyEcho: true } : {}),
       skipResizeWarning: skipWarning,
@@ -1879,7 +1885,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
           feedbackTransition.expectedFlushContentSha256 = crypto
             .createHash('sha256')
             .update(
-              this.normalizeWebviewEditContent(message.content).replace(/\r\n/g, '\n'),
+              this.normalizeWebviewEditContent(message.content, document.getText()).replace(
+                /\r\n/g,
+                '\n'
+              ),
               'utf8'
             )
             .digest('hex');
@@ -2048,6 +2057,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         const enableMath = config.get<boolean>('markdownForHumans.enableMath', true);
         webview.postMessage({
           type: 'settingsUpdate',
+          frontmatterStyle: config.get('markdownForHumans.frontmatter.style', 'current'),
           skipResizeWarning: skipWarning,
           imagePath: imagePath,
           imagePathBase: imagePathBase,
@@ -11326,8 +11336,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
    * resulting TextDocument change event observes unwrapped frontmatter,
    * blank-line policy, newline normalization, not the raw serializer payload.
    */
-  private normalizeWebviewEditContent(content: string): string {
-    const unwrappedContent = this.unwrapFrontmatterFromWebview(content);
+  private normalizeWebviewEditContent(content: string, source: string): string {
+    const unwrappedContent = this.unwrapFrontmatterFromWebview(content, source);
     const policyContent = applyBlankLinePolicy(unwrappedContent, this.getBlankLineMode());
     return ensureSingleTrailingNewline(policyContent);
   }
@@ -11342,8 +11352,8 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     rendererContent: string,
     sourceText: string
   ): boolean {
-    const normalizedRenderer = this.normalizeWebviewEditContent(rendererContent);
-    const normalizedSource = this.normalizeWebviewEditContent(sourceText);
+    const normalizedRenderer = this.normalizeWebviewEditContent(rendererContent, sourceText);
+    const normalizedSource = this.normalizeWebviewEditContent(sourceText, sourceText);
     if (normalizedRenderer === normalizedSource) return true;
     if (!isMarkdownRendererEquivalent(normalizedRenderer, normalizedSource)) return false;
     return (
@@ -11949,14 +11959,16 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
     if (options?.signal?.aborted) return false;
 
     // Skip if content unchanged (avoid redundant edits)
-    const unwrappedContent = this.unwrapFrontmatterFromWebview(effectiveContent);
+    const currentText = document.getText();
+    const unwrappedContent = this.unwrapFrontmatterFromWebview(effectiveContent, currentText);
     const blankLineMode = this.getBlankLineMode();
     // Normalize the inbound text to exactly one trailing newline (markdownlint
     // MD047). Done up-front so the equality and AST checks below compare the
     // form we'd actually write — a doc on disk that already ends with `\n`
     // matches a no-newline serialization and is short-circuited as a no-op.
-    const normalizedContent = this.normalizeWebviewEditContent(effectiveContent);
-    const currentText = document.getText();
+    const normalizedContent = ensureSingleTrailingNewline(
+      applyBlankLinePolicy(unwrappedContent, blankLineMode)
+    );
     if (normalizedContent === currentText) {
       return true;
     }
@@ -12071,7 +12083,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
    * Returns original content when no frontmatter is present.
    */
   private wrapFrontmatterForWebview(content: string): string {
-    const match = content.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/);
+    const match = LEADING_YAML_FRONTMATTER.exec(content);
     if (!match) return content;
 
     const usesCrLf = match[0].includes('\r\n');
@@ -12107,8 +12119,11 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
    * Unwrap a fenced frontmatter code block back to YAML delimiters.
    * If no wrapped frontmatter is detected, returns the original content.
    */
-  private unwrapFrontmatterFromWebview(content: string): string {
+  private unwrapFrontmatterFromWebview(content: string, source?: string): string {
     if (!content.startsWith('```')) return content;
+    // An authored leading YAML example can look identical to our wrapper.
+    // Only remove the synthetic fence if the host actually wrapped frontmatter.
+    if (source !== undefined && !LEADING_YAML_FRONTMATTER.test(source)) return content;
 
     const usesCrLf = content.includes('\r\n');
     const newline = usesCrLf ? '\r\n' : '\n';
@@ -12161,6 +12176,10 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
       .replace(/&/g, '&amp;')
       .replace(/"/g, '&quot;');
 
+    const frontmatterWorkerUri = this.getVersionedWebviewAssetUri(webview, 'frontmatter-worker.js')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;');
+
     // Use a nonce for security
     const nonce = getNonce();
 
@@ -12188,7 +12207,7 @@ export class MarkdownEditorProvider implements vscode.CustomTextEditorProvider, 
         <link href="${styleUri}" rel="stylesheet">
         <title>Markdown Editor for Humans</title>
       </head>
-      <body data-highlighting-worker-uri="${highlightingWorkerUri}"${renderL10nBundleAttribute(vscode.l10n.bundle)}>
+      <body data-highlighting-worker-uri="${highlightingWorkerUri}" data-frontmatter-worker-uri="${frontmatterWorkerUri}"${renderL10nBundleAttribute(vscode.l10n.bundle)}>
         <div id="editor"></div>
         <script nonce="${nonce}" src="${scriptUri}"></script>
       </body>

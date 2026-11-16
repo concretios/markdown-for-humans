@@ -4,9 +4,9 @@
 
 - **Task name:** Frontmatter Support
 - **Slug:** frontmatter
-- **Status:** backlog (basic wrap/unwrap + dirty-state fix already shipped; remaining = richer metadata UX)
+- **Status:** in review for Guided YAML and Properties. The broader metadata features below remain backlog.
 - **Created:** 2025-11-29
-- **Last updated:** 2026-10-03
+- **Last updated:** 2026-11-15
 - **Shipped:** _(partial — see `roadmap/shipped/task-frontmatter-dirty-state-fix.md`)_
 
 ---
@@ -36,6 +36,25 @@
 ---
 
 ## 3. Desired Outcome & Scope
+
+### First increment: Guided YAML and Properties
+
+The Visual Editor wraps leading frontmatter in a YAML code block and unwraps it on save. YAML is already supported by the code highlighting worker, but the current presentation can read as a single gray block. Inline sequences and nested collections are hard to scan, and long summaries can be hard to follow.
+
+- The `markdownForHumans.frontmatter.style` setting offers `current` (default), `guided`, and `properties`. Open editors apply changes immediately.
+- Guided YAML leaves the editable YAML in place. Theme colors distinguish keys, numbers, booleans, nulls, date-like text, and collection punctuation. Indentation guides and a shaded region for folded and literal values make nesting and multiline text easier to scan.
+- Properties shows a definition list with chips for inline scalar arrays, nested groups, and a readable summary. **Edit YAML** reveals the same Guided YAML used in `guided`. **Show properties** returns to the reading view. Both views use the same underlying source and copy the original YAML.
+- The host identifies leading frontmatter so an authored YAML fence keeps its own rendering and delimiters. The webview adds decorations to the existing code block and renders Properties outside its editable content. Export and Feedback use the source block.
+- A lazy webview worker parses only the first tagged block after a short edit pause. It bounds input and output, leaves aliases as references, and falls back to the existing code block for unsupported YAML, malformed input, or a worker failure. Only the existing code block path runs in `current`.
+- Tests cover inline and block lists, nested mappings, date-like text, multiline strings, aliases, malformed input and size limits. The live editor tests verify setting changes, raw YAML editing, unchanged serialization, and export. Host tests cover the distinction between an authored YAML fence and wrapped frontmatter.
+
+The selected Teal & Coral palette uses teal keys and chips, coral booleans and nulls, blue numbers, and lilac dates. Guided YAML and Edit YAML share the same colors.
+
+Native checks used VS Code 1.146.0 on macOS with the release build from the feature branch. Light Modern and Dark Modern were checked with the same 8,275-word fixture. The checks covered live style switching, open and reload, Edit YAML, copy and paste of the raw YAML, save, undo and redo, and the source split. Editing a title changed only its source line, and undo followed by save restored the fixture byte for byte. The final palette was captured in both themes.
+
+See the [contribution workflow](../../CONTRIBUTING.md#-submit-code), [VS Code webview theme guidance](https://code.visualstudio.com/api/extension-guides/webview#theming-webview-content) and [YAML 1.2.2](https://yaml.org/spec/1.2.2/).
+
+### Broader metadata experience (backlog)
 
 **Success criteria:**
 - YAML frontmatter between `---` delimiters parsed and rendered specially

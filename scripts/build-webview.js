@@ -51,18 +51,18 @@ const buildOptions = {
 
 // VS Code workers load from Blob URLs, so dependencies must stay in this one
 // classic-script bundle. Code splitting and runtime imports are not allowed.
-const workerBuildOptions = {
+const workerBuilds = ['highlighting', 'frontmatter'].map(name => ({
   ...buildOptions,
-  entryPoints: ['src/webview/highlighting/worker.ts'],
-  outfile: 'dist/highlighting-worker.js',
-};
+  entryPoints: [`src/webview/${name}/worker.ts`],
+  outfile: `dist/${name}-worker.js`,
+}));
 
 async function build() {
   if (isWatch) {
     // Watch mode - development build
     const contexts = [];
     try {
-      for (const options of [buildOptions, workerBuildOptions]) {
+      for (const options of [buildOptions, ...workerBuilds]) {
         contexts.push(
           await esbuild.context({
             ...options,
@@ -81,13 +81,13 @@ async function build() {
   } else {
     // One-time build
     try {
-      await Promise.all([esbuild.build(buildOptions), esbuild.build(workerBuildOptions)]);
+      await Promise.all([buildOptions, ...workerBuilds].map(options => esbuild.build(options)));
       if (isProduction || noSourcemap) {
         // Ensure release builds don't leave stale sourcemaps in dist/
         for (const mapFile of [
           'dist/webview.js.map',
           'dist/webview.css.map',
-          'dist/highlighting-worker.js.map',
+          ...workerBuilds.map(options => options.outfile + '.map'),
         ]) {
           try {
             fs.unlinkSync(mapFile);

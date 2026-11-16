@@ -17,6 +17,7 @@ type MarkdownManager = {
 interface MarkdownSourceToken {
   readonly type?: string;
   readonly raw?: string;
+  readonly frontmatter?: boolean;
 }
 
 interface SerializedTopLevelBlock {
@@ -552,12 +553,13 @@ function serializeBlockMarkdownResult(
  * @param editor - Editor to load
  * @param markdown - Markdown source
  * @param options.addToHistory - Set to `false` for the first load, so undo stops at the opened file
+ * @param options.hasFrontmatter - Identify the leading code block wrapped by the host
  * @returns The result of `editor.commands.setContent`
  */
 export function setMarkdownContentPreservingSource(
   editor: Editor,
   markdown: string,
-  options: { addToHistory?: boolean } = {}
+  options: { addToHistory?: boolean; hasFrontmatter?: boolean } = {}
 ): boolean {
   const manager = getMarkdownManager(editor);
   const createLexer = manager?.createLexer;
@@ -572,7 +574,12 @@ export function setMarkdownContentPreservingSource(
       const lex = lexer.lex.bind(lexer);
       lexer.lex = (source: string) => {
         const lexed = lex(source);
-        if (tokens === null && source === markdown) tokens = lexed;
+        if (tokens === null && source === markdown) {
+          if (options.hasFrontmatter && lexed[0]?.type === 'code') {
+            lexed[0] = { ...lexed[0], frontmatter: true };
+          }
+          tokens = lexed;
+        }
         return lexed;
       };
       return lexer;
