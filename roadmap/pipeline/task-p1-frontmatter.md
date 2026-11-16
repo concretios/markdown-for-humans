@@ -342,7 +342,7 @@ For Guided YAML and Properties:
 - [x] Wire the live setting, worker, shared YAML editor, and theme colors. Update the README, localizations, and license notices.
 - [x] Run Jest, lint, typecheck, release build, and VSIX packaging.
 - [x] Verify the feature in the VS Code Extension Development Host and attach light and dark screenshots to the PR.
-- [ ] Record and attach a screen recording of the feature.
+- [x] Record and attach a screen recording of the feature.
 - [ ] Complete the continuous ten-minute reading pass with a 3,000-word or longer document.
 
 ---
@@ -354,6 +354,10 @@ For Guided YAML and Properties:
 - Drafted the scope before implementation and reviewed light and dark design mockups. The implementation uses two opt-in views and leaves the current code block as the default.
 - Verified YAML collections and multiline scalars, exact serialization across style changes, source-only export, and preservation of authored YAML fences. All 5,906 executed Jest tests passed. Lint, typecheck, release build, and VSIX packaging also passed.
 - Tested the release build in VS Code 1.146.0 on macOS with the fixture described above. Opened [draft PR #198](https://github.com/concretios/markdown-for-humans/pull/198) with four screenshots from the development host.
+
+### 2026-11-16
+
+- Review fixes. A mouse click on **Show properties** now puts the caret in the first text after the frontmatter, so Cmd+Z and typing work at once; keyboard activation keeps focus on the toggle. Property keys get a minimum column width and wrap at word boundaries, so `reviewers` no longer splits in a narrow pane. Both fixes have tests that failed first. All 5,909 executed Jest tests, lint and typecheck passed. Checked before and after in VS Code 1.146.0 on macOS next to the source split.
 
 ---
 
