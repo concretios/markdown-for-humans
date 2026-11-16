@@ -6482,7 +6482,8 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
 
 .md4h-frontmatter-fields > div {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  /* Keep room for a typical key so narrow panes do not split words like "reviewers". */
+  grid-template-columns: minmax(min(10em, 40%), 1fr) minmax(0, 3fr);
   gap: 12px;
   padding: 5px 0;
 }
@@ -6518,7 +6519,7 @@ body.vscode-high-contrast-light.feedback-completion-open .feedback-completion-di
 .md4h-frontmatter-fields dt {
   color: var(--md4h-frontmatter-key);
   font-family: var(--vscode-editor-font-family);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .md4h-frontmatter-fields dd {

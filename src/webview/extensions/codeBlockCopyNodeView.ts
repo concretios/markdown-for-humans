@@ -77,7 +77,11 @@ export function createCodeBlockCopyNodeView(
   initialNode: ProseMirrorNode,
   htmlAttributes: CodeBlockHtmlAttributes,
   languageClassPrefix = 'language-',
-  frontmatter?: { decorations: readonly Decoration[]; edit: () => void }
+  frontmatter?: {
+    decorations: readonly Decoration[];
+    edit: () => void;
+    focusBody: () => boolean;
+  }
 ): NodeView {
   let currentNode = initialNode;
   let feedbackTimer: number | null = null;
@@ -172,7 +176,7 @@ export function createCodeBlockCopyNodeView(
   // inside ProseMirror even while the properties reading view is visible.
   const controls =
     currentNode.attrs.frontmatter && frontmatter
-      ? createFrontmatterControls(wrapper, frontmatter.edit)
+      ? createFrontmatterControls(wrapper, frontmatter.edit, frontmatter.focusBody)
       : undefined;
   controls?.update(frontmatter?.decorations ?? []);
 

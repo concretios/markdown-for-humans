@@ -1,5 +1,7 @@
 /** @jest-environment jsdom */
 
+import { readFileSync } from 'fs';
+import path from 'path';
 import { Editor } from '@tiptap/core';
 import { Markdown } from '@tiptap/markdown';
 import StarterKit from '@tiptap/starter-kit';
@@ -19,8 +21,10 @@ describe('frontmatter styles in the live editor', () => {
   let editor: Editor;
 
   function open(hasFrontmatter: boolean) {
+    const element = document.createElement('div');
+    document.body.append(element);
     editor = new Editor({
-      element: document.createElement('div'),
+      element,
       extensions: [
         StarterKit.configure({ codeBlock: false }),
         CodeBlockWithCopy.configure({ readFrontmatter: async source => parseFrontmatter(source) }),
@@ -39,7 +43,10 @@ describe('frontmatter styles in the live editor', () => {
     }
   }
 
-  afterEach(() => editor.destroy());
+  afterEach(() => {
+    editor.destroy();
+    document.body.replaceChildren();
+  });
 
   it('changes live presentation without changing the document or exported YAML', async () => {
     open(true);
@@ -71,5 +78,51 @@ describe('frontmatter styles in the live editor', () => {
     editor.view.dispatch(editor.state.tr.setMeta(frontmatterKey, { style: 'properties' }));
     expect(editor.state.doc.firstChild?.attrs.frontmatter).toBe(false);
     expect(editor.view.dom.querySelector('.md4h-frontmatter-properties')).toBeNull();
+  });
+
+  it('returns focus to the text after Show properties is clicked, so undo works', async () => {
+    open(true);
+    await setStyle('properties');
+    const button = editor.view.dom.querySelector<HTMLButtonElement>(
+      '.md4h-frontmatter-properties button'
+    );
+    const mouseClick = () =>
+      button?.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+
+    mouseClick();
+    expect(button?.textContent).toBe('Show properties');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    mouseClick();
+    // TipTap focuses on the next animation frame.
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(button?.textContent).toBe('Edit YAML');
+    expect(document.activeElement).toBe(editor.view.dom);
+    expect(editor.state.selection.$head.parent.textContent).toBe('Body');
+  });
+
+  it('keeps focus on the toggle when the keyboard activates Show properties', async () => {
+    open(true);
+    await setStyle('properties');
+    const button = editor.view.dom.querySelector<HTMLButtonElement>(
+      '.md4h-frontmatter-properties button'
+    );
+    button?.click();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    button?.click();
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(button?.textContent).toBe('Edit YAML');
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('wraps property keys at word boundaries, not mid-word', () => {
+    const css = readFileSync(path.resolve(__dirname, '../../webview/editor.css'), 'utf8');
+    const keyRule = css.match(/\.md4h-frontmatter-fields dt \{([^}]*)\}/)?.[1] ?? '';
+    const rowRule = css.match(/\.md4h-frontmatter-fields > div \{([^}]*)\}/)?.[1] ?? '';
+    expect(keyRule).toContain('overflow-wrap: break-word');
+    expect(keyRule).not.toContain('anywhere');
+    // The key column keeps room for a typical key before it shrinks with the pane.
+    expect(rowRule).toMatch(/grid-template-columns: minmax\(min\(\d+(?:\.\d+)?em, \d+%\), 1fr\)/);
   });
 });

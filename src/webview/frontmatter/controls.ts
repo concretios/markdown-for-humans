@@ -8,8 +8,16 @@ import type { FrontmatterPresentation } from './presentation';
 import { REVEAL_FRONTMATTER } from './plugin';
 import { renderFrontmatterProperties } from './properties';
 
-/** Mount a reading view alongside the existing editable YAML and switch between them locally. */
-export function createFrontmatterControls(wrapper: HTMLElement, focusYaml: () => void) {
+/**
+ * Mount a reading view alongside the existing editable YAML and switch between them locally.
+ * @param focusYaml - Puts the caret in the YAML for editing.
+ * @param focusBody - Puts the caret in the first text after the frontmatter; false when there is none.
+ */
+export function createFrontmatterControls(
+  wrapper: HTMLElement,
+  focusYaml: () => void,
+  focusBody: () => boolean
+) {
   const dom = document.createElement('section');
   dom.className = 'md4h-frontmatter-properties';
   dom.contentEditable = 'false';
@@ -47,7 +55,9 @@ export function createFrontmatterControls(wrapper: HTMLElement, focusYaml: () =>
     editing = !editing;
     syncView();
     if (editing) focusYaml();
-    else toggle.focus({ preventScroll: true });
+    // A mouse click returns to the text so Cmd+Z and typing work at once. Keyboard
+    // activation (detail 0) keeps focus on the toggle so it can be pressed again.
+    else if (event.detail === 0 || !focusBody()) toggle.focus({ preventScroll: true });
   });
 
   return {

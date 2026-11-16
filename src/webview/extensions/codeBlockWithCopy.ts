@@ -6,7 +6,7 @@
 
 import CodeBlock, { type CodeBlockOptions } from '@tiptap/extension-code-block';
 import { mergeAttributes } from '@tiptap/core';
-import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Plugin, PluginKey, Selection } from '@tiptap/pm/state';
 import { parsePreservedCodeBlock, renderPreservedCodeBlock } from './preservedCodeBlock';
 import { createCodeBlockCopyNodeView } from './codeBlockCopyNodeView';
 import { createCodeHighlightingPlugin } from '../highlighting/plugin';
@@ -98,6 +98,19 @@ export const CodeBlockWithCopy = CodeBlock.extend<HighlightedCodeBlockOptions>({
             if (typeof pos === 'number' && editor.isEditable) {
               editor.commands.focus(pos + 1, { scrollIntoView: false });
             }
+          },
+          focusBody: () => {
+            const pos = getPos();
+            const block = typeof pos === 'number' ? editor.state.doc.nodeAt(pos) : null;
+            if (typeof pos !== 'number' || !block || !editor.isEditable) return false;
+            const next = Selection.findFrom(
+              editor.state.doc.resolve(pos + block.nodeSize),
+              1,
+              true
+            );
+            if (!next) return false;
+            editor.commands.focus(next.from, { scrollIntoView: false });
+            return true;
           },
         }
       );
