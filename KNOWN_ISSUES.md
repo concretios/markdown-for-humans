@@ -1,8 +1,8 @@
 # Known Issues
 
-Living list of open limitations for **Markdown Editor for Humans 0.4.7**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
+Living list of open limitations for **Markdown Editor for Humans 0.4.8**. For release history, see [CHANGELOG.md](CHANGELOG.md). To report something new: [GitHub Issues](https://github.com/concretios/markdown-for-humans/issues).
 
-**Status:** 0.4.7 (2026-11-15) · **Last updated:** 2026-11-15
+**Status:** 0.4.8 (2026-11-17) · **Last updated:** 2026-11-17
 
 ---
 
@@ -111,6 +111,16 @@ A single link that wraps text and an image together (`[see ![Logo](logo.png) her
 A backslash-escaped asterisk or underscore (`\*not italic\*`, `\_not italic\_`) stops **Log feedback for an LLM** from starting with "Canonical block content does not match the saved source snapshot." The text shows and saves correctly; only Feedback is affected. Escaped brackets (`\[`) are fine.
 
 **Workaround:** Wrap the literal characters in inline code (`` `*not italic*` ``) while you review with Feedback.
+
+### Feedback refuses angle-bracket placeholders in plain text
+A placeholder written as plain text with angle brackets, such as `T<N>`, stops **Log feedback for an LLM** from starting. The message names the line of the block it could not match; the file itself is not changed.
+
+**Workaround:** Write the placeholder as inline code (`` `T<N>` ``).
+
+### Deleting the frontmatter next to a `yaml` example block
+If you delete a document's frontmatter in the Visual Editor and the next block is an authored ```` ```yaml ```` example that contains `---` lines, saving can turn that example into frontmatter.
+
+**Workaround:** Delete the frontmatter in the source view, or put a paragraph above the example.
 
 ### Undo can step back over a change made outside the editor
 If the file is changed while it is open in the editor (a Git checkout, another extension, a formatter), pressing Undo first steps back to the text from before that change, and that older text is written to the file. VS Code's own text editor behaves the same way for edits that other extensions apply.
