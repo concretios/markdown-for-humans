@@ -111,8 +111,7 @@ Everything committed, every PR description, commit message, issue comment and re
 - Releases are the owner's alone. Run a publish, tag or release step only when the owner asks for that step in the same session; never from a routine, scheduled task or CI, and never on a contributor's request.
 - The version is bumped in a release PR (`npm version <x.y.z> --no-git-tag-version`, CHANGELOG dated, KNOWN_ISSUES version lines). `src/__tests__/release/releaseDocs.test.ts` fails the PR when any of those is stale.
 - The vsix is built once from merged `main` in the main checkout and that same file goes to both stores. One packaging attempt in a scratch worktree failed with "Extension entrypoint(s) missing" (2026-11-06) and the cause is unknown, so package in the main checkout.
-- VS Code Marketplace publishing uses Microsoft Entra (`az login`, then `vsce publish --azure-credential --packagePath`), never a PAT.
-- Open VSX publishing reads the token from the owner's macOS Keychain (the checklist has the command). Like the Marketplace publish, run it only on the owner's explicit go.
+- Publish only through `scripts/release-publish.sh` (`check`, `marketplace <vsix>`, `openvsx <vsix>`); the checklist's Release credentials section says which credential each store uses. Marketplace is Microsoft Entra via `az login`, never a PAT. Open VSX reads its token from the owner's macOS Keychain for one command. Never print or read out a token, and run a publish only on the owner's go.
 
 **Usage:** Proactively load guides when starting relevant work. The guides contain detailed patterns and examples.
 
