@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 
 - **Log feedback for an LLM** starts on a numbered list whose sub-bullets are indented less than the item's marker, such as a 3-space bullet under `11. `. It refused with "Feedback could not match this document to the saved file". As in CommonMark and on GitHub, such a bullet is a separate list, not a child of the item; indent it to the marker width (4 spaces under `10. ` to `99. `) to nest it. Thanks to [@heathkh](https://github.com/heathkh) for the report ([#191](https://github.com/concretios/markdown-for-humans/issues/191)).
+- In Feedback, **Add feedback** on a checklist item opens the comment box again. Clicking it did nothing, because the checkbox's screen reader label was read as part of the item's text. A selection across checklist items no longer includes that label either.
 
 ## [0.4.8] - 2026-11-17
 
