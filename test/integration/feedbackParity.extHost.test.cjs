@@ -127,4 +127,11 @@ suite('Feedback snapshot parity (Ext Host)', () => {
     this.timeout(90_000);
     await assertFeedbackStarts('link-definitions.md');
   });
+
+  // Issue 191: a sub-bullet indented less than its numbered marker is a
+  // separate list in CommonMark; Feedback must not re-nest it.
+  test('starts Feedback on sub-bullets indented less than a numbered marker', async function () {
+    this.timeout(90_000);
+    await assertFeedbackStarts('two-digit-list-indent.md');
+  });
 });

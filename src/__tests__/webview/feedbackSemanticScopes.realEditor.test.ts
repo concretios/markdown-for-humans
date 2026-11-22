@@ -2,6 +2,7 @@
 import { Editor } from '@tiptap/core';
 import CodeBlock from '@tiptap/extension-code-block';
 import { TableKit } from '@tiptap/extension-table';
+import { TaskItem, TaskList } from '@tiptap/extension-list';
 import StarterKit from '@tiptap/starter-kit';
 import { readFileSync } from 'fs';
 import * as path from 'path';
@@ -472,6 +473,72 @@ describe('Semantic Feedback scopes with a real editor', () => {
       });
       expect(controller.chooseScope()).toBe(false);
       expect(document.querySelector('.feedback-composer')).toBeNull();
+    } finally {
+      controller.deactivate();
+      editor.destroy();
+      document.body.replaceChildren();
+    }
+  });
+
+  // TipTap's TaskItem NodeView puts a checkbox label with visually hidden text
+  // beside each item. That text made the scope differ from the document text,
+  // so clicking Add feedback on a checklist item silently opened nothing.
+  it.each([
+    [
+      'a checklist item',
+      '<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><p>One</p></li><li data-type="taskItem" data-checked="true"><p>Two</p></li></ul>',
+      1,
+      'Two',
+    ],
+    [
+      'a checklist item with a subtask',
+      '<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><p>One</p><ul data-type="taskList"><li data-type="taskItem" data-checked="true"><p>Sub</p></li></ul></li><li data-type="taskItem" data-checked="false"><p>Two</p></li></ul>',
+      0,
+      'OneSub',
+    ],
+  ])('opens the composer for %s and sends only its text', async (_name, content, index, text) => {
+    document.body.innerHTML = '<main><div id="editor"></div></main>';
+    const editor = new Editor({
+      element: document.querySelector('#editor') as HTMLElement,
+      extensions: [StarterKit, TaskList, TaskItem.configure({ nested: true })],
+      content,
+    });
+    const host = { postMessage: jest.fn() };
+    const controller = createFeedbackReviewController({ editor, host });
+    editor.view.dom.querySelectorAll('*').forEach(element => {
+      element.getBoundingClientRect = () =>
+        ({ left: 80, top: 100, right: 700, bottom: 300, width: 620, height: 200 }) as DOMRect;
+    });
+    try {
+      controller.activate({
+        sessionId: 'checklist',
+        source: 'test.md',
+        sourceSha256: 'a'.repeat(64),
+        round: 'round-1',
+        evidenceVersion: 2,
+        anchors: [{ ordinal: 0, startLine: 1, endLine: 3 }],
+        items: [],
+      });
+      editor.view.dom
+        .querySelectorAll('p')
+        [index].dispatchEvent(new MouseEvent('pointerover', { bubbles: true }));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const rail = document.querySelector<HTMLButtonElement>('[data-feedback-block-action]')!;
+      expect(rail.getAttribute('aria-label')).toContain('Task and children');
+      rail.click();
+      const form = document.querySelector<HTMLFormElement>('.feedback-composer');
+      expect(form).not.toBeNull();
+      const field = form!.querySelector<HTMLTextAreaElement>('textarea')!;
+      field.value = 'Reword this task';
+      field.dispatchEvent(new Event('input', { bubbles: true }));
+      form!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      expect(host.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'feedback.text.add',
+          evidence: { kind: 'rendered-text', text, complete: true },
+        })
+      );
+      expect(JSON.stringify(host.postMessage.mock.calls)).not.toContain('Task item checkbox');
     } finally {
       controller.deactivate();
       editor.destroy();

@@ -69,6 +69,7 @@ import { processPasteContent, parseFencedCode } from './utils/pasteHandler';
 import { insertPlainText, readsAsMarkdown } from './utils/plainTextPaste';
 import { copySelectionAsMarkdown } from './utils/copyMarkdown';
 import { isUndoRedoShortcut } from './utils/undoRedoShortcut';
+import { installWindowFocusRestore } from './utils/windowFocusRestore';
 import { shouldAutoLink } from './utils/linkValidation';
 import { buildOutlineFromEditor, findHeadingPos } from './utils/outline';
 import { scrollToHeading } from './utils/scrollToHeading';
@@ -1170,6 +1171,18 @@ function initializeEditor(initialContent: string, hasFrontmatter = false) {
         }
         window.dispatchEvent(new CustomEvent('editorFocusChange', { detail: { focused: false } }));
       }, 0);
+    });
+
+    // Keep the caret when the VS Code window loses and regains focus. The
+    // webview host can leave focus on <body>, and the Alt release of Alt+Tab can
+    // move focus to the File menu; either silently drops typing.
+    // view.focus() keeps the selection and does not scroll the reading position.
+    installWindowFocusRestore({
+      win: window,
+      editorDom,
+      focusEditor: () => {
+        if (!editorInstance.isDestroyed) editorInstance.view.focus();
+      },
     });
 
     // Create table menu

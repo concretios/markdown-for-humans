@@ -196,6 +196,42 @@ describe('Feedback snapshot renderer round-trip', () => {
     }
   });
 
+  // A sub-bullet indented less than the marker width ("11. " is four) is not
+  // nested in CommonMark. The editor showed it as its own list, but the anchor
+  // map re-nested it, so Feedback refused to start.
+  it.each([
+    [
+      'three-space bullet under a two-digit item',
+      '# Repro\n\n10. First\n11. Second\n   - nested bullet\n12. Third\n',
+    ],
+    ['two-space bullet under a two-digit item', '10. First\n  - nested\n11. Second\n'],
+    ['two-space bullet under a one-digit item', '1. First\n  - nested\n2. Second\n'],
+    ['lazy paragraph line under a two-digit item', '10. First\n   lazy line\n11. Second\n'],
+    [
+      'four-space bullet under a two-digit item',
+      '10. First\n11. Second\n    - nested\n12. Third\n',
+    ],
+    ['three-space bullet under a one-digit item', '4. First\n5. Second\n   - nested\n6. Third\n'],
+  ])('anchors a %s', (_name, source) => {
+    const editor = createFeedbackSnapshotEditor(source);
+    try {
+      const blocks = enumerateCanonicalFeedbackBlocks(editor);
+      const result = buildFeedbackAnchorMap(source, blocks);
+      expect(result).toEqual(expect.objectContaining({ ok: true }));
+      if (!result.ok) return;
+
+      // Each block must quote exactly the lines it renders, so the content
+      // check in FeedbackSnapshotService.finalize also passes.
+      const lines = source.split('\n');
+      result.map.blocks.forEach((anchor, index) => {
+        const sourceBlock = lines.slice(anchor.startLine - 1, anchor.endLine).join('\n');
+        expect(isMarkdownRendererEquivalent(sourceBlock, blocks[index].markdown)).toBe(true);
+      });
+    } finally {
+      editor.destroy();
+    }
+  });
+
   it('keeps the unchanged contribution guide equivalent with exact source anchors', () => {
     const source = readFileSync(resolve(__dirname, '../../../CONTRIBUTING.md'), 'utf8');
     const editor = createFeedbackSnapshotEditor(source);

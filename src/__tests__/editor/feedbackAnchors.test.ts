@@ -273,7 +273,10 @@ describe('buildFeedbackAnchorMap', () => {
     }
   });
 
-  it('maps production mixed lists when two-space nested bullets split an ordered block', () => {
+  // The editor parses numbered lists with marked's CommonMark tokenizer, so a
+  // two-space bullet under "1. " is not nested: it starts a separate bullet
+  // list. Each block must anchor to the lines it actually holds.
+  it('maps a two-space bullet under an ordered item as a separate list, as the editor renders it', () => {
     const rawMarkdown = [
       '1. Ordered parent item',
       '  - Nested unordered child item one',
@@ -286,31 +289,51 @@ describe('buildFeedbackAnchorMap', () => {
       '    1. Deep nested ordered grandchild',
     ].join('\n');
     const canonicalBlocks = [
-      block(
-        58,
-        'list',
-        [
-          '1. Ordered parent item',
-          '  - Nested unordered child item one',
-          '  - Nested unordered child item two',
-          '    - Deeper unordered grandchild item',
-        ].join('\n')
-      ),
+      block(58, 'list', '1. Ordered parent item'),
       block(
         59,
         'list',
         [
+          '- Nested unordered child item one',
+          '- Nested unordered child item two',
+          '  - Deeper unordered grandchild item',
           '- Unordered parent item',
           '  1. Nested ordered child one',
           '  2. Nested ordered child two',
-          '    1. Deep nested ordered grandchild',
+          '  3. Deep nested ordered grandchild',
         ].join('\n')
       ),
     ];
 
     expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
-      { ordinal: 58, kind: 'list', startLine: 1, endLine: 4 },
-      { ordinal: 59, kind: 'list', startLine: 6, endLine: 9 },
+      { ordinal: 58, kind: 'list', startLine: 1, endLine: 1 },
+      { ordinal: 59, kind: 'list', startLine: 2, endLine: 9 },
+    ]);
+  });
+
+  // A sub-bullet indented less than a two-digit marker ("11. ") ends the
+  // numbered list in CommonMark. The anchor map must not re-nest it.
+  it('maps a three-space bullet under a two-digit item as its own list', () => {
+    const rawMarkdown = [
+      '# Repro',
+      '',
+      '10. First',
+      '11. Second',
+      '   - nested bullet',
+      '12. Third',
+    ].join('\n');
+    const canonicalBlocks = [
+      block(0, 'heading', '# Repro'),
+      block(1, 'list', '10. First\n11. Second'),
+      block(2, 'list', '- nested bullet'),
+      block(3, 'list', '12. Third'),
+    ];
+
+    expect(expectAnchorMap(rawMarkdown, canonicalBlocks).blocks).toEqual([
+      { ordinal: 0, kind: 'heading', startLine: 1, endLine: 1 },
+      { ordinal: 1, kind: 'list', startLine: 3, endLine: 4 },
+      { ordinal: 2, kind: 'list', startLine: 5, endLine: 5 },
+      { ordinal: 3, kind: 'list', startLine: 6, endLine: 6 },
     ]);
   });
 

@@ -55,14 +55,17 @@ describe('Feedback anchors with the production list parser', () => {
     try {
       const canonicalBlocks = enumerateCanonicalFeedbackBlocks(editor);
       expect(canonicalBlocks).toHaveLength(2);
+      // A two-space bullet is not a child of "1. ": the editor shows it as the
+      // start of the bullet list that follows.
+      expect(canonicalBlocks[0].markdown).toBe('1. Ordered parent item');
 
       const result = buildFeedbackAnchorMap(MIXED_LIST_MARKDOWN, canonicalBlocks);
       expect(result).toEqual({
         ok: true,
         map: {
           blocks: [
-            { ordinal: 0, kind: 'list', startLine: 1, endLine: 4 },
-            { ordinal: 1, kind: 'list', startLine: 6, endLine: 9 },
+            { ordinal: 0, kind: 'list', startLine: 1, endLine: 1 },
+            { ordinal: 1, kind: 'list', startLine: 2, endLine: 9 },
           ],
         },
       });

@@ -11,7 +11,7 @@
  *
  * Key responsibilities:
  * - Parse canonical and source Markdown into comparable top-level block kinds
- * - Honor the rich parser's ordered-list, task-list and standalone HTML image boundaries
+ * - Honor the rich parser's task-list and standalone HTML image boundaries
  * - Preserve exact raw line spans across source-only formatting differences
  * - Treat leading YAML or explicitly identified JSON frontmatter as one block
  * - Anchor link reference definitions, which have no parsed block, by exact text
@@ -118,13 +118,6 @@ const markdownParser = new MarkdownIt({
   linkify: false,
 });
 
-interface OrderedListSpan {
-  startLine: number;
-  endLineExclusive: number;
-}
-
-const ORDERED_LIST_ITEM_PATTERN = /^(\s*)(\d+)\.\s+(.*)$/;
-const INDENTED_LINE_PATTERN = /^\s/;
 /** The item pattern of `@tiptap/extension-list`'s task-list Markdown tokenizer. */
 const TASK_ITEM_PATTERN = /^(\s*)([-+*])\s+\[([ xX])\]\s+(.*)$/;
 const THREE_SPACE_ORDERED_LIST_ROOT_PATTERN = /^ {3}\d+\.\s+/;
@@ -382,7 +375,7 @@ function tipTapTaskListRuns(
   return runs.length > 0 ? runs : null;
 }
 
-function parseMarkdownItTopLevelBlocks(
+function parseTopLevelBlocks(
   markdown: string,
   lineOffset: number
 ): ParsedSourceBlock[] | FeedbackAnchorError {
@@ -440,183 +433,6 @@ function parseMarkdownItTopLevelBlocks(
   }
 
   return blocks;
-}
-
-/**
- * Return the line immediately after one ordered-list token according to the
- * tokenizer shipped by `@tiptap/extension-list` 3.30.x. That tokenizer accepts
- * two-space mixed-list children beneath an ordered item, while markdown-it
- * requires indentation based on the ordered marker width. Keeping this small
- * boundary rule aligned with the rich parser prevents one TipTap list from
- * becoming two host-side blocks.
- */
-function tipTapOrderedListEnd(sourceLines: readonly string[], startLine: number): number {
-  let currentLine = startLine;
-  let consumed = startLine;
-
-  while (currentLine < sourceLines.length) {
-    if (!ORDERED_LIST_ITEM_PATTERN.test(sourceLines[currentLine] ?? '')) break;
-
-    let nextLine = currentLine + 1;
-    while (nextLine < sourceLines.length) {
-      const candidate = sourceLines[nextLine] ?? '';
-      if (ORDERED_LIST_ITEM_PATTERN.test(candidate)) break;
-
-      if (candidate.trim() === '' || INDENTED_LINE_PATTERN.test(candidate)) {
-        nextLine += 1;
-        continue;
-      }
-      break;
-    }
-
-    consumed = nextLine;
-    currentLine = nextLine;
-  }
-
-  return consumed;
-}
-
-function orderedListSpans(markdown: string, tokens: readonly MarkdownToken[]): OrderedListSpan[] {
-  const sourceLines = markdown.split(/\r?\n/);
-  const spans: OrderedListSpan[] = [];
-
-  for (const token of tokens) {
-    if (token.level !== 0 || token.type !== 'ordered_list_open' || token.map === null) continue;
-
-    const [startLine, markdownItEndLineExclusive] = token.map;
-    const rootMatch = sourceLines[startLine]?.match(ORDERED_LIST_ITEM_PATTERN);
-    // TipTap's ordered-list tokenizer only applies the mixed-list continuation
-    // rule to a true column-zero root. Markdown-it already agrees with TipTap
-    // for one- and two-space roots, so adapting those spans would merge two
-    // independently rendered blocks and produce incorrect source anchors.
-    if (!rootMatch || rootMatch[1] !== '') continue;
-
-    const previous = spans[spans.length - 1];
-    if (previous && startLine < previous.endLineExclusive) continue;
-
-    const endLineExclusive = tipTapOrderedListEnd(sourceLines, startLine);
-    let contentEndLineExclusive = endLineExclusive;
-    while (
-      contentEndLineExclusive > startLine + 1 &&
-      (sourceLines[contentEndLineExclusive - 1] ?? '').trim() === ''
-    ) {
-      contentEndLineExclusive -= 1;
-    }
-
-    // Trailing separator whitespace alone is not a dialect mismatch. Repair
-    // only when TipTap assigns actual continuation content beyond markdown-it's
-    // top-level ordered-list token.
-    if (contentEndLineExclusive > markdownItEndLineExclusive) {
-      spans.push({ startLine, endLineExclusive });
-    }
-  }
-
-  return spans;
-}
-
-function restoreLineEndings(markdown: string, lines: readonly string[]): string {
-  const endings = markdown.match(/\r\n|\n/g) ?? [];
-  return lines.map((line, index) => `${line}${endings[index] ?? ''}`).join('');
-}
-
-/**
- * Adapt only parser-shadow indentation for proven TipTap ordered-list runs.
- * The source bytes remain untouched. Repaired spans must reparse as exactly
- * one level-zero ordered-list block or the original strict parse is retained.
- */
-function adaptTipTapOrderedListBoundaries(
-  markdown: string,
-  tokens: readonly MarkdownToken[]
-): string {
-  const spans = orderedListSpans(markdown, tokens);
-  if (spans.length === 0) return markdown;
-
-  const sourceLines = markdown.split(/\r?\n/);
-  const shadowLines = [...sourceLines];
-
-  for (const span of spans) {
-    const rootMatch = sourceLines[span.startLine]?.match(/^( *)(\d+)\.\s+(.*)$/);
-    if (!rootMatch) return markdown;
-
-    const rootIndent = rootMatch[1].length;
-    let contentIndent = rootIndent + rootMatch[2].length + 2;
-    for (let lineIndex = span.startLine + 1; lineIndex < span.endLineExclusive; lineIndex += 1) {
-      const sourceLine = sourceLines[lineIndex] ?? '';
-      if (sourceLine.trim() === '') continue;
-
-      const orderedItem = sourceLine.match(/^( *)(\d+)\.\s+(.*)$/);
-      const leadingSpaces = sourceLine.match(/^( *)/)?.[1].length ?? 0;
-      if (sourceLine[leadingSpaces] === '\t' || leadingSpaces < rootIndent) return markdown;
-
-      if (orderedItem && leadingSpaces === rootIndent) {
-        contentIndent = rootIndent + orderedItem[2].length + 2;
-        continue;
-      }
-      if (leadingSpaces <= rootIndent) return markdown;
-
-      if (leadingSpaces < contentIndent) {
-        shadowLines[lineIndex] = `${' '.repeat(contentIndent - leadingSpaces)}${sourceLine}`;
-      }
-    }
-  }
-
-  const shadowMarkdown = restoreLineEndings(markdown, shadowLines);
-  let shadowTokens: MarkdownToken[];
-  try {
-    shadowTokens = markdownParser.parse(shadowMarkdown, {});
-  } catch {
-    return markdown;
-  }
-
-  for (const span of spans) {
-    let contentEndLineExclusive = span.endLineExclusive;
-    while (
-      contentEndLineExclusive > span.startLine + 1 &&
-      (sourceLines[contentEndLineExclusive - 1] ?? '').trim() === ''
-    ) {
-      contentEndLineExclusive -= 1;
-    }
-    const overlapping = shadowTokens.filter(
-      token =>
-        token.level === 0 &&
-        token.map !== null &&
-        token.map[0] < contentEndLineExclusive &&
-        token.map[1] > span.startLine
-    );
-    if (
-      overlapping.length !== 1 ||
-      overlapping[0].type !== 'ordered_list_open' ||
-      overlapping[0].map?.[0] !== span.startLine ||
-      (overlapping[0].map?.[1] ?? 0) < contentEndLineExclusive ||
-      (overlapping[0].map?.[1] ?? Number.POSITIVE_INFINITY) > span.endLineExclusive
-    ) {
-      return markdown;
-    }
-  }
-
-  return shadowMarkdown;
-}
-
-function parseTopLevelBlocks(
-  markdown: string,
-  lineOffset: number
-): ParsedSourceBlock[] | FeedbackAnchorError {
-  let tokens: MarkdownToken[];
-  try {
-    tokens = markdownParser.parse(markdown, {});
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Markdown parser failure.';
-    return {
-      code: FEEDBACK_ANCHOR_ERROR_CODE,
-      reason: 'unsupported-raw-block',
-      detail: `Markdown parsing failed: ${message}`,
-    };
-  }
-
-  return parseMarkdownItTopLevelBlocks(
-    adaptTipTapOrderedListBoundaries(markdown, tokens),
-    lineOffset
-  );
 }
 
 function lineStarts(markdown: string): number[] {
