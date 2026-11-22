@@ -1,6 +1,7 @@
 /** @jest-environment jsdom */
 
 import { Editor, Node as TiptapNode } from '@tiptap/core';
+import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
 import { NodeSelection } from '@tiptap/pm/state';
 import StarterKit from '@tiptap/starter-kit';
@@ -304,6 +305,30 @@ describe('feedback rendered ranges', () => {
   afterEach(() => {
     window.getSelection()?.removeAllRanges();
     document.body.replaceChildren();
+  });
+
+  // A selection across checklist items crosses each item's checkbox label,
+  // whose visually hidden text is not document text.
+  it('leaves task checkbox labels out of a selection across checklist items', () => {
+    const element = document.createElement('div');
+    document.body.appendChild(element);
+    const editor = new Editor({
+      element,
+      extensions: [StarterKit, TaskList, TaskItem],
+      content:
+        '<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><p>One</p></li><li data-type="taskItem" data-checked="true"><p>Two</p></li></ul>',
+    });
+    try {
+      const [first, second] = Array.from(editor.view.dom.querySelectorAll('p')).map(textNode);
+      const target = getFeedbackTargetFromDomRange(editor, selectDomText(first, 1, second, 2));
+
+      expect(target).toEqual(expect.objectContaining({ kind: 'inline', focus: 'neTw' }));
+      if (target?.kind !== 'inline') return;
+      // Restoring the saved item reads the same text, so it still resolves.
+      expect(resolveFeedbackRenderedRange(editor, target.range, 'neTw')).not.toBeNull();
+    } finally {
+      editor.destroy();
+    }
   });
 
   it.each(EXACT_RENDERED_RANGE_CASES)('round-trips $name exactly', testCase => {

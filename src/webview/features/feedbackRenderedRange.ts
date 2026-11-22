@@ -163,6 +163,31 @@ function normalizedVisibleText(value: string): string {
   return value.replace(/\r\n/g, '\n');
 }
 
+/**
+ * The checkbox label TipTap's TaskItem NodeView puts beside its contentDOM.
+ * It holds visually hidden text ("Task item checkbox for ...") for screen
+ * readers, which is not document text.
+ */
+const TASK_CHECKBOX_LABEL_SELECTOR = 'li[data-checked] > label';
+
+/**
+ * Text of a DOM range as the reader sees it, without task checkbox labels.
+ * Every rendered-range path (create, scope, restore) reads text here, so the
+ * stored focus and the restored focus always agree.
+ */
+function feedbackDomRangeText(range: Range): string {
+  const container = range.commonAncestorContainer;
+  const element = container instanceof Element ? container : container.parentElement;
+  if (element?.closest(TASK_CHECKBOX_LABEL_SELECTOR)) return '';
+  // Fast path: most ranges hold no task item, so skip the clone.
+  if (!element?.querySelector(TASK_CHECKBOX_LABEL_SELECTOR)) {
+    return normalizedVisibleText(range.toString());
+  }
+  const fragment = range.cloneContents();
+  fragment.querySelectorAll(TASK_CHECKBOX_LABEL_SELECTOR).forEach(label => label.remove());
+  return normalizedVisibleText(fragment.textContent ?? '');
+}
+
 /** Counts Unicode code points, so a surrogate pair is one character. */
 export function codePointLength(value: string): number {
   return value.length - (value.match(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g)?.length ?? 0);
@@ -330,7 +355,7 @@ export function resolveFeedbackRenderedRange(
   const domRange = domRangeForPositions(editor, positions.from, positions.to);
   if (!domRange) return null;
 
-  const focus = normalizedVisibleText(domRange.toString());
+  const focus = feedbackDomRangeText(domRange);
   if (focus.length === 0) return null;
   if (expectedFocus !== undefined && normalizedVisibleText(expectedFocus) !== focus) {
     return null;
@@ -660,7 +685,7 @@ export function getFeedbackTargetFromDomRange(
   }
 
   const ordinals = domOrdinalsForRange(editor, nativeRange);
-  const nativeFocus = normalizedVisibleText(nativeRange.toString());
+  const nativeFocus = feedbackDomRangeText(nativeRange);
   if (hasOpaqueContent(editor, ordinals, nativeRange)) {
     return blockFallback(editor, ordinals, nativeFocus, 'opaque-node');
   }
